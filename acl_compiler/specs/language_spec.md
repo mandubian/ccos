@@ -1,10 +1,10 @@
-# ACL Language Specification (Work In Progress)
+# RTFS Language Specification (Work In Progress)
 
-This document outlines the design and features of the ACL (AI-Centric Language) language.
+This document outlines the design and features of the RTFS (Reasoning Task Flow Specification) language.
 
 ## 1. The `task` Form: The Central Artifact
 
-ACL revolves around the concept of a `task`, which represents a complete unit of work derived from a human instruction and processed by an AI system. A `task` is typically represented as an ACL **Map** containing several key-value pairs that describe the instruction, its interpretation, the plan for execution, and the history of that execution.
+RTFS revolves around the concept of a `task`, which represents a complete unit of work derived from a human instruction and processed by an AI system. A `task` is typically represented as an RTFS **Map** containing several key-value pairs that describe the instruction, its interpretation, the plan for execution, and the history of that execution.
 
 **Standard `task` Structure:**
 
@@ -14,14 +14,14 @@ While flexible, a typical `task` map includes the following keys (using Keywords
 *   **`:source` (Value):** Information about the origin of the task (e.g., `"human-instruction"`, `"system-generated"`).
 *   **`:natural-language` (String, Optional):** The original human instruction text, if applicable.
 *   **`:intent` (Value, typically Map):** A structured representation of the semantic goal derived from the instruction. Its specific structure depends on the domain and the AI's interpretation capabilities. (See `language_prospections.md` for examples).
-*   **`:plan` (Expr, typically List/Do):** An executable ACL expression representing the sequence of steps to achieve the `:intent`. This is composed using the Core Expression Forms defined below.
+*   **`:plan` (Expr, typically List/Do):** An executable RTFS expression representing the sequence of steps to achieve the `:intent`. This is composed using the Core Expression Forms defined below.
 *   **`:execution-log` (List):** An immutable, append-only list of Maps, where each map represents a stage in the planning or execution lifecycle of the task. It tracks status, agent actions, timestamps, errors, and potentially intermediate results. (See `language_prospections.md` for detailed structure and examples).
 
 The `task` form serves as the primary data structure passed between different AI components (e.g., instruction parser, planner, executor) and provides a comprehensive record of the work unit.
 
 ## 2. Data Types (`Value`)
 
-ACL supports the following fundamental data types:
+RTFS supports the following fundamental data types:
 
 *   **`Nil`**: Represents the absence of a value, similar to `null` or `None`. Evaluates to false in boolean contexts. Represented as `nil`.
 *   **`Bool`**: Represents boolean values `true` and `false`.
@@ -37,7 +37,7 @@ ACL supports the following fundamental data types:
 
 ## 3. Type System
 
-ACL employs a **strong, static type system** designed to enhance predictability and robustness, especially for AI-generated code. Type checking is performed before execution (either at compile-time or pre-interpretation).
+RTFS employs a **strong, static type system** designed to enhance predictability and robustness, especially for AI-generated code. Type checking is performed before execution (either at compile-time or pre-interpretation).
 
 *   **Type Syntax:**
     *   **Basic Types:** Represented by symbols: `Int`, `Float`, `Bool`, `String`, `Symbol`, `Keyword`, `Nil`, `Void` (for functions with no return value).
@@ -52,7 +52,7 @@ ACL employs a **strong, static type system** designed to enhance predictability 
     *   **Variables:** `(let ([<symbol> : <Type> <value-expr>]) ...)`
     *   **Function Parameters & Return:** `(define (<name> [<param1> : <Type1>] ...) : <ReturnType> <body>)`
 *   **Generics (Parametric Polymorphism - Planned):** Type variables (e.g., `T`, `K`, `V`) allow defining functions and types that operate on multiple types (e.g., `(List T)`, `(define (identity [x : T]) : T x)`).
-*   **Evaluation Strategy:** ACL uses **strict (eager) evaluation** by default. Laziness is not a standard feature.
+*   **Evaluation Strategy:** RTFS uses **strict (eager) evaluation** by default. Laziness is not a standard feature.
 
 ## 4. Core Expression Forms (`Expr`)
 

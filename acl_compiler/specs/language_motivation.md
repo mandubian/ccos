@@ -1,17 +1,17 @@
-# ACL Language Motivation
+# RTFS Language Motivation
 
-This document describes the rationale behind the design choices and goals for the **AI-Centric Language (ACL)**.
+This document describes the rationale behind the design choices and goals for the **Reasoning Task Flow Specification (RTFS)**.
 
 ## 1. Purpose and Primary Use Case
 
-ACL is **not** a general-purpose programming language. It is a **specialized language** designed primarily for **AI systems** (like GitHub Copilot) to represent and execute tasks derived from human instructions.
+RTFS is **not** a general-purpose programming language. It is a **specialized language** designed primarily for **AI systems** (like GitHub Copilot) to represent and execute tasks derived from human instructions.
 
-**Core Use Case:** An AI translates a human instruction into a structured ACL **`task`**. This `task` representation is the central concept and artifact of ACL. It encapsulates the entire lifecycle of fulfilling the instruction, typically including:
+**Core Use Case:** An AI translates a human instruction into a structured RTFS **`task`**. This `task` representation is the central concept and artifact of RTFS. It encapsulates the entire lifecycle of fulfilling the instruction, typically including:
 
 1.  **Context/Instruction:** Metadata about the original request (e.g., natural language text).
 2.  **Semantic Intent (`:intent`):** A formal, structured representation of the goal derived from the instruction (the "what" and "why").
-3.  **Execution Plan (`:plan`):** A detailed, executable sequence of steps (ACL code) designed to achieve the intent (the "how"). This plan integrates:
-    *   Internal ACL logic (data manipulation, control flow).
+3.  **Execution Plan (`:plan`):** A detailed, executable sequence of steps (RTFS code) designed to achieve the intent (the "how"). This plan integrates:
+    *   Internal RTFS logic (data manipulation, control flow).
     *   Calls to external **tools** (APIs, CLIs, IDE functions) via runtime primitives.
     *   Management of complex **resources** (e.g., tensors, files) via opaque handles and controlled operations (planned, potentially via monadic control).
 4.  **Execution Log (`:execution-log`):** An immutable record tracking the evolution of the plan and the status of its execution (as detailed in `language_prospections.md`).
@@ -22,9 +22,9 @@ ACL is **not** a general-purpose programming language. It is a **specialized lan
 *   **Instruction -> Task -> Execution:** Serve as the bridge transforming high-level human instructions into verifiable, executable `task` objects containing both intent and plan.
 *   **Robustness & Predictability:** Enable the generation and execution of reliable plans through features like strong typing (planned), a functional core, and explicit management of side effects (tools, resources via monadic control).
 *   **Inter-AI Communication:** Offer a potential standard format (`task`) for exchanging structured work units (intent + plan + history) between different AI systems or agents.
-*   **Executable Specification:** The ACL `task` itself acts as an executable specification of the work to be done, including its history and status.
+*   **Executable Specification:** The RTFS `task` itself acts as an executable specification of the work to be done, including its history and status.
 
-ACL is designed *for AI* to structure its understanding, planning, and execution of user requests within a single, comprehensive `task` object.
+RTFS is designed *for AI* to structure its understanding, planning, and execution of user requests within a single, comprehensive `task` object.
 
 ## 2. Architectural Choices
 
