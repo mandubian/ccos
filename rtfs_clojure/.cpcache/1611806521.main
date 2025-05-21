@@ -1,0 +1,4 @@
+-m
+clojure.test
+--regex
+acl-clojure\\..*-test$

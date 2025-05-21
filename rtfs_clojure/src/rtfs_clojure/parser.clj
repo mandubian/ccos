@@ -88,13 +88,21 @@
           ;; Default: Function/Tool Call
           (ast/make-call (mapv parse-expr data))))) ; Parse the whole list including the operator symbol
 
-    ;; Vector or Map (Treat as literals for now, unless specific forms require them)
-    ;; Could potentially parse into Literal nodes holding the collection,
-    ;; or add specific AST nodes if RTFS defines vector/map literals differently.
-    ;; For now, let's treat them as literal values.
-    (or (vector? data) (map? data))
+    ;; Vector (Treat as literal for now)
+    (vector? data)
     (ast/make-literal data)
 
+    ;; Map
+    (map? data)
+    (if (and (contains? data :plan) (contains? data :id)) ; Heuristic: If it has :plan and :id, treat as Task
+      (ast/make-task
+       :id (:id data) ; Assuming id is simple value for now
+       :source (:source data)
+       :natural-language (:natural-language data)
+       :intent (:intent data) ; Keep intent as data
+       :plan (parse-expr (:plan data)) ; Recursively parse the plan
+       :execution-log (:execution-log data)) ; Keep log as data for now
+      (ast/make-literal data)) ; Otherwise, treat as a generic literal map
 
     :else
     (parse-error "Cannot parse input into RTFS AST" data)))
