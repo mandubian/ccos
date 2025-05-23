@@ -1,0 +1,80 @@
+[
+    Module(
+        ModuleDefinition {
+            name: Symbol(
+                "my.cool-module",
+            ),
+            exports: Some(
+                [
+                    Symbol(
+                        "public-fn",
+                    ),
+                ],
+            ),
+            definitions: [
+                Import(
+                    ImportDefinition {
+                        module_name: Symbol(
+                            "other.module",
+                        ),
+                        alias: None,
+                        only: None,
+                    },
+                ),
+                Def(
+                    DefExpr {
+                        symbol: Symbol(
+                            "private-val",
+                        ),
+                        type_annotation: None,
+                        value: Literal(
+                            Integer(
+                                42,
+                            ),
+                        ),
+                    },
+                ),
+                Defn(
+                    DefnExpr {
+                        name: Symbol(
+                            "public-fn",
+                        ),
+                        params: [
+                            ParamDef {
+                                pattern: Symbol(
+                                    Symbol(
+                                        "x",
+                                    ),
+                                ),
+                                type_annotation: None,
+                            },
+                        ],
+                        variadic_param: None,
+                        return_type: None,
+                        body: [
+                            FunctionCall {
+                                function: Symbol(
+                                    Symbol(
+                                        "other/do-something",
+                                    ),
+                                ),
+                                arguments: [
+                                    Symbol(
+                                        Symbol(
+                                            "x",
+                                        ),
+                                    ),
+                                    Symbol(
+                                        Symbol(
+                                            "private-val",
+                                        ),
+                                    ),
+                                ],
+                            },
+                        ],
+                    },
+                ),
+            ],
+        },
+    ),
+]
