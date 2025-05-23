@@ -1,0 +1,219 @@
+// --- Grammar Entry Point ---
+program = { SOI ~ (task_definition | module_definition | expression)* ~ EOI }
+// Allow multiple top-level forms for now
+
+// --- Core Recursive Rule ---
+// Order matters for precedence (e.g., special forms before general lists)
+// Removed function_call, relying on list + parser heuristic
+expression = _{ literal | keyword | symbol | special_form | list | vector | map }
+
+// --- Basic Values ---
+literal = { float | integer | string | boolean | nil }
+
+integer = @{ ("-" | "+")? ~ ASCII_DIGIT+ }
+float   = @{ ("-" | "+")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+
+// String parsing rules:
+// escape_sequence must be defined before string_char, and string_char before string.
+escape_sequence = { "\\" ~ ("\"" | "\\" | "n" | "t" | "r") } // For tool: \\ becomes \, \" becomes ", \\ becomes \
+string_char     = { escape_sequence | (!("\"" | "\\\\") ~ ANY) }   // For tool: \" becomes ", \\\\ becomes \
+string          =  { "\"" ~ string_char* ~ "\"" }                 // For tool: \" becomes "
+
+boolean = @{ "true" | "false" }
+nil     = @{ "nil" }
+
+// --- Identifiers & Symbols ---
+// Based on grammar_spec.md, allowing common Lisp chars. '.' is for ns, '-' is common.
+identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
+identifier            = @{ identifier_start_char ~ identifier_chars* }
+
+// Namespaced identifier like my.module/my-function or just my-function
+// Allowing multiple '.' for ns parts before the '/'
+namespaced_identifier = @{ identifier ~ ("." ~ identifier)* ~ "/" ~ identifier }
+
+// A symbol is typically represented by an identifier or namespaced identifier in code
+symbol = { namespaced_identifier | identifier }
+
+// --- Keywords ---
+// Simple keyword like :foo or qualified like :my.ns/foo
+keyword = @{ ":" ~ (namespaced_identifier | identifier) }
+
+
+// --- Collections ---
+// These now explicitly contain 'expression'
+list      = { "(" ~ expression* ~ ")" }
+vector    = { "[" ~ expression* ~ "]" }
+map       = { "{" ~ map_entry* ~ "}" }
+map_entry = { map_key ~ expression }
+// Allowing keywords, strings, or integers as map keys for now (as per grammar_spec)
+map_key = { keyword | string | integer }
+
+// --- Type Expressions (Based on grammar_spec.md) ---
+primitive_type = { keyword }
+// Keywords like :int, :float, :string, :bool, :nil, :keyword, :symbol, :any, :never
+
+// Complex Type Rules (assuming list-based syntax like [:vector T], [:map ...], etc.)
+vector_type    = { "[" ~ ":vector" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
+map_type_entry = { "[" ~ keyword ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ "?")? ~ WHITESPACE* ~ "]" }
+// [Key Type Optional?]
+map_type_wildcard = { "[" ~ ":*" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
+// [:* WildcardType]
+map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ map_type_entry)* ~ (WHITESPACE* ~ map_type_wildcard)? ~ WHITESPACE* ~ "]" }
+param_type          = { type_expr }
+variadic_param_type = { "&" ~ WHITESPACE* ~ type_expr }
+function_type       = { "[" ~ ":=>" ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ param_type)* ~ (WHITESPACE* ~ variadic_param_type)? ~ WHITESPACE* ~ "]" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
+// [:=> [Params...] Variadic? Return]
+resource_type     = { "[" ~ ":resource" ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ "]" }
+union_type        = { "[" ~ ":or" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
+intersection_type = { "[" ~ ":and" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
+literal_type      = { "[" ~ ":val" ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ "]" }
+
+// Main type expression rule
+type_expr = _{
+    primitive_type
+  | vector_type
+  | map_type
+  | function_type
+  | resource_type
+  | union_type
+  | intersection_type
+  | literal_type
+  | symbol // Allow type aliases (symbols) - handled later in type checking
+}
+
+// --- Patterns (Destructuring) ---
+wildcard = @{ "_" }
+// Added explicit wildcard rule
+
+binding_pattern = _{ symbol | map_destructuring_pattern | vector_destructuring_pattern | wildcard }
+// Added wildcard
+
+map_destructuring_pattern   =  {
+    "{" ~ map_destructuring_entry* ~ ("&" ~ symbol)? ~ (":as" ~ symbol)? ~ "}"
+}
+map_destructuring_entry     = _{ map_destructuring_key_entry | map_destructuring_or_entry }
+map_destructuring_key_entry = _{
+    (":keys" ~ "[" ~ binding_pattern+ ~ "]")
+  | (keyword ~ binding_pattern)
+  | (string ~ binding_pattern)
+}
+map_destructuring_or_entry  =  { ":or" ~ "{" ~ (symbol ~ literal)+ ~ "}" }
+
+vector_destructuring_pattern = {
+    "[" ~ binding_pattern* ~ ("&" ~ symbol)? ~ (":as" ~ symbol)? ~ "]"
+}
+
+// --- Special Forms ---
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr }
+// Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
+
+do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
+// Added for clarity and robustness - must be followed by whitespace or delimiter to avoid matching "do-something"
+
+let_keyword = @{ "let" }
+let_expr = { "(" ~ let_keyword ~ WHITESPACE* ~ vector ~ (WHITESPACE* ~ expression)+ ~ ")" }
+
+if_expr = { "(" ~ "if" ~ expression ~ expression ~ expression? ~ ")" }
+// Made else optional for now
+
+// do_expr = @{ "(" ~ "do" ~ expression* ~ ")" } // Original
+do_expr = { "(" ~ do_keyword ~ expression* ~ ")" }
+// Modified to use do_keyword
+// Ensure atomic and matches "do" keyword
+
+fn_param_list = { "[" ~ param_def* ~ ("&" ~ symbol)? ~ "]" } // New rule for parameter lists
+
+fn_expr   = { "(" ~ fn_keyword ~ fn_param_list ~ (":" ~ type_expr)? ~ expression+ ~ ")" } // Use fn_keyword
+param_def = { binding_pattern ~ (":" ~ type_expr)? }
+
+def_expr  = { "(" ~ def_keyword ~ symbol ~ (":" ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
+defn_expr = { "(" ~ defn_keyword ~ symbol ~ fn_param_list ~ (":" ~ type_expr)? ~ expression+ ~ ")" } // Use fn_param_list & defn_keyword
+
+parallel_expr    = { "(" ~ parallel_keyword ~ parallel_binding+ ~ ")" } // Use parallel_keyword
+parallel_binding = { "[" ~ symbol ~ type_annotation? ~ expression ~ "]" }
+type_annotation = { ":" ~ type_expr }
+
+with_resource_expr = { "(" ~ with_resource_keyword ~ "[" ~ symbol ~ type_expr ~ expression ~ "]" ~ expression+ ~ ")" } // Use with_resource_keyword
+
+try_catch_expr = { "(" ~ try_keyword ~ expression+ ~ catch_clause* ~ finally_clause? ~ ")" } // Use try_keyword
+// Changed + to * for catch
+catch_clause   =  { "(" ~ catch_keyword ~ catch_pattern ~ symbol ~ expression+ ~ ")" } // Use catch_keyword
+finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_keyword
+catch_pattern  = _{ type_expr | keyword | symbol }
+// symbol implies catch-all
+
+when_keyword = { "when" } // Added new rule
+
+match_expr    =  { "(" ~ match_keyword ~ expression ~ match_clause+ ~ ")" } // Use match_keyword
+match_clause  =  { "(" ~ match_pattern ~ (when_keyword ~ expression)? ~ expression+ ~ ")" } // Updated to use when_keyword
+match_pattern = _{
+    literal
+  | symbol
+  | keyword
+  | "_"
+  | type_expr // Matching on type might be complex, placeholder
+
+  | vector_match_pattern
+  | map_match_pattern
+  | ("(" ~ ":as" ~ symbol ~ match_pattern ~ ")")
+}
+
+vector_match_pattern    = { "[" ~ match_pattern* ~ ("&" ~ symbol)? ~ "]" }
+map_match_pattern       = { "{" ~ map_match_pattern_entry* ~ ("&" ~ symbol)? ~ "}" }
+map_match_pattern_entry = { map_key ~ match_pattern }
+
+log_step_expr = { "(" ~ log_step_keyword ~ ":id" ~ string ~ expression ~ ")" } // Use log_step_keyword
+// Simplified based on syntax_spec
+
+// --- Top-Level Definitions ---z
+task_keyword = @{ "task" }
+module_keyword = @{ "module" }
+import_keyword = @{ "import" }
+
+// Keywords for special forms
+fn_keyword = @{ "fn" }
+def_keyword = @{ "def" }
+defn_keyword = @{ "defn" }
+// let_keyword is already defined
+// if_keyword is not needed as "if" is not ambiguous with symbols in the same way
+parallel_keyword = @{ "parallel" }
+with_resource_keyword = @{ "with-resource" }
+try_keyword = @{ "try" }
+catch_keyword = @{ "catch" }
+finally_keyword = @{ "finally" }
+match_keyword = @{ "match" }
+log_step_keyword = @{ "log-step" }
+
+
+task_definition =  { "(" ~ task_keyword ~ task_property+ ~ ")" }
+task_property   = {
+    (":id" ~ string)
+  | (":source" ~ string) // Added from syntax_spec
+  | (":timestamp" ~ string) // Added from syntax_spec
+  | (":metadata" ~ map) // Assuming map literal
+  | (":intent" ~ expression)
+  | (":contracts" ~ map) // Assuming map literal
+  | (":plan" ~ expression)
+  | (":execution-trace" ~ vector) // Assuming vector literal
+}
+
+// module_definition =  { "(" ~ "module" ~ namespaced_identifier ~ export_option? ~ definition* ~ ")" }
+module_definition =  { "(" ~ module_keyword ~ (symbol | namespaced_identifier) ~ export_option? ~ definition* ~ ")" } // Changed namespaced_identifier to symbol and used module_keyword
+
+// Corrected export_option structure
+exports_keyword   = @{ ":exports" } 
+export_symbols_vec = { "[" ~ (WHITESPACE* ~ symbol)+ ~ WHITESPACE* ~ "]" }
+export_option     =  { "(" ~ exports_keyword ~ WHITESPACE* ~ export_symbols_vec ~ WHITESPACE* ~ ")" }
+
+definition        = _{ def_expr | defn_expr | import_definition }
+import_definition =  { "(" ~ import_keyword ~ (symbol | namespaced_identifier) ~ (import_option* ) ~ ")" } // Allow multiple flat import options
+import_option      = { ":as" ~ symbol | ":only" ~ "[" ~ symbol+ ~ "]" } // Normal rule, singular
+
+// --- Whitespace and Comments ---
+// Allow whitespace and comments between tokens
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" } // These are literal tab, CR, LF
+COMMENT    = _{ ";" ~ (!(NEWLINE) ~ ANY)* }   // Corrected COMMENT rule using built-in NEWLINE
+
+// Implicit whitespace/comments between rules:
+// _ = { (WHITESPACE | COMMENT)* } // Pest handles this implicitly if rules are atomic/push/drop
