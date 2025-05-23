@@ -1,0 +1,37 @@
+# Rust build artifacts
+/target/
+rtfs_compiler/target/
+
+# If you are building a library, ignore Cargo.lock
+# Uncomment the next line if this is a library, not a binary
+# Cargo.lock
+
+# Backup and temporary files
+*.rs.bk
+*.swp
+*.tmp
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# VS Code settings
+.vscode/
+
+# JetBrains IDEs
+.idea/
+
+# Byebug command history
+.byebug_history
+
+# Node/npm artifacts (if using JS tooling)
+node_modules/
+
+# Coverage reports
+coverage/
+*.lcov
+
+# Other common ignores
+*.bak
+*.old
