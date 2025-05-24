@@ -2,6 +2,14 @@
 
 This document outlines the fundamental concepts, design principles, and technical approach behind the **Reasoning Task Flow Specification (RTFS)** language.
 
+## My Human point of view
+
+I have seen Anthropic MCP that is becoming standard of fact for application to AI communication and Google A2A for AI to AI communication. They are great, but I find it not pushing the concepts far enough, not AI native enough, too weak compared to what an LLM could express in its intents and processes starting from human instructions. There is no need to separate app to AI and AI to AI communication, it is the same thing. It starts from human instructions (or AI instructions) and it ends with AI to AI communication. I think we can do better than that by letting the LLM design the language itself, so it is made for itself, not for humans.
+
+Thus, I want to study a new language that is made by AI for AI, not for humans, to generate a structure that self-contains the original instructions, the intent inferred by the AI with the tools it can use, the plan to fulfill the task and finally the execution trace. It should be self-explanatory by being both data and code and express the what and the how of the task to be executed, with a strong focus on verifiability, safety, and traceability. It should be able to express complex tasks in a way that is easy for AI to generate, parse, and execute, while also being robust and deterministic.
+
+This project is a pure exercice of style to see how far I can push the boundaries of what an LLM can do and choose with minimum intervention knowing it is made for itself. I have left the model design the core principles of the language, the syntax, the semantics, the grammar, the type system, the security model, the resource management, the standard library, and even the tooling to parse and execute it. From original prompt, LLM has been in favor of principles like types, effects, immutability. But I initially let the model decide what it wanted to do and it went in this direction that I personally foster so I've pushed it further in this direction. Thus, maybe it is not really objective in this sense, but I think it is a good exercise to see how far we can go in this direction that is a bit crazy and too ambitious.
+
 ## Project Genesis: The Bootstrap Prompt
 
 The RTFS project was initiated with the following prompt, which has guided its core philosophy:
