@@ -1,4 +1,6 @@
-# RTFS - Reasoning Task Flow Specification
+# RTFS - Reasoning Task Flow Specification or Read The F\*\*\*ing Specification
+
+## Meta-Teaser: RTFS in its Own Words
 
 ````lisp
 (task :id "rtfs-readme-teaser-v1"
