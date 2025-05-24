@@ -20,7 +20,7 @@ The RTFS project was initiated with the following prompt, which has guided its c
 >
 > Remember that this language is made for YOU, not for me.
 
-This initial directive, along with subsequent design discussions and refinements (many of which are archived in the `chats/` directory), led to the creation of RTFS. RTFS was conceived and initially designed by a Large Language Model (Claude 3 Opus) with the primary goal of creating a language optimized for AI systems to define, execute, trace, and verify complex tasks, directly addressing the needs outlined in the prompt.
+This initial directive, along with subsequent design discussions and refinements (many of which are archived in the `chats/` directory), led to the creation of RTFS. RTFS was conceived and initially designed by a Large Language Model (mostly using Github Copilot with Gemini 2.5 Pro a lot, Claude 3.7 and GPT4.1 a bit and a tiny bit of Claude 4 Sonnet) with the primary goal of creating a language optimized for AI systems to define, execute, trace, and verify complex tasks, directly addressing the needs outlined in the prompt.
 
 ## 1. Purpose and Core Motivations (Shaped by the Genesis Prompt)
 
@@ -105,6 +105,16 @@ Bringing RTFS to life involves a toolchain designed to process, execute, and ult
   - **Execution:** The runtime/interpreter executes the IR.
   - **Optimization:** Future compilers could optimize the IR.
   - **LLM Training:** The structured nature of the IR is ideal for training LLMs.
+
+  **Implementation Choice (Rust):**
+  While RTFS's S-expression syntax might suggest a Clojure-based parser for easier initial development (given Clojure's LISP nature and native handling of S-expressions), a full **Rust implementation** was chosen for the core RTFS tooling (parser, validator, and eventual runtime/compiler). This decision was driven by the need for:
+
+  - **High Performance:** Critical for a language intended for frequent generation and processing by AI systems.
+  - **Robustness & Safety:** Rust's static typing, ownership model, and borrow checker offer strong compile-time guarantees, leading to more reliable and secure tooling. This is paramount when executing AI-generated code.
+  - **Fine-Grained Control:** Rust provides detailed control over system resources, memory, and execution flow, essential for optimization and complex integrations.
+  - **Long-term Maintainability & Ecosystem:** Rust offers a strong foundation for building performant, standalone tools and benefits from a mature ecosystem for systems programming.
+
+  Although a Clojure script-based approach could have simplified initial S-expression handling, it was deemed less fitting for the project's core requirements of performance, safety, and control. The choice of Rust underscores a commitment to building a highly reliable and efficient foundation for AI task execution.
 
 - **Enabling Native LLM Generation:**
   A core goal is to leverage the IR and a growing corpus of RTFS `task` artifacts to fine-tune Large Language Models. The aim is for LLMs to "learn" the structure, semantics, and common patterns of RTFS, enabling them to natively generate correct, efficient, and safe RTFS plans. This creates a virtuous cycle: an LLM-designed language that other LLMs can master.
