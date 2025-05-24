@@ -1,5 +1,52 @@
 # RTFS - Reasoning Task Flow Specification
 
+````lisp
+(task :id "rtfs-readme-teaser-v1"
+  :metadata {
+    :purpose "Briefly showcase RTFS by defining its essence in its own format."
+    :target "README.md Introduction"
+    :timestamp "2025-05-25T11:00:00Z" ;; Current date
+  }
+
+  :intent "To be a self-describing artifact of the RTFS language, illustrating its core structure and principles for AI-driven task execution. This very code is an example of RTFS."
+
+  :contracts {
+    :input "None; this task is a self-contained demonstration."
+    :output "The understanding of RTFS imparted by reading this structure."
+    :capabilities-needed [
+      "ai:generate-and-understand-rtfs" ;; Conceptual capability
+      "system:log-execution-securely"   ;; Conceptual capability
+    ]
+  }
+
+  :plan (do
+          ;; RTFS is designed for AI:
+          (def ai-centricity "Core Idea: A language for AI agents to define, run, and track tasks.")
+
+          ;; RTFS is verifiable:
+          (def verifiable-code "Structure: 'intent' (what to do), 'contracts' (rules), 'plan' (how to do it).")
+
+          ;; RTFS is traceable:
+          (def traceable-execution "Audit: ':execution-trace' (see below) logs all actions for clarity and security.")
+
+          ;; RTFS is data:
+          (def code-is-data "Syntax: S-expressions, making RTFS code easy for AI to generate and process.")
+
+          ;; This plan\\'s 'execution' is you reading and understanding this!
+          (tool:display-message "Welcome to RTFS! This is how it works, in its own terms.")
+        )
+
+  :execution-trace [
+    { :event :task-instantiated
+      :timestamp "2025-05-25T11:00:01Z"
+      :agent "RTFS-Documentation-Bot"
+      :details "This RTFS task was generated to serve as a concise, self-explanatory teaser."
+      :security { :hash-of-previous "nil" :current-hash "abc123xyz789" :method "sha256-chain" }
+    }
+    ;; Further entries would log the 'execution' of the plan by an RTFS runtime.
+  ]
+)
+
 This document outlines the fundamental concepts, design principles, and technical approach behind the **Reasoning Task Flow Specification (RTFS)** language.
 
 ## Project Rationale: An Author's Perspective (also reshaped by the LLM :D)
@@ -64,7 +111,7 @@ The design of RTFS was guided by an LLM's understanding of what would make a lan
   (do
     (tool:log "Starting task...")
     (let [x 10] (* x 2)))
-  ```
+````
 
 - **Verifiability & Safety (Types & Contracts):**
   To enhance the reliability of AI-generated plans, RTFS includes a type system (both static and dynamic checks) and explicit contracts. Tasks define their `:input-schema`, `:output-schema`, and `:capabilities-required`. This allows for upfront validation and runtime checks, ensuring that tasks operate within expected boundaries.
@@ -425,3 +472,7 @@ Contributions are welcome! Please open issues or submit pull requests for improv
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).
+
+```
+
+```
