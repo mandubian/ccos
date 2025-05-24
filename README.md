@@ -118,8 +118,6 @@ The design of RTFS was guided by an LLM's understanding of what would make a lan
     (let [x 10] (* x 2)))
   ```
 
-````
-
 - **Verifiability & Safety (Types & Contracts):**
   To enhance the reliability of AI-generated plans, RTFS includes a type system (both static and dynamic checks) and explicit contracts. Tasks define their `:input-schema`, `:output-schema`, and `:capabilities-required`. This allows for upfront validation and runtime checks, ensuring that tasks operate within expected boundaries.
 
@@ -480,7 +478,6 @@ Contributions are welcome! Please open issues or submit pull requests for improv
 
 This project is licensed under the [Apache License 2.0](LICENSE).
 
-```
+## Acknowledgments
 
-```
-````
+This project was inspired by the need for a robust, AI-native language for task execution and verification. Special thanks to the LLMs that contributed to its design and development.
