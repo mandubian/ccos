@@ -1,8 +1,10 @@
-# RTFS - Reasoning Task Flow Specification or Read The F\*\*\*ing Specification
+# RTFS - Reasoning Task Flow Specification
+
+_(or Read The F\*\*\*ing Spec)_
 
 ## Meta-Teaser: RTFS in its Own Words
 
-````lisp
+```lisp
 (task :id "rtfs-readme-teaser-v1"
   :metadata {
     :purpose "Briefly showcase RTFS by defining its essence in its own format."
@@ -48,6 +50,7 @@
     ;; Further entries would log the 'execution' of the plan by an RTFS runtime.
   ]
 )
+```
 
 This document outlines the fundamental concepts, design principles, and technical approach behind the **Reasoning Task Flow Specification (RTFS)** language.
 
@@ -113,6 +116,8 @@ The design of RTFS was guided by an LLM's understanding of what would make a lan
   (do
     (tool:log "Starting task...")
     (let [x 10] (* x 2)))
+  ```
+
 ````
 
 - **Verifiability & Safety (Types & Contracts):**
@@ -478,3 +483,4 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ```
 
 ```
+````
