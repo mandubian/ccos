@@ -2,13 +2,20 @@
 
 This document outlines the fundamental concepts, design principles, and technical approach behind the **Reasoning Task Flow Specification (RTFS)** language.
 
-## My Human point of view
+## Project Rationale: An Author's Perspective (also reshaped by the LLM :D)
 
-I have seen Anthropic MCP that is becoming standard of fact for application to AI communication and Google A2A for AI to AI communication. They are great, but I find it not pushing the concepts far enough, not AI native enough, too weak compared to what an LLM could express in its intents and processes starting from human instructions. There is no need to separate app to AI and AI to AI communication, it is the same thing. It starts from human instructions (or AI instructions) and it ends with AI to AI communication. I think we can do better than that by letting the LLM design the language itself, so it is made for itself, not for humans.
+While existing AI communication protocols like Anthropic's MCP and Google'ss A2A are significant, they appear to offer limited scope for a truly AI-native language. Current approaches don't seem to fully harness a Large Language Model's (LLM) capacity to articulate complex intents and processes derived from human instructions. Furthermore, the distinction between application-to-AI and AI-to-AI communication can be seen as artificial, as both often stem from initial directives (human or AI) and lead to AI-driven interactions.
 
-Thus, I want to study a new language that is made by AI for AI, not for humans, to generate a structure that self-contains the original instructions, the intent inferred by the AI with the tools it can use, the plan to fulfill the task and finally the execution trace. It should be self-explanatory by being both data and code and express the what and the how of the task to be executed, with a strong focus on verifiability, safety, and traceability. It should be able to express complex tasks in a way that is easy for AI to generate, parse, and execute, while also being robust and deterministic.
+This project, RTFS, explores an alternative: a language where LLMs have significantly shaped the design, making it primarily for AI use. The central idea is to enable an AI to generate a self-contained structure representing a unit of work. This structure, referred to in RTFS as a `task`, is envisioned to include:
 
-This project is a pure exercice of style to see how far I can push the boundaries of what an LLM can do and choose with minimum intervention knowing it is made for itself. I have left the model design the core principles of the language, the syntax, the semantics, the grammar, the type system, the security model, the resource management, the standard library, and even the tooling to parse and execute it. From original prompt, LLM has been in favor of principles like types, effects, immutability. But I initially let the model decide what it wanted to do and it went in this direction that I personally foster so I've pushed it further in this direction. Thus, maybe it is not really objective in this sense, but I think it is a good exercise to see how far we can go in this direction that is a bit crazy and too ambitious.
+- The original instruction (from a human or another AI).
+- The AI\\\'s inferred intent, considering available tools.
+- A detailed plan to execute the work.
+- A complete, verifiable execution trace.
+
+This artifact (the RTFS `task`), being both data and code, should be self-explanatory, clearly defining both the objective (\"what\") and the method (\"how\"). Key principles guiding this design are verifiability, safety, traceability, robustness, and determinism. The aim is to make it straightforward for AIs to generate, parse, and execute complex operations.
+
+RTFS also serves as an experiment to explore the capabilities of LLMs in language design, particularly when the language is intended for the AI's own use with minimal human steering. Although the LLM's initial design choices (favoring types, effects, and immutability) aligned with principles I personally support and encouraged, the development process has been an insightful journey into this collaborative and ambitious approach to creating a new language.
 
 ## Project Genesis: The Bootstrap Prompt
 
@@ -84,7 +91,7 @@ The design of RTFS was guided by an LLM's understanding of what would make a lan
   Complex data types like **tensors or ML models** can be represented either as first-class array types (`[:array :float [100 100 3]]`) or managed as opaque resource handles (`[:resource TensorHandle]`) via `with-resource`.
 
 - **Traceability & Auditability:**
-  Every `task` artifact includes an `:execution-trace`, an immutable, append-only log of significant events during its lifecycle. This detailed trace is vital for debugging, auditing AI behavior, understanding decision-making processes, and ensuring accountability.
+  Every `task` artifact includes an `:execution-trace`, an immutable, append-only log of significant events. To enhance security, this trace leverages cryptographic techniques like hashing to link entries and ensure data integrity. This makes the execution record verifiable, tamper-evident, and trustworthy, which is crucial for debugging, auditing AI behavior, understanding decision-making, and ensuring accountability.
 
 - **Modularity & Reusability:**
   RTFS supports `module`, `import`, and `export` mechanisms, allowing developers and AI agents to create and share libraries of reusable functions and task components, promoting a more organized and efficient workflow development.
