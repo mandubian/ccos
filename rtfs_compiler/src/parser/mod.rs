@@ -139,11 +139,19 @@ fn build_task_definition(pair: Pair<Rule>) -> Result<TaskDefinition, PestParseEr
     let _task_keyword = next_significant(&mut inner);
 
     while let Some(prop_pair) = next_significant(&mut inner) {
-        eprintln!("[build_task_definition] prop_pair: rule={:?}, str='{}'", prop_pair.as_rule(), prop_pair.as_str());
+        eprintln!(
+            "[build_task_definition] prop_pair: rule={:?}, str='{}'",
+            prop_pair.as_rule(),
+            prop_pair.as_str()
+        );
         let prop_str = prop_pair.as_str().to_string();
         let mut prop_inner = prop_pair.into_inner();
         let value_pair = next_significant(&mut prop_inner).expect("Task property needs value");
-        eprintln!("[build_task_definition] value_pair: rule={:?}, str='{}'", value_pair.as_rule(), value_pair.as_str());
+        eprintln!(
+            "[build_task_definition] value_pair: rule={:?}, str='{}'",
+            value_pair.as_rule(),
+            value_pair.as_str()
+        );
         match prop_str.trim_start() {
             s if s.starts_with(":id") => {
                 assert_eq!(value_pair.as_rule(), Rule::string);
@@ -161,7 +169,8 @@ fn build_task_definition(pair: Pair<Rule>) -> Result<TaskDefinition, PestParseEr
                 assert_eq!(value_pair.as_rule(), Rule::string);
                 let raw_str = value_pair.as_str();
                 let content = &raw_str[1..raw_str.len() - 1];
-                timestamp = Some(unescape(content).expect("Invalid escape sequence in task timestamp"));
+                timestamp =
+                    Some(unescape(content).expect("Invalid escape sequence in task timestamp"));
             }
             s if s.starts_with(":metadata") => {
                 assert_eq!(value_pair.as_rule(), Rule::map);
@@ -202,8 +211,9 @@ fn build_task_definition(pair: Pair<Rule>) -> Result<TaskDefinition, PestParseEr
 // Helper function to build export options
 // Expected pairs: inner of export_option rule (exports_keyword, export_symbols_vec)
 fn build_export_option(mut pairs: Pairs<Rule>) -> Result<Vec<Symbol>, PestParseError> {
-    let exports_keyword_pair = next_significant(&mut pairs)
-        .ok_or_else(|| PestParseError::CustomError("Expected :exports keyword in export_option".to_string()))?;
+    let exports_keyword_pair = next_significant(&mut pairs).ok_or_else(|| {
+        PestParseError::CustomError("Expected :exports keyword in export_option".to_string())
+    })?;
     if exports_keyword_pair.as_rule() != Rule::exports_keyword {
         return Err(PestParseError::UnexpectedRule {
             expected: ":exports keyword".to_string(),
@@ -212,8 +222,9 @@ fn build_export_option(mut pairs: Pairs<Rule>) -> Result<Vec<Symbol>, PestParseE
         });
     }
 
-    let symbols_vec_pair = next_significant(&mut pairs)
-        .ok_or_else(|| PestParseError::CustomError("Expected symbols vector in export_option".to_string()))?;
+    let symbols_vec_pair = next_significant(&mut pairs).ok_or_else(|| {
+        PestParseError::CustomError("Expected symbols vector in export_option".to_string())
+    })?;
     if symbols_vec_pair.as_rule() != Rule::export_symbols_vec {
         return Err(PestParseError::UnexpectedRule {
             expected: "symbols vector".to_string(),
@@ -222,39 +233,42 @@ fn build_export_option(mut pairs: Pairs<Rule>) -> Result<Vec<Symbol>, PestParseE
         });
     }
 
-    symbols_vec_pair.into_inner()
+    symbols_vec_pair
+        .into_inner()
         .filter(|p| p.as_rule() == Rule::symbol)
         .map(|p| Ok(build_symbol(p))) // build_symbol doesn't return Result, so wrap Ok
         .collect()
 }
 
-
 // module_definition =  { "(" ~ module_keyword ~ symbol ~ export_option? ~ definition* ~ ")" }
 // fn build_module_definition(pair: Pair<Rule>) -> ModuleDefinition { // Old signature
-fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestParseError> { // New signature
+fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestParseError> {
+    // New signature
     // assert_eq!(pair.as_rule(), Rule::module_definition); // Already asserted by caller build_ast
     let mut inner_pairs = pair.into_inner(); // Consumes the Rule::module_definition pair itself
 
     // 1. module_keyword
-    let module_keyword_pair = next_significant(&mut inner_pairs)
-        .ok_or_else(|| PestParseError::CustomError("Module definition missing module keyword".to_string()))?;
+    let module_keyword_pair = next_significant(&mut inner_pairs).ok_or_else(|| {
+        PestParseError::CustomError("Module definition missing module keyword".to_string())
+    })?;
     if module_keyword_pair.as_rule() != Rule::module_keyword {
-        return Err(PestParseError::UnexpectedRule{
+        return Err(PestParseError::UnexpectedRule {
             expected: "module_keyword".to_string(),
             found: format!("{:?}", module_keyword_pair.as_rule()),
-            rule_text: module_keyword_pair.as_str().to_string()
+            rule_text: module_keyword_pair.as_str().to_string(),
         });
     }
 
     // 2. Name (symbol)
-    let name_pair = next_significant(&mut inner_pairs)
-        .ok_or_else(|| PestParseError::CustomError("Module definition requires a name".to_string()))?;
+    let name_pair = next_significant(&mut inner_pairs).ok_or_else(|| {
+        PestParseError::CustomError("Module definition requires a name".to_string())
+    })?;
     // As per grammar: module_definition = { "(" ~ module_keyword ~ symbol ...
     if name_pair.as_rule() != Rule::symbol {
-         return Err(PestParseError::UnexpectedRule{
+        return Err(PestParseError::UnexpectedRule {
             expected: "symbol for module name".to_string(),
             found: format!("{:?}", name_pair.as_rule()),
-            rule_text: name_pair.as_str().to_string()
+            rule_text: name_pair.as_str().to_string(),
         });
     }
     let name = build_symbol(name_pair);
@@ -315,29 +329,34 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
 
 // import_definition =  { "(" ~ import_keyword ~ namespaced_identifier ~ import_options? ~ ")" }
 // fn build_import_definition(pair: Pair<Rule>) -> ImportDefinition { // Old signature
-fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, PestParseError> { // New signature, takes inner pairs
+fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, PestParseError> {
+    // New signature, takes inner pairs
     // assert_eq!(pair.as_rule(), Rule::import_definition); // Asserted by caller
     // let mut inner = pair.into_inner(); // Caller now passes inner pairs
 
     // 1. import_keyword
-    let import_keyword_pair = next_significant(&mut pairs)
-        .ok_or_else(|| PestParseError::CustomError("Import definition missing import keyword".to_string()))?;
+    let import_keyword_pair = next_significant(&mut pairs).ok_or_else(|| {
+        PestParseError::CustomError("Import definition missing import keyword".to_string())
+    })?;
     if import_keyword_pair.as_rule() != Rule::import_keyword {
-        return Err(PestParseError::UnexpectedRule{
+        return Err(PestParseError::UnexpectedRule {
             expected: "import_keyword".to_string(),
             found: format!("{:?}", import_keyword_pair.as_rule()),
-            rule_text: import_keyword_pair.as_str().to_string()
+            rule_text: import_keyword_pair.as_str().to_string(),
         });
     }
 
     // 2. Module Name
-    let module_name_pair = next_significant(&mut pairs)
-        .ok_or_else(|| PestParseError::CustomError("Import definition requires a module name".to_string()))?;
-    if !(module_name_pair.as_rule() == Rule::namespaced_identifier || module_name_pair.as_rule() == Rule::symbol) {
-         return Err(PestParseError::UnexpectedRule{
+    let module_name_pair = next_significant(&mut pairs).ok_or_else(|| {
+        PestParseError::CustomError("Import definition requires a module name".to_string())
+    })?;
+    if !(module_name_pair.as_rule() == Rule::namespaced_identifier
+        || module_name_pair.as_rule() == Rule::symbol)
+    {
+        return Err(PestParseError::UnexpectedRule {
             expected: "symbol or namespaced_identifier for import module name".to_string(),
             found: format!("{:?}", module_name_pair.as_rule()),
-            rule_text: module_name_pair.as_str().to_string()
+            rule_text: module_name_pair.as_str().to_string(),
         });
     }
     let module_name = build_symbol(module_name_pair);
@@ -345,49 +364,55 @@ fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, P
     let mut alias = None;
     let mut only = None;
 
-    // Iterate over all remaining pairs for flat import_option rules
-    for option_pair in pairs {
-        match option_pair.as_rule() {
-            Rule::import_option => {
-                let mut option_inner = option_pair.into_inner();
-                let key_pair = next_significant(&mut option_inner)
-                    .ok_or_else(|| PestParseError::CustomError("Import option missing key (e.g., :as, :only)".to_string()))?;
-                match key_pair.as_str() {
-                    ":as" => {
-                        let alias_sym_pair = next_significant(&mut option_inner)
-                            .ok_or_else(|| PestParseError::CustomError("Import :as requires a symbol".to_string()))?;
-                        if alias_sym_pair.as_rule() != Rule::symbol {
-                            return Err(PestParseError::UnexpectedRule{
-                                expected: "symbol for :as alias".to_string(),
-                                found: format!("{:?}", alias_sym_pair.as_rule()),
-                                rule_text: alias_sym_pair.as_str().to_string()
-                            });
-                        }
-                        alias = Some(build_symbol(alias_sym_pair));
+    // Parse import_option rules (which contain ":as symbol" or ":only [symbols]")
+    while let Some(option_pair) = next_significant(&mut pairs) {
+        if option_pair.as_rule() == Rule::import_option {
+            let option_text = option_pair.as_str();
+            let option_inner = option_pair.into_inner();
+
+            // The first element tells us which type of option this is
+            if option_text.starts_with(":as") {
+                // Skip the ":as" part and get the symbol
+                // The import_option rule is ":as" ~ symbol, so we need to find the symbol
+                let mut found_symbol = false;
+                for inner_pair in option_inner {
+                    if inner_pair.as_rule() == Rule::symbol {
+                        alias = Some(build_symbol(inner_pair));
+                        found_symbol = true;
+                        break;
                     }
-                    ":only" => {
-                        let only_vec_pair = next_significant(&mut option_inner)
-                            .ok_or_else(|| PestParseError::CustomError("Import :only requires a symbol vector".to_string()))?;
-                        if only_vec_pair.as_rule() != Rule::vector {
-                            return Err(PestParseError::UnexpectedRule{
-                                expected: "vector for :only list".to_string(),
-                                found: format!("{:?}", only_vec_pair.as_rule()),
-                                rule_text: only_vec_pair.as_str().to_string()
-                            });
-                        }
-                        only = Some(
-                            only_vec_pair
-                                .into_inner()
-                                .filter(|p| p.as_rule() == Rule::symbol)
-                                .map(|p| Ok(build_symbol(p)))
-                                .collect::<Result<Vec<_>, PestParseError>>()?,
-                        );
-                    }
-                    _ => return Err(PestParseError::CustomError(format!("Unknown import option: {}", key_pair.as_str()))),
                 }
+                if !found_symbol {
+                    return Err(PestParseError::CustomError(
+                        "Import :as option missing symbol".to_string(),
+                    ));
+                }
+            } else if option_text.starts_with(":only") {
+                // The import_option rule is ":only" ~ "[" ~ symbol+ ~ "]"
+                // We need to find the symbols within the brackets
+                let mut symbols = Vec::new();
+                for inner_pair in option_inner {
+                    if inner_pair.as_rule() == Rule::symbol {
+                        symbols.push(build_symbol(inner_pair));
+                    }
+                }
+                if symbols.is_empty() {
+                    return Err(PestParseError::CustomError(
+                        "Import :only option requires at least one symbol".to_string(),
+                    ));
+                }
+                only = Some(symbols);
+            } else {
+                return Err(PestParseError::CustomError(format!(
+                    "Unknown import option: {}",
+                    option_text
+                )));
             }
-            Rule::WHITESPACE | Rule::COMMENT => continue,
-            _ => return Err(PestParseError::CustomError(format!("Unexpected rule in import_definition: {:?}", option_pair.as_rule()))),
+        } else {
+            return Err(PestParseError::CustomError(format!(
+                "Expected import_option, found: {:?}",
+                option_pair.as_rule()
+            )));
         }
     }
 
@@ -455,9 +480,7 @@ mod tests {
             assert_eq!(
                 ast, $expected,
                 "Expression AST mismatch for input: {:?}\nExpected: {:#?}\nActual: {:#?}",
-                $input,
-                $expected,
-                ast
+                $input, $expected, ast
             );
         };
     }
@@ -765,7 +788,9 @@ mod tests {
                     variadic_param: None,
                     return_type: None,
                     body: vec![Expression::FunctionCall {
-                        function: Box::new(Expression::Symbol(Symbol("other/do-something".to_string()))),
+                        function: Box::new(Expression::Symbol(Symbol(
+                            "other/do-something".to_string(),
+                        ))),
                         arguments: vec![
                             Expression::Symbol(Symbol("x".to_string())),
                             Expression::Symbol(Symbol("private-val".to_string())),
@@ -775,7 +800,11 @@ mod tests {
             ],
         })];
         let parse_result = parse(input);
-        assert!(parse_result.is_ok(), "Failed to parse module definition: {:?}", parse_result.err());
+        assert!(
+            parse_result.is_ok(),
+            "Failed to parse module definition: {:?}",
+            parse_result.err()
+        );
         let actual = parse_result.unwrap();
         use std::fs::File;
         use std::io::Write;
@@ -966,7 +995,8 @@ mod tests {
 
     #[test]
     fn test_parse_log_step() {
-        let parse_result = RTFSParser::parse(Rule::expression, "(log-step :id \"step-1\" (do-something))");
+        let parse_result =
+            RTFSParser::parse(Rule::expression, "(log-step :id \"step-1\" (do-something))");
         assert!(
             parse_result.is_ok(),
             "Failed to parse expression:\\nInput: {:?}\\nError: {:?}",
@@ -977,7 +1007,7 @@ mod tests {
         let expr_pair = parse_result.unwrap().next().unwrap();
         let ast = expressions::build_expression(expr_pair);
         println!("Actual AST: {:#?}", ast);
-        
+
         let expected = Expression::LogStep(LogStepExpr {
             id: "step-1".to_string(),
             expression: Box::new(Expression::FunctionCall {
@@ -986,7 +1016,7 @@ mod tests {
             }),
         });
         println!("Expected AST: {:#?}", expected);
-        
+
         assert_eq!(
             ast, expected,
             "Expression AST mismatch for input: {:?}",

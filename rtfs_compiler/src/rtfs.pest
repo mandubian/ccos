@@ -136,7 +136,12 @@ type_annotation = { ":" ~ type_expr }
 
 with_resource_expr = { "(" ~ with_resource_keyword ~ "[" ~ symbol ~ type_expr ~ expression ~ "]" ~ expression+ ~ ")" } // Use with_resource_keyword
 
-try_catch_expr = { "(" ~ try_keyword ~ expression+ ~ catch_clause* ~ finally_clause? ~ ")" } // Use try_keyword
+// Define a rule for expressions that can appear in a try block's body.
+// It must not be a catch_clause or finally_clause itself.
+// This prevents expression+ from consuming catch/finally clauses.
+try_body_expression = _{ !(catch_clause | finally_clause) ~ expression }
+
+try_catch_expr = { "(" ~ try_keyword ~ try_body_expression+ ~ catch_clause* ~ finally_clause? ~ ")" } // Use try_keyword and try_body_expression
 // Changed + to * for catch
 catch_clause   =  { "(" ~ catch_keyword ~ catch_pattern ~ symbol ~ expression+ ~ ")" } // Use catch_keyword
 finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_keyword

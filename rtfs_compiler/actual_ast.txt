@@ -17,7 +17,11 @@
                         module_name: Symbol(
                             "other.module",
                         ),
-                        alias: None,
+                        alias: Some(
+                            Symbol(
+                                "other",
+                            ),
+                        ),
                         only: None,
                     },
                 ),

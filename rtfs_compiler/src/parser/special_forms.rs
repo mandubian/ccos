@@ -3,9 +3,9 @@ use pest::iterators::{Pair, Pairs};
 
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
-    CatchClause, CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, LetBinding, LetExpr, LogStepExpr, MapMatchPattern, MatchClause, MatchExpr, MatchPattern, ParallelBinding, ParallelExpr, ParamDef, Pattern, Symbol, TryCatchExpr, TypeExpr, VectorMatchPattern, WithResourceExpr
-    // Add other AST nodes like Literal, Keyword if they are directly constructed here,
-    // though often they come from build_literal, build_keyword etc.
+    CatchClause, CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, LetBinding,
+    LetExpr, LogStepExpr, MapMatchPattern, MatchClause, MatchExpr, MatchPattern, ParallelBinding,
+    ParallelExpr, ParamDef, TryCatchExpr, TypeExpr, VectorMatchPattern, WithResourceExpr,
 };
 use crate::parser::next_significant;
 
@@ -29,7 +29,7 @@ pub(super) fn build_let_expr(pairs: Pairs<Rule>) -> LetExpr {
             }
             Rule::let_keyword => {
                 significant_pairs.next(); // Consume let_keyword
-                // Consume any whitespace/comment immediately after let_keyword
+                                          // Consume any whitespace/comment immediately after let_keyword
                 while let Some(sp) = significant_pairs.peek() {
                     if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
                         significant_pairs.next();
@@ -110,7 +110,7 @@ pub(super) fn build_if_expr(mut pairs: Pairs<Rule>) -> IfExpr {
 }
 
 pub(super) fn build_do_expr(pairs: Pairs<Rule>) -> DoExpr {
-    // When called from `Rule::do_expr` in expressions.rs, 
+    // When called from `Rule::do_expr` in expressions.rs,
     // `pairs` will be from `do_expr.into_inner()`.
     // Grammar: `do_expr = { "(" ~ do_keyword ~ expression* ~ ")" }`
     // So, the inner pairs will start with `do_keyword` followed by `expression*`.
@@ -136,7 +136,7 @@ pub(super) fn build_do_expr(pairs: Pairs<Rule>) -> DoExpr {
             significant_pairs.next(); // Consume the do_keyword
         }
     }
-    
+
     // Now, map over the actual expressions, filtering any further non-significant tokens
     let expressions = significant_pairs
         .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
@@ -288,7 +288,7 @@ pub(super) fn build_fn_expr(mut pairs: Pairs<Rule>) -> FnExpr {
 
 pub(super) fn build_def_expr(mut pairs: Pairs<Rule>) -> DefExpr {
     // def_expr = { "(" ~ def_keyword ~ symbol ~ (":" ~ type_expr)? ~ expression ~ ")" }
-    // When called from `Rule::def_expr` in expressions.rs, 
+    // When called from `Rule::def_expr` in expressions.rs,
     // `pairs` will be from `def_expr.into_inner()`.
     // So, the inner pairs will start with `def_keyword` followed by `symbol`, `type_expr?`, `expression`.
 
@@ -359,10 +359,16 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> DefnExpr {
     }
 
     // Now get the symbol for the function name
-    let name = build_symbol(pairs.next().expect("defn_expr: missing function name symbol"));
+    let name = build_symbol(
+        pairs
+            .next()
+            .expect("defn_expr: missing function name symbol"),
+    );
 
     // 3. Consume fn_param_list for parameters
-    let params_list_pair = pairs.next().expect("defn_expr: missing parameters list (fn_param_list)");
+    let params_list_pair = pairs
+        .next()
+        .expect("defn_expr: missing parameters list (fn_param_list)");
 
     assert_eq!(
         params_list_pair.as_rule(),
@@ -378,7 +384,9 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> DefnExpr {
 
     while let Some(param_item_peek) = params_inner.peek() {
         // Skip whitespace/comments
-        if param_item_peek.as_rule() == Rule::COMMENT || param_item_peek.as_rule() == Rule::WHITESPACE {
+        if param_item_peek.as_rule() == Rule::COMMENT
+            || param_item_peek.as_rule() == Rule::WHITESPACE
+        {
             params_inner.next(); // Consume whitespace/comment
             continue;
         }
@@ -386,7 +394,7 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> DefnExpr {
         // Check for variadic '&'
         if param_item_peek.as_str() == "&" {
             params_inner.next(); // Consume '&'
-            // Consume potential whitespace after &
+                                 // Consume potential whitespace after &
             while let Some(peeked) = params_inner.peek() {
                 if peeked.as_rule() == Rule::COMMENT || peeked.as_rule() == Rule::WHITESPACE {
                     params_inner.next(); // Consume
@@ -407,25 +415,33 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> DefnExpr {
         // Process regular parameter (param_def)
         // fn_param_list = { "[" ~ param_def* ~ ("&" ~ symbol)? ~ "]" }
         // param_def = { binding_pattern ~ (":" ~ type_expr)? }
-        let param_def_pair = params_inner.next().expect("defn_expr: expected param_def in parameter list");
+        let param_def_pair = params_inner
+            .next()
+            .expect("defn_expr: expected param_def in parameter list");
         assert_eq!(
             param_def_pair.as_rule(),
             Rule::param_def,
             "defn_expr: Expected param_def in fn_param_list, found {:?} ('{}')",
-            param_def_pair.as_rule(), param_def_pair.as_str()
+            param_def_pair.as_rule(),
+            param_def_pair.as_str()
         );
-        
+
         let mut inner_param_def = param_def_pair.into_inner();
-        let pattern_pair = inner_param_def.next().expect("defn_expr: param_def requires a pattern");
+        let pattern_pair = inner_param_def
+            .next()
+            .expect("defn_expr: param_def requires a pattern");
         // pattern_pair should be Rule::binding_pattern based on param_def grammar
         // build_pattern handles various pattern types including direct symbols if binding_pattern is silent
-        let pattern = build_pattern(pattern_pair); 
-        
+        let pattern = build_pattern(pattern_pair);
+
         let type_annotation = inner_param_def
             .find(|p| p.as_rule() == Rule::type_expr)
             .map(build_type_expr);
 
-        params.push(ParamDef { pattern, type_annotation });
+        params.push(ParamDef {
+            pattern,
+            type_annotation,
+        });
     }
 
     // 4. Optional return type (from the remaining pairs of defn_expr)
@@ -440,7 +456,12 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> DefnExpr {
     // 5. Body expressions (one or more, remaining items in `pairs`)
     let body_pairs_for_debug: Vec<_> = pairs.peekable().collect(); // Collect for debug printing
     for (i, p) in body_pairs_for_debug.iter().enumerate() {
-        eprintln!("[build_defn_expr] Body pair {}: rule={:?}, str='{}'", i, p.as_rule(), p.as_str());
+        eprintln!(
+            "[build_defn_expr] Body pair {}: rule={:?}, str='{}'",
+            i,
+            p.as_rule(),
+            p.as_str()
+        );
     }
     // Re-create the iterator for actual use
     let pairs = body_pairs_for_debug.into_iter().peekable();
@@ -501,22 +522,36 @@ fn build_parallel_binding(pair: Pair<Rule>) -> ParallelBinding {
 
     let mut type_annotation = None;
     let mut next_pair = next_significant(&mut inner).expect("Parallel binding needs expression");
-    println!("  Next pair after symbol: rule={:?}, text='{}'", next_pair.as_rule(), next_pair.as_str());
+    println!(
+        "  Next pair after symbol: rule={:?}, text='{}'",
+        next_pair.as_rule(),
+        next_pair.as_str()
+    );
 
     // Check if we have a type annotation
     if next_pair.as_rule() == Rule::type_annotation {
         // Parse the type annotation - it contains ": type_expr"
         let mut type_inner = next_pair.into_inner();
         // Skip the ":" and get the type_expr
-        let type_expr_pair = type_inner.find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+        let type_expr_pair = type_inner
+            .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
             .expect("type_annotation should contain type_expr");
-        println!("  Found type annotation, type_expr: rule={:?}, text='{}'", type_expr_pair.as_rule(), type_expr_pair.as_str());
-        
+        println!(
+            "  Found type annotation, type_expr: rule={:?}, text='{}'",
+            type_expr_pair.as_rule(),
+            type_expr_pair.as_str()
+        );
+
         type_annotation = Some(build_type_expr(type_expr_pair));
         println!("  Built type annotation: {:?}", type_annotation);
-        
-        next_pair = next_significant(&mut inner).expect("Parallel binding needs expression after type");
-        println!("  Next pair after type: rule={:?}, text='{}'", next_pair.as_rule(), next_pair.as_str());
+
+        next_pair =
+            next_significant(&mut inner).expect("Parallel binding needs expression after type");
+        println!(
+            "  Next pair after type: rule={:?}, text='{}'",
+            next_pair.as_rule(),
+            next_pair.as_str()
+        );
     }
 
     let expression = Box::new(build_expression(next_pair));
@@ -550,8 +585,10 @@ pub(super) fn build_with_resource_expr(mut pairs: Pairs<Rule>) -> WithResourceEx
     }
 
     // The next three pairs are the binding: symbol, type_expr, expression
-    let resource_symbol = build_symbol(next_significant(&mut pairs).expect("with-resource needs symbol"));
-    let resource_type = build_type_expr(next_significant(&mut pairs).expect("with-resource needs type"));
+    let resource_symbol =
+        build_symbol(next_significant(&mut pairs).expect("with-resource needs symbol"));
+    let resource_type =
+        build_type_expr(next_significant(&mut pairs).expect("with-resource needs type"));
     let resource_init = Box::new(build_expression(
         next_significant(&mut pairs).expect("with-resource needs init expression"),
     ));
@@ -570,48 +607,104 @@ pub(super) fn build_with_resource_expr(mut pairs: Pairs<Rule>) -> WithResourceEx
 pub(super) fn build_try_catch_expr(pairs: Pairs<Rule>) -> TryCatchExpr {
     let mut try_body = Vec::new();
     let mut catch_clauses = Vec::new();
-    let mut finally_body: Option<Vec<crate::ast::Expression>> = None; // Use full path for clarity
-    let mut current_section = "try"; // "try", "catch", "finally"
+    let mut finally_body: Option<Vec<crate::ast::Expression>> = None;
 
-    // Filter out the pairs to handle try_keyword if present
-    let filtered_pairs: Vec<Pair<Rule>> = pairs
+    // Collect pairs into a vector first to avoid ownership issues with debug output
+    let all_pairs: Vec<Pair<Rule>> = pairs.collect();
+
+    // Add debug output to see what rules are being produced
+    eprintln!("[build_try_catch_expr] Starting to parse try-catch expression");
+    for (i, pair) in all_pairs.iter().enumerate() {
+        eprintln!(
+            "[build_try_catch_expr] Rule {}: {:?} = '{}'",
+            i,
+            pair.as_rule(),
+            pair.as_str()
+        );
+    }
+
+    // Filter out whitespace, comments, and the try_keyword
+    let filtered_pairs: Vec<Pair<Rule>> = all_pairs
+        .into_iter()
         .filter(|p| match p.as_rule() {
-            Rule::try_keyword => false, // Skip try_keyword
-            Rule::WHITESPACE | Rule::COMMENT => false, // Skip whitespace and comments
+            Rule::try_keyword | Rule::WHITESPACE | Rule::COMMENT => false,
             _ => true,
         })
         .collect();
 
+    eprintln!(
+        "[build_try_catch_expr] Filtered pairs count: {}",
+        filtered_pairs.len()
+    );
+    for (i, pair) in filtered_pairs.iter().enumerate() {
+        eprintln!(
+            "[build_try_catch_expr] Filtered Rule {}: {:?} = '{}'",
+            i,
+            pair.as_rule(),
+            pair.as_str()
+        );
+    }
+
+    let mut parsing_try = true;
+
     for pair in filtered_pairs {
         match pair.as_rule() {
-            Rule::expression => match current_section {
-                "try" => try_body.push(build_expression(pair)),
-                "finally" => {
-                    // Explicitly type the temporary body vector
-                    let mut body: Vec<crate::ast::Expression> =
-                        finally_body.take().unwrap_or_default();
-                    body.push(build_expression(pair));
-                    finally_body = Some(body);
-                }
-                _ => panic!("Unexpected expression in try/catch/finally"),
-            },
             Rule::catch_clause => {
-                current_section = "catch";
+                eprintln!(
+                    "[build_try_catch_expr] Found catch_clause: {}",
+                    pair.as_str()
+                );
+                parsing_try = false;
                 catch_clauses.push(build_catch_clause(pair));
             }
             Rule::finally_clause => {
-                current_section = "finally";
-                // The expressions are inside the finally_clause rule
+                eprintln!(
+                    "[build_try_catch_expr] Found finally_clause: {}",
+                    pair.as_str()
+                );
+                parsing_try = false;
+                // Extract expressions from within the finally_clause
                 finally_body = Some(
                     pair.into_inner()
-                        .filter(|p| p.as_rule() == Rule::expression)
+                        .filter(|p| match p.as_rule() {
+                            Rule::finally_keyword | Rule::WHITESPACE | Rule::COMMENT => false,
+                            _ => true,
+                        })
                         .map(build_expression)
                         .collect(),
                 );
             }
-            rule => panic!("Unexpected rule in try_catch_expr: {:?}", rule),
+            // All other rules should be expressions in the try body
+            _ => {
+                if parsing_try {
+                    eprintln!(
+                        "[build_try_catch_expr] Adding to try body: {:?} = '{}'",
+                        pair.as_rule(),
+                        pair.as_str()
+                    );
+                    try_body.push(build_expression(pair));
+                } else {
+                    panic!(
+                        "Unexpected expression after catch/finally clauses: {:?}",
+                        pair.as_rule()
+                    );
+                }
+            }
         }
     }
+
+    eprintln!(
+        "[build_try_catch_expr] Final try_body length: {}",
+        try_body.len()
+    );
+    eprintln!(
+        "[build_try_catch_expr] Final catch_clauses length: {}",
+        catch_clauses.len()
+    );
+    eprintln!(
+        "[build_try_catch_expr] Final finally_body: {:?}",
+        finally_body.is_some()
+    );
 
     TryCatchExpr {
         try_body,
@@ -625,16 +718,29 @@ fn build_catch_clause(pair: Pair<Rule>) -> CatchClause {
     assert_eq!(pair.as_rule(), Rule::catch_clause);
     let mut inner = pair.into_inner();
 
-    // Skip "catch" keyword if present as a token
+    // 1. Consume catch_keyword
+    let catch_keyword_pair =
+        next_significant(&mut inner).expect("Catch clause missing catch_keyword");
+    assert_eq!(
+        catch_keyword_pair.as_rule(),
+        Rule::catch_keyword,
+        "Expected catch_keyword in catch_clause"
+    );
+
+    // 2. Build catch_pattern
     let pattern_pair = next_significant(&mut inner).expect("Catch clause needs pattern");
     let pattern = build_catch_pattern(pattern_pair);
 
+    // 3. Build binding symbol
     let binding =
         build_symbol(next_significant(&mut inner).expect("Catch clause needs binding symbol"));
 
+    // 4. Build body expressions
+    // The rest of the inner pairs are expressions for the body.
+    // We need to filter out any WHITESPACE or COMMENT that might be between expressions.
     let body = inner
-        .filter(|p| p.as_rule() == Rule::expression)
-        .map(build_expression)
+        .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+        .map(build_expression) // build_expression should handle any valid expression type
         .collect();
 
     CatchClause {
@@ -646,16 +752,51 @@ fn build_catch_clause(pair: Pair<Rule>) -> CatchClause {
 
 // catch_pattern = _{ type_expr | keyword | symbol }
 fn build_catch_pattern(pair: Pair<Rule>) -> CatchPattern {
-    // Drill down if needed
-    let actual_pair = match pair.as_rule() {
-        Rule::catch_pattern => pair.into_inner().next().unwrap(),
-        _ => pair,
-    };
-    match actual_pair.as_rule() {
-        Rule::type_expr => CatchPattern::Type(build_type_expr(actual_pair)),
-        Rule::keyword => CatchPattern::Keyword(build_keyword(actual_pair)),
-        Rule::symbol => CatchPattern::Symbol(build_symbol(actual_pair)),
-        rule => unimplemented!("build_catch_pattern not implemented for rule: {:?}", rule),
+    eprintln!(
+        "[build_catch_pattern] Received pair: {:?} - '{}'",
+        pair.as_rule(),
+        pair.as_str()
+    );
+    match pair.as_rule() {
+        Rule::primitive_type => {
+            // If type_expr resolves to primitive_type (which is a keyword),
+            // the test suite expects this to be treated as CatchPattern::Keyword.
+            let inner_keyword_pair = pair
+                .clone()
+                .into_inner()
+                .next()
+                .expect("primitive_type should contain a keyword");
+            assert_eq!(
+                inner_keyword_pair.as_rule(),
+                Rule::keyword,
+                "Expected inner rule of primitive_type to be keyword"
+            );
+            CatchPattern::Keyword(build_keyword(inner_keyword_pair))
+        }
+        Rule::symbol => {
+            // If type_expr resolves to a symbol, it implies a type alias.
+            CatchPattern::Type(TypeExpr::Alias(build_symbol(pair)))
+        }
+        // Other specific type rules that type_expr can resolve to
+        Rule::vector_type
+        | Rule::map_type
+        | Rule::function_type
+        | Rule::resource_type
+        | Rule::union_type
+        | Rule::intersection_type
+        | Rule::literal_type => CatchPattern::Type(build_type_expr(pair)),
+        Rule::keyword => {
+            // This arm would be hit if 'keyword' was matched directly by the catch_pattern rule,
+            // rather than via type_expr -> primitive_type.
+            CatchPattern::Keyword(build_keyword(pair))
+        }
+        // Rule::type_expr itself is silent, so we expect its resolved inner rule.
+        // If Rule::type_expr were passed directly (e.g., not silent), build_type_expr would handle it.
+        rule => unimplemented!(
+            "build_catch_pattern for rule: {:?} - content: '{}'",
+            rule,
+            pair.as_str()
+        ),
     }
 }
 
@@ -691,59 +832,93 @@ pub(super) fn build_match_expr(mut pairs: Pairs<Rule>) -> MatchExpr {
 fn build_match_clause(pair: Pair<Rule>) -> MatchClause {
     println!("Match clause raw: '{}'", pair.as_str());
     assert_eq!(pair.as_rule(), Rule::match_clause);
-    
+
     // Let's debug all inner pairs first
-    let inner_debug = pair.clone().into_inner()
+    let inner_debug = pair
+        .clone()
+        .into_inner()
         .map(|p| format!("Rule: {:?}, Text: '{}'", p.as_rule(), p.as_str()))
         .collect::<Vec<_>>();
     println!("Match clause inner pairs: {:#?}", inner_debug);
-    
+
     let mut inner = pair.into_inner();
 
     let pattern_pair = next_significant(&mut inner).expect("Match clause needs pattern");
-    println!("Pattern pair: {:?} - \'{}\'", pattern_pair.as_rule(), pattern_pair.as_str());
+    println!(
+        "Pattern pair: {:?} - \'{}\'",
+        pattern_pair.as_rule(),
+        pattern_pair.as_str()
+    );
     let pattern = build_match_pattern(pattern_pair);
     println!("Built pattern: {:?}", pattern);
 
     let mut guard = None;
     let mut body = Vec::new();
-    
+
     let remaining_after_pattern = inner.clone().collect::<Vec<_>>();
-    println!("Remaining pairs after pattern: {:?}", remaining_after_pattern.iter().map(|p| (p.as_rule(), p.as_str())).collect::<Vec<_>>());
-    
+    println!(
+        "Remaining pairs after pattern: {:?}",
+        remaining_after_pattern
+            .iter()
+            .map(|p| (p.as_rule(), p.as_str()))
+            .collect::<Vec<_>>()
+    );
+
     // Peek at the next significant token to check for "when"
     let mut peek_iter = inner.clone(); // Clone for peeking
     let next_token_peeked = next_significant(&mut peek_iter);
 
     if let Some(token_peeked) = next_token_peeked {
-        println!("Next token after pattern (peeked): {:?} \'{}\'", token_peeked.as_rule(), token_peeked.as_str());
+        println!(
+            "Next token after pattern (peeked): {:?} \'{}\'",
+            token_peeked.as_rule(),
+            token_peeked.as_str()
+        );
         if token_peeked.as_rule() == Rule::when_keyword {
             println!("Found \'when\' guard keyword");
             // Consume the 'when_keyword' from the original iterator 'inner'
-            let _when_keyword_token = next_significant(&mut inner).expect("Consumed when keyword already identified by peeking"); 
+            let _when_keyword_token = next_significant(&mut inner)
+                .expect("Consumed when keyword already identified by peeking");
 
-            let guard_expr_pair = next_significant(&mut inner)
-                .expect("\'when\' guard requires an expression");
-            
-            println!("Guard expression: {:?} \'{}\'", guard_expr_pair.as_rule(), guard_expr_pair.as_str());    
+            let guard_expr_pair =
+                next_significant(&mut inner).expect("\'when\' guard requires an expression");
+
+            println!(
+                "Guard expression: {:?} \'{}\'",
+                guard_expr_pair.as_rule(),
+                guard_expr_pair.as_str()
+            );
             guard = Some(Box::new(build_expression(guard_expr_pair.clone())));
             println!("Built guard expression: {:?}", guard);
-            
+
             // All subsequent significant pairs are body expressions
             println!("Building body expressions after guard");
             while let Some(body_expr_pair) = next_significant(&mut inner) {
-                println!("Body expression: {:?} \'{}\'", body_expr_pair.as_rule(), body_expr_pair.as_str());
+                println!(
+                    "Body expression: {:?} \'{}\'",
+                    body_expr_pair.as_rule(),
+                    body_expr_pair.as_str()
+                );
                 body.push(build_expression(body_expr_pair));
             }
         } else {
             // No "when" keyword, so the token_peeked is the first body expression.
             // We need to consume it from the original `inner` iterator.
-            println!("No \'when\' found, processing as body expressions, starting with: {:?} \'{}\'", token_peeked.as_rule(), token_peeked.as_str());
-            let first_body_expr_pair = next_significant(&mut inner).expect("Consumed first body expression already identified by peeking");
-            body.push(build_expression(first_body_expr_pair)); 
+            println!(
+                "No \'when\' found, processing as body expressions, starting with: {:?} \'{}\'",
+                token_peeked.as_rule(),
+                token_peeked.as_str()
+            );
+            let first_body_expr_pair = next_significant(&mut inner)
+                .expect("Consumed first body expression already identified by peeking");
+            body.push(build_expression(first_body_expr_pair));
             // Process remaining pairs from the original iterator 'inner'
             while let Some(body_expr_pair) = next_significant(&mut inner) {
-                println!("Body expression: {:?} \'{}\'", body_expr_pair.as_rule(), body_expr_pair.as_str());
+                println!(
+                    "Body expression: {:?} \'{}\'",
+                    body_expr_pair.as_rule(),
+                    body_expr_pair.as_str()
+                );
                 body.push(build_expression(body_expr_pair));
             }
         }
@@ -865,21 +1040,24 @@ pub(super) fn build_log_step_expr(mut pairs: Pairs<Rule>) -> LogStepExpr {
             pairs.next(); // Consume the log_step_keyword
         }
     }
-    
+
     // Get the string value for the id (":id" literal is consumed by grammar parser)
     let id_value_pair = pairs.next().expect("log-step expects string value for id");
-    assert_eq!(id_value_pair.as_rule(), Rule::string, "Expected string for log-step id value");
-    
+    assert_eq!(
+        id_value_pair.as_rule(),
+        Rule::string,
+        "Expected string for log-step id value"
+    );
+
     let id_str_raw = id_value_pair.as_str();
 
     // Remove quotes and unescape string literal
     let id_content = &id_str_raw[1..id_str_raw.len() - 1];
     let id = unescape(id_content).expect("Invalid escape sequence in log-step id string");
-    
+
     // Get the expression
     let expression_pair = pairs.next().expect("log-step requires an expression");
     let expression = Box::new(build_expression(expression_pair));
-    
+
     LogStepExpr { id, expression }
 }
-
