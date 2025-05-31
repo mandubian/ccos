@@ -1,24 +1,16 @@
-use super::common::{build_keyword, build_literal, build_map_key, build_symbol}; // Import from sibling
+use super::common::{build_literal, build_map_key, build_symbol}; // Removed build_keyword
 use super::special_forms::{
-    build_def_expr,
-    build_defn_expr,
-    build_do_expr,
-    build_fn_expr,
-    build_if_expr,
-    build_let_expr,
-    build_log_step_expr,
-    build_match_expr,
-    build_parallel_expr,
-    build_try_catch_expr,     // Added new builders
-    build_with_resource_expr, // Added new builders
+    build_def_expr, build_defn_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
+    build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
+    build_with_resource_expr,
 };
-use super::Rule; // Import Rule from the parent module (mod.rs)
+use super::{PestParseError, Rule}; // Added PestParseError
 use crate::ast::{Expression, MapKey};
-use pest::iterators::Pair; // Removed unused Pairs
-use std::collections::HashMap; // Import from sibling
+use pest::iterators::Pair;
+use std::collections::HashMap;
 
-pub(super) fn build_expression(mut pair: Pair<Rule>) -> Expression {
-    // Drill down through silent rules like 'expression' or 'special_form'
+pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestParseError> {
+    // Drill down through silent rules like \\\'expression\\\' or \\\'special_form\\\'
     loop {
         let rule = pair.as_rule();
         if rule == Rule::expression || rule == Rule::special_form {
@@ -26,7 +18,9 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Expression {
             if let Some(next) = inner.next() {
                 pair = next;
             } else {
-                panic!("Expected inner rule for expression/special_form");
+                return Err(PestParseError::InvalidInput(
+                    "Expected inner rule for expression/special_form".to_string(),
+                ));
             }
         } else {
             break;
@@ -34,116 +28,137 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Expression {
     }
 
     match pair.as_rule() {
-        Rule::literal => Expression::Literal(build_literal(pair)),
-        Rule::symbol => Expression::Symbol(build_symbol(pair)),
-        Rule::keyword => Expression::Keyword(build_keyword(pair)),
-        Rule::vector => Expression::Vector(pair.into_inner().map(build_expression).collect()),
-        Rule::map => Expression::Map(build_map(pair)),
-        Rule::let_expr => Expression::Let(build_let_expr(pair.into_inner())),
-        Rule::if_expr => Expression::If(build_if_expr(pair.into_inner())),
-        Rule::do_expr => {
-            // Since we've improved the do_keyword rule in the grammar to properly match
-            // only "do" followed by whitespace or delimiters, we can safely assume
-            // that if we get here with Rule::do_expr, it's actually a "do" special form.
-            Expression::Do(build_do_expr(pair.into_inner()))
-        },
-        Rule::fn_expr => Expression::Fn(build_fn_expr(pair.into_inner())),
-        Rule::def_expr => Expression::Def(build_def_expr(pair.into_inner())),
-        Rule::defn_expr => Expression::Defn(build_defn_expr(pair.into_inner())),
-        Rule::parallel_expr => Expression::Parallel(build_parallel_expr(pair.into_inner())),
-        Rule::with_resource_expr => {
-            Expression::WithResource(build_with_resource_expr(pair.into_inner()))
-        }
-        Rule::try_catch_expr => Expression::TryCatch(build_try_catch_expr(pair.into_inner())),
-        Rule::match_expr => Expression::Match(build_match_expr(pair.into_inner())),
-        Rule::log_step_expr => Expression::LogStep(build_log_step_expr(pair.into_inner())),
+        Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
+        Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
+        Rule::vector => Ok(Expression::Vector(
+            pair.into_inner()
+                .map(build_expression)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Rule::map => Ok(Expression::Map(build_map(pair)?)),
+        Rule::let_expr => Ok(Expression::Let(build_let_expr(pair.into_inner())?)),
+        Rule::if_expr => Ok(Expression::If(build_if_expr(pair.into_inner())?)),
+        Rule::do_expr => Ok(Expression::Do(build_do_expr(pair.into_inner())?)),
+        Rule::fn_expr => Ok(Expression::Fn(build_fn_expr(pair.into_inner())?)),
+        Rule::def_expr => Ok(Expression::Def(Box::new(build_def_expr(
+            pair.into_inner(),
+        )?))),
+        Rule::defn_expr => Ok(Expression::Defn(Box::new(build_defn_expr(
+            pair.into_inner(),
+        )?))),
+        Rule::parallel_expr => Ok(Expression::Parallel(build_parallel_expr(
+            pair.into_inner(),
+        )?)),
+        Rule::with_resource_expr => Ok(Expression::WithResource(build_with_resource_expr(
+            pair.into_inner(),
+        )?)),
+        Rule::try_catch_expr => Ok(Expression::TryCatch(build_try_catch_expr(
+            pair.into_inner(),
+        )?)),
+        Rule::match_expr => Ok(Expression::Match(Box::new(build_match_expr(
+            pair.into_inner(),
+        )?))),
+        Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(
+            pair.into_inner(),
+        )?))),
         Rule::list => {
             let inner_pairs: Vec<Pair<Rule>> = pair
                 .clone()
                 .into_inner()
-                // Filter out whitespace/comments more robustly
                 .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
                 .collect();
 
             if inner_pairs.is_empty() {
-                return Expression::List(vec![]); // Return directly
+                return Ok(Expression::List(vec![]));
             } else {
                 let first_element_pair = inner_pairs[0].clone();
-                let first_element_ast = build_expression(first_element_pair.clone()); // Build AST for first element
+                let first_element_ast = build_expression(first_element_pair.clone())?;
 
-                // --- Check for special forms disguised as lists ---
                 if let Expression::Symbol(s) = &first_element_ast {
-                    // Get the pairs *after* the keyword symbol
                     let mut arguments_pairs = pair.into_inner();
-                    // Consume the first significant element (the keyword)
+                    // Consume the first element (the symbol itself) from arguments_pairs
                     arguments_pairs
                         .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT);
 
-                    // Check the EXACT symbol string
                     match s.0.as_str() {
-                        // Pass the remaining pairs (arguments/body) to the builder
-                        "if" => return Expression::If(build_if_expr(arguments_pairs)),
-                        "do" => return Expression::Do(build_do_expr(arguments_pairs)),
-                        "let" => return Expression::Let(build_let_expr(arguments_pairs)),
-                        "fn" => return Expression::Fn(build_fn_expr(arguments_pairs)),
-                        "def" => return Expression::Def(build_def_expr(arguments_pairs)),
-                        "defn" => return Expression::Defn(build_defn_expr(arguments_pairs)),
+                        "if" => return Ok(Expression::If(build_if_expr(arguments_pairs)?)),
+                        "do" => return Ok(Expression::Do(build_do_expr(arguments_pairs)?)),
+                        "let" => return Ok(Expression::Let(build_let_expr(arguments_pairs)?)),
+                        "fn" => return Ok(Expression::Fn(build_fn_expr(arguments_pairs)?)),
+                        "def" => {
+                            return Ok(Expression::Def(Box::new(build_def_expr(arguments_pairs)?)))
+                        }
+                        "defn" => {
+                            return Ok(Expression::Defn(Box::new(build_defn_expr(
+                                arguments_pairs,
+                            )?)))
+                        }
                         "parallel" => {
-                            return Expression::Parallel(build_parallel_expr(arguments_pairs))
+                            return Ok(Expression::Parallel(build_parallel_expr(arguments_pairs)?))
                         }
                         "with-resource" => {
-                            return Expression::WithResource(build_with_resource_expr(
+                            return Ok(Expression::WithResource(build_with_resource_expr(
                                 arguments_pairs,
-                            ))
+                            )?))
                         }
                         "try" => {
-                            return Expression::TryCatch(build_try_catch_expr(arguments_pairs))
+                            return Ok(Expression::TryCatch(build_try_catch_expr(arguments_pairs)?))
                         }
-                        "match" => return Expression::Match(build_match_expr(arguments_pairs)),
+                        "match" => {
+                            return Ok(Expression::Match(Box::new(build_match_expr(
+                                arguments_pairs,
+                            )?)))
+                        }
                         "log-step" => {
-                            println!("[expressions.rs] Calling build_log_step_expr with arguments_pairs: {:?}", arguments_pairs.clone().collect::<Vec<_>>());
-                            return Expression::LogStep(build_log_step_expr(arguments_pairs));
+                            return Ok(Expression::LogStep(Box::new(build_log_step_expr(
+                                arguments_pairs,
+                            )?)));
                         }
-                        _ => {} // Not a special form keyword, continue below
+                        _ => {} // Fall through to general function call or list
                     }
-                    // If we reached here, it was a symbol but NOT a special form keyword.
                 }
-                // --- End special form check ---
 
-                // If it wasn't a special form, proceed with function call or list logic
-                if matches!(first_element_ast, Expression::Symbol(_)) {
-                    let args = inner_pairs // Use the filtered inner_pairs
+                // Re-evaluate if it's a function call after potential special form handling
+                if matches!(first_element_ast, Expression::Symbol(_))
+                    || matches!(first_element_ast, Expression::Fn(_)) // Allow ( (fn [] ...) args )
+                    || matches!(first_element_ast, Expression::FunctionCall { .. })
+                // Allow ( (another-call) args)
+                {
+                    let args = inner_pairs
                         .iter()
-                        .skip(1) // Skip the function symbol
+                        .skip(1)
                         .map(|p| build_expression(p.clone()))
-                        .collect();
-                    // Explicitly return FunctionCall if the first element was a non-special-form symbol
-                    return Expression::FunctionCall {
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(Expression::FunctionCall {
                         function: Box::new(first_element_ast),
                         arguments: args,
-                    };
+                    });
                 } else {
-                    // If first element wasn't a symbol, it's just a list
-                    let elements = inner_pairs // Use the filtered inner_pairs
+                    // If the first element is not a symbol, it's a list of expressions
+                    // We need to re-collect all elements including the first one
+                    let elements = inner_pairs
                         .iter()
                         .map(|p| build_expression(p.clone()))
-                        .collect();
-                    // Explicitly return List if the first element was not a symbol
-                    return Expression::List(elements);
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(Expression::List(elements));
                 }
             }
         }
-        rule => unimplemented!(
+        rule => Err(PestParseError::UnsupportedRule(format!(
             "build_expression not implemented for rule: {:?} - {}",
             rule,
             pair.as_str()
-        ),
+        ))),
     }
 }
 
-// Builds a HashMap from map pairs
-pub(super) fn build_map(pair: Pair<Rule>) -> HashMap<MapKey, Expression> {
-    assert_eq!(pair.as_rule(), Rule::map);
+pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>, PestParseError> {
+    if pair.as_rule() != Rule::map {
+        return Err(PestParseError::InvalidInput(format!(
+            "Expected Rule::map, found {:?} for build_map",
+            pair.as_rule()
+        )));
+    }
     let mut map = HashMap::new();
     let mut map_content = pair.into_inner();
 
@@ -152,20 +167,23 @@ pub(super) fn build_map(pair: Pair<Rule>) -> HashMap<MapKey, Expression> {
             continue;
         }
 
-        assert_eq!(
-            entry_pair.as_rule(),
-            Rule::map_entry,
-            "Expected map_entry inside map"
-        );
+        if entry_pair.as_rule() != Rule::map_entry {
+            return Err(PestParseError::InvalidInput(format!(
+                "Expected map_entry inside map, found {:?}",
+                entry_pair.as_rule()
+            )));
+        }
         let mut entry_inner = entry_pair.into_inner();
-        let key_pair = entry_inner.next().expect("Map entry missing key");
+        let key_pair = entry_inner
+            .next()
+            .ok_or_else(|| PestParseError::InvalidInput("Map entry missing key".to_string()))?;
         let value_pair = entry_inner
             .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-            .expect("Map entry missing value");
+            .ok_or_else(|| PestParseError::InvalidInput("Map entry missing value".to_string()))?;
 
-        let key = build_map_key(key_pair);
-        let value = build_expression(value_pair);
+        let key = build_map_key(key_pair)?;
+        let value = build_expression(value_pair)?;
         map.insert(key, value);
     }
-    map
+    Ok(map)
 }

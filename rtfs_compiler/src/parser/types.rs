@@ -1,183 +1,178 @@
-use super::common::{build_keyword, build_literal, build_symbol}; // Added imports
-use super::Rule;
-// Removed unused Keyword, Literal, Symbol
-use crate::ast::{PrimitiveType, TypeExpr};
-use pest::iterators::{Pair, Pairs}; // Added Pairs
+use super::{PestParseError, Rule};
+use crate::ast::{MapTypeEntry, ParamType, PrimitiveType, TypeExpr}; // Removed unused imports
+use pest::iterators::Pair;
 
-// Helper to skip whitespace and comments in a Pairs iterator
-fn next_significant<'a>(pairs: &mut Pairs<'a, Rule>) -> Option<Pair<'a, Rule>> {
-    pairs.find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-}
+// Helper function imports from sibling modules
+use super::common::{build_keyword, build_symbol};
 
-pub(super) fn build_type_expr(pair: Pair<Rule>) -> TypeExpr {
-    // Allow direct calls with concrete rules or via the main type_expr rule
-    let actual_pair = match pair.as_rule() {
-        Rule::type_expr | Rule::param_type => pair
+// Build type expression from a parsed pair
+pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
+    // Get the actual type pair, handling wrapper rules
+    let actual_type_pair = match pair.as_rule() {
+        Rule::type_expr => pair
             .into_inner()
             .next()
-            .expect("type_expr/param_type should have inner rule"),
-        _ => pair, // Assume it's already the concrete rule
+            .ok_or_else(|| PestParseError::MissingToken("type_expr inner".to_string()))?,
+        _ => pair,
     };
 
-    match actual_pair.as_rule() {
-        // --- Primitive Types ---
-        Rule::primitive_type => {
-            match actual_pair.as_str() {
-                ":int" => TypeExpr::Primitive(PrimitiveType::Int),
-                ":float" => TypeExpr::Primitive(PrimitiveType::Float),
-                ":string" => TypeExpr::Primitive(PrimitiveType::String),
-                ":bool" => TypeExpr::Primitive(PrimitiveType::Bool),
-                ":nil" => TypeExpr::Primitive(PrimitiveType::Nil),
-                ":keyword" => TypeExpr::Primitive(PrimitiveType::Keyword),
-                ":symbol" => TypeExpr::Primitive(PrimitiveType::Symbol),
-                ":any" => TypeExpr::Any,
-                ":never" => TypeExpr::Never,
-                s if s.starts_with(":") => {
-                    // Treat unknown :Type as an alias (strip leading ':')
-                    let name = &s[1..];
-                    TypeExpr::Alias(crate::ast::Symbol(name.to_string()))
-                }
-                _ => unimplemented!("Unknown primitive type string: {}", actual_pair.as_str()),
+    match actual_type_pair.as_rule() {
+        Rule::keyword => {
+            let keyword_pair = actual_type_pair.clone();
+            match keyword_pair.as_str() {
+                ":int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+                ":float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+                ":string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+                ":bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+                ":nil" => Ok(TypeExpr::Primitive(PrimitiveType::Nil)),
+                ":keyword" => Ok(TypeExpr::Primitive(PrimitiveType::Keyword)),
+                ":symbol" => Ok(TypeExpr::Primitive(PrimitiveType::Symbol)),
+                ":any" => Ok(TypeExpr::Any),
+                ":never" => Ok(TypeExpr::Never),
+                _ => Ok(TypeExpr::Primitive(PrimitiveType::Custom(build_keyword(
+                    keyword_pair,
+                )?))),
             }
-        },
-        // --- Type Alias ---
-        Rule::symbol => TypeExpr::Alias(build_symbol(actual_pair)),
-
-        // --- Complex Types ---
+        }
+        Rule::symbol => Ok(TypeExpr::Alias(build_symbol(actual_type_pair)?)),
         Rule::vector_type => {
-            // vector_type = { "[" ~ ":vector" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
-            let inner_type_pair = actual_pair
-                .into_inner()
-                .find(|p| p.as_rule() == Rule::type_expr)
-                .expect("vector_type requires an inner type_expr");
-            TypeExpr::Vector(Box::new(build_type_expr(inner_type_pair)))
+            let inner_type_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
+                PestParseError::MissingToken("expected inner type for vector".to_string())
+            })?;
+            Ok(TypeExpr::Vector(Box::new(build_type_expr(
+                inner_type_pair,
+            )?)))
         }
         Rule::map_type => {
-            // map_type = { "[" ~ ":map" ~ (WHITESPACE* ~ map_type_entry)* ~ (WHITESPACE* ~ map_type_wildcard)? ~ WHITESPACE* ~ "]" }
-            let mut inner = actual_pair.into_inner();
+            let mut inner = actual_type_pair.into_inner();
             let mut entries = Vec::new();
             let mut wildcard = None;
 
-            while let Some(pair) = inner.peek() {
-                match pair.as_rule() {
+            while let Some(map_entry_pair) = inner.next() {
+                match map_entry_pair.as_rule() {
                     Rule::map_type_entry => {
-                        // map_type_entry = { "[" ~ keyword ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ "?")? ~ WHITESPACE* ~ "]" }
-                        let mut entry_inner = inner.next().unwrap().into_inner();
-                        let key = build_keyword(
-                            next_significant(&mut entry_inner).expect("Map entry needs keyword"),
-                        );
-                        let type_expr = build_type_expr(
-                            next_significant(&mut entry_inner).expect("Map entry needs type"),
-                        );
-                        // Check if '?' exists
-                        let is_optional = entry_inner.any(|p| p.as_str() == "?");
-                        entries.push((key, type_expr, is_optional));
+                        let mut entry_inner = map_entry_pair.into_inner();
+                        let key_pair = entry_inner.next().ok_or_else(|| {
+                            PestParseError::MissingToken(
+                                "expected key in map type entry".to_string(),
+                            )
+                        })?;
+                        let type_pair = entry_inner.next().ok_or_else(|| {
+                            PestParseError::MissingToken(
+                                "expected type in map type entry".to_string(),
+                            )
+                        })?;
+
+                        entries.push(MapTypeEntry {
+                            key: build_keyword(key_pair)?,
+                            value_type: Box::new(build_type_expr(type_pair)?),
+                            optional: false, // Basic map_type_entry is not optional
+                        });
                     }
                     Rule::map_type_wildcard => {
-                        // map_type_wildcard = { "[" ~ ":*" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
-                        let mut wildcard_inner = inner.next().unwrap().into_inner(); // Made mutable
-                        let wildcard_type_pair = wildcard_inner
-                            .find(|p| p.as_rule() == Rule::type_expr)
-                            .expect("map_type_wildcard requires an inner type_expr");
-                        wildcard = Some(Box::new(build_type_expr(wildcard_type_pair)));
+                        let wildcard_type_pair =
+                            map_entry_pair.into_inner().next().ok_or_else(|| {
+                                PestParseError::MissingToken(
+                                    "expected type for map wildcard".to_string(),
+                                )
+                            })?;
+                        wildcard = Some(Box::new(build_type_expr(wildcard_type_pair)?));
                     }
-                    Rule::WHITESPACE | Rule::COMMENT => {
-                        inner.next(); // Skip
+                    _ => {
+                        return Err(PestParseError::UnexpectedRule {
+                            expected: "map_type_entry or map_type_wildcard".to_string(),
+                            found: format!("{:?}", map_entry_pair.as_rule()),
+                            rule_text: map_entry_pair.as_str().to_string(),
+                        })
                     }
-                    // Skip the initial ":map" keyword
-                    Rule::keyword if pair.as_str() == ":map" => {
-                        inner.next();
-                    }
-                    rule => panic!("Unexpected rule inside map_type: {:?}", rule),
                 }
             }
-            TypeExpr::Map { entries, wildcard }
+            Ok(TypeExpr::Map { entries, wildcard })
         }
         Rule::function_type => {
-            // function_type = { "[" ~ ":=>" ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ param_type)* ~ (WHITESPACE* ~ variadic_param_type)? ~ WHITESPACE* ~ "]" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
-            let mut inner = actual_pair.into_inner();
+            let mut inner = actual_type_pair.into_inner();
+
+            // Parse the function structure
+            // Expected: "[" ":=>" "[" params... "]" return_type "]"
+            let first_part = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken("expected parameter list in function type".to_string())
+            })?;
+
             let mut param_types = Vec::new();
             let mut variadic_param_type = None;
-            // Removed unused initial assignment: let mut return_type = None;
 
-            // Find the parameters vector '[' ... ']'
-            let params_vector = inner
-                .find(|p| p.as_rule() == Rule::vector) // Assuming grammar uses vector for params
-                .expect("Function type needs parameter vector []");
-
-            let mut params_inner = params_vector.into_inner();
-            while let Some(pair) = params_inner.peek() {
-                match pair.as_rule() {
-                    Rule::param_type => {
-                        param_types.push(build_type_expr(params_inner.next().unwrap()));
+            // Check if first part is parameter list or direct parameters
+            let param_pairs = first_part.into_inner();
+            for param_pair in param_pairs {
+                match param_pair.as_rule() {
+                    Rule::type_expr => {
+                        param_types.push(ParamType::Simple(Box::new(build_type_expr(param_pair)?)));
                     }
-                    Rule::variadic_param_type => {
-                        // variadic_param_type = { "&" ~ WHITESPACE* ~ type_expr }
-                        let mut var_inner = params_inner.next().unwrap().into_inner(); // Made mutable
-                        let var_type_pair = var_inner
-                            .find(|p| p.as_rule() == Rule::type_expr)
-                            .expect("Variadic param type needs inner type_expr");
-                        variadic_param_type = Some(Box::new(build_type_expr(var_type_pair)));
-                        break; // Only one variadic param allowed
+                    _ if param_pair.as_str() == "&" => {
+                        // Variadic parameter marker - next should be the type
+                        // Note: This is a simplified approach since Rule::variadic_type_marker doesn't exist
+                        if let Some(variadic_type_pair) = inner.next() {
+                            variadic_param_type =
+                                Some(Box::new(build_type_expr(variadic_type_pair)?));
+                        }
+                        break;
                     }
                     Rule::WHITESPACE | Rule::COMMENT => {
-                        params_inner.next(); // Skip
+                        // Skip whitespace and comments
                     }
-                    rule => panic!("Unexpected rule inside function params vector: {:?}", rule),
+                    _ => {
+                        return Err(PestParseError::UnexpectedRule {
+                            expected: "type_expr or & for variadic".to_string(),
+                            found: format!("{:?}", param_pair.as_rule()),
+                            rule_text: param_pair.as_str().to_string(),
+                        })
+                    }
                 }
             }
 
-            // Find the return type (the last type_expr in the main list)
-            let return_type = inner
-                .find(|p| p.as_rule() == Rule::type_expr)
-                .map(|p| Box::new(build_type_expr(p)))
-                .expect("Function type needs return type");
+            let return_type = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken("expected return type in function type".to_string())
+            })?;
 
-            TypeExpr::Function {
+            Ok(TypeExpr::Function {
                 param_types,
                 variadic_param_type,
-                return_type, // Directly use the parsed value
-            }
+                return_type: Box::new(build_type_expr(return_type)?),
+            })
         }
         Rule::resource_type => {
-            // resource_type = { "[" ~ ":resource" ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ "]" }
-            let symbol_pair = actual_pair
-                .into_inner()
-                .find(|p| p.as_rule() == Rule::symbol)
-                .expect("resource_type requires a symbol");
-            TypeExpr::Resource(build_symbol(symbol_pair))
+            let symbol_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
+                PestParseError::MissingToken("expected symbol in resource type".to_string())
+            })?;
+            Ok(TypeExpr::Resource(build_symbol(symbol_pair)?))
         }
         Rule::union_type => {
-            // union_type = { "[" ~ ":or" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
-            let types = actual_pair
+            let type_pairs: Result<Vec<TypeExpr>, PestParseError> = actual_type_pair
                 .into_inner()
-                .filter(|p| p.as_rule() == Rule::type_expr)
+                .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
                 .map(build_type_expr)
                 .collect();
-            TypeExpr::Union(types)
+            Ok(TypeExpr::Union(type_pairs?))
         }
         Rule::intersection_type => {
-            // intersection_type = { "[" ~ ":and" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
-            let types = actual_pair
+            let type_pairs: Result<Vec<TypeExpr>, PestParseError> = actual_type_pair
                 .into_inner()
-                .filter(|p| p.as_rule() == Rule::type_expr)
+                .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
                 .map(build_type_expr)
                 .collect();
-            TypeExpr::Intersection(types)
+            Ok(TypeExpr::Intersection(type_pairs?))
         }
         Rule::literal_type => {
-            // literal_type = { "[" ~ ":val" ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ "]" }
-            let literal_pair = actual_pair
-                .into_inner()
-                .find(|p| p.as_rule() == Rule::literal)
-                .expect("literal_type requires a literal");
-            TypeExpr::Literal(build_literal(literal_pair))
+            let literal_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
+                PestParseError::MissingToken("expected literal in literal type".to_string())
+            })?;
+            use super::common::build_literal;
+            Ok(TypeExpr::Literal(build_literal(literal_pair)?))
         }
-
-        rule => unimplemented!(
-            "build_type_expr not implemented for rule: {:?}, content: {}",
-            rule,
-            actual_pair.as_str()
-        ),
+        s => Err(PestParseError::UnexpectedRule {
+            expected: "valid type expression".to_string(),
+            found: format!("{:?}", s),
+            rule_text: actual_type_pair.as_str().to_string(),
+        }),
     }
 }

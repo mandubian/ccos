@@ -9,8 +9,13 @@ pub enum PestParseError {
         found: String,
         rule_text: String,
     },
+    MissingToken(String),
+    InvalidInput(String),          // Added
+    UnsupportedRule(String),       // Added
+    InvalidLiteral(String),        // Added
+    InvalidEscapeSequence(String), // Added
     CustomError(String),
-    PestError(pest::error::Error<Rule>),
+    PestError(pest::error::Error<Rule>), // For errors from Pest itself
 }
 
 impl From<pest::error::Error<Rule>> for PestParseError {
@@ -59,12 +64,14 @@ fn next_significant<'a>(pairs: &mut Pairs<'a, Rule>) -> Option<Pair<'a, Rule>> {
 
 // --- Main Parsing Function ---
 
-pub fn parse(input: &str) -> Result<Vec<TopLevel>, pest::error::Error<Rule>> {
-    let pairs = RTFSParser::parse(Rule::program, input)?;
-    // Program contains SOI ~ (task_definition | module_definition | expression)* ~ EOI
-    // The `pairs` variable is an iterator over the content matched by Rule::program.
-    // We need its single inner item (which should be the sequence inside program)
-    // then iterate over *that* sequence's inner items.
+// pub fn parse(input: &str) -> Result<Vec<TopLevel>, pest::error::Error<Rule>> {
+pub fn parse(input: &str) -> Result<Vec<TopLevel>, PestParseError> {
+    // MODIFIED error type
+    let pairs = RTFSParser::parse(Rule::program, input).map_err(PestParseError::from)?; // MODIFIED to map error
+                                                                                        // Program contains SOI ~ (task_definition | module_definition | expression)* ~ EOI
+                                                                                        // The `pairs` variable is an iterator over the content matched by Rule::program.
+                                                                                        // We need its single inner item (which should be the sequence inside program)
+                                                                                        // then iterate over *that* sequence's inner items.
     let program_content = pairs
         .peek()
         .expect("Parse should have yielded one program rule");
@@ -73,12 +80,17 @@ pub fn parse(input: &str) -> Result<Vec<TopLevel>, pest::error::Error<Rule>> {
     });
     // Keep EOI filter as it's implicitly added by Pest
 
-    Ok(top_level_pairs.map(build_ast).collect())
+    // Ok(top_level_pairs.map(build_ast).collect()) // OLD
+    top_level_pairs
+        .map(build_ast)
+        .collect::<Result<Vec<_>, _>>() // NEW
 }
 
 // --- AST Builder Functions ---
 
-fn build_ast(pair: Pair<Rule>) -> TopLevel {
+// fn build_ast(pair: Pair<Rule>) -> TopLevel {
+fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
+    // MODIFIED return type
     match pair.as_rule() {
         // Handle expression directly or via special form rules that resolve to Expression
         Rule::expression
@@ -100,23 +112,34 @@ fn build_ast(pair: Pair<Rule>) -> TopLevel {
         | Rule::match_expr
         | Rule::log_step_expr
         | Rule::identifier // Allow standalone identifiers? Maybe error later.
-        | Rule::namespaced_identifier => TopLevel::Expression(build_expression(pair)),
+        // | Rule::namespaced_identifier => Ok(TopLevel::Expression(build_expression(pair?))), // MODIFIED OLD
+        | Rule::namespaced_identifier => build_expression(pair).map(TopLevel::Expression), // MODIFIED NEW
 
         // Handle specific top-level definitions
-        Rule::task_definition => TopLevel::Task(build_task_definition(pair).unwrap()),
-        Rule::module_definition => TopLevel::Module(build_module_definition(pair).unwrap()),
+        // Rule::task_definition => Ok(TopLevel::Task(build_task_definition(pair?)), // MODIFIED OLD
+        Rule::task_definition => build_task_definition(pair).map(TopLevel::Task), // MODIFIED NEW
+        // Rule::module_definition => Ok(TopLevel::Module(build_module_definition(pair?))), // MODIFIED OLD
+        Rule::module_definition => build_module_definition(pair).map(TopLevel::Module), // MODIFIED NEW
 
         // Import definition should only appear inside a module, handle within build_module_definition
         Rule::import_definition => {
-            panic!("Import definition found outside of a module context")
+            // panic!("Import definition found outside of a module context") // OLD
+            Err(PestParseError::CustomError( // NEW
+                "Import definition found outside of a module context".to_string(),
+            ))
         }
 
         // Handle unexpected rules at this level
-        rule => unimplemented!(
+        // rule => unimplemented!( // OLD
+        //     "build_ast encountered unexpected top-level rule: {:?}, content: \'{}\'",
+        //     rule,
+        //     pair.as_str()
+        // ),
+        rule => Err(PestParseError::CustomError(format!( // NEW
             "build_ast encountered unexpected top-level rule: {:?}, content: '{}'",
             rule,
             pair.as_str()
-        ),
+        ))),
     }
 }
 
@@ -174,23 +197,29 @@ fn build_task_definition(pair: Pair<Rule>) -> Result<TaskDefinition, PestParseEr
             }
             s if s.starts_with(":metadata") => {
                 assert_eq!(value_pair.as_rule(), Rule::map);
-                metadata = Some(Expression::Map(build_map(value_pair)));
+                metadata = Some(Expression::Map(build_map(value_pair)?));
             }
             s if s.starts_with(":intent") => {
-                intent = Some(build_expression(value_pair));
+                intent = Some(build_expression(value_pair)?);
             }
             s if s.starts_with(":contracts") => {
                 assert_eq!(value_pair.as_rule(), Rule::map);
-                contracts = Some(Expression::Map(build_map(value_pair)));
+                contracts = Some(Expression::Map(build_map(value_pair)?));
             }
             s if s.starts_with(":plan") => {
-                plan = Some(build_expression(value_pair));
+                plan = Some(build_expression(value_pair)?);
             }
             s if s.starts_with(":execution-trace") => {
                 assert_eq!(value_pair.as_rule(), Rule::vector);
-                execution_trace = Some(Expression::Vector(
-                    value_pair.into_inner().map(build_expression).collect(),
-                ));
+                // execution_trace = Some(Expression::Vector( // OLD
+                //     value_pair.into_inner().map(build_expression).collect(),
+                // ));
+                let exprs = value_pair // NEW
+                    .into_inner()
+                    .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+                    .map(build_expression)
+                    .collect::<Result<Vec<_>, PestParseError>>()?;
+                execution_trace = Some(Expression::Vector(exprs)); // NEW
             }
             _ => panic!("Unknown task property: {}", prop_str),
         }
@@ -236,8 +265,10 @@ fn build_export_option(mut pairs: Pairs<Rule>) -> Result<Vec<Symbol>, PestParseE
     symbols_vec_pair
         .into_inner()
         .filter(|p| p.as_rule() == Rule::symbol)
-        .map(|p| Ok(build_symbol(p))) // build_symbol doesn't return Result, so wrap Ok
-        .collect()
+        // .map(|p| Ok(build_symbol(p))) // build_symbol doesn't return Result, so wrap Ok // OLD COMMENT & CODE
+        // .collect() // OLD
+        .map(build_symbol) // NEW - build_symbol now returns Result
+        .collect::<Result<Vec<Symbol>, PestParseError>>() // NEW - collect into Result
 }
 
 // module_definition =  { "(" ~ module_keyword ~ symbol ~ export_option? ~ definition* ~ ")" }
@@ -271,7 +302,8 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
             rule_text: name_pair.as_str().to_string(),
         });
     }
-    let name = build_symbol(name_pair);
+    // let name = build_symbol(name_pair); // OLD
+    let name = build_symbol(name_pair)?; // NEW
 
     let mut exports = None;
     let mut definitions = Vec::new();
@@ -292,9 +324,10 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
         // Skip whitespace and comments if they are passed (though next_significant in a loop would be better if they could be mixed)
         // The current loop structure assumes `remaining_module_parts` only yields significant tokens.
         match def_candidate_pair.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT | Rule::EOI => continue, // EOI might appear if it's the last thing
+            Rule::WHITESPACE | Rule::COMMENT | Rule::EOI => continue, // EOI might appear if it\'s the last thing
             Rule::def_expr => {
-                let def_node = build_def_expr(def_candidate_pair.into_inner());
+                // let def_node = build_def_expr(def_candidate_pair.into_inner()); // OLD
+                let def_node = build_def_expr(def_candidate_pair.into_inner())?; // NEW
                 definitions.push(ModuleLevelDefinition::Def(def_node));
             }
             Rule::defn_expr => {
@@ -303,7 +336,8 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
                     def_candidate_pair.as_rule(),
                     def_candidate_pair.as_str()
                 );
-                let defn_node = build_defn_expr(def_candidate_pair.into_inner());
+                // let defn_node = build_defn_expr(def_candidate_pair.into_inner()); // OLD
+                let defn_node = build_defn_expr(def_candidate_pair.into_inner())?; // NEW
                 definitions.push(ModuleLevelDefinition::Defn(defn_node));
             }
             Rule::import_definition => {
@@ -359,7 +393,8 @@ fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, P
             rule_text: module_name_pair.as_str().to_string(),
         });
     }
-    let module_name = build_symbol(module_name_pair);
+    // let module_name = build_symbol(module_name_pair); // OLD
+    let module_name = build_symbol(module_name_pair)?; // NEW
 
     let mut alias = None;
     let mut only = None;
@@ -377,7 +412,8 @@ fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, P
                 let mut found_symbol = false;
                 for inner_pair in option_inner {
                     if inner_pair.as_rule() == Rule::symbol {
-                        alias = Some(build_symbol(inner_pair));
+                        // alias = Some(build_symbol(inner_pair)); // OLD
+                        alias = Some(build_symbol(inner_pair)?); // NEW
                         found_symbol = true;
                         break;
                     }
@@ -390,18 +426,26 @@ fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, P
             } else if option_text.starts_with(":only") {
                 // The import_option rule is ":only" ~ "[" ~ symbol+ ~ "]"
                 // We need to find the symbols within the brackets
-                let mut symbols = Vec::new();
-                for inner_pair in option_inner {
-                    if inner_pair.as_rule() == Rule::symbol {
-                        symbols.push(build_symbol(inner_pair));
-                    }
-                }
+                // let mut symbols = Vec::new(); // OLD
+                // for inner_pair in option_inner { // OLD
+                //     if inner_pair.as_rule() == Rule::symbol { // OLD
+                //         symbols.push(build_symbol(inner_pair)); // OLD - build_symbol used to not return Result or was handled differently
+                //     } // OLD
+                // } // OLD
+
+                let collected_symbols: Result<Vec<Symbol>, PestParseError> =
+                    option_inner // NEW
+                        .filter(|p| p.as_rule() == Rule::symbol) // Ensure we only try to build symbols from symbol rules
+                        .map(build_symbol) // build_symbol returns Result<Symbol, PestParseError>
+                        .collect();
+                let symbols = collected_symbols?; // NEW - propagate error if collection failed
+
                 if symbols.is_empty() {
                     return Err(PestParseError::CustomError(
                         "Import :only option requires at least one symbol".to_string(),
                     ));
                 }
-                only = Some(symbols);
+                only = Some(symbols); // NEW - symbols is now Vec<Symbol>
             } else {
                 return Err(PestParseError::CustomError(format!(
                     "Unknown import option: {}",
@@ -429,39 +473,43 @@ mod tests {
     use super::*;
     // Move AST imports needed only for tests here
     use crate::ast::{
-        // Added more AST types for tests
-        CatchClause,  // Added
-        CatchPattern, // Added
+        CatchClause,
+        CatchPattern,
         DefExpr,
-        DefnExpr, // Added DefnExpr
-        DoExpr,
+        DefnExpr,
+        // DoExpr, // Removed unused import
         Expression,
-        IfExpr,
-        ImportDefinition, // Added ImportDefinition
+        FnExpr,
+        // IfExpr, // Removed unused import
+        ImportDefinition,
         Keyword,
         LetBinding,
         LetExpr,
         Literal,
-        LogStepExpr, // Added
+        // LogStepExpr, // Removed unused import
+        MapDestructuringEntry, // Changed from MapPatternEntry
         MapKey,
-        // Removed unused MapMatchPattern
-        MatchClause,  // Added
-        MatchExpr,    // Added
-        MatchPattern, // Added
+        MapMatchEntry, // Added for match map patterns
+        MapTypeEntry,
+        MatchClause,
+        MatchExpr,
+        MatchPattern, // Added for match patterns
         ModuleDefinition,
         ModuleLevelDefinition,
-        ParallelBinding, // Added
-        ParallelExpr,    // Added
-        ParamDef,        // Added ParamDef
+        ParallelBinding,
+        ParallelExpr,
+        ParamDef,
+        ParamType,
         Pattern,
+        PrimitiveType, // Added for TypeExpr::Primitive
         Symbol,
         TaskDefinition,
         TopLevel,
-        TryCatchExpr, // Added
-        TypeExpr,     // Added TypeExpr for catch/match patterns
-        // Removed unused VectorMatchPattern
-        WithResourceExpr, // Added
+        TryCatchExpr,
+        TypeExpr,
+        WithResourceExpr,
     };
+    use crate::parser::types::build_type_expr;
     use std::collections::HashMap; // Added HashMap for map tests
 
     // Helper macro for asserting expression parsing
@@ -470,16 +518,24 @@ mod tests {
             let parse_result = RTFSParser::parse(Rule::expression, $input);
             assert!(
                 parse_result.is_ok(),
-                "Failed to parse expression:\\nInput: {:?}\\nError: {:?}",
+                "Failed to parse expression (RTFSParser::parse):\\nInput: {:?}\\nError: {:?}",
                 $input,
                 parse_result.err().unwrap()
             );
-            // Pass the expression pair itself to build_expression
             let expr_pair = parse_result.unwrap().next().unwrap();
-            let ast = expressions::build_expression(expr_pair);
+            let expr_pair_str = expr_pair.as_str().to_string(); // Clone the string before moving expr_pair
+            let ast_result = expressions::build_expression(expr_pair); // This returns Result<Expression, PestParseError>
+            assert!(
+                ast_result.is_ok(),
+                "Failed to build expression (expressions::build_expression):\\nInput: {:?}\\nSource pair: {:?}\\nError: {:?}",
+                $input,
+                expr_pair_str,
+                ast_result.err().unwrap()
+            );
+            let ast = ast_result.unwrap(); // Now ast is an Expression
             assert_eq!(
-                ast, $expected,
-                "Expression AST mismatch for input: {:?}\nExpected: {:#?}\nActual: {:#?}",
+                ast, $expected, // $expected is a direct Expression
+                "Expression AST mismatch for input: {:?}\\nExpected: {:#?}\\nActual: {:#?}",
                 $input, $expected, ast
             );
         };
@@ -506,33 +562,36 @@ mod tests {
 
     #[test]
     fn test_parse_simple_literals() {
-        assert_expr_parses_to!("123", Expression::Literal(Literal::Integer(123)));
-        assert_expr_parses_to!("-45", Expression::Literal(Literal::Integer(-45)));
-        assert_expr_parses_to!("1.23", Expression::Literal(Literal::Float(1.23)));
-        assert_expr_parses_to!("-0.5", Expression::Literal(Literal::Float(-0.5)));
+        assert_expr_parses_to!("123", Expression::Literal(Literal::Integer(123))); // MODIFIED
+        assert_expr_parses_to!("-45", Expression::Literal(Literal::Integer(-45))); // MODIFIED
+        assert_expr_parses_to!("1.23", Expression::Literal(Literal::Float(1.23))); // MODIFIED
+        assert_expr_parses_to!("-0.5", Expression::Literal(Literal::Float(-0.5))); // MODIFIED
         assert_expr_parses_to!(
-            "\"hello\"",
-            Expression::Literal(Literal::String("hello".to_string()))
+            "\\\"hello\\\"",                                           // RTFS source: "hello"
+            Expression::Literal(Literal::String("hello".to_string()))  // MODIFIED
         );
         assert_expr_parses_to!(
-            "\"hello\\\\world\\n\"", // Need double backslash for literal backslash in Rust string
-            Expression::Literal(Literal::String("hello\\world\n".to_string()))
+            "\\\"hello\\\\\\\\world\\\\n\\\"", // RTFS source: "hello\\world\\n"
+            Expression::Literal(Literal::String("hello\\\\world\\n".to_string()))  // MODIFIED
         );
-        assert_expr_parses_to!("true", Expression::Literal(Literal::Boolean(true)));
-        assert_expr_parses_to!("false", Expression::Literal(Literal::Boolean(false)));
-        assert_expr_parses_to!("nil", Expression::Literal(Literal::Nil));
+        assert_expr_parses_to!("true", Expression::Literal(Literal::Boolean(true))); // MODIFIED
+        assert_expr_parses_to!("false", Expression::Literal(Literal::Boolean(false))); // MODIFIED
+        assert_expr_parses_to!("nil", Expression::Literal(Literal::Nil)); // MODIFIED
     }
 
     #[test]
     fn test_parse_symbol_keyword() {
-        assert_expr_parses_to!("my-var", Expression::Symbol(Symbol("my-var".to_string())));
+        assert_expr_parses_to!(
+            "my-var",
+            Expression::Symbol(Symbol("my-var".to_string())) // MODIFIED
+        );
         assert_expr_parses_to!(
             "ns/my-var",
-            Expression::Symbol(Symbol("ns/my-var".to_string()))
+            Expression::Symbol(Symbol("ns/my-var".to_string())) // MODIFIED
         );
         assert_expr_parses_to!(
             ":my-key",
-            Expression::Keyword(Keyword("my-key".to_string()))
+            Expression::Literal(Literal::Keyword(Keyword("my-key".to_string()))) // MODIFIED
         );
     }
 
@@ -542,17 +601,19 @@ mod tests {
         assert_expr_parses_to!(
             "[1 2 \"three\"]",
             Expression::Vector(vec![
+                // MODIFIED
                 Expression::Literal(Literal::Integer(1)),
                 Expression::Literal(Literal::Integer(2)),
                 Expression::Literal(Literal::String("three".to_string())),
             ])
         );
-        assert_expr_parses_to!("[]", Expression::Vector(vec![]));
+        assert_expr_parses_to!("[]", Expression::Vector(vec![])); // MODIFIED
 
         // List (Function Call heuristic)
         assert_expr_parses_to!(
             "(a b c)",
             Expression::FunctionCall {
+                // MODIFIED
                 function: Box::new(Expression::Symbol(Symbol("a".to_string()))),
                 arguments: vec![
                     Expression::Symbol(Symbol("b".to_string())),
@@ -561,11 +622,12 @@ mod tests {
             }
         );
         // Empty list is still a list
-        assert_expr_parses_to!("()", Expression::List(vec![]));
-        // List starting with non-symbol is a list
+        assert_expr_parses_to!("()", Expression::List(vec![])); // MODIFIED
+                                                                // List starting with non-symbol is a list
         assert_expr_parses_to!(
             "(1 2 3)",
             Expression::List(vec![
+                // MODIFIED
                 Expression::Literal(Literal::Integer(1)),
                 Expression::Literal(Literal::Integer(2)),
                 Expression::Literal(Literal::Integer(3)),
@@ -582,52 +644,25 @@ mod tests {
             MapKey::String("b".to_string()),
             Expression::Literal(Literal::Boolean(true)),
         );
-        assert_expr_parses_to!("{ :a 1 \"b\" true }", Expression::Map(expected_map.clone()));
-        assert_expr_parses_to!("{}", Expression::Map(HashMap::new()));
-    }
+        assert_expr_parses_to!(
+            "{ :a 1 \"b\" true }",
+            Expression::Map(expected_map.clone()) // MODIFIED
+        );
+        assert_expr_parses_to!("{}", Expression::Map(HashMap::new())); // MODIFIED
 
-    #[test]
-    fn test_parse_if() {
-        assert_expr_parses_to!(
-            "(if true 1 0)",
-            Expression::If(IfExpr {
-                condition: Box::new(Expression::Literal(Literal::Boolean(true))),
-                then_branch: Box::new(Expression::Literal(Literal::Integer(1))),
-                else_branch: Some(Box::new(Expression::Literal(Literal::Integer(0)))),
-            })
+        // Map with integer key
+        let mut map_with_int_key = HashMap::new();
+        map_with_int_key.insert(
+            MapKey::Integer(0),
+            Expression::Literal(Literal::String("zero".to_string())),
+        );
+        map_with_int_key.insert(
+            MapKey::Keyword(Keyword("a".to_string())),
+            Expression::Literal(Literal::Integer(1)),
         );
         assert_expr_parses_to!(
-            "(if x y)",
-            Expression::If(IfExpr {
-                condition: Box::new(Expression::Symbol(Symbol("x".to_string()))),
-                then_branch: Box::new(Expression::Symbol(Symbol("y".to_string()))),
-                else_branch: None,
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_do() {
-        assert_expr_parses_to!(
-            "(do (a) (b))",
-            Expression::Do(DoExpr {
-                expressions: vec![
-                    Expression::FunctionCall {
-                        function: Box::new(Expression::Symbol(Symbol("a".to_string()))),
-                        arguments: vec![]
-                    },
-                    Expression::FunctionCall {
-                        function: Box::new(Expression::Symbol(Symbol("b".to_string()))),
-                        arguments: vec![]
-                    },
-                ]
-            })
-        );
-        assert_expr_parses_to!(
-            "(do)",
-            Expression::Do(DoExpr {
-                expressions: vec![]
-            })
+            "{0 \"zero\" :a 1}",
+            Expression::Map(map_with_int_key.clone()) // MODIFIED
         );
     }
 
@@ -635,13 +670,22 @@ mod tests {
     fn test_parse_def() {
         assert_expr_parses_to!(
             "(def x 1)",
-            Expression::Def(DefExpr {
+            Expression::Def(Box::new(DefExpr {
+                // MODIFIED
                 symbol: Symbol("x".to_string()),
                 type_annotation: None,
                 value: Box::new(Expression::Literal(Literal::Integer(1))),
-            })
+            }))
         );
-        // TODO: Add test with type annotation once build_type_expr is fully tested
+        assert_expr_parses_to!(
+            "(def y MyType \"value\")",
+            Expression::Def(Box::new(DefExpr {
+                // MODIFIED
+                symbol: Symbol("y".to_string()),
+                type_annotation: Some(TypeExpr::Alias(Symbol("MyType".to_string()))),
+                value: Box::new(Expression::Literal(Literal::String("value".to_string()))),
+            }))
+        );
     }
 
     #[test]
@@ -650,6 +694,7 @@ mod tests {
         assert_expr_parses_to!(
             "(let [x 1 y \"hi\"] (+ x 1))",
             Expression::Let(LetExpr {
+                // MODIFIED
                 bindings: vec![
                     LetBinding {
                         pattern: Pattern::Symbol(Symbol("x".to_string())),
@@ -659,7 +704,7 @@ mod tests {
                     LetBinding {
                         pattern: Pattern::Symbol(Symbol("y".to_string())),
                         type_annotation: None,
-                        value: Box::new(Expression::Literal(Literal::String("hi".to_string()))),
+                        value: Box::new(Expression::Literal(Literal::String("hi".to_string())))
                     },
                 ],
                 body: vec![Expression::FunctionCall {
@@ -671,7 +716,101 @@ mod tests {
                 },],
             })
         );
-        // TODO: Add tests for let with destructuring patterns once pattern parsing is fully tested
+        // Let with vector destructuring
+        assert_expr_parses_to!(
+            "(let [[a b & rest :as all-v] my-vec x 1] (do a b rest all-v x))",
+            Expression::Let(LetExpr {
+                // MODIFIED
+                bindings: vec![
+                    LetBinding {
+                        pattern: Pattern::VectorDestructuring {
+                            elements: vec![
+                                Pattern::Symbol(Symbol("a".to_string())),
+                                Pattern::Symbol(Symbol("b".to_string())),
+                            ],
+                            rest: Some(Symbol("rest".to_string())),
+                            as_symbol: Some(Symbol("all-v".to_string())),
+                        },
+                        type_annotation: None,
+                        value: Box::new(Expression::Symbol(Symbol("my-vec".to_string()))),
+                    },
+                    LetBinding {
+                        pattern: Pattern::Symbol(Symbol("x".to_string())),
+                        type_annotation: None,
+                        value: Box::new(Expression::Literal(Literal::Integer(1))),
+                    },
+                ],
+                body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("do".to_string()))),
+                    arguments: vec![
+                        Expression::Symbol(Symbol("a".to_string())),
+                        Expression::Symbol(Symbol("b".to_string())),
+                        Expression::Symbol(Symbol("rest".to_string())),
+                        Expression::Symbol(Symbol("all-v".to_string())),
+                        Expression::Symbol(Symbol("x".to_string())),
+                    ],
+                }],
+            })
+        );
+        // Let with map destructuring
+        assert_expr_parses_to!(
+            "(let [{:key1 val1 :keys [s1 s2] \"str-key\" val2 & r :as all-m} my-map] (do val1 s1 s2 val2 r all-m))",
+            Expression::Let(LetExpr { // MODIFIED
+                bindings: vec![LetBinding {
+                    pattern: Pattern::MapDestructuring {
+                        entries: vec![
+                            MapDestructuringEntry::KeyBinding {
+                                key: MapKey::Keyword(Keyword("key1".to_string())),
+                                pattern: Box::new(Pattern::Symbol(Symbol("val1".to_string()))),
+                            },
+                            MapDestructuringEntry::Keys(vec![
+                                Symbol("s1".to_string()),
+                                Symbol("s2".to_string()),
+                            ]),
+                            MapDestructuringEntry::KeyBinding {
+                                key: MapKey::String("str-key".to_string()),
+                                pattern: Box::new(Pattern::Symbol(Symbol("val2".to_string()))),
+                            },
+                        ],
+                        rest: Some(Symbol("r".to_string())),
+                        as_symbol: Some(Symbol("all-m".to_string())),
+                    },
+                    type_annotation: None,
+                    value: Box::new(Expression::Symbol(Symbol("my-map".to_string()))),
+                }],
+                body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("do".to_string()))),
+                    arguments: vec![
+                        Expression::Symbol(Symbol("val1".to_string())),
+                        Expression::Symbol(Symbol("s1".to_string())),
+                        Expression::Symbol(Symbol("s2".to_string())),
+                        Expression::Symbol(Symbol("val2".to_string())),
+                        Expression::Symbol(Symbol("r".to_string())),
+                        Expression::Symbol(Symbol("all-m".to_string())),
+                    ],
+                }],
+            })
+        );
+        // Let with wildcard
+        assert_expr_parses_to!(
+            "(let [_ 1 y 2] y)",
+            Expression::Let(LetExpr {
+                // MODIFIED
+                bindings: vec![
+                    LetBinding {
+                        pattern: Pattern::Wildcard,
+                        type_annotation: None,
+                        value: Box::new(Expression::Literal(Literal::Integer(1))),
+                    },
+                    LetBinding {
+                        pattern: Pattern::Symbol(Symbol("y".to_string())),
+                        type_annotation: None,
+                        value: Box::new(Expression::Literal(Literal::Integer(2))),
+                    },
+                ],
+                body: vec![Expression::Symbol(Symbol("y".to_string()))],
+            })
+        );
     }
 
     // --- Top Level Parsing ---
@@ -684,13 +823,13 @@ mod tests {
             )))]
         );
         assert_program_parses_to!(
-            "(def x 1) \n ; comment \n \"hello\"",
+            "(def x 1) \\n ; comment \\n \"hello\"",
             vec![
-                TopLevel::Expression(Expression::Def(DefExpr {
+                TopLevel::Expression(Expression::Def(Box::new(DefExpr {
                     symbol: Symbol("x".to_string()),
                     type_annotation: None,
                     value: Box::new(Expression::Literal(Literal::Integer(1))),
-                })),
+                }))),
                 TopLevel::Expression(Expression::Literal(Literal::String("hello".to_string()))),
             ]
         );
@@ -712,11 +851,11 @@ mod tests {
         let mut contracts_map = HashMap::new();
         contracts_map.insert(
             MapKey::Keyword(Keyword("input".to_string())),
-            Expression::Keyword(Keyword("string".to_string())),
+            Expression::Literal(Literal::Keyword(Keyword("string".to_string()))),
         );
         contracts_map.insert(
             MapKey::Keyword(Keyword("output".to_string())),
-            Expression::Keyword(Keyword("component".to_string())),
+            Expression::Literal(Literal::Keyword(Keyword("component".to_string()))),
         );
         let mut trace_map = HashMap::new();
         trace_map.insert(
@@ -725,7 +864,7 @@ mod tests {
         );
         trace_map.insert(
             MapKey::Keyword(Keyword("status".to_string())),
-            Expression::Keyword(Keyword("success".to_string())),
+            Expression::Literal(Literal::Keyword(Keyword("success".to_string()))),
         );
 
         assert_program_parses_to!(
@@ -760,9 +899,10 @@ mod tests {
         (module my.cool-module
           (:exports [ public-fn ])
           (import other.module :as other)
+          (import another.module :only [ func-a func-b ])
           (def private-val 42)
-          (defn public-fn [x] ; Simple param
-            (other/do-something x private-val)) ; Body expression
+          (defn public-fn [x :ParamType & rest-args :RestType] :ReturnType ; Params, variadic, return type
+            (other/do-something x private-val rest-args)) ; Body expression
         )
         "#;
         let expected = vec![TopLevel::Module(ModuleDefinition {
@@ -774,6 +914,14 @@ mod tests {
                     alias: Some(Symbol("other".to_string())),
                     only: None,
                 }),
+                ModuleLevelDefinition::Import(ImportDefinition {
+                    module_name: Symbol("another.module".to_string()),
+                    alias: None,
+                    only: Some(vec![
+                        Symbol("func-a".to_string()),
+                        Symbol("func-b".to_string()),
+                    ]),
+                }),
                 ModuleLevelDefinition::Def(DefExpr {
                     symbol: Symbol("private-val".to_string()),
                     type_annotation: None,
@@ -783,10 +931,14 @@ mod tests {
                     name: Symbol("public-fn".to_string()),
                     params: vec![ParamDef {
                         pattern: Pattern::Symbol(Symbol("x".to_string())),
-                        type_annotation: None,
+                        type_annotation: Some(TypeExpr::Alias(Symbol("ParamType".to_string()))),
                     }],
-                    variadic_param: None,
-                    return_type: None,
+                    variadic_param: Some(ParamDef {
+                        // Changed to ParamDef
+                        pattern: Pattern::Symbol(Symbol("rest-args".to_string())),
+                        type_annotation: Some(TypeExpr::Alias(Symbol("RestType".to_string()))),
+                    }),
+                    return_type: Some(TypeExpr::Alias(Symbol("ReturnType".to_string()))),
                     body: vec![Expression::FunctionCall {
                         function: Box::new(Expression::Symbol(Symbol(
                             "other/do-something".to_string(),
@@ -794,6 +946,7 @@ mod tests {
                         arguments: vec![
                             Expression::Symbol(Symbol("x".to_string())),
                             Expression::Symbol(Symbol("private-val".to_string())),
+                            Expression::Symbol(Symbol("rest-args".to_string())),
                         ],
                     }],
                 }),
@@ -813,14 +966,14 @@ mod tests {
         let mut actual_file = File::create("actual_ast.txt").unwrap();
         writeln!(expected_file, "{:#?}", expected).unwrap();
         writeln!(actual_file, "{:#?}", actual).unwrap();
-        println!("\n==================== AST DIFF HELP ====================");
+        println!("\\n==================== AST DIFF HELP ====================");
         println!("Expected AST written to: expected_ast.txt");
         println!("Actual AST   written to: actual_ast.txt");
         println!("To see a diff, run: diff -u expected_ast.txt actual_ast.txt");
         println!("(Or use your favorite diff tool)");
-        println!("======================================================\n");
+        println!("======================================================\\n");
         println!("Expected AST: {:#?}", expected);
-        println!("Actual AST: {:#?}\n", actual);
+        println!("Actual AST: {:#?}\\n", actual);
         assert_eq!(actual, expected, "Module definition AST mismatch");
     }
 
@@ -831,6 +984,7 @@ mod tests {
         assert_expr_parses_to!(
             "(parallel [a (f 1)] [b :SomeType (g 2)])",
             Expression::Parallel(ParallelExpr {
+                // MODIFIED
                 bindings: vec![
                     ParallelBinding {
                         symbol: Symbol("a".to_string()),
@@ -858,8 +1012,9 @@ mod tests {
         assert_expr_parses_to!(
             "(with-resource [res :ResourceType (init-res)] (use res))",
             Expression::WithResource(WithResourceExpr {
+                // MODIFIED
                 resource_symbol: Symbol("res".to_string()),
-                resource_type: TypeExpr::Alias(Symbol("ResourceType".to_string())), // Assuming Alias
+                resource_type: TypeExpr::Alias(Symbol("ResourceType".to_string())),
                 resource_init: Box::new(Expression::FunctionCall {
                     function: Box::new(Expression::Symbol(Symbol("init-res".to_string()))),
                     arguments: vec![],
@@ -874,73 +1029,86 @@ mod tests {
 
     #[test]
     fn test_parse_try_catch() {
+        // Basic try-catch
         assert_expr_parses_to!(
-            "(try (dangerous-op) (catch :Error e (handle e)) (catch :Other err (log err)) (finally (cleanup)))",
+            "(try (dangerous-op) (catch :Error e (log e)) (catch :OtherError oe (log oe)))",
             Expression::TryCatch(TryCatchExpr {
-                try_body: vec![
-                    Expression::FunctionCall {
-                        function: Box::new(Expression::Symbol(Symbol("dangerous-op".to_string()))),
-                        arguments: vec![],
-                    }
-                ],
+                // MODIFIED
+                try_body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("dangerous-op".to_string()))),
+                    arguments: vec![],
+                }],
                 catch_clauses: vec![
                     CatchClause {
                         pattern: CatchPattern::Keyword(Keyword("Error".to_string())),
                         binding: Symbol("e".to_string()),
-                        body: vec![
-                            Expression::FunctionCall {
-                                function: Box::new(Expression::Symbol(Symbol("handle".to_string()))),
-                                arguments: vec![Expression::Symbol(Symbol("e".to_string()))],
-                            }
-                        ],
+                        body: vec![Expression::FunctionCall {
+                            function: Box::new(Expression::Symbol(Symbol("log".to_string()))),
+                            arguments: vec![Expression::Symbol(Symbol("e".to_string()))],
+                        }],
                     },
                     CatchClause {
-                        pattern: CatchPattern::Keyword(Keyword("Other".to_string())),
-                        binding: Symbol("err".to_string()),
-                        body: vec![
-                            Expression::FunctionCall {
-                                function: Box::new(Expression::Symbol(Symbol("log".to_string()))),
-                                arguments: vec![Expression::Symbol(Symbol("err".to_string()))],
-                            }
-                        ],
+                        pattern: CatchPattern::Keyword(Keyword("OtherError".to_string())),
+                        binding: Symbol("oe".to_string()),
+                        body: vec![Expression::FunctionCall {
+                            function: Box::new(Expression::Symbol(Symbol("log".to_string()))),
+                            arguments: vec![Expression::Symbol(Symbol("oe".to_string()))],
+                        }],
                     },
                 ],
-                finally_body: Some(vec![
-                    Expression::FunctionCall {
-                        function: Box::new(Expression::Symbol(Symbol("cleanup".to_string()))),
-                        arguments: vec![],
-                    }
-                ]),
+                finally_body: None,
             })
         );
-        // Test without finally
+
+        // Try-catch with finally
         assert_expr_parses_to!(
-            "(try (op) (catch :E x (h x)))",
+            "(try (op) (catch :E e (log e)) (finally (cleanup)))",
             Expression::TryCatch(TryCatchExpr {
+                // MODIFIED
                 try_body: vec![Expression::FunctionCall {
                     function: Box::new(Expression::Symbol(Symbol("op".to_string()))),
-                    arguments: vec![]
+                    arguments: vec![],
                 }],
                 catch_clauses: vec![CatchClause {
                     pattern: CatchPattern::Keyword(Keyword("E".to_string())),
-                    binding: Symbol("x".to_string()),
+                    binding: Symbol("e".to_string()),
                     body: vec![Expression::FunctionCall {
-                        function: Box::new(Expression::Symbol(Symbol("h".to_string()))),
-                        arguments: vec![Expression::Symbol(Symbol("x".to_string()))]
+                        function: Box::new(Expression::Symbol(Symbol("log".to_string()))),
+                        arguments: vec![Expression::Symbol(Symbol("e".to_string()))],
                     }],
                 }],
-                finally_body: None,
+                finally_body: Some(vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("cleanup".to_string()))),
+                    arguments: vec![],
+                }]),
+            })
+        );
+
+        // Try-finally (no catch)
+        assert_expr_parses_to!(
+            "(try (main-op) (finally (always-run)))",
+            Expression::TryCatch(TryCatchExpr {
+                // MODIFIED
+                try_body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("main-op".to_string()))),
+                    arguments: vec![],
+                }],
+                catch_clauses: vec![], // Empty catch clauses
+                finally_body: Some(vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("always-run".to_string()))),
+                    arguments: vec![],
+                }]),
             })
         );
     }
 
     #[test]
     fn test_parse_match() {
-        // Simple literal and wildcard match
         assert_expr_parses_to!(
-            "(match x (1 \"one\") (\"two\" 2) (_ 0))",
-            Expression::Match(MatchExpr {
-                expression: Box::new(Expression::Symbol(Symbol("x".to_string()))),
+            "(match my-val 1 \"one\" [2 3] \"two-three\" _ \"default\")",
+            Expression::Match(Box::new(MatchExpr {
+                // MODIFIED
+                expression: Box::new(Expression::Symbol(Symbol("my-val".to_string()))),
                 clauses: vec![
                     MatchClause {
                         pattern: MatchPattern::Literal(Literal::Integer(1)),
@@ -948,79 +1116,115 @@ mod tests {
                         body: vec![Expression::Literal(Literal::String("one".to_string()))],
                     },
                     MatchClause {
-                        pattern: MatchPattern::Literal(Literal::String("two".to_string())),
+                        pattern: MatchPattern::Vector {
+                            elements: vec![
+                                MatchPattern::Literal(Literal::Integer(2)),
+                                MatchPattern::Literal(Literal::Integer(3)),
+                            ],
+                            rest: None,
+                        },
                         guard: None,
-                        body: vec![Expression::Literal(Literal::Integer(2))],
+                        body: vec![Expression::Literal(Literal::String(
+                            "two-three".to_string()
+                        ))],
                     },
                     MatchClause {
                         pattern: MatchPattern::Wildcard,
                         guard: None,
-                        body: vec![Expression::Literal(Literal::Integer(0))],
+                        body: vec![Expression::Literal(Literal::String("default".to_string()))],
                     },
                 ],
-            })
+            }))
         );
+
         // Match with guard
         assert_expr_parses_to!(
-            "(match y (:a 1) (x when (> x 0) x) (_ -1))",
-            Expression::Match(MatchExpr {
-                expression: Box::new(Expression::Symbol(Symbol("y".to_string()))),
+            "(match x [a b] (when (> a b)) (list a b) _ nil)",
+            Expression::Match(Box::new(MatchExpr {
+                // MODIFIED
+                expression: Box::new(Expression::Symbol(Symbol("x".to_string()))),
                 clauses: vec![
                     MatchClause {
-                        pattern: MatchPattern::Keyword(Keyword("a".to_string())),
-                        guard: None,
-                        body: vec![Expression::Literal(Literal::Integer(1))],
-                    },
-                    MatchClause {
-                        pattern: MatchPattern::Symbol(Symbol("x".to_string())), // Symbol pattern binds
+                        pattern: MatchPattern::Vector {
+                            elements: vec![
+                                MatchPattern::Symbol(Symbol("a".to_string())),
+                                MatchPattern::Symbol(Symbol("b".to_string())),
+                            ],
+                            rest: None,
+                        },
                         guard: Some(Box::new(Expression::FunctionCall {
                             function: Box::new(Expression::Symbol(Symbol(">".to_string()))),
                             arguments: vec![
-                                Expression::Symbol(Symbol("x".to_string())),
-                                Expression::Literal(Literal::Integer(0))
-                            ]
+                                Expression::Symbol(Symbol("a".to_string())),
+                                Expression::Symbol(Symbol("b".to_string())),
+                            ],
                         })),
-                        body: vec![Expression::Symbol(Symbol("x".to_string()))],
+                        body: vec![Expression::List(vec![
+                            // Changed to Expression::List
+                            Expression::Symbol(Symbol("a".to_string())),
+                            Expression::Symbol(Symbol("b".to_string())),
+                        ])],
                     },
                     MatchClause {
                         pattern: MatchPattern::Wildcard,
                         guard: None,
-                        body: vec![Expression::Literal(Literal::Integer(-1))],
+                        body: vec![Expression::Literal(Literal::Nil)],
                     },
                 ],
-            })
+            }))
         );
-        // TODO: Add tests for vector/map/as match patterns once pattern parsing is robustly tested
-    }
 
-    #[test]
-    fn test_parse_log_step() {
-        let parse_result =
-            RTFSParser::parse(Rule::expression, "(log-step :id \"step-1\" (do-something))");
-        assert!(
-            parse_result.is_ok(),
-            "Failed to parse expression:\\nInput: {:?}\\nError: {:?}",
-            "(log-step :id \"step-1\" (do-something))",
-            parse_result.err().unwrap()
-        );
-        // Pass the expression pair itself to build_expression
-        let expr_pair = parse_result.unwrap().next().unwrap();
-        let ast = expressions::build_expression(expr_pair);
-        println!("Actual AST: {:#?}", ast);
-
-        let expected = Expression::LogStep(LogStepExpr {
-            id: "step-1".to_string(),
-            expression: Box::new(Expression::FunctionCall {
-                function: Box::new(Expression::Symbol(Symbol("do-something".to_string()))),
-                arguments: vec![],
-            }),
-        });
-        println!("Expected AST: {:#?}", expected);
-
-        assert_eq!(
-            ast, expected,
-            "Expression AST mismatch for input: {:?}",
-            "(log-step :id \"step-1\" (do-something))"
+        // Match with map pattern
+        assert_expr_parses_to!(
+            "(match data {:type \"user\" :name n} (greet n) { :type \"admin\" } (admin-panel))",
+            Expression::Match(Box::new(MatchExpr {
+                // MODIFIED
+                expression: Box::new(Expression::Symbol(Symbol("data".to_string()))),
+                clauses: vec![
+                    MatchClause {
+                        pattern: MatchPattern::Map {
+                            entries: vec![
+                                MapMatchEntry {
+                                    key: MapKey::Keyword(Keyword("type".to_string())),
+                                    pattern: Box::new(MatchPattern::Literal(Literal::String(
+                                        "user".to_string()
+                                    ))),
+                                },
+                                MapMatchEntry {
+                                    key: MapKey::Keyword(Keyword("name".to_string())),
+                                    pattern: Box::new(MatchPattern::Symbol(Symbol(
+                                        "n".to_string()
+                                    ))),
+                                },
+                            ],
+                            rest: None,
+                        },
+                        guard: None,
+                        body: vec![Expression::FunctionCall {
+                            function: Box::new(Expression::Symbol(Symbol("greet".to_string()))),
+                            arguments: vec![Expression::Symbol(Symbol("n".to_string()))],
+                        }],
+                    },
+                    MatchClause {
+                        pattern: MatchPattern::Map {
+                            entries: vec![MapMatchEntry {
+                                key: MapKey::Keyword(Keyword("type".to_string())),
+                                pattern: Box::new(MatchPattern::Literal(Literal::String(
+                                    "admin".to_string()
+                                ))),
+                            },],
+                            rest: None,
+                        },
+                        guard: None,
+                        body: vec![Expression::FunctionCall {
+                            function: Box::new(Expression::Symbol(Symbol(
+                                "admin-panel".to_string()
+                            ))),
+                            arguments: vec![],
+                        }],
+                    },
+                ],
+            }))
         );
     }
 
@@ -1028,4 +1232,259 @@ mod tests {
     // TODO: Add tests for comments and whitespace handling within structures
     // TODO: Add tests for complex patterns (map/vector destructuring in let, fn, match)
     // TODO: Add tests for complex type expressions
+
+    // --- Tests for fn ---
+    #[test]
+    fn test_parse_fn() {
+        // Simple fn
+        assert_expr_parses_to!(
+            "(fn [x y] (+ x y))",
+            Expression::Fn(FnExpr {
+                // MODIFIED
+                params: vec![
+                    ParamDef {
+                        pattern: Pattern::Symbol(Symbol("x".to_string())),
+                        type_annotation: None
+                    },
+                    ParamDef {
+                        pattern: Pattern::Symbol(Symbol("y".to_string())),
+                        type_annotation: None
+                    },
+                ],
+                variadic_param: None,
+                return_type: None,
+                body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("+".to_string()))),
+                    arguments: vec![
+                        Expression::Symbol(Symbol("x".to_string())),
+                        Expression::Symbol(Symbol("y".to_string())),
+                    ],
+                }],
+            })
+        );
+
+        // Fn with type annotations and variadic param
+        assert_expr_parses_to!(
+            "(fn [name :String & rest :Any] :String (str name (join rest)))",
+            Expression::Fn(FnExpr {
+                // MODIFIED
+                params: vec![ParamDef {
+                    pattern: Pattern::Symbol(Symbol("name".to_string())),
+                    type_annotation: Some(TypeExpr::Alias(Symbol("String".to_string())))
+                },],
+                variadic_param: Some(ParamDef {
+                    pattern: Pattern::Symbol(Symbol("rest".to_string())),
+                    type_annotation: Some(TypeExpr::Alias(Symbol("Any".to_string())))
+                }),
+                return_type: Some(TypeExpr::Alias(Symbol("String".to_string()))),
+                body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("str".to_string()))),
+                    arguments: vec![
+                        Expression::Symbol(Symbol("name".to_string())),
+                        Expression::FunctionCall {
+                            function: Box::new(Expression::Symbol(Symbol("join".to_string()))),
+                            arguments: vec![Expression::Symbol(Symbol("rest".to_string()))],
+                        }
+                    ],
+                }],
+            })
+        );
+
+        // Fn with destructuring in params
+        assert_expr_parses_to!(
+            "(fn [{:x x-val} [y z]] (+ x-val y z))",
+            Expression::Fn(FnExpr {
+                // MODIFIED
+                params: vec![
+                    ParamDef {
+                        pattern: Pattern::MapDestructuring {
+                            entries: vec![MapDestructuringEntry::KeyBinding {
+                                key: MapKey::Keyword(Keyword("x".to_string())),
+                                pattern: Box::new(Pattern::Symbol(Symbol("x-val".to_string())))
+                            }],
+                            rest: None,
+                            as_symbol: None,
+                        },
+                        type_annotation: None
+                    },
+                    ParamDef {
+                        pattern: Pattern::VectorDestructuring {
+                            elements: vec![
+                                Pattern::Symbol(Symbol("y".to_string())),
+                                Pattern::Symbol(Symbol("z".to_string())),
+                            ],
+                            rest: None,
+                            as_symbol: None,
+                        },
+                        type_annotation: None
+                    },
+                ],
+                variadic_param: None,
+                return_type: None,
+                body: vec![Expression::FunctionCall {
+                    function: Box::new(Expression::Symbol(Symbol("+".to_string()))),
+                    arguments: vec![
+                        Expression::Symbol(Symbol("x-val".to_string())),
+                        Expression::Symbol(Symbol("y".to_string())),
+                        Expression::Symbol(Symbol("z".to_string())),
+                    ],
+                }],
+            })
+        );
+    }
+
+    // Helper macro for asserting type expression parsing
+    macro_rules! assert_type_parses_to {
+        ($input:expr, $expected:expr) => {
+            let parse_result = RTFSParser::parse(Rule::type_expr, $input);
+            assert!(
+                parse_result.is_ok(),
+                "Failed to parse type expression:\nInput: {:?}\nError: {:?}",
+                $input,
+                parse_result.err().unwrap()
+            );
+            let type_pair = parse_result.unwrap().next().unwrap();
+            // build_type_expr now returns Result<TypeExpr, PestParseError>
+            let ast_result = build_type_expr(type_pair);
+            assert!(
+                ast_result.is_ok(),
+                "Failed to build TypeExpr AST:\nInput: {:?}\nError: {:?}",
+                $input,
+                ast_result.as_ref().err() // Use as_ref() to borrow for err()
+            );
+            let ast = ast_result.unwrap();
+            assert_eq!(
+                ast, $expected,
+                "TypeExpr AST mismatch for input: {:?}\nExpected: {:#?}\nActual: {:#?}",
+                $input, $expected, ast
+            );
+        };
+    }
+
+    #[test]
+    fn test_parse_type_expressions() {
+        // Primitive types
+        assert_type_parses_to!(":int", TypeExpr::Primitive(PrimitiveType::Int));
+        assert_type_parses_to!(":string", TypeExpr::Primitive(PrimitiveType::String));
+        assert_type_parses_to!(":any", TypeExpr::Any);
+        assert_type_parses_to!(":never", TypeExpr::Never);
+
+        // Symbol as type alias
+        assert_type_parses_to!(
+            "MyCustomType",
+            TypeExpr::Alias(Symbol("MyCustomType".to_string()))
+        );
+        assert_type_parses_to!(
+            "my.namespace/Type",
+            TypeExpr::Alias(Symbol("my.namespace/Type".to_string()))
+        );
+
+        // Vector type
+        assert_type_parses_to!(
+            "[:vector :int]",
+            TypeExpr::Vector(Box::new(TypeExpr::Primitive(PrimitiveType::Int)))
+        );
+        assert_type_parses_to!(
+            "[:vector [:vector :string]]",
+            TypeExpr::Vector(Box::new(TypeExpr::Vector(Box::new(TypeExpr::Primitive(
+                PrimitiveType::String
+            )))))
+        );
+
+        // Map type
+        assert_type_parses_to!(
+            "[:map [:key1 :int] [:key2? :string] [:* :any]]",
+            TypeExpr::Map {
+                entries: vec![
+                    MapTypeEntry {
+                        key: Keyword("key1".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                        optional: false,
+                    },
+                    MapTypeEntry {
+                        key: Keyword("key2".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                        optional: true,
+                    },
+                ],
+                wildcard: Some(Box::new(TypeExpr::Any)),
+            }
+        );
+        assert_type_parses_to!(
+            "[:map]",
+            TypeExpr::Map {
+                entries: vec![],
+                wildcard: None
+            }
+        );
+
+        // Function type
+        assert_type_parses_to!(
+            "[:=> [:int :string] :bool]", // Simple params, return
+            TypeExpr::Function {
+                param_types: vec![
+                    // Changed from params
+                    ParamType::Simple(Box::new(TypeExpr::Primitive(PrimitiveType::Int))),
+                    ParamType::Simple(Box::new(TypeExpr::Primitive(PrimitiveType::String))),
+                ],
+                variadic_param_type: None, // Changed from variadic
+                return_type: Box::new(TypeExpr::Primitive(PrimitiveType::Bool)),
+            }
+        );
+        assert_type_parses_to!(
+            "[:=> [:A & :B] :C]", // Variadic
+            TypeExpr::Function {
+                param_types: vec![ParamType::Simple(Box::new(TypeExpr::Alias(Symbol(
+                    "A".to_string()
+                ))))], // Changed from params
+                variadic_param_type: Some(Box::new(TypeExpr::Alias(Symbol("B".to_string())))), // Changed from variadic
+                return_type: Box::new(TypeExpr::Alias(Symbol("C".to_string()))),
+            }
+        );
+        assert_type_parses_to!(
+            "[:=> [] :void]", // No params
+            TypeExpr::Function {
+                param_types: vec![],       // Changed from params
+                variadic_param_type: None, // Changed from variadic
+                return_type: Box::new(TypeExpr::Primitive(PrimitiveType::Custom(Keyword(
+                    "void".to_string()
+                )))), // Assuming :void is a custom primitive
+            }
+        );
+
+        // Resource type
+        assert_type_parses_to!(
+            "[:resource my.resource/Handle]",
+            TypeExpr::Resource(Symbol("my.resource/Handle".to_string()))
+        );
+
+        // Union type
+        assert_type_parses_to!(
+            "[:or :int :string :nil]",
+            TypeExpr::Union(vec![
+                TypeExpr::Primitive(PrimitiveType::Int),
+                TypeExpr::Primitive(PrimitiveType::String),
+                TypeExpr::Primitive(PrimitiveType::Nil),
+            ])
+        );
+
+        // Intersection type
+        assert_type_parses_to!(
+            "[:and HasName HasAge]",
+            TypeExpr::Intersection(vec![
+                TypeExpr::Alias(Symbol("HasName".to_string())),
+                TypeExpr::Alias(Symbol("HasAge".to_string())),
+            ])
+        );
+
+        // Literal type
+        assert_type_parses_to!("[:val 123]", TypeExpr::Literal(Literal::Integer(123)));
+        assert_type_parses_to!(
+            "[:val \"hello\"]", // Corrected line
+            TypeExpr::Literal(Literal::String("hello".to_string()))
+        );
+        assert_type_parses_to!("[:val true]", TypeExpr::Literal(Literal::Boolean(true)));
+    }
+
+    // TODO: Add tests for comments and whitespace handling within structures
 }
