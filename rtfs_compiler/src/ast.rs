@@ -1,142 +1,186 @@
 use std::collections::HashMap;
 
-// Using i64 for integers and f64 for floats as common defaults.
-#[derive(Debug, Clone, PartialEq)]
+// --- Literal, Symbol, Keyword ---
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Integer(i64),
     Float(f64),
     String(String),
     Boolean(bool),
+    Keyword(Keyword), // Added Keyword variant
     Nil,
 }
 
-// Represents identifiers, potentially namespaced (e.g., "my-var", "my.ns/func")
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct Symbol(pub String);
 
-// Represents keywords (e.g., ":my-key", ":my.ns/key")
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct Keyword(pub String);
 
-// Represents different types of map keys allowed by the grammar
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// --- Map Key ---
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum MapKey {
     Keyword(Keyword),
     String(String),
     Integer(i64),
 }
 
-// Represents a binding pattern used in let, fn, match
-#[derive(Debug, Clone, PartialEq)]
+// --- Patterns for Destructuring (let, fn params) ---
+#[derive(Debug, PartialEq, Clone)]
 pub enum Pattern {
     Symbol(Symbol),
-    MapPattern(MapPattern),
-    VectorPattern(VectorPattern),
-    Literal(Literal), // For match patterns
-    Wildcard,         // For match patterns: _
-                      // TODO: Consider adding TypePattern for match?
+    Wildcard, // _
+    VectorDestructuring {
+        // Renamed from VectorPattern
+        elements: Vec<Pattern>,
+        rest: Option<Symbol>,      // For ..rest or &rest
+        as_symbol: Option<Symbol>, // For :as binding
+    },
+    MapDestructuring {
+        // Renamed from MapPattern
+        entries: Vec<MapDestructuringEntry>,
+        rest: Option<Symbol>,      // For ..rest or &rest
+        as_symbol: Option<Symbol>, // For :as binding
+    },
+    // Literal(Literal), // Literals are not typically part of binding patterns directly, but MatchPattern
 }
 
-// Updated MapPattern based on grammar
-#[derive(Debug, Clone, PartialEq)]
-pub struct MapPattern {
-    // :keys [s1 s2 ...]
-    pub keys: Vec<Symbol>, // Symbols bound directly from matching map keys
-    // :kw pattern, "str" pattern, 123 pattern
-    pub entries: Vec<(MapKey, Pattern)>, // Explicit key-pattern pairs
-    // :or { default-symbol default-literal ... }
-    pub or_defaults: Option<HashMap<Symbol, Literal>>, // Defaults for symbols if key missing
-    // & rest-symbol
-    pub rest: Option<Symbol>, // Bind remaining key-value pairs to a map symbol
-    // :as whole-map-symbol
-    pub as_binding: Option<Symbol>, // Bind the entire matched map to a symbol
+#[derive(Debug, PartialEq, Clone)]
+pub enum MapDestructuringEntry {
+    KeyBinding { key: MapKey, pattern: Box<Pattern> },
+    Keys(Vec<Symbol>), // For :keys [s1 s2]
+                       // TODO: Consider :or { default-val literal } if needed for destructuring
 }
 
-// Updated VectorPattern based on grammar
-#[derive(Debug, Clone, PartialEq)]
-pub struct VectorPattern {
-    // [p1 p2 ...]
-    pub elements: Vec<Pattern>, // Patterns for positional elements
-    // & rest-symbol
-    pub rest: Option<Symbol>, // Bind remaining elements to a vector/list symbol
-    // :as whole-vec-symbol
-    pub as_binding: Option<Symbol>, // Bind the entire matched vector/list to a symbol
-}
-
-// Represents type expressions used in annotations
-#[derive(Debug, Clone, PartialEq)]
-pub enum TypeExpr {
-    Primitive(PrimitiveType),
-    Vector(Box<TypeExpr>), // [:vector ElementType]
+// --- Patterns for Matching (match clauses) ---
+#[derive(Debug, PartialEq, Clone)]
+pub enum MatchPattern {
+    Literal(Literal),
+    Symbol(Symbol),                 // Binds the matched value to the symbol
+    Keyword(Keyword),               // Matches a specific keyword
+    Wildcard,                       // _
+    Type(TypeExpr, Option<Symbol>), // Matches type, optionally binds the value
+    Vector {
+        // Changed from VectorMatchPattern
+        elements: Vec<MatchPattern>,
+        rest: Option<Symbol>, // For ..rest or &rest
+    },
     Map {
-        // Ensure this is a struct variant
-        entries: Vec<(Keyword, TypeExpr, bool)>, // [:map [key Type optional?]...]
-        wildcard: Option<Box<TypeExpr>>,         // [:* WildcardType]?
+        // Changed from MapMatchPattern
+        entries: Vec<MapMatchEntry>,
+        rest: Option<Symbol>, // For ..rest or &rest
     },
-    Function {
-        // Ensure this is a struct variant
-        param_types: Vec<TypeExpr>,                 // Parameter types
-        variadic_param_type: Option<Box<TypeExpr>>, // Type after &
-        return_type: Box<TypeExpr>,                 // Return type
-    },
-    Resource(Symbol),            // [:resource Symbol]
-    Union(Vec<TypeExpr>),        // [:or Type...]
-    Intersection(Vec<TypeExpr>), // [:and Type...]
-    Literal(Literal),            // [:val Literal]
-    Any,                         // :any
-    Never,                       // :never
-    Alias(Symbol),               // Added missing Alias variant
+    As(Symbol, Box<MatchPattern>), // :as pattern
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone)]
+pub struct MapMatchEntry {
+    pub key: MapKey,
+    pub pattern: Box<MatchPattern>,
+}
+
+// --- Type Expressions ---
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum PrimitiveType {
     Int,
     Float,
     String,
     Bool,
     Nil,
-    Keyword,
-    Symbol,
+    Keyword, // Represents the type of keywords themselves
+    Symbol,  // Represents the type of symbols themselves
+    // Any, // Moved to TypeExpr::Any
+    // Never, // Moved to TypeExpr::Never
+    Custom(Keyword), // For other primitive-like types specified by a keyword e.g. :my-custom-primitive
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct MapTypeEntry {
+    pub key: Keyword, // Keys in map types are keywords
+    pub value_type: Box<TypeExpr>,
+    pub optional: bool,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ParamType {
+    Simple(Box<TypeExpr>),
+    // Represents a standard parameter with a type
+    // Variadic(Box<TypeExpr>), // Represented by FnExpr.variadic_param_type now
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum TypeExpr {
+    Primitive(PrimitiveType),
+    Alias(Symbol),         // Type alias like MyType or my.namespace/MyType
+    Vector(Box<TypeExpr>), // Vector type, e.g., [:vector :int]
+    Map {
+        entries: Vec<MapTypeEntry>,
+        wildcard: Option<Box<TypeExpr>>, // For [:* AnyType]
+    },
+    Function {
+        param_types: Vec<ParamType>,                // Changed from params
+        variadic_param_type: Option<Box<TypeExpr>>, // Changed from variadic
+        return_type: Box<TypeExpr>,
+    },
+    Resource(Symbol),            // E.g., [:resource my.pkg/Handle]
+    Union(Vec<TypeExpr>),        // E.g., [:or :int :string]
+    Intersection(Vec<TypeExpr>), // E.g., [:and HasName HasId]
+    Literal(Literal),            // E.g., [:val 123] or [:val "hello"]
+    Any,                         // :any type
+    Never,                       // :never type
+}
+
+// --- Core Expression Structure ---
+
 // Represents a single binding in a `let` expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct LetBinding {
-    pub pattern: Pattern,
+    pub pattern: Pattern, // Changed from symbol: Symbol
     pub type_annotation: Option<TypeExpr>,
     pub value: Box<Expression>,
 }
 
 // Represents the main expression types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Literal(Literal),
     Symbol(Symbol),
-    Keyword(Keyword),
-    List(Vec<Expression>), // General list/potential function call
+    // Keyword(Keyword), // Keywords are literals: Literal::Keyword
+    List(Vec<Expression>), // Added for generic lists like (1 2 3) or ()
     Vector(Vec<Expression>),
     Map(HashMap<MapKey, Expression>),
-
-    // Special Forms
-    Let(LetExpr),
-    If(IfExpr),
-    Do(DoExpr),
-    Fn(FnExpr),
-    Def(DefExpr),
-    Defn(DefnExpr),
-    Parallel(ParallelExpr),         // Added
-    WithResource(WithResourceExpr), // Added
-    TryCatch(TryCatchExpr),         // Added
-    Match(MatchExpr),               // Added
-    LogStep(LogStepExpr),           // Added
-
-    // Explicit Function Call (might be refined during parsing/semantic analysis)
-    // For now, List might cover this implicitly based on context.
     FunctionCall {
-        // Uncommented this variant
         function: Box<Expression>,
-        arguments: Vec<Expression>, // Renamed from args to arguments
+        arguments: Vec<Expression>,
     },
+    If(IfExpr),
+    Let(LetExpr),
+    Do(DoExpr),
+    Match(Box<MatchExpr>),     // Changed to Box<MatchExpr>
+    LogStep(Box<LogStepExpr>), // Changed to Box<LogStepExpr>
+    TryCatch(TryCatchExpr),
+    Fn(FnExpr),
+    WithResource(WithResourceExpr),
+    Parallel(ParallelExpr),
+    Def(Box<DefExpr>),   // Added for def as an expression
+    Defn(Box<DefnExpr>), // Added for defn as an expression
+}
+
+// Struct for Match Expression
+#[derive(Debug, PartialEq, Clone)]
+pub struct MatchExpr {
+    pub expression: Box<Expression>,
+    pub clauses: Vec<MatchClause>,
+}
+
+// Struct for LogStep Expression
+#[derive(Debug, PartialEq, Clone)]
+pub struct LogStepExpr {
+    pub level: Option<Keyword>,   // e.g., :info, :debug, :error
+    pub values: Vec<Expression>,  // The expressions to log
+    pub location: Option<String>, // Optional string literal for source location hint
 }
 
 // Structs for Special Forms
@@ -161,14 +205,14 @@ pub struct DoExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnExpr {
     pub params: Vec<ParamDef>,
-    pub variadic_param: Option<Symbol>, // Symbol for the '& rest' binding
+    pub variadic_param: Option<ParamDef>, // Changed from Option<Symbol>
     pub return_type: Option<TypeExpr>,
     pub body: Vec<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
-    pub pattern: Pattern, // Parameter name or destructuring pattern
+    pub pattern: Pattern, // Changed from name: Symbol to allow destructuring
     pub type_annotation: Option<TypeExpr>,
 }
 
@@ -184,7 +228,7 @@ pub struct DefExpr {
 pub struct DefnExpr {
     pub name: Symbol,
     pub params: Vec<ParamDef>,
-    pub variadic_param: Option<Symbol>,
+    pub variadic_param: Option<ParamDef>, // Changed from Option<Symbol>
     pub return_type: Option<TypeExpr>,
     pub body: Vec<Expression>,
 }
@@ -220,71 +264,25 @@ pub struct TryCatchExpr {
     pub finally_body: Option<Vec<Expression>>, // Optional in grammar
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum CatchPattern {
-    // catch_pattern = _{ type_expr | keyword | symbol }
-    Type(TypeExpr),
-    Keyword(Keyword),
-    Symbol(Symbol), // Catch-all or specific error symbol
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct CatchClause {
-    // "(" ~ "catch" ~ catch_pattern ~ symbol ~ expression+ ~ ")"
-    pub pattern: CatchPattern,
-    pub binding: Symbol, // Symbol to bind the caught error/exception object
+    pub pattern: CatchPattern, // This seems to be a separate enum
+    pub binding: Symbol,
     pub body: Vec<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchExpr {
-    pub expression: Box<Expression>, // Expression to match against
-    pub clauses: Vec<MatchClause>,
+#[derive(Debug, PartialEq, Clone)]
+pub enum CatchPattern {
+    Keyword(Keyword), // e.g. :Error
+    Type(TypeExpr),   // e.g. :my.pkg/CustomErrorType
+    Symbol(Symbol),   // e.g. AnyError - acts as a catch-all with binding
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct MatchClause {
-    // "(" ~ match_pattern ~ ("when" ~ expression)? ~ expression+ ~ ")"
-    pub pattern: MatchPattern, // Using a distinct MatchPattern type
-    pub guard: Option<Box<Expression>>, // Optional 'when' condition
+    pub pattern: MatchPattern, // Changed from Pattern
+    pub guard: Option<Box<Expression>>,
     pub body: Vec<Expression>,
-}
-
-// Represents patterns specifically allowed in `match` clauses
-#[derive(Debug, Clone, PartialEq)]
-pub enum MatchPattern {
-    Literal(Literal),
-    Symbol(Symbol), // Can act as a binding or match specific symbol value (context-dependent)
-    Keyword(Keyword),
-    Wildcard,       // _
-    Type(TypeExpr), // Match based on type (runtime check)
-    Vector(VectorMatchPattern),
-    Map(MapMatchPattern),
-    As(Symbol, Box<MatchPattern>), // (:as name pattern)
-}
-
-// Vector pattern specific to match (allows nested match patterns)
-#[derive(Debug, Clone, PartialEq)]
-pub struct VectorMatchPattern {
-    // vector_match_pattern = { "[" ~ match_pattern* ~ ("&" ~ symbol)? ~ "]" }
-    pub elements: Vec<MatchPattern>,
-    pub rest: Option<Symbol>, // Bind rest of elements
-}
-
-// Map pattern specific to match (allows nested match patterns)
-#[derive(Debug, Clone, PartialEq)]
-pub struct MapMatchPattern {
-    // map_match_pattern = { "{" ~ map_match_pattern_entry* ~ ("&" ~ symbol)? ~ "}" }
-    // map_match_pattern_entry = { map_key ~ match_pattern }
-    pub entries: Vec<(MapKey, MatchPattern)>,
-    pub rest: Option<Symbol>, // Bind rest of key-value pairs
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LogStepExpr {
-    // "(" ~ "log-step" ~ ":id" ~ string ~ expression ~ ")"
-    pub id: String, // ID is a string literal
-    pub expression: Box<Expression>,
 }
 
 // Represents top-level definitions in a file
@@ -306,7 +304,7 @@ pub struct TaskDefinition {
     pub contracts: Option<Expression>, // Likely a Map expression
     pub plan: Option<Expression>,
     pub execution_trace: Option<Expression>, // Likely a Vector expression
-    pub metadata: Option<Expression>, // Added metadata field
+    pub metadata: Option<Expression>,        // Added metadata field
 }
 
 #[derive(Debug, Clone, PartialEq)]

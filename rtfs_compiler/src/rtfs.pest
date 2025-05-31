@@ -8,7 +8,7 @@ program = { SOI ~ (task_definition | module_definition | expression)* ~ EOI }
 expression = _{ literal | keyword | symbol | special_form | list | vector | map }
 
 // --- Basic Values ---
-literal = { float | integer | string | boolean | nil }
+literal = { float | integer | string | boolean | nil | keyword } // Added keyword here
 
 integer = @{ ("-" | "+")? ~ ASCII_DIGIT+ }
 float   = @{ ("-" | "+")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
@@ -124,15 +124,15 @@ do_expr = { "(" ~ do_keyword ~ expression* ~ ")" }
 
 fn_param_list = { "[" ~ param_def* ~ ("&" ~ symbol)? ~ "]" } // New rule for parameter lists
 
-fn_expr   = { "(" ~ fn_keyword ~ fn_param_list ~ (":" ~ type_expr)? ~ expression+ ~ ")" } // Use fn_keyword
-param_def = { binding_pattern ~ (":" ~ type_expr)? }
+fn_expr   = { "(" ~ fn_keyword ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Use fn_keyword
+param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 
-def_expr  = { "(" ~ def_keyword ~ symbol ~ (":" ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
-defn_expr = { "(" ~ defn_keyword ~ symbol ~ fn_param_list ~ (":" ~ type_expr)? ~ expression+ ~ ")" } // Use fn_param_list & defn_keyword
+def_expr  = { "(" ~ def_keyword ~ symbol ~ (COLON ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
+defn_expr = { "(" ~ defn_keyword ~ symbol ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Use fn_param_list & defn_keyword
 
 parallel_expr    = { "(" ~ parallel_keyword ~ parallel_binding+ ~ ")" } // Use parallel_keyword
 parallel_binding = { "[" ~ symbol ~ type_annotation? ~ expression ~ "]" }
-type_annotation = { ":" ~ type_expr }
+type_annotation = { COLON ~ type_expr }
 
 with_resource_expr = { "(" ~ with_resource_keyword ~ "[" ~ symbol ~ type_expr ~ expression ~ "]" ~ expression+ ~ ")" } // Use with_resource_keyword
 
@@ -219,6 +219,12 @@ import_option      = { ":as" ~ symbol | ":only" ~ "[" ~ symbol+ ~ "]" } // Norma
 // Allow whitespace and comments between tokens
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" } // These are literal tab, CR, LF
 COMMENT    = _{ ";" ~ (!(NEWLINE) ~ ANY)* }   // Corrected COMMENT rule using built-in NEWLINE
+
+// --- Punctuation Tokens ---
+COLON = { ":" }
+COMMA = { "," }
+AMPERSAND= { "&" }
+
 
 // Implicit whitespace/comments between rules:
 // _ = { (WHITESPACE | COMMENT)* } // Pest handles this implicitly if rules are atomic/push/drop
