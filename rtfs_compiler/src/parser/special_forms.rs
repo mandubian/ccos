@@ -309,14 +309,11 @@ pub(super) fn build_fn_expr(mut pairs: Pairs<Rule>) -> Result<FnExpr, PestParseE
         return Err(PestParseError::InvalidInput(
             "fn requires at least one body expression".to_string(),
         ));
-    }
-
-    Ok(FnExpr {
+    }    Ok(FnExpr {
         params,
         variadic_param,
         body,
         return_type,
-        // name: None, // REMOVED: FnExpr AST does not have a name field
     })
 }
 
@@ -402,26 +399,12 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> Result<DefnExpr, PestPa
             "Expected symbol for defn name, found {:?}",
             symbol_pair.as_rule()
         )));
-    }
-    let name = build_symbol(symbol_pair)?;
+    }    let name = build_symbol(symbol_pair)?;
 
-    // The rest of the pairs form the fn_expr (params, body, etc.)
-    // We need to reconstruct a Pairs<Rule> for build_fn_expr.
-    // This is a bit tricky as `pairs` is an iterator.
-    // A simpler approach might be to expect build_fn_expr to handle pairs that *start* with params_list.
-    // Or, we parse params, return type, and body here directly.
-    // For now, let\'s assume build_fn_expr can take the remaining pairs.
-    // However, build_fn_expr expects to be able to consume an optional fn_keyword.
-    // To make this work, we pass the *original* `pair.into_inner()` to `build_fn_expr`
-    // and it skips the `defn_keyword` and `symbol`.
-    // This is not ideal. Let\'s parse fn components here.
-
+    // Parse function components directly since defn combines defn_keyword + symbol + fn_expr
     let params_pair = pairs
         .next()
         .ok_or_else(|| PestParseError::InvalidInput("defn requires parameters list".to_string()))?;
-    // `build_fn_expr` expects pairs starting with fn_keyword or params_list.
-    // We need to create a new `Pairs` that `build_fn_expr` can consume.
-    // This is complex. Let\'s simplify: defn will directly parse fn components.
 
     if params_pair.as_rule() != Rule::fn_param_list {
         return Err(PestParseError::InvalidInput(format!(
@@ -592,13 +575,12 @@ pub(super) fn build_parallel_expr(mut pairs: Pairs<Rule>) -> Result<ParallelExpr
             return Err(PestParseError::InvalidInput(format!(
                 "Expected Rule::parallel_binding for parallel bindings, found {:?}",
                 binding_pair.as_rule()
-            )));
-        }
-          // Parse the parallel_binding: "[" ~ symbol ~ type_annotation? ~ expression ~ "]"
-        let binding_inner = binding_pair.into_inner()
-            .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT);
-          // Debug: Print all tokens in the binding
-        let all_tokens: Vec<_> = binding_inner.collect();
+            )));        }
+          
+        // Parse the parallel_binding: "[" ~ symbol ~ type_annotation? ~ expression ~ "]"
+        let all_tokens: Vec<_> = binding_pair.into_inner()
+            .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+            .collect();
         
         let mut binding_inner = all_tokens.into_iter();
         
@@ -622,12 +604,10 @@ pub(super) fn build_parallel_expr(mut pairs: Pairs<Rule>) -> Result<ParallelExpr
                 
                 // Find the type_expr - since type_expr is a silent rule, look for its variants                
                 for token in inner_tokens {
-                    match token.as_rule() {
-                        Rule::COLON => continue, // Skip the colon
+                    match token.as_rule() {                        Rule::COLON => continue, // Skip the colon
                         Rule::primitive_type | Rule::vector_type | Rule::tuple_type | Rule::map_type | 
                         Rule::function_type | Rule::resource_type | Rule::union_type | 
                         Rule::intersection_type | Rule::literal_type | Rule::symbol => {
-                            println!("DEBUG: Found matching token: {:?}", token.as_rule());
                             type_annotation = Some(build_type_expr(token)?);
                             break;
                         }
@@ -722,12 +702,10 @@ pub(super) fn build_with_resource_expr(
         return Err(PestParseError::InvalidInput(
             "with-resource requires at least one body expression".to_string(),
         ));
-    }
-
-    Ok(WithResourceExpr {
+    }    Ok(WithResourceExpr {
         resource_symbol: symbol,
         resource_type,
-        resource_init: Box::new(resource_init_expr), // CHANGED: from resource_expression to resource_init
+        resource_init: Box::new(resource_init_expr),
         body,
     })
 }
@@ -830,12 +808,10 @@ pub(super) fn build_try_catch_expr(mut pairs: Pairs<Rule>) -> Result<TryCatchExp
                 return Err(PestParseError::InvalidInput(
                     "Catch clause requires at least one body expression".to_string(),
                 ));
-            }
-
-            catch_clauses.push(CatchClause {
+            }            catch_clauses.push(CatchClause {
                 pattern,
                 binding,
-                body: catch_body_expressions, // CHANGED: from handler_expression (Box<Expression>) to Vec<Expression>
+                body: catch_body_expressions,
             });
         } else if clause_candidate_pair.as_rule() == Rule::finally_clause {
             if finally_body.is_some() {
@@ -878,16 +854,14 @@ pub(super) fn build_try_catch_expr(mut pairs: Pairs<Rule>) -> Result<TryCatchExp
                 clause_candidate_pair.as_rule()
             )));
         }
-    }
-
-    // As per grammar, catch_clause* means zero or more.
+    }    // As per grammar, catch_clause* means zero or more.
     // But AST TryCatchExpr implies try_body and catch_clauses are somewhat mandatory.
     // The prompt error "missing structure fields: try_body, finally_body" for TryCatchExpr
     // and "missing structure fields: binding, body" for CatchClause.
     // Let's ensure try_body is passed. finally_body is Option.
 
     Ok(TryCatchExpr {
-        try_body: try_body_expressions, // CHANGED: from try_block
+        try_body: try_body_expressions,
         catch_clauses,
         finally_body,
     })
