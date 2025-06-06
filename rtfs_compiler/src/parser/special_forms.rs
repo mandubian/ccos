@@ -682,52 +682,36 @@ pub(super) fn build_with_resource_expr(
                 }
             }
         }
-    }
-
-    let resource_binding_pair = pairs.next().ok_or_else(|| {
-        PestParseError::InvalidInput("with-resource requires a resource binding".to_string())
+    }    // The grammar inlines the binding: "[" ~ symbol ~ type_expr ~ expression ~ "]"
+    // So we get the three components directly as separate pairs
+    
+    // Parse symbol (first component of the binding)
+    let symbol_pair = pairs.next().ok_or_else(|| {
+        PestParseError::InvalidInput("with-resource requires a symbol in binding".to_string())
     })?;
     
-    if resource_binding_pair.as_rule() != Rule::vector {
-        return Err(PestParseError::InvalidInput(format!(
-            "with-resource binding must be a vector, got {:?}",
-            resource_binding_pair.as_rule()
-        )));
-    }
+    // Parse type_expr (second component of the binding)  
+    let type_expr_pair = pairs.next().ok_or_else(|| {
+        PestParseError::InvalidInput("with-resource requires a type_expr in binding".to_string())
+    })?;
     
-    // Extract binding elements
-    let binding_elements: Vec<_> = resource_binding_pair
-        .clone()
-        .into_inner()
-        .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-        .collect();
-    
-    if binding_elements.len() != 3 {        
-        return Err(PestParseError::InvalidInput(format!(
-            "with-resource binding must be a vector of [symbol type_expr expression]. Got {} elements",
-            binding_elements.len()
-        )));
-    }
-    
-    // Parse the three elements: symbol, type_expr, expression
-    let symbol_pair = &binding_elements[0];
-    let type_expr_pair = &binding_elements[1];
-    let resource_init_pair = &binding_elements[2];
-
-    // Parse symbol (must be a symbol)
+    // Parse resource initialization expression (third component of the binding)
+    let resource_init_pair = pairs.next().ok_or_else(|| {
+        PestParseError::InvalidInput("with-resource requires an initialization expression in binding".to_string())
+    })?;    // Parse symbol (must be a symbol)
     if symbol_pair.as_rule() != Rule::symbol {
         return Err(PestParseError::InvalidInput(format!(
             "Expected symbol for with-resource binding, found {:?}",
             symbol_pair.as_rule()
         )));
     }
-    let symbol = build_symbol(symbol_pair.clone())?;
+    let symbol = build_symbol(symbol_pair)?;
     
     // Parse type - build_type_expr can handle various rule types (symbol, keyword, etc.)
-    let resource_type = build_type_expr(type_expr_pair.clone())?;
+    let resource_type = build_type_expr(type_expr_pair)?;
     
     // Parse resource initialization expression
-    let resource_init_expr = build_expression(resource_init_pair.clone())?;
+    let resource_init_expr = build_expression(resource_init_pair)?;
 
     let body = pairs
         .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
