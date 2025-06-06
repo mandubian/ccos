@@ -50,29 +50,34 @@ map_entry = { map_key ~ expression }
 map_key = { keyword | string | integer }
 
 // --- Type Expressions (Based on grammar_spec.md) ---
-primitive_type = { keyword }
-// Keywords like :int, :float, :string, :bool, :nil, :keyword, :symbol, :any, :never
+primitive_type = { symbol }
+// Symbols like int, float, string, bool, nil, keyword, symbol, any, never
+// Changed from keyword to symbol for consistency
 
 // Complex Type Rules (assuming list-based syntax like [:vector T], [:map ...], etc.)
+optional_marker = { "?" }
 vector_type    = { "[" ~ ":vector" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
-map_type_entry = { "[" ~ keyword ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ "?")? ~ WHITESPACE* ~ "]" }
+map_type_entry = { "[" ~ keyword ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ optional_marker)? ~ WHITESPACE* ~ "]" }
 // [Key Type Optional?]
 map_type_wildcard = { "[" ~ ":*" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
 // [:* WildcardType]
-map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ map_type_entry)* ~ (WHITESPACE* ~ map_type_wildcard)? ~ WHITESPACE* ~ "]" }
+map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ (map_type_wildcard | map_type_entry))* ~ WHITESPACE* ~ "]" }
+tuple_type          = { "[" ~ ":tuple" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 param_type          = { type_expr }
 variadic_param_type = { "&" ~ WHITESPACE* ~ type_expr }
 function_type       = { "[" ~ ":=>" ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ param_type)* ~ (WHITESPACE* ~ variadic_param_type)? ~ WHITESPACE* ~ "]" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
 // [:=> [Params...] Variadic? Return]
 resource_type     = { "[" ~ ":resource" ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ "]" }
-union_type        = { "[" ~ ":or" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
+union_type        = { "[" ~ ":union" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
+// Changed from :or to :union for consistency with type_system.md
 intersection_type = { "[" ~ ":and" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 literal_type      = { "[" ~ ":val" ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ "]" }
 
 // Main type expression rule
 type_expr = _{
-    primitive_type
+    primitive_type     // Now symbols: int, float, string, bool, etc.
   | vector_type
+  | tuple_type        // Added explicit tuple_type rule
   | map_type
   | function_type
   | resource_type
@@ -86,14 +91,17 @@ type_expr = _{
 wildcard = @{ "_" }
 // Added explicit wildcard rule
 
-binding_pattern = _{ symbol | map_destructuring_pattern | vector_destructuring_pattern | wildcard }
+binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_destructuring_pattern }
 // Added wildcard
 
 map_destructuring_pattern   =  {
-    "{" ~ map_destructuring_entry* ~ ("&" ~ symbol)? ~ (":as" ~ symbol)? ~ "}"
+    "{" ~ map_destructuring_entry* ~ map_rest_binding? ~ map_as_binding? ~ "}"
 }
-map_destructuring_entry     = _{ map_destructuring_key_entry | map_destructuring_or_entry }
-map_destructuring_key_entry = _{
+
+map_rest_binding = { AMPERSAND ~ symbol }
+map_as_binding = { ":as" ~ symbol }
+map_destructuring_entry     = { map_destructuring_key_entry | map_destructuring_or_entry }
+map_destructuring_key_entry = {
     (":keys" ~ "[" ~ binding_pattern+ ~ "]")
   | (keyword ~ binding_pattern)
   | (string ~ binding_pattern)
@@ -101,8 +109,11 @@ map_destructuring_key_entry = _{
 map_destructuring_or_entry  =  { ":or" ~ "{" ~ (symbol ~ literal)+ ~ "}" }
 
 vector_destructuring_pattern = {
-    "[" ~ binding_pattern* ~ ("&" ~ symbol)? ~ (":as" ~ symbol)? ~ "]"
+    "[" ~ binding_pattern* ~ vector_rest_binding? ~ vector_as_binding? ~ "]"
 }
+
+vector_rest_binding = { AMPERSAND ~ symbol }
+vector_as_binding = { ":as" ~ symbol }
 
 // --- Special Forms ---
 special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr }
@@ -112,7 +123,7 @@ do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" 
 // Added for clarity and robustness - must be followed by whitespace or delimiter to avoid matching "do-something"
 
 let_keyword = @{ "let" }
-let_expr = { "(" ~ let_keyword ~ WHITESPACE* ~ vector ~ (WHITESPACE* ~ expression)+ ~ ")" }
+let_expr = { "(" ~ let_keyword ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ binding_pattern ~ WHITESPACE* ~ expression)* ~ WHITESPACE* ~ "]" ~ (WHITESPACE* ~ expression)+ ~ ")" }
 
 if_expr = { "(" ~ "if" ~ expression ~ expression ~ expression? ~ ")" }
 // Made else optional for now
@@ -122,7 +133,7 @@ do_expr = { "(" ~ do_keyword ~ expression* ~ ")" }
 // Modified to use do_keyword
 // Ensure atomic and matches "do" keyword
 
-fn_param_list = { "[" ~ param_def* ~ ("&" ~ symbol)? ~ "]" } // New rule for parameter lists
+fn_param_list = { "[" ~ param_def* ~ (AMPERSAND ~ symbol ~ (COLON ~ type_expr)?)? ~ "]" } // New rule for parameter lists
 
 fn_expr   = { "(" ~ fn_keyword ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Use fn_keyword
 param_def = { binding_pattern ~ (COLON ~ type_expr)? }
@@ -148,15 +159,13 @@ finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_k
 catch_pattern  = _{ type_expr | keyword | symbol }
 // symbol implies catch-all
 
-when_keyword = { "when" } // Added new rule
-
-match_expr    =  { "(" ~ match_keyword ~ expression ~ match_clause+ ~ ")" } // Use match_keyword
-match_clause  =  { "(" ~ match_pattern ~ (when_keyword ~ expression)? ~ expression+ ~ ")" } // Updated to use when_keyword
+// Flat syntax: (match expr pattern1 body1 pattern2 body2 ...)
+match_expr    =  { "(" ~ match_keyword ~ expression ~ (match_pattern ~ expression+)+ ~ ")" } // Use match_keyword - flat syntax
 match_pattern = _{
     literal
   | symbol
   | keyword
-  | "_"
+  | wildcard
   | type_expr // Matching on type might be complex, placeholder
 
   | vector_match_pattern
@@ -222,7 +231,7 @@ COMMENT    = _{ ";" ~ (!(NEWLINE) ~ ANY)* }   // Corrected COMMENT rule using bu
 
 // --- Punctuation Tokens ---
 COLON = { ":" }
-COMMA = { "," }
+// COMMA = { "," }  // Unused for now
 AMPERSAND= { "&" }
 
 
