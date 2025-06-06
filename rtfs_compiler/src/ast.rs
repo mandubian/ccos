@@ -115,6 +115,7 @@ pub enum TypeExpr {
     Primitive(PrimitiveType),
     Alias(Symbol),         // Type alias like MyType or my.namespace/MyType
     Vector(Box<TypeExpr>), // Vector type, e.g., [:vector :int]
+    Tuple(Vec<TypeExpr>),  // Tuple type, e.g., [:tuple :int :string :bool]
     Map {
         entries: Vec<MapTypeEntry>,
         wildcard: Option<Box<TypeExpr>>, // For [:* AnyType]
