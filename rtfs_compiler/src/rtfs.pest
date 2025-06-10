@@ -5,7 +5,7 @@ program = { SOI ~ (task_definition | module_definition | expression)* ~ EOI }
 // --- Core Recursive Rule ---
 // Order matters for precedence (e.g., special forms before general lists)
 // Removed function_call, relying on list + parser heuristic
-expression = _{ literal | keyword | symbol | special_form | list | vector | map }
+expression = _{ literal | keyword | symbol | task_context_access | special_form | list | vector | map }
 
 // --- Basic Values ---
 literal = { float | integer | string | boolean | nil | keyword } // Added keyword here
@@ -20,12 +20,12 @@ string_char     = { escape_sequence | (!("\"" | "\\\\") ~ ANY) }   // For tool: 
 string          =  { "\"" ~ string_char* ~ "\"" }                 // For tool: \" becomes "
 
 boolean = @{ "true" | "false" }
-nil     = @{ "nil" }
+nil     = @{ "nil" ~ !identifier_chars }
 
 // --- Identifiers & Symbols ---
 // Based on grammar_spec.md, allowing common Lisp chars. '.' is for ns, '-' is common.
 identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" }
-identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | ":" }
 identifier            = @{ identifier_start_char ~ identifier_chars* }
 
 // Namespaced identifier like my.module/my-function or just my-function
@@ -39,6 +39,27 @@ symbol = { namespaced_identifier | identifier }
 // Simple keyword like :foo or qualified like :my.ns/foo
 keyword = @{ ":" ~ (namespaced_identifier | identifier) }
 
+// Add this after the existing symbol rule and before collections
+// Task context access using @ prefix
+task_context_access = { "@" ~ (identifier | keyword) }
+
+
+vector_match_pattern    = { "[" ~ match_pattern* ~ ("&" ~ symbol)? ~ "]" }
+map_match_pattern_entry = { map_key ~ match_pattern }
+map_match_pattern       = { "{" ~ map_match_pattern_entry* ~ ("&" ~ symbol)? ~ "}" }
+
+as_match_pattern = { "(" ~ ":as" ~ symbol ~ match_pattern ~ ")" } // Specific rule for :as
+
+match_pattern = _{
+    literal
+  | keyword // Keyword before symbol if keywords can look like symbols
+  | wildcard // Wildcard before symbol
+  | symbol 
+  | type_expr // Matching on type might be complex, placeholder
+  | as_match_pattern // Use the specific :as pattern rule
+  | vector_match_pattern
+  | map_match_pattern 
+}
 
 // --- Collections ---
 // These now explicitly contain 'expression'
@@ -70,52 +91,67 @@ function_type       = { "[" ~ ":=>" ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ param_t
 resource_type     = { "[" ~ ":resource" ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ "]" }
 union_type        = { "[" ~ ":union" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 // Changed from :or to :union for consistency with type_system.md
-intersection_type = { "[" ~ ":and" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
+intersection_type = { "[" ~ ":and" ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ predicate_expr)? ~ WHITESPACE* ~ "]" }
 literal_type      = { "[" ~ ":val" ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ "]" }
 
+// Also add array shapes support (mentioned in specs but missing from grammar)
+dimension = { integer | "?" }
+shape = { "[" ~ dimension* ~ "]" }
+array_type = { "[" ~ ":array" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ shape? ~ WHITESPACE* ~ "]" }
+
 // Main type expression rule
-type_expr = _{
-    primitive_type     // Now symbols: int, float, string, bool, etc.
-  | vector_type
-  | tuple_type        // Added explicit tuple_type rule
-  | map_type
-  | function_type
-  | resource_type
-  | union_type
-  | intersection_type
-  | literal_type
-  | symbol // Allow type aliases (symbols) - handled later in type checking
+type_expr = _{ 
+    primitive_type | 
+    vector_type | 
+    map_type | 
+    tuple_type | 
+    function_type | 
+    resource_type | 
+    union_type | 
+    intersection_type | 
+    literal_type |
+    array_type
 }
+
+// Add schema predicate support for type refinements
+predicate_expr = { "[" ~ predicate_name ~ literal* ~ "]" }
+predicate_name = { keyword | symbol }
 
 // --- Patterns (Destructuring) ---
 wildcard = @{ "_" }
 // Added explicit wildcard rule
 
+// Define these before binding_pattern uses them
+keys_entry = { ":keys" ~ "[" ~ symbol* ~ "]" }
+map_destructuring_entry = { keys_entry | map_key ~ binding_pattern }
+
+map_rest_binding = { "&" ~ symbol }
+map_as_binding = { ":as" ~ symbol }
+map_destructuring_pattern = {
+    "{" ~
+    map_destructuring_entry* ~
+    map_rest_binding? ~
+    map_as_binding? ~
+    "}"
+}
+
+vector_rest_binding = { "&" ~ symbol }
+vector_as_binding = { ":as" ~ symbol }
+vector_destructuring_pattern = {
+    "[" ~
+    binding_pattern* ~
+    vector_rest_binding? ~
+    vector_as_binding? ~
+    "]"
+}
+
+
 binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_destructuring_pattern }
 // Added wildcard
 
-map_destructuring_pattern   =  {
-    "{" ~ map_destructuring_entry* ~ map_rest_binding? ~ map_as_binding? ~ "}"
-}
-
-map_rest_binding = { AMPERSAND ~ symbol }
-map_as_binding = { ":as" ~ symbol }
-map_destructuring_entry     = { map_destructuring_key_entry | map_destructuring_or_entry }
-map_destructuring_key_entry = {
-    (":keys" ~ "[" ~ binding_pattern+ ~ "]")
-  | (keyword ~ binding_pattern)
-  | (string ~ binding_pattern)
-}
-map_destructuring_or_entry  =  { ":or" ~ "{" ~ (symbol ~ literal)+ ~ "}" }
-
-vector_destructuring_pattern = {
-    "[" ~ binding_pattern* ~ vector_rest_binding? ~ vector_as_binding? ~ "]"
-}
-
-vector_rest_binding = { AMPERSAND ~ symbol }
-vector_as_binding = { ":as" ~ symbol }
-
 // --- Special Forms ---
+log_step_expr = { "(" ~ log_step_keyword ~ ":id" ~ string ~ expression ~ ")" }
+
 special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
@@ -160,25 +196,9 @@ catch_pattern  = _{ type_expr | keyword | symbol }
 // symbol implies catch-all
 
 // Flat syntax: (match expr pattern1 body1 pattern2 body2 ...)
-match_expr    =  { "(" ~ match_keyword ~ expression ~ (match_pattern ~ expression+)+ ~ ")" } // Use match_keyword - flat syntax
-match_pattern = _{
-    literal
-  | symbol
-  | keyword
-  | wildcard
-  | type_expr // Matching on type might be complex, placeholder
-
-  | vector_match_pattern
-  | map_match_pattern
-  | ("(" ~ ":as" ~ symbol ~ match_pattern ~ ")")
-}
-
-vector_match_pattern    = { "[" ~ match_pattern* ~ ("&" ~ symbol)? ~ "]" }
-map_match_pattern       = { "{" ~ map_match_pattern_entry* ~ ("&" ~ symbol)? ~ "}" }
-map_match_pattern_entry = { map_key ~ match_pattern }
-
-log_step_expr = { "(" ~ log_step_keyword ~ ":id" ~ string ~ expression ~ ")" } // Use log_step_keyword
-// Simplified based on syntax_spec
+match_expr    =  { "(" ~ match_keyword ~ expression ~ (match_clause_content)+ ~ ")" } 
+match_clause_content = { match_pattern ~ (WHEN ~ expression)? ~ expression } // pattern, optional guard, then body expressions
+WHEN = @{ "when" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Keyword for guard - now atomic
 
 // --- Top-Level Definitions ---z
 task_keyword = @{ "task" }
@@ -196,8 +216,8 @@ with_resource_keyword = @{ "with-resource" }
 try_keyword = @{ "try" }
 catch_keyword = @{ "catch" }
 finally_keyword = @{ "finally" }
-match_keyword = @{ "match" }
-log_step_keyword = @{ "log-step" }
+match_keyword = @{ "match" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Made atomic
+log_step_keyword = @{ "log-step" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Made atomic
 
 
 task_definition =  { "(" ~ task_keyword ~ task_property+ ~ ")" }
@@ -234,6 +254,3 @@ COLON = { ":" }
 // COMMA = { "," }  // Unused for now
 AMPERSAND= { "&" }
 
-
-// Implicit whitespace/comments between rules:
-// _ = { (WHITESPACE | COMMENT)* } // Pest handles this implicitly if rules are atomic/push/drop

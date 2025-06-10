@@ -1,7 +1,7 @@
 use super::utils::unescape;
 use super::PestParseError; // Added for Result return types
 use super::Rule;
-use crate::ast::{Keyword, Literal, MapDestructuringEntry, MapKey, Pattern, Symbol}; // Fixed: MapPatternEntry -> MapDestructuringEntry
+use crate::ast::{Keyword, Literal, MapDestructuringEntry, MapKey, MapMatchEntry, MatchPattern, Pattern, Symbol}; // Added match-related types
 use pest::iterators::Pair;
 
 // --- Helper Builders ---
@@ -106,85 +106,61 @@ fn build_map_destructuring_parts(
     let mut rest_binding = None;
     let mut as_binding = None;
 
-    while let Some(current_pair) = inner.next() {match current_pair.as_rule() {
-            Rule::map_destructuring_entry => {
-                let mut entry_inner = current_pair.into_inner();
-                let key_entry_pair = entry_inner.next().ok_or_else(|| {
-                    PestParseError::MissingToken("map destructuring key entry".to_string())
-                })?;                if key_entry_pair.as_rule() == Rule::map_destructuring_key_entry {
-                    let key_entry_str = key_entry_pair.as_str();
+    while let Some(current_pair) = inner.next() {match current_pair.as_rule() {            Rule::map_destructuring_entry => {
+                let mut entry_inner = current_pair.into_inner(); // current_pair is the map_destructuring_entry
+                
+                // Check what type of entry this is
+                let first_token = entry_inner.peek().ok_or_else(|| {
+                    PestParseError::MissingToken("first token in map_destructuring_entry".to_string())
+                })?;
+                
+                if first_token.as_rule() == Rule::keys_entry {
+                    // Handle keys_entry rule
+                    let keys_entry_pair = entry_inner.next().unwrap(); // Consume the keys_entry
+                    let keys_inner = keys_entry_pair.into_inner();
                     
-                    if key_entry_str.starts_with(":keys") {
-                        // Handle :keys pattern - extract symbols from the vector
-                        let mut symbols = Vec::new();
-                        let mut inside_vector = false;
-                        let mut current_symbol = String::new();
-                        
-                        for ch in key_entry_str.chars() {
-                            match ch {
-                                '[' => inside_vector = true,
-                                ']' => {
-                                    if !current_symbol.trim().is_empty() {
-                                        symbols.push(Symbol(current_symbol.trim().to_string()));
-                                    }
-                                    break;
-                                }
-                                ' ' | '\t' | '\n' | '\r' => {
-                                    if inside_vector && !current_symbol.trim().is_empty() {
-                                        symbols.push(Symbol(current_symbol.trim().to_string()));
-                                        current_symbol.clear();
-                                    }
-                                }
-                                _ => {
-                                    if inside_vector {
-                                        current_symbol.push(ch);
-                                    }
-                                }
-                            }
+                    // Skip the ":keys" token and look for symbols
+                    let mut symbols = Vec::new();
+                    for token in keys_inner {
+                        if token.as_rule() == Rule::symbol {
+                            symbols.push(build_symbol(token)?);
                         }
-                        entries.push(MapDestructuringEntry::Keys(symbols));
-                    } else {
-                        // Handle {:key pattern} or {"key" pattern}
-                        let mut key_entry_inner = key_entry_pair.into_inner();
-                        let key_token_pair = key_entry_inner.next().ok_or_else(|| {
-                            PestParseError::MissingToken("map destructuring key token".to_string())
-                        })?;
-                        let val_pattern_pair = key_entry_inner.next().ok_or_else(|| {
-                            PestParseError::MissingToken("map destructuring value pattern".to_string())
-                        })?;
-
-                        let map_key = match key_token_pair.as_rule() {
-                            Rule::keyword => MapKey::Keyword(build_keyword(key_token_pair)?),
-                            Rule::string => {
-                                let raw_str = key_token_pair.as_str();
-                                let content = &raw_str[1..raw_str.len() - 1];
-                                MapKey::String(unescape(content)?)
-                            }
-                            _ => {
-                                return Err(PestParseError::UnexpectedRule {
-                                    expected: "keyword or string for map pattern key".to_string(),
-                                    found: format!("{:?}", key_token_pair.as_rule()),
-                                    rule_text: key_token_pair.as_str().to_string(),
-                                })
-                            }
-                        };
-
-                        let pattern_to_bind = build_pattern(val_pattern_pair)?;
-                        entries.push(MapDestructuringEntry::KeyBinding {
-                            key: map_key,
-                            pattern: Box::new(pattern_to_bind),
+                    }
+                    
+                    entries.push(MapDestructuringEntry::Keys(symbols));
+                } else {
+                    // Regular map_key ~ binding_pattern
+                    let key_token_pair = entry_inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken("map_key in map_destructuring_entry".to_string())
+                    })?;
+                    
+                    // Ensure it's actually a map_key rule, as expected by build_map_key
+                    if key_token_pair.as_rule() != Rule::map_key {
+                         return Err(PestParseError::UnexpectedRule {
+                            expected: "map_key".to_string(),
+                            found: format!("{:?}", key_token_pair.as_rule()),
+                            rule_text: key_token_pair.as_str().to_string(),
                         });
                     }
-                } else if key_entry_pair.as_rule() == Rule::map_destructuring_or_entry {
-                    // Handle :or pattern - for now, skip it as it's not in the test
-                    // TODO: Implement this if needed
+
+                    let val_pattern_pair = entry_inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken("binding_pattern in map_destructuring_entry".to_string())
+                    })?;
+                    // val_pattern_pair is expected to be a binding_pattern. build_pattern can handle this.
+
+                    let map_key_val = build_map_key(key_token_pair)?;
+                    let pattern_to_bind = build_pattern(val_pattern_pair)?;
+
+                    entries.push(MapDestructuringEntry::KeyBinding {
+                        key: map_key_val,
+                        pattern: Box::new(pattern_to_bind),
+                    });
                 }
-            }
-            Rule::map_rest_binding => {
+            }Rule::map_rest_binding => {
                 // Extract the symbol from the map_rest_binding rule
                 let mut rest_inner = current_pair.into_inner();
-                // Skip the AMPERSAND token
-                rest_inner.next();
+                // The AMPERSAND is part of the rule structure, not a separate inner token.
+                // The first inner token IS the symbol.
                 let rest_sym_pair = rest_inner.next().ok_or_else(|| {
                     PestParseError::MissingToken("symbol in map_rest_binding".to_string())
                 })?;
@@ -264,12 +240,14 @@ fn build_vector_destructuring_parts(
             expected: "vector_destructuring_pattern".to_string(),
             found: format!("{:?}", pair.as_rule()),
             rule_text: pair.as_str().to_string(),
-        });    }
+        });
+    }
     
     let mut inner = pair.into_inner().peekable();
     let mut elements = Vec::new();
     let mut rest_binding = None;
-    let mut as_binding = None;    while let Some(current_pair) = inner.next() {
+    let mut as_binding = None;
+    while let Some(current_pair) = inner.next() {
         match current_pair.as_rule() {
             // Since binding_pattern is silent (_), we get the inner patterns directly
             Rule::symbol | Rule::wildcard | Rule::map_destructuring_pattern | Rule::vector_destructuring_pattern => {
@@ -278,8 +256,8 @@ fn build_vector_destructuring_parts(
             Rule::vector_rest_binding => {
                 // Extract the symbol from the vector_rest_binding rule
                 let mut rest_inner = current_pair.into_inner();
-                // Skip the AMPERSAND token
-                rest_inner.next();
+                // The AMPERSAND is part of the rule structure, not a separate inner token.
+                // The first inner token IS the symbol.
                 let rest_sym_pair = rest_inner.next().ok_or_else(|| {
                     PestParseError::MissingToken("symbol in vector_rest_binding".to_string())
                 })?;
@@ -356,5 +334,207 @@ pub(super) fn build_pattern(pair: Pair<Rule>) -> Result<Pattern, PestParseError>
             found: format!("{:?}", rule),
             rule_text: actual_pair.as_str().to_string(),
         }),
+    }
+}
+
+// Build match pattern for match expressions
+pub(super) fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, PestParseError> {
+    let actual_pair = match pair.as_rule() {
+        Rule::match_pattern => pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| PestParseError::MissingToken("match_pattern inner".to_string()))?,
+        _ => pair,
+    };
+
+    match actual_pair.as_rule() {
+        Rule::literal => Ok(MatchPattern::Literal(build_literal(actual_pair)?)),
+        Rule::symbol => Ok(MatchPattern::Symbol(build_symbol(actual_pair)?)),
+        Rule::keyword => Ok(MatchPattern::Keyword(build_keyword(actual_pair)?)),
+        Rule::wildcard => Ok(MatchPattern::Wildcard),
+        Rule::type_expr => {
+            // For type expressions, we don't bind to a symbol in basic matching
+            // More complex type matching with binding would need different syntax
+            Ok(MatchPattern::Type(super::types::build_type_expr(actual_pair)?, None))
+        }
+        Rule::vector_match_pattern => {
+            let mut elements = Vec::new();
+            let mut rest: Option<Symbol> = None;
+            let mut inner_pairs = actual_pair.into_inner().peekable();
+            
+            while let Some(p_peek) = inner_pairs.peek() {
+                // Skip whitespace and comments
+                if p_peek.as_rule() == Rule::WHITESPACE || p_peek.as_rule() == Rule::COMMENT {
+                    inner_pairs.next();
+                    continue;
+                }
+                
+                // Check for rest pattern "&"
+                if p_peek.as_str() == "&" {
+                    inner_pairs.next(); // Consume "&"
+                    
+                    // Skip whitespace after "&"
+                    while let Some(ws_peek) = inner_pairs.peek() {
+                        if ws_peek.as_rule() == Rule::WHITESPACE || ws_peek.as_rule() == Rule::COMMENT {
+                            inner_pairs.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    let sym_pair = inner_pairs.next().ok_or_else(|| {
+                        PestParseError::InvalidInput(
+                            "Expected symbol after & in vector match pattern".to_string(),
+                        )
+                    })?;
+                    
+                    if sym_pair.as_rule() != Rule::symbol {
+                        return Err(PestParseError::UnexpectedRule {
+                            expected: "symbol".to_string(),
+                            found: format!("{:?}", sym_pair.as_rule()),
+                            rule_text: sym_pair.as_str().to_string(),
+                        });
+                    }
+                    
+                    rest = Some(build_symbol(sym_pair)?);
+                    break;
+                }
+                
+                // Otherwise, it's an element pattern
+                let p = inner_pairs.next().unwrap();
+                elements.push(build_match_pattern(p)?);
+            }
+            
+            Ok(MatchPattern::Vector { elements, rest })
+        }
+        Rule::map_match_pattern => {
+            let mut entries = Vec::new();
+            let mut rest: Option<Symbol> = None;
+            let mut inner_pairs = actual_pair.into_inner().peekable();
+            
+            while let Some(p_peek) = inner_pairs.peek() {
+                // Skip whitespace and comments
+                if p_peek.as_rule() == Rule::WHITESPACE || p_peek.as_rule() == Rule::COMMENT {
+                    inner_pairs.next();
+                    continue;
+                }
+                
+                // Check for rest pattern "&"
+                if p_peek.as_str() == "&" {
+                    inner_pairs.next(); // Consume "&"
+                    
+                    // Skip whitespace after "&"
+                    while let Some(ws_peek) = inner_pairs.peek() {
+                        if ws_peek.as_rule() == Rule::WHITESPACE || ws_peek.as_rule() == Rule::COMMENT {
+                            inner_pairs.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    let sym_pair = inner_pairs.next().ok_or_else(|| {
+                        PestParseError::InvalidInput(
+                            "Expected symbol after & in map match pattern".to_string(),
+                        )
+                    })?;
+                    
+                    if sym_pair.as_rule() != Rule::symbol {
+                        return Err(PestParseError::UnexpectedRule {
+                            expected: "symbol".to_string(),
+                            found: format!("{:?}", sym_pair.as_rule()),
+                            rule_text: sym_pair.as_str().to_string(),
+                        });
+                    }
+                    
+                    rest = Some(build_symbol(sym_pair)?);
+                    break;
+                }
+                
+                // Otherwise, it should be a map_match_pattern_entry
+                if p_peek.as_rule() == Rule::map_match_pattern_entry {
+                    let entry_pair = inner_pairs.next().unwrap();
+                    let mut entry_inner = entry_pair.into_inner();
+                    
+                    let key_pair = entry_inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken("map_key in map_match_pattern_entry".to_string())
+                    })?;
+                    
+                    let value_pattern_pair = entry_inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken("match_pattern in map_match_pattern_entry".to_string())
+                    })?;
+                    
+                    entries.push(MapMatchEntry {
+                        key: build_map_key(key_pair)?,
+                        pattern: Box::new(build_match_pattern(value_pattern_pair)?),
+                    });
+                } else {
+                    return Err(PestParseError::UnexpectedRule {
+                        expected: "map_match_pattern_entry or & rest".to_string(),
+                        found: format!("{:?}", p_peek.as_rule()),
+                        rule_text: p_peek.as_str().to_string(),
+                    });
+                }
+            }
+            
+            Ok(MatchPattern::Map { entries, rest })
+        }
+        Rule::as_match_pattern => {
+            // Parse (:as symbol pattern)
+            let mut inner_pairs = actual_pair.into_inner();
+            
+            // Skip :as keyword
+            let _as_keyword = inner_pairs.next(); // Should be ":as"
+            
+            // Skip whitespace
+            while let Some(ws_peek) = inner_pairs.peek() {
+                if ws_peek.as_rule() == Rule::WHITESPACE || ws_peek.as_rule() == Rule::COMMENT {
+                    inner_pairs.next();
+                } else {
+                    break;
+                }
+            }
+            
+            let symbol_pair = inner_pairs.next().ok_or_else(|| {
+                PestParseError::InvalidInput("AS pattern: missing symbol".to_string())
+            })?;
+            
+            if symbol_pair.as_rule() != Rule::symbol {
+                return Err(PestParseError::UnexpectedRule {
+                    expected: "symbol".to_string(),
+                    found: format!("{:?}", symbol_pair.as_rule()),
+                    rule_text: symbol_pair.as_str().to_string(),
+                });
+            }
+            
+            // Skip whitespace
+            while let Some(ws_peek) = inner_pairs.peek() {
+                if ws_peek.as_rule() == Rule::WHITESPACE || ws_peek.as_rule() == Rule::COMMENT {
+                    inner_pairs.next();
+                } else {
+                    break;
+                }
+            }
+            
+            let pattern_pair = inner_pairs.next().ok_or_else(|| {
+                PestParseError::InvalidInput("AS pattern: missing pattern to bind".to_string())
+            })?;
+            
+            Ok(MatchPattern::As(
+                build_symbol(symbol_pair)?,
+                Box::new(build_match_pattern(pattern_pair)?),
+            ))
+        }
+        unknown_rule => {
+            // Handle wildcard by string content if it's not a specific Rule::wildcard
+            if actual_pair.as_str() == "_" {
+                Ok(MatchPattern::Wildcard)
+            } else {
+                Err(PestParseError::UnsupportedRule(format!(
+                    "build_match_pattern: Unsupported rule: {:?}, content: '{}'",
+                    unknown_rule,
+                    actual_pair.as_str()
+                )))
+            }
+        }
     }
 }
