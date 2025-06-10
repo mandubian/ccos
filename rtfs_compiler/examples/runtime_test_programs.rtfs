@@ -1,0 +1,243 @@
+// RTFS Runtime Test Programs
+// These examples demonstrate the full capabilities of the RTFS runtime system
+// when used with complete program parsing (beyond single expressions)
+
+// 1. Resource Management Example
+(defn process-file [filename]
+  (with-resource [input-file [:resource FileHandle] (tool:open-file filename :read)]
+    (with-resource [output-file [:resource FileHandle] (tool:open-file "processed.txt" :write)]
+      (do
+        (tool:log "Processing file:" filename)
+        (let [content (tool:read-line input-file)]
+          (match content
+            [:ok data] (do
+                         (tool:write-line output-file (str "Processed: " data))
+                         (tool:log "File processed successfully"))
+            [:error err] (tool:log "Error reading file:" (:message err))))))))
+
+// 2. Error Handling Example
+(defn safe-divide [a b]
+  (try
+    (if (= b 0)
+      [:error {:type :error/division-by-zero 
+               :message "Division by zero not allowed"
+               :data {:dividend a :divisor b}}]
+      [:ok (/ a b)])
+    (catch :error/runtime err
+      (do
+        (tool:log "Runtime error in division:" (:message err))
+        [:error {:type :error/runtime 
+                 :message "Unexpected runtime error"
+                 :data err}]))
+    (finally
+      (tool:log "Division operation completed"))))
+
+// 3. Parallel Processing Example
+(defn fetch-and-process-data []
+  (do
+    (tool:log "Starting parallel data fetch")
+    (let [results (parallel
+                    [users (tool:http-fetch "http://api.example.com/users")]
+                    [posts (tool:http-fetch "http://api.example.com/posts")]
+                    [comments (tool:http-fetch "http://api.example.com/comments")])]
+      (match results
+        {:users [:ok user-data] :posts [:ok post-data] :comments [:ok comment-data]}
+        (do
+          (tool:log "All data fetched successfully")
+          (process-combined-data user-data post-data comment-data))
+        
+        results-with-errors
+        (do
+          (tool:log "Some requests failed:" results-with-errors)
+          (handle-partial-results results-with-errors))))))
+
+// 4. Advanced Pattern Matching
+(defn process-message [message]
+  (match message
+    [:user-action {:type :login :user user-id}]
+    (do
+      (tool:log "User login:" user-id)
+      (update-user-status user-id :online))
+    
+    [:user-action {:type :logout :user user-id}]
+    (do
+      (tool:log "User logout:" user-id)
+      (update-user-status user-id :offline))
+    
+    [:system-event {:type :maintenance :when when :duration duration}]
+    (do
+      (tool:log "Scheduling maintenance:" when "for" duration)
+      (schedule-maintenance when duration))
+    
+    [:error error-info]
+    (do
+      (tool:log "Error in message processing:" (:message error-info))
+      (report-error error-info))
+    
+    unknown-message
+    (do
+      (tool:log "Unknown message type:" unknown-message)
+      [:error {:type :error/unknown-message
+               :message "Unrecognized message format"
+               :data unknown-message}])))
+
+// 5. Function Composition and Higher-Order Functions
+(defn compose [f g]
+  (fn [x] (f (g x))))
+
+(defn map-transform [transform-fn items]
+  (map-fn transform-fn items))
+
+(defn process-numbers [numbers]
+  (let [double (fn [x] (* x 2))
+        increment (fn [x] (+ x 1))
+        double-then-increment (compose increment double)]
+    (map-transform double-then-increment numbers)))
+
+// 6. Environment and Configuration Management
+(defn load-config []
+  (let [env (tool:get-env "ENVIRONMENT" "development")
+        debug-mode (tool:get-env "DEBUG" "false")]
+    (match env
+      "production" {:logging :error :debug false :database "prod-db"}
+      "staging" {:logging :warn :debug false :database "staging-db"}
+      "development" {:logging :debug :debug true :database "dev-db"}
+      _ {:logging :info :debug false :database "default-db"})))
+
+// 7. Complex Workflow with Error Recovery
+(defn execute-workflow [task-id]
+  (try
+    (do
+      (tool:log "Starting workflow for task:" task-id)
+      
+      (let [config (load-config)
+            initial-data (tool:get-task-data task-id)]
+        
+        (match initial-data
+          [:ok data] 
+          (let [step1-result (process-step-1 data config)
+                step2-result (process-step-2 step1-result config)
+                final-result (process-step-3 step2-result config)]
+            (match final-result
+              [:ok result] (do
+                             (tool:log "Workflow completed successfully")
+                             (save-result task-id result)
+                             [:ok result])
+              [:error err] (do
+                             (tool:log "Workflow failed at final step:" (:message err))
+                             (cleanup-partial-work task-id)
+                             [:error err])))
+          
+          [:error err]
+          (do
+            (tool:log "Failed to load initial data:" (:message err))
+            [:error {:type :error/workflow-failed
+                     :message "Could not start workflow"
+                     :data {:task-id task-id :cause err}}]))))
+    
+    (catch :error/network network-err
+      (do
+        (tool:log "Network error in workflow:" (:message network-err))
+        (schedule-retry task-id)
+        [:error {:type :error/workflow-retry
+                 :message "Workflow will be retried"
+                 :data {:task-id task-id :retry-scheduled true}}]))
+    
+    (catch :error/validation validation-err
+      (do
+        (tool:log "Validation error in workflow:" (:message validation-err))
+        [:error {:type :error/workflow-invalid
+                 :message "Workflow input validation failed"
+                 :data {:task-id task-id :validation-error validation-err}}]))
+    
+    (finally
+      (tool:log "Workflow execution completed for task:" task-id))))
+
+// 8. JSON Processing with Error Handling
+(defn process-json-config [json-string]
+  (match (tool:parse-json json-string)
+    [:ok config-data]
+    (match config-data
+      {:version version :settings settings :endpoints endpoints}
+      (do
+        (tool:log "Valid config loaded, version:" version)
+        (validate-and-apply-config settings endpoints))
+      
+      incomplete-config
+      [:error {:type :error/config-incomplete
+               :message "Configuration missing required fields"
+               :data incomplete-config}])
+    
+    [:error parse-error]
+    [:error {:type :error/config-parse
+             :message "Failed to parse JSON configuration"
+             :data parse-error}]))
+
+// 9. Type-Safe Resource Operations
+(defn safe-file-operation [filename operation]
+  (try
+    (with-resource [file [:resource FileHandle] (tool:open-file filename :read)]
+      (match operation
+        :read-all (tool:read-all file)
+        :read-line (tool:read-line file)
+        :get-metadata (tool:get-file-metadata file)
+        unknown-op [:error {:type :error/unsupported-operation
+                           :message "Unsupported file operation"
+                           :data {:operation unknown-op}}]))
+    
+    (catch :error/file-not-found file-err
+      [:error {:type :error/file-operation-failed
+               :message "File not found"
+               :data {:filename filename :operation operation}}])
+    
+    (catch :error/permission-denied perm-err
+      [:error {:type :error/file-operation-failed
+               :message "Permission denied"
+               :data {:filename filename :operation operation}}])))
+
+// 10. Comprehensive Testing Framework
+(defn run-test-suite []
+  (let [tests [
+    {:name "arithmetic-operations" :test (fn [] (test-arithmetic))}
+    {:name "collection-operations" :test (fn [] (test-collections))}
+    {:name "pattern-matching" :test (fn [] (test-pattern-matching))}
+    {:name "resource-management" :test (fn [] (test-resources))}
+    {:name "error-handling" :test (fn [] (test-error-handling))}
+    {:name "parallel-execution" :test (fn [] (test-parallel))}]]
+    
+    (let [results (parallel
+                    [arithmetic-result (run-test (get tests 0))]
+                    [collection-result (run-test (get tests 1))]
+                    [pattern-result (run-test (get tests 2))]
+                    [resource-result (run-test (get tests 3))]
+                    [error-result (run-test (get tests 4))]
+                    [parallel-result (run-test (get tests 5))])]
+      
+      (let [passed (count-if :passed (map-fn :status (map second results)))
+            total (count results)]
+        (tool:log "Test Results:" passed "/" total "passed")
+        (if (= passed total)
+          (tool:log "All tests PASSED!")
+          (tool:log "Some tests FAILED - check individual results"))
+        results))))
+
+// These examples demonstrate:
+// 1. Resource management with automatic cleanup
+// 2. Comprehensive error handling with try-catch-finally
+// 3. Parallel execution with result collection
+// 4. Advanced pattern matching with destructuring
+// 5. Function composition and higher-order functions
+// 6. Environment configuration and management
+// 7. Complex workflow orchestration with error recovery
+// 8. JSON processing with validation
+// 9. Type-safe resource operations
+// 10. Testing framework implementation
+//
+// The runtime system supports all these constructs and provides:
+// - Automatic memory management
+// - Resource lifecycle management
+// - Structured error handling
+// - Pattern matching and destructuring
+// - Concurrent execution capabilities
+// - Type safety and validation
+// - Extensible tool integration
