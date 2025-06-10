@@ -153,7 +153,7 @@ pub enum Expression {
     Vector(Vec<Expression>),
     Map(HashMap<MapKey, Expression>),
     FunctionCall {
-        function: Box<Expression>,
+        callee: Box<Expression>, // Added this field
         arguments: Vec<Expression>,
     },
     If(IfExpr),
@@ -283,7 +283,7 @@ pub enum CatchPattern {
 pub struct MatchClause {
     pub pattern: MatchPattern, // Changed from Pattern
     pub guard: Option<Box<Expression>>,
-    pub body: Vec<Expression>,
+    pub body: Box<Expression>, // Changed from Vec<Expression>
 }
 
 // Represents top-level definitions in a file

@@ -9,20 +9,16 @@ use crate::ast::{
     DefnExpr,
     DoExpr,
     Expression, // Ensure this is correctly in scope
-    FnExpr,
-    IfExpr,
+    FnExpr,    IfExpr,
     LetBinding,
     LetExpr,
     LogStepExpr,
-    MapMatchEntry,
     MatchClause,
     MatchExpr,
-    MatchPattern,
     ParallelBinding,
     ParallelExpr,
     ParamDef,
     Pattern,
-    Symbol,
     TryCatchExpr,
     TypeExpr,
     WithResourceExpr,
@@ -30,7 +26,7 @@ use crate::ast::{
 
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword
-use super::common::{build_keyword, build_literal, build_map_key, build_pattern, build_symbol};
+use super::common::{build_keyword, build_pattern, build_symbol};
 use super::expressions::build_expression;
 use super::types::build_type_expr; // For type annotations
 
@@ -38,76 +34,140 @@ use super::types::build_type_expr; // For type annotations
 use super::utils::unescape; // For log_step_expr
 
 pub(super) fn build_let_expr(pairs: Pairs<Rule>) -> Result<LetExpr, PestParseError> {
-    let mut significant_pairs = pairs.peekable();
 
-    // 1. Consume let_keyword if present
-    while let Some(p) = significant_pairs.peek() {
-        match p.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT => {
-                significant_pairs.next();
+    let mut iter = pairs.peekable();
+
+    if let Some(p) = iter.peek() {
+        if p.as_rule() == Rule::let_keyword {
+
+            iter.next(); 
+            while let Some(sp) = iter.peek() {
+                if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
+
+                    iter.next();
+                } else {
+                    break;
+                }
             }
-            Rule::let_keyword => {
-                significant_pairs.next();
-                while let Some(sp) = significant_pairs.peek() {
-                    if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
-                        significant_pairs.next();
+        }
+    }    let mut bindings = Vec::new();
+    let mut body_expressions_vec = Vec::new();
+
+    loop {
+        while let Some(p) = iter.peek() {
+            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+
+                iter.next(); 
+            } else {
+                break; 
+            }
+        }
+
+        if iter.peek().is_none() {
+
+            break;
+        }
+        
+        let iter_before_binding_attempt = iter.clone();
+
+
+
+        let pattern_pair_candidate = match iter.peek() {
+            Some(p) => {
+
+                p.clone()
+            }
+            None => {
+
+                break; 
+            }
+        };
+
+        match build_pattern(pattern_pair_candidate.clone()) {
+            Ok(pattern) => {
+
+                iter.next(); // Consume the pattern_pair_candidate
+
+                while let Some(p) = iter.peek() {
+                    if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+
+                        iter.next();
                     } else {
                         break;
                     }
                 }
-                break;
+
+                if iter.peek().is_none() {
+
+                    iter = iter_before_binding_attempt; 
+                    break; 
+                }
+
+                let value_pair_candidate = match iter.peek() {
+                    Some(p) => {
+
+                        p.clone()
+                    }
+                    None => { // Should be caught by previous check, but defensive.
+
+                        iter = iter_before_binding_attempt; 
+                        break; 
+                    }
+                };
+                
+
+                match build_expression(value_pair_candidate.clone()) {
+                    Ok(value) => {
+
+                        iter.next(); // Consume the value_pair_candidate
+
+                        bindings.push(LetBinding {
+                            pattern,
+                            type_annotation: None, 
+                            value: Box::new(value),
+                        });
+
+                    }
+                    Err(e) => {
+
+                        return Err(e); // Return error immediately for malformed binding value
+                    }
+                }            }
+            Err(_e) => {
+                break; 
             }
-            _ => break,
         }
     }
 
-    // 2. The grammar has inline bindings in let_expr: "[" ~ (binding_pattern ~ expression)* ~ "]"
-    // So we directly get the binding patterns and expressions as pairs, not wrapped in a vector rule
-    
-    let mut bindings = Vec::new();
-    let mut body_pairs = Vec::new();
-    let mut collecting_bindings = true;
-    
-    // Collect all significant pairs first
-    let all_pairs: Vec<_> = significant_pairs
-        .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-        .collect();
-    
-    let mut i = 0;
-    while i < all_pairs.len() && collecting_bindings {
-        // Check if we have at least 2 more elements for a pattern-value pair
-        if i + 1 < all_pairs.len() {
-            // Try to parse as pattern-value pair
-            let pattern_pair = &all_pairs[i];
-            let value_pair = &all_pairs[i + 1];
-            
-            // If we can parse the first as a pattern, continue with bindings
-            if let Ok(pattern) = build_pattern(pattern_pair.clone()) {
-                if let Ok(value) = build_expression(value_pair.clone()) {
-                    let type_annotation: Option<TypeExpr> = None; // TODO: Handle type annotations in let bindings
-                    bindings.push(LetBinding {
-                        pattern,
-                        type_annotation,
-                        value: Box::new(value),
-                    });
-                    i += 2;
-                    continue;
+
+    while let Some(pair) = iter.next() {
+        match pair.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => { 
+
+            }
+            _ => {
+
+                match build_expression(pair.clone()) { // Added clone here for safety if build_expression fails and we need pair again (though not in current logic)
+                    Ok(expr) => body_expressions_vec.push(expr),
+                    Err(e) => {
+
+                        return Err(e);
+                    }
                 }
             }
         }
-        
-        // If we can't parse as pattern-value pair, the rest is body
-        collecting_bindings = false;
-        body_pairs.extend(all_pairs[i..].iter().cloned());
+    }
+    
+
+    if body_expressions_vec.is_empty() {
+
+        return Err(PestParseError::InvalidInput(
+            "let expression requires at least one body expression".to_string(),
+        ));
     }
 
-    // 3. Parse body expressions
-    let body = body_pairs
-        .into_iter()
-        .map(build_expression)
-        .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(LetExpr { bindings, body })
+    Ok(LetExpr { bindings, body: body_expressions_vec })
 }
 
 pub(super) fn build_if_expr(mut pairs: Pairs<Rule>) -> Result<IfExpr, PestParseError> {
@@ -218,7 +278,7 @@ pub(super) fn build_fn_expr(mut pairs: Pairs<Rule>) -> Result<FnExpr, PestParseE
             if let Some(peeked_colon) = params_inner.peek() {
                 if peeked_colon.as_rule() == Rule::COLON {
                     params_inner.next(); // consume COLON
-                    // Consume potential whitespace after ':'
+                    // Consume potential whitespace after ':' 
                     while let Some(p_ws) = params_inner.peek() {
                         if p_ws.as_rule() == Rule::WHITESPACE || p_ws.as_rule() == Rule::COMMENT {
                             params_inner.next();
@@ -282,8 +342,8 @@ pub(super) fn build_fn_expr(mut pairs: Pairs<Rule>) -> Result<FnExpr, PestParseE
     let mut return_type: Option<TypeExpr> = None;
     if let Some(peeked_ret_colon) = pairs.peek() {
         if peeked_ret_colon.as_rule() == Rule::COLON {
-            pairs.next(); // Consume \':\'
-                          // Consume potential whitespace after \':\'
+            pairs.next(); // Consume \':\' 
+                          // Consume potential whitespace after \':\' 
             while let Some(p_ws) = pairs.peek() {
                 if p_ws.as_rule() == Rule::WHITESPACE || p_ws.as_rule() == Rule::COMMENT {
                     pairs.next();
@@ -348,8 +408,8 @@ pub(super) fn build_def_expr(mut pairs: Pairs<Rule>) -> Result<DefExpr, PestPars
     let mut type_annotation: Option<TypeExpr> = None;
     if let Some(peeked_colon) = pairs.peek() {
         if peeked_colon.as_rule() == Rule::COLON {
-            pairs.next(); // Consume \':\'
-                          // Consume potential whitespace after \':\'
+            pairs.next(); // Consume \':\' 
+                          // Consume potential whitespace after \':\' 
             while let Some(p_ws) = pairs.peek() {
                 if p_ws.as_rule() == Rule::WHITESPACE || p_ws.as_rule() == Rule::COMMENT {
                     pairs.next();
@@ -424,7 +484,7 @@ pub(super) fn build_defn_expr(mut pairs: Pairs<Rule>) -> Result<DefnExpr, PestPa
             params_inner.next();
             continue;
         }        if param_item_peek.as_rule() == Rule::AMPERSAND {
-            params_inner.next(); // &
+            params_inner.next(); // & 
             while let Some(p) = params_inner.peek() {
                 if p.as_rule() == Rule::WHITESPACE {
                     params_inner.next();
@@ -873,8 +933,8 @@ pub(super) fn build_try_catch_expr(mut pairs: Pairs<Rule>) -> Result<TryCatchExp
 fn build_catch_pattern(pair: Pair<Rule>) -> Result<CatchPattern, PestParseError> {
     match pair.as_rule() {
         Rule::type_expr => Ok(CatchPattern::Type(build_type_expr(pair)?)),
-        Rule::keyword => Ok(CatchPattern::Keyword(build_keyword(pair)?)), // CORRECTED: ? after function call
-        Rule::symbol => Ok(CatchPattern::Symbol(build_symbol(pair)?)), // CORRECTED: ? after function call
+        Rule::keyword => Ok(CatchPattern::Keyword(build_keyword(pair)?)),
+        Rule::symbol => Ok(CatchPattern::Symbol(build_symbol(pair)?)),
         unknown_rule => Err(PestParseError::InvalidInput(format!(
             "Invalid rule for catch_pattern: {:?}, content: '{}'",
             unknown_rule,
@@ -884,13 +944,15 @@ fn build_catch_pattern(pair: Pair<Rule>) -> Result<CatchPattern, PestParseError>
 }
 
 pub(super) fn build_match_expr(mut pairs: Pairs<Rule>) -> Result<MatchExpr, PestParseError> {
-    // Consume match_keyword if present
+
+
     if let Some(p) = pairs.peek() {
         if p.as_rule() == Rule::match_keyword {
-            pairs.next();
-            // Consume whitespace after keyword
-            while let Some(sp) = pairs.peek() {
+
+            pairs.next(); 
+            while let Some(sp) = pairs.peek() { 
                 if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
+
                     pairs.next();
                 } else {
                     break;
@@ -899,369 +961,142 @@ pub(super) fn build_match_expr(mut pairs: Pairs<Rule>) -> Result<MatchExpr, Pest
         }
     }
 
-    let expression_pair = pairs.next().ok_or_else(|| {
+    let expression_to_match_pair = pairs.next().ok_or_else(|| {
         PestParseError::InvalidInput(
             "match expression requires an expression to match against".to_string(),
         )
     })?;
-    let expression = Box::new(build_expression(expression_pair)?);
 
+    let matched_expression = Box::new(build_expression(expression_to_match_pair.clone())?);
+
+    let mut all_tokens: Vec<Pair<Rule>> = Vec::new();
+    while let Some(pair) = pairs.next() {
+        if pair.as_rule() == Rule::WHITESPACE || pair.as_rule() == Rule::COMMENT {
+            continue;
+        }
+        
+        if pair.as_rule() == Rule::match_clause_content {
+            // Extract inner tokens from match_clause_content
+            for inner_pair in pair.into_inner() {
+                if inner_pair.as_rule() != Rule::WHITESPACE && inner_pair.as_rule() != Rule::COMMENT {
+                    all_tokens.push(inner_pair);
+                }
+            }
+        } else {
+            all_tokens.push(pair);
+        }
+    }
+
+
+
+    // Manually group tokens into clauses
     let mut clauses = Vec::new();
-    
-    // Parse alternating pattern and expression(s) in flat syntax
-    loop {
-        // Skip whitespace and comments
-        while let Some(p) = pairs.peek() {
-            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-                pairs.next();
-            } else {
+    let mut i = 0;    while i < all_tokens.len() {
+        // Try to parse the current token as a pattern
+        let pattern_result = super::common::build_match_pattern(all_tokens[i].clone());
+        if pattern_result.is_err() {
+            // If pattern parsing fails, we've reached the end of clauses
+            // UNLESS this is a 'when' token which should be handled in guard detection
+            if all_tokens[i].as_str() != "when" {
                 break;
             }
+            // If it's 'when', there might be a parsing issue with the previous pattern,
+            // so we should still break to avoid infinite loops
+            break;
         }
-          // Check if we have a pattern
-        if pairs.peek().is_none() {
-            break; // No more clauses
-        }        // Parse the pattern
-        let pattern = build_match_pattern(pairs.next().unwrap())?;
         
-        // Skip whitespace and comments
-        while let Some(p) = pairs.peek() {
-            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-                pairs.next();
-            } else {
-                break;
+        let pattern = pattern_result.unwrap();
+
+        i += 1;        // Check for optional guard (when keyword)
+        let mut guard_expression: Option<Box<Expression>> = None;
+        if i < all_tokens.len() && (all_tokens[i].as_str() == "when" || all_tokens[i].as_rule() == Rule::WHEN) {
+            i += 1; // Skip 'when'
+            if i >= all_tokens.len() {
+                return Err(PestParseError::InvalidInput("Guard expression missing after 'when'".to_string()));
             }
-        }
-        
-        // Check for optional guard by looking at the next expression
-        let mut guard = None;
+            guard_expression = Some(Box::new(build_expression(all_tokens[i].clone())?));
+            i += 1;
+        }// Collect body expressions until we find the next pattern
         let mut body_expressions = Vec::new();
         
-        // Parse the first expression after pattern
-        if let Some(first_expr_pair) = pairs.peek() {
-            if first_expr_pair.as_rule() != Rule::WHITESPACE && first_expr_pair.as_rule() != Rule::COMMENT {
-                // Check if this expression is a guard (starts with "when")
-                if first_expr_pair.as_rule() == Rule::list {
-                    let first_expr_content = first_expr_pair.as_str();
-                    if first_expr_content.trim_start().starts_with("(when ") {
-                        // This is a guard expression
-                        let guard_pair = pairs.next().unwrap();
-                        let guard_expr = build_expression(guard_pair)?;
-                        
-                        // Extract the condition from the when expression
-                        if let Expression::FunctionCall { function, arguments } = guard_expr {
-                            if let Expression::Symbol(sym) = *function {
-                                if sym.0 == "when" && arguments.len() == 1 {
-                                    guard = Some(Box::new(arguments.into_iter().next().unwrap()));
-                                } else {
-                                    // Not a guard, treat as body expression
-                                    body_expressions.push(Expression::FunctionCall { function: Box::new(Expression::Symbol(sym)), arguments });
-                                }
-                            } else {
-                                // Not a guard, treat as body expression
-                                body_expressions.push(Expression::FunctionCall { function, arguments });
-                            }
-                        } else {
-                            // Not a guard, treat as body expression
-                            body_expressions.push(guard_expr);
-                        }
-                    } else {
-                        // Not a guard, parse as body expression
-                        body_expressions.push(build_expression(pairs.next().unwrap())?);
-                    }
-                } else {
-                    // Not a list, can't be a guard
-                    body_expressions.push(build_expression(pairs.next().unwrap())?);
-                }
-            }
+        // Always consume at least one expression as body
+        if i < all_tokens.len() {
+            let body_expr = build_expression(all_tokens[i].clone())?;
+
+            body_expressions.push(body_expr);
+            i += 1;
         }
         
-        // If we don't have any body expressions yet, we need at least one more
-        if body_expressions.is_empty() {
-            // Skip whitespace and comments
-            while let Some(p) = pairs.peek() {
-                if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-                    pairs.next();
-                } else {
-                    break;
+        // Then continue consuming expressions until we find a valid pattern for the next clause
+        while i < all_tokens.len() {
+            // Try to parse this token as a pattern to see if it starts the next clause
+            let next_pattern_result = super::common::build_match_pattern(all_tokens[i].clone());
+            if next_pattern_result.is_ok() {
+                // Check if there's another expression after this that could also be a pattern
+                // If so, this might be a body expression, not a pattern
+                let mut should_treat_as_pattern = true;
+                if i + 1 < all_tokens.len() {
+                    let next_next_result = super::common::build_match_pattern(all_tokens[i + 1].clone());
+                    if next_next_result.is_ok() {
+                        // Two consecutive patterns suggests this might be the end of current clause
+                        should_treat_as_pattern = true;
+                    } else {
+                        // Pattern followed by non-pattern suggests this might be a pattern-body pair
+                        should_treat_as_pattern = true;
+                    }
                 }
+                
+                if should_treat_as_pattern {
+
+                    break; // This starts the next clause
+                }
+            }            // Otherwise, it's a body expression
+            // Skip 'when' tokens as they are handled in guard detection
+            if all_tokens[i].as_str() == "when" || all_tokens[i].as_rule() == Rule::WHEN {
+                break; // This should not happen if guard detection worked correctly
             }
             
-            if let Some(body_expr_pair) = pairs.peek() {
-                if body_expr_pair.as_rule() != Rule::WHITESPACE && body_expr_pair.as_rule() != Rule::COMMENT {
-                    body_expressions.push(build_expression(pairs.next().unwrap())?);
-                }
-            }
+            let body_expr = build_expression(all_tokens[i].clone())?;
+
+            body_expressions.push(body_expr);
+            i += 1;
         }
-        
+
         if body_expressions.is_empty() {
-            return Err(PestParseError::InvalidInput(
-                "Match clause requires at least one body expression".to_string(),
-            ));
+            return Err(PestParseError::InvalidInput("Match clause missing body expression".to_string()));
         }
-        
+
+        // Create the body (single expression or DoExpr for multiple)
+        let body_expression = if body_expressions.len() == 1 {
+            Box::new(body_expressions.into_iter().next().unwrap())
+        } else {
+            Box::new(Expression::Do(DoExpr { expressions: body_expressions }))
+        };
+
         clauses.push(MatchClause {
             pattern,
-            guard,
-            body: body_expressions,
+            guard: guard_expression,
+            body: body_expression,
         });
+
     }
 
     if clauses.is_empty() {
+
         return Err(PestParseError::InvalidInput(
             "match expression requires at least one clause".to_string(),
         ));
     }
 
+
     Ok(MatchExpr {
-        expression,
+        expression: matched_expression,
         clauses,
     })
 }
 
-// Refined build_match_pattern based on rtfs.pest:
-// match_pattern = _{ literal | symbol | keyword | "_" | type_expr | vector_match_pattern | map_match_pattern | ("(" ~ ":as" ~ symbol ~ match_pattern ~ ")") }
-fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, PestParseError> {
-    match pair.as_rule() {
-        Rule::literal => Ok(MatchPattern::Literal(build_literal(pair)?)), // CORRECTED: ? after function call
-        Rule::symbol => {
-            // Check if it's a wildcard symbol "_"
-            if pair.as_str() == "_" {
-                Ok(MatchPattern::Wildcard)
-            } else {
-                Ok(MatchPattern::Symbol(build_symbol(pair)?)) // CORRECTED: ? after function call
-            }
-        }
-        Rule::keyword => Ok(MatchPattern::Keyword(build_keyword(pair)?)), // CORRECTED: ? after function call
-        Rule::wildcard => Ok(MatchPattern::Wildcard),
-        Rule::type_expr => Ok(MatchPattern::Type(build_type_expr(pair)?, None)),
-        Rule::vector_match_pattern => {
-            let mut elements = Vec::new();
-            let mut rest: Option<Symbol> = None;
-            let mut inner_pairs = pair.into_inner().peekable(); // Use peekable for peeking
-            while let Some(p_peek) = inner_pairs.peek() {
-                // Peek before consuming
-                if p_peek.as_rule() == Rule::WHITESPACE || p_peek.as_rule() == Rule::COMMENT {
-                    inner_pairs.next(); // Consume whitespace/comment
-                    continue;
-                }
-                // Check for rest pattern string "&"
-                if p_peek.as_str() == "&" {
-                    inner_pairs.next(); // Consume "&"
-                                        // Consume optional whitespace after &
-                    while let Some(ws_peek) = inner_pairs.peek() {
-                        if ws_peek.as_rule() == Rule::WHITESPACE {
-                            inner_pairs.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    let sym_pair = inner_pairs.next().ok_or_else(|| {
-                        PestParseError::InvalidInput(
-                            "Expected symbol after & in vector_match_pattern".to_string(),
-                        )
-                    })?;
-                    if sym_pair.as_rule() != Rule::symbol {
-                        return Err(PestParseError::InvalidInput(format!(
-                            "Expected symbol for vector rest, found {:?}, content: '{}'",
-                            sym_pair.as_rule(),
-                            sym_pair.as_str()
-                        )));
-                    }
-                    rest = Some(build_symbol(sym_pair)?);
-                    break;
-                }
-                // If not whitespace, comment, or rest pattern, it must be an element pattern
-                let p = inner_pairs.next().unwrap(); // Consume the pattern element
-                elements.push(build_match_pattern(p)?);
-            }
-            Ok(MatchPattern::Vector { elements, rest })
-        }
-        Rule::map_match_pattern => {
-            let mut entries = Vec::new();
-            let mut rest: Option<Symbol> = None;
-            let mut inner_pairs = pair.into_inner().peekable(); // Use peekable for peeking
-            while let Some(p_peek) = inner_pairs.peek() {
-                // Peek before consuming
-                if p_peek.as_rule() == Rule::WHITESPACE || p_peek.as_rule() == Rule::COMMENT {
-                    inner_pairs.next(); // Consume whitespace/comment
-                    continue;
-                }
-                // Check for rest pattern string "&"
-                if p_peek.as_str() == "&" {
-                    inner_pairs.next(); // Consume "&"
-                                        // Consume optional whitespace after &
-                    while let Some(ws_peek) = inner_pairs.peek() {
-                        if ws_peek.as_rule() == Rule::WHITESPACE {
-                            inner_pairs.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    let sym_pair = inner_pairs.next().ok_or_else(|| {
-                        PestParseError::InvalidInput(
-                            "Expected symbol after & in map_match_pattern".to_string(),
-                        )
-                    })?;
-                    if sym_pair.as_rule() != Rule::symbol {
-                        return Err(PestParseError::InvalidInput(format!(
-                            "Expected symbol for map rest, found {:?}, content: '{}'",
-                            sym_pair.as_rule(),
-                            sym_pair.as_str()
-                        )));
-                    }
-                    rest = Some(build_symbol(sym_pair)?);
-                    break;
-                }
-                // If not whitespace, comment, or rest pattern, it must be a map entry
-                let entry_pair = inner_pairs.next().unwrap(); // Consume the map entry
-                if entry_pair.as_rule() != Rule::map_match_pattern_entry {
-                    return Err(PestParseError::InvalidInput(format!("Expected map_match_pattern_entry in map pattern, found {:?}, content: '{}'", entry_pair.as_rule(), entry_pair.as_str())));
-                }
-                let mut entry_inner = entry_pair.into_inner();
-                let key_pair = entry_inner.next().ok_or_else(|| {
-                    PestParseError::InvalidInput("Map match entry missing key".to_string())
-                })?;
-                let value_pattern_pair = entry_inner.next().ok_or_else(|| {
-                    PestParseError::InvalidInput(
-                        "Map match entry missing value pattern".to_string(),
-                    )
-                })?;
-
-                entries.push(MapMatchEntry {
-                    key: build_map_key(key_pair)?,
-                    pattern: Box::new(build_match_pattern(value_pattern_pair)?),
-                });
-            }
-            Ok(MatchPattern::Map { entries, rest })
-        }
-        Rule::list => {
-            let mut inner_list_pairs = pair.clone().into_inner().peekable();
-            if let Some(first_in_list) = inner_list_pairs.peek() {
-                if first_in_list.as_str() == ":as" {
-                    inner_list_pairs.next(); // Consume :as
-
-                    while let Some(ws_peek) = inner_list_pairs.peek() {
-                        // Consume whitespace after :as
-                        if ws_peek.as_rule() == Rule::WHITESPACE
-                            || ws_peek.as_rule() == Rule::COMMENT
-                        {
-                            inner_list_pairs.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let symbol_pair = inner_list_pairs.next().ok_or_else(|| {
-                        PestParseError::InvalidInput(
-                            "AS pattern: missing symbol after :as".to_string(),
-                        )
-                    })?;
-                    if symbol_pair.as_rule() != Rule::symbol {
-                        return Err(PestParseError::InvalidInput(format!(
-                            "Expected symbol for AS pattern, found {:?}, content: '{}'",
-                            symbol_pair.as_rule(),
-                            symbol_pair.as_str()
-                        )));
-                    }
-                    let symbol = build_symbol(symbol_pair)?;
-
-                    while let Some(ws_peek) = inner_list_pairs.peek() {
-                        // Consume whitespace after symbol
-                        if ws_peek.as_rule() == Rule::WHITESPACE
-                            || ws_peek.as_rule() == Rule::COMMENT
-                        {
-                            inner_list_pairs.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let pattern_to_bind_pair = inner_list_pairs.next().ok_or_else(|| {
-                        PestParseError::InvalidInput(
-                            "AS pattern: missing pattern to bind".to_string(),
-                        )
-                    })?;
-                    let pattern_to_bind = build_match_pattern(pattern_to_bind_pair)?;
-
-                    if let Some(extra_peek) = inner_list_pairs.peek() {
-                        // Check for extra tokens
-                        if extra_peek.as_rule() != Rule::WHITESPACE
-                            && extra_peek.as_rule() != Rule::COMMENT
-                        {
-                            return Err(PestParseError::InvalidInput(format!(
-                                "AS pattern: unexpected token after pattern: {:?}, content: '{}'",
-                                extra_peek.as_rule(),
-                                extra_peek.as_str()
-                            )));
-                        }
-                    }
-                    return Ok(MatchPattern::As(symbol, Box::new(pattern_to_bind)));
-                }
-            }
-            Err(PestParseError::UnsupportedRule(format!(
-                "build_match_pattern: Unexpected list content: '{}'. Expected '(:as symbol pattern)' or other known match pattern rule.",
-                pair.as_str()
-            )))
-        }        Rule::vector => {
-            // Handle regular vector as match pattern in flat syntax
-            let mut elements = Vec::new();
-            let mut inner_pairs = pair.into_inner();
-            
-            while let Some(element_pair) = inner_pairs.next() {
-                if element_pair.as_rule() == Rule::WHITESPACE || element_pair.as_rule() == Rule::COMMENT {
-                    continue;
-                }
-                elements.push(build_match_pattern(element_pair)?);
-            }
-            
-            Ok(MatchPattern::Vector { elements, rest: None })
-        }
-        Rule::map => {
-            // Handle regular map as match pattern in flat syntax
-            let mut entries = Vec::new();
-            let mut inner_pairs = pair.into_inner();
-            
-            while let Some(entry_pair) = inner_pairs.next() {
-                if entry_pair.as_rule() == Rule::WHITESPACE || entry_pair.as_rule() == Rule::COMMENT {
-                    continue;
-                }
-                if entry_pair.as_rule() != Rule::map_entry {
-                    return Err(PestParseError::InvalidInput(format!(
-                        "Expected map_entry in map pattern, found {:?}",
-                        entry_pair.as_rule()
-                    )));
-                }
-                
-                let mut entry_inner = entry_pair.into_inner();
-                let key_pair = entry_inner.next().ok_or_else(|| {
-                    PestParseError::InvalidInput("Map entry missing key".to_string())
-                })?;
-                let value_pair = entry_inner.next().ok_or_else(|| {
-                    PestParseError::InvalidInput("Map entry missing value".to_string())
-                })?;
-                
-                entries.push(MapMatchEntry {
-                    key: build_map_key(key_pair)?,
-                    pattern: Box::new(build_match_pattern(value_pair)?),
-                });
-            }
-            
-            Ok(MatchPattern::Map { entries, rest: None })
-        }
-        unknown_rule => {
-            // Handle '_' for wildcard if it's not a specific Rule::wildcard
-            if pair.as_str() == "_" {
-                return Ok(MatchPattern::Wildcard);
-            }
-            Err(PestParseError::UnsupportedRule(format!(
-                "build_match_pattern: Unhandled rule: {:?}, content: '{}'",
-                unknown_rule,
-                pair.as_str()
-            )))
-        }
-    }
-}
+// Helper function to build MatchPattern from a Pair<Rule>
+// This function is now implemented in super::common::build_match_pattern
 
 pub(super) fn build_log_step_expr(mut pairs: Pairs<Rule>) -> Result<LogStepExpr, PestParseError> {
     // Consume log_step_keyword if present

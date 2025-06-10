@@ -62,88 +62,48 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
             pair.into_inner(),
         )?))),
         Rule::list => {
-            let inner_pairs: Vec<Pair<Rule>> = pair
-                .clone()
-                .into_inner()
-                .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-                .collect();
+            let mut inner_pairs = pair.into_inner().peekable();
 
-            if inner_pairs.is_empty() {
-                return Ok(Expression::List(vec![]));
+            if inner_pairs.peek().is_none() {
+                // Empty list: ()
+                Ok(Expression::List(vec![]))
             } else {
-                let first_element_pair = inner_pairs[0].clone();
-                let first_element_ast = build_expression(first_element_pair.clone())?;
+                // Non-empty list, potentially a function call or a data list
+                let first_element_pair = inner_pairs.next().unwrap(); // We know it's not empty
 
-                if let Expression::Symbol(s) = &first_element_ast {
-                    let mut arguments_pairs = pair.into_inner();
-                    // Consume the first element (the symbol itself) from arguments_pairs
-                    arguments_pairs
-                        .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT);
+                // Attempt to parse the first element.
+                // We need to clone `first_element_pair` if we might need to re-parse all elements later for a data list.
+                let callee_ast = build_expression(first_element_pair.clone())?;
 
-                    match s.0.as_str() {
-                        "if" => return Ok(Expression::If(build_if_expr(arguments_pairs)?)),
-                        "do" => return Ok(Expression::Do(build_do_expr(arguments_pairs)?)),
-                        "let" => return Ok(Expression::Let(build_let_expr(arguments_pairs)?)),
-                        "fn" => return Ok(Expression::Fn(build_fn_expr(arguments_pairs)?)),
-                        "def" => {
-                            return Ok(Expression::Def(Box::new(build_def_expr(arguments_pairs)?)))
+                // Heuristic: if the first element is a Symbol, or an Fn expression,
+                // or another FunctionCall, treat it as a function call.
+                match callee_ast {
+                    Expression::Symbol(_) | Expression::Fn(_) | Expression::FunctionCall { .. } => {
+                        // It's likely a function call. Parse remaining as arguments.
+                        let arguments = inner_pairs
+                            .map(build_expression) // build_expression for each subsequent pair
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(Expression::FunctionCall {
+                            callee: Box::new(callee_ast),
+                            arguments,
+                        })
+                    }
+                    // If the first element is not a symbol/fn/call, it's a data list.
+                    _ => {
+                        // Reconstruct the full list of expressions, including the first element.
+                        // We already parsed `callee_ast` (the first element).
+                        let mut elements = vec![callee_ast];
+                        // Parse the rest of the elements.
+                        for p in inner_pairs {
+                            elements.push(build_expression(p)?);
                         }
-                        "defn" => {
-                            return Ok(Expression::Defn(Box::new(build_defn_expr(
-                                arguments_pairs,
-                            )?)))
-                        }
-                        "parallel" => {
-                            return Ok(Expression::Parallel(build_parallel_expr(arguments_pairs)?))
-                        }
-                        "with-resource" => {
-                            return Ok(Expression::WithResource(build_with_resource_expr(
-                                arguments_pairs,
-                            )?))
-                        }
-                        "try" => {
-                            return Ok(Expression::TryCatch(build_try_catch_expr(arguments_pairs)?))
-                        }
-                        "match" => {
-                            return Ok(Expression::Match(Box::new(build_match_expr(
-                                arguments_pairs,
-                            )?)))
-                        }
-                        "log-step" => {
-                            return Ok(Expression::LogStep(Box::new(build_log_step_expr(
-                                arguments_pairs,
-                            )?)));
-                        }
-                        _ => {} // Fall through to general function call or list
+                        Ok(Expression::List(elements))
                     }
                 }
-
-                // Re-evaluate if it's a function call after potential special form handling
-                if matches!(first_element_ast, Expression::Symbol(_))
-                    || matches!(first_element_ast, Expression::Fn(_)) // Allow ( (fn [] ...) args )
-                    || matches!(first_element_ast, Expression::FunctionCall { .. })
-                // Allow ( (another-call) args)
-                {
-                    let args = inner_pairs
-                        .iter()
-                        .skip(1)
-                        .map(|p| build_expression(p.clone()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    return Ok(Expression::FunctionCall {
-                        function: Box::new(first_element_ast),
-                        arguments: args,
-                    });
-                } else {
-                    // If the first element is not a symbol, it's a list of expressions
-                    // We need to re-collect all elements including the first one
-                    let elements = inner_pairs
-                        .iter()
-                        .map(|p| build_expression(p.clone()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    return Ok(Expression::List(elements));
-                }
-            }
-        }
+            }        }
+        Rule::WHEN => Err(PestParseError::InvalidInput(
+            "'when' keyword found in unexpected context - should only appear in match expressions".to_string()
+        )),
         rule => Err(PestParseError::UnsupportedRule(format!(
             "build_expression not implemented for rule: {:?} - {}",
             rule,
