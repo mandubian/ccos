@@ -479,6 +479,20 @@ For more detailed information, please refer to the following specification docum
    cargo build --release
    ```
 
+## Documentation
+
+### Quick Reference
+- **[Project Overview](README.md)** - This document
+- **[Language Specifications](specs/)** - Complete RTFS language specification
+- **[Implementation Documentation](docs/implementation/)** - Technical implementation details
+- **[Development Roadmap](docs/NEXT_STEPS_UPDATED.md)** - Current status and future plans
+
+### Key Documents
+- **[Runtime Implementation Summary](docs/implementation/RUNTIME_IMPLEMENTATION_SUMMARY.md)** - Complete overview of the RTFS runtime system
+- **[Standard Library Specification](specs/stdlib_spec.md)** - Built-in functions and modules
+- **[Architecture Overview](specs/architecture_overview.md)** - System architecture and design
+- **[Example Programs](rtfs_compiler/examples/)** - Sample RTFS code demonstrating capabilities
+
 ## Usage
 
 Run the main binary:
