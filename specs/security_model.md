@@ -57,6 +57,12 @@ This document outlines the security mechanisms designed for the standalone RTFS 
     2.  If a valid token is present, the call proceeds.
     3.  If not, a security error is raised, and the call is denied.
 *   **Token Management:** The runtime manages the lifecycle of capability tokens (issuance, revocation, expiry).
+*   **Agent Authentication:** When a capability token for an agent interaction is granted and used (e.g., via `invoke`, `consume-stream`, `produce-to-stream`), the RTFS runtime is responsible for handling the actual authentication with the external agent. This is based on the authentication mechanisms specified in the agent's profile (e.g., API keys, OAuth2 tokens). The task itself does not handle these external credentials; the capability token signifies the runtime's authorization to proceed with the authenticated interaction. Refer to `language_semantics.md` (Section 8.4) for more details on runtime credential management.
+
+## 4. Task Input and Intent Security (Placeholder)
+
+*   **Goal:** Ensure the integrity and authenticity of the inputs and intents provided to tasks, preventing injection or tampering.
+*   **Mechanism:** To be defined. Potentially involves signing inputs and intents, similar to execution trace signatures.
 
 ## 5. Capability Definition Format (Proposal)
 
@@ -91,14 +97,48 @@ To enable validation and granting, the capabilities listed in `:capabilities-req
   :host "api.example.com"
   :port 443
   :protocols [:https] }
+
+;; ---- NEW CAPABILITY TYPE FOR AGENT INTERACTIONS ----
+
+;; Allow interaction with a specific capability from a specific agent profile
+{ :type :agent-capability-access
+  :agent-profile-id "polyglot-agent-v1" ;; Matches :id in agent-profile
+  :capability-id "translate-text-batch-v1.2" ;; Matches :capability-id in agent's :capabilities list
+  ;; Optional: specify which invocation types are allowed for this capability
+  :invocation-types [:invoke] ;; Could be [:invoke], [:consume-stream], [:produce-to-stream] or a combination
+                              ;; Defaults to all applicable types for the capability if omitted.
+}
+
+;; Allow interaction with any capability from a specific agent, with constraints on parameters
+{ :type :agent-capability-access
+  :agent-profile-id "user-preferences-agent-v2"
+  :capability-id "*" ;; Wildcard: any capability from this agent
+  ;; Optional: Constraints on the parameters sent to any capability of this agent.
+  ;; These predicate schemas apply to the arguments map of 'invoke' or 'consume-stream',
+  ;; or the item-expression of 'produce-to-stream'.
+  :constraints {:params 
+                  {:user-id [:= "current-session-user-id"] ;; Example: parameter must match a runtime-injected value
+                   :data-sensitivity [:< 3]}}} ;; Example: parameter must be less than 3
+
+;; Allow consuming a specific stream, constraining initial parameters
+{ :type :agent-capability-access
+  :agent-profile-id "market-data-feed-agent"
+  :capability-id "live-stock-ticker-v1"
+  :invocation-types [:consume-stream]
+  :constraints {:params ;; Constraints on the parameters map for consume-stream
+                  {:symbols [:vector-contains-only [:string-matches-regex "^[A-Z]{1,4}$"]] ;; Only allow valid stock symbols
+                   :update-frequency [:in-range 1 60]}}} ;; Update frequency between 1 and 60 seconds
 ```
 
-*   **:type**: Identifies the category of capability (e.g., `:tool-call`, `:resource-access`, `:network-access`).
-*   **Identifiers**: Specify the target (e.g., `:tool-name`, `:resource-type`, `:host`).
-*   **:permissions**: List allowed actions (e.g., `:read`, `:write`, `:execute`).
-*   **:constraints**: An optional map defining restrictions on arguments or resource attributes. The structure is typically `{:attribute-name PredicateSchema}` or `{:args {:arg-name PredicateSchema}}`.
-    *   The `PredicateSchema` uses the **exact same syntax** as defined in `type_system.md` for `[:and]` types: `[PredicateName Arg1 Arg2 ...]`, where `PredicateName` is resolved to a validation function, and `Arg1...` are literal arguments.
-    *   The value being constrained (e.g., the value of the `:path` argument, the `:host` attribute) is implicitly the first argument to the predicate logic.
+*   **:type**: Identifies the category of capability (e.g., `:tool-call`, `:resource-access`, `:network-access`, `:agent-capability-access`).
+*   **Identifiers**: Specify the target (e.g., `:tool-name`, `:resource-type`, `:host`, `:agent-profile-id`, `:capability-id`).
+*   **:permissions**: List allowed actions (e.g., `:read`, `:write`, `:execute`). For `:agent-capability-access`, permissions are implicitly defined by the agent's capability and optionally refined by `:invocation-types`.
+*   **:invocation-types** (for `:agent-capability-access`): An optional list specifying which forms (`:invoke`, `:consume-stream`, `:produce-to-stream`) are permitted for the given agent capability.
+*   **:constraints**: An optional map defining restrictions.
+    *   For `:tool-call`: `{:args {:arg-name PredicateSchema}}`
+    *   For `:resource-access` and `:network-access`: `{:attribute-name PredicateSchema}`
+    *   For `:agent-capability-access`: `{:params {:param-name PredicateSchema}}`, applying to the parameters map/item expression of the interaction.
+    *   The `PredicateSchema` uses the **exact same syntax** as defined in `type_system.md` for `[:and]` types and type refinements: `[PredicateName Arg1 Arg2 ...]`, where `PredicateName` is resolved to a validation function, and `Arg1...` are literal arguments.
 
 This structured format allows the runtime/orchestrator to parse capability requests, match them against policies, and potentially generate constrained capability tokens.
 
@@ -138,13 +178,32 @@ This structured format allows the runtime/orchestrator to parse capability reque
 { :type :tool-call
   :tool-name "tool:set-log-level"
   :constraints {:args {:level [:< 5]}} }
+
+;; --- Agent Capability Access Examples (Reiteration for clarity in this section) ---
+
+;; Allow invoking the 'translate-text-batch-v1.2' capability from 'polyglot-agent-v1'
+{ :type :agent-capability-access
+  :agent-profile-id "polyglot-agent-v1"
+  :capability-id "translate-text-batch-v1.2"
+  :invocation-types [:invoke] 
+}
+
+;; Allow consuming the 'live-translation-feed-v1.0' stream from 'polyglot-agent-v1'
+;; with a constraint that the 'target-language' parameter must be :fr or :es
+{ :type :agent-capability-access
+  :agent-profile-id "polyglot-agent-v1"
+  :capability-id "live-translation-feed-v1.0"
+  :invocation-types [:consume-stream]
+  :constraints {:params {:target-language [:enum :fr :es]}}
+}
 ```
 
 ## 6. Implementation Considerations
 
 *   **Key Management:** A secure system for managing agent keys and distributing public keys is crucial but external to the RTFS language spec itself.
 *   **Canonicalization:** A strict, unambiguous canonical representation format for signed data is essential for reliable verification.
-*   **Capability Definition:** A clear language or format for defining capabilities and their associated constraints is needed.
-*   **Runtime Integration:** Both signature verification and capability checking require tight integration with the RTFS runtime environment.
+*   **Capability Definition:** A clear language or format for defining capabilities and their associated constraints is needed. This document proposes one such format.
+*   **Runtime Integration:** Both signature verification and capability checking require tight integration with the RTFS runtime environment. The runtime must also handle the mapping of `:agent-capability-access` requests to network operations, including managing authentication with external agents as per their profiles.
+*   **Agent Profile Trust and Verification:** The process of discovering and fetching agent profiles needs to be secure. Mechanisms to verify the authenticity and integrity of agent profiles (e.g., signed profiles, trusted registries) are important but may be further detailed in agent discovery protocol specifications.
 
 This layered approach (signatures for auditability, capabilities for access control) provides a robust foundation for secure execution of RTFS tasks.

@@ -238,19 +238,28 @@ While RTFS supports explicit type annotations, the type system should also perfo
   - `Predicate`: `[PredicateName Arg1 Arg2 ...]`, where `PredicateName` is a function symbol/keyword and `Args` are literals.
   - Example: `[:and int [:> 0] [:< 100]]` (An integer greater than 0 and less than 100).
 
-### 11.7. Literal Types
+### 11.7. Stream Types
+
+- `[:stream ElementType]`
+  - Represents a sequence of values of `ElementType` that are processed over time.
+  - This type is used in `:input-schema` or `:output-schema` to indicate that a task or capability consumes or produces a stream of data.
+  - The actual mechanism of streaming (e.g., push, pull, specific protocol) is handled by the runtime and communication layer, but the type system defines the data contract for each element in the stream.
+  - Example: `[:stream [:map [:event-id int] [:payload any]]]` (A stream of maps)
+  - Example: `[:stream string]` (A stream of strings)
+
+### 11.8. Literal Types
 
 - `[:val LiteralValue]`
   - Represents a type inhabited by only a single literal value.
   - Example: `[:val :success]`, `[:val 42]`
 
-### 11.8. Enum Types (Syntactic Sugar)
+### 11.9. Enum Types (Syntactic Sugar)
 
 - `[:enum Val1 Val2 ...]`
   - Syntactic sugar for `[:union [:val Val1] [:val Val2] ...]`, where `Val`s are typically keywords or strings.
   - Example: `[:enum :pending :running :completed]`
 
-### 11.9. Standard Type Aliases (Conceptual)
+### 11.10. Standard Type Aliases (Conceptual)
 
 While RTFS might not have a formal `deftype` mechanism initially, certain common patterns can be treated as standard aliases in documentation and potentially by tooling:
 

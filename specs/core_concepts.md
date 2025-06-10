@@ -108,3 +108,38 @@ This modular architecture allows for different implementations (e.g., a Rust-bas
     *   **Function:** Translates RTFS semantics into equivalent constructs in the target environment.
 
 This modular architecture allows for different implementations (e.g., a Rust-based runtime, a Clojure-based transpiler) while adhering to the common RTFS language specification.
+
+## 6. Agent Profiles and Discovery
+
+To operate in a multi-agent system, RTFS agents can be described by an **`agent-profile`**. This profile is a self-contained RTFS artifact that defines:
+
+- **Identity:** Unique identifiers, human-readable names, and descriptions.
+- **Capabilities:** A catalog of tasks or services the agent can perform, including their input/output schemas.
+- **Communication Endpoints:** How the agent exposes its capabilities (e.g., via JSON-RPC over HTTP, WebSockets for streaming).
+- **Discovery Mechanisms:** Information on how other agents can find and learn about this agent (e.g., registration with a directory service, well-known discovery endpoints).
+
+Agent profiles are crucial for enabling dynamic interaction and collaboration between RTFS agents and potentially with non-RTFS systems.
+
+## 7. Standardized Communication and Interoperability
+
+RTFS aims to facilitate robust communication both between RTFS agents and with external systems. This involves:
+
+- **Protocol Bindings:** Defining how RTFS task invocations and data exchange map to standard protocols like JSON-RPC. RTFS tasks can act as clients or expose their functionality as servers using these protocols.
+- **Interoperability Layers:** Providing mechanisms to declare compatibility or map RTFS constructs to established agent communication frameworks like Agent2Agent (A2A) and Model Context Protocol (MCP). This allows RTFS agents to participate in broader AI ecosystems.
+- **Message Passing:** Standardizing the structure of messages for requests, responses, and notifications, especially when RTFS tasks themselves are exchanged as payloads.
+
+## 8. Streaming Data Flows
+
+Many AI tasks involve processing continuous streams of data. RTFS incorporates streaming as a first-class concept:
+
+- **Stream Types:** The type system supports defining streams of specific data types in task contracts.
+- **Stream Operations:** The language provides constructs within the `:plan` for producing, consuming, and transforming data streams.
+- **Protocol Integration:** Streaming operations are designed to integrate with underlying streaming-capable communication protocols (e.g., WebSockets, Server-Sent Events).
+
+## 9. Enhanced Tool Definition and Integration
+
+Building on the `:contracts` section, RTFS will support richer tool definitions inspired by protocols like MCP:
+
+- **Schema-Driven Tool Contracts:** Tools (whether internal RTFS functions or external services) can be defined with formal schemas (e.g., JSON Schema or RTFS's own schema language) for their inputs and outputs.
+- **Tool Annotations:** Metadata about tool behavior (e.g., idempotency, side-effects) can be specified.
+- **Tool Catalogs:** Agents can declare a catalog of tools they provide, aiding in discovery and capability negotiation.

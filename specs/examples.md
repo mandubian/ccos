@@ -476,5 +476,844 @@ Demonstrates using `match` to handle the standard `Result<T>` pattern (`[:ok Val
 *   The second clause `[:error err-map]` handles parsing errors, binding the standard `ErrorMap` to `err-map`.
 *   Demonstrates accessing the parsed value or the error details within the respective clauses.
 
+## 13. Task Interacting with an Agent Profile
+
+These examples illustrate how an RTFS task can declare dependencies on capabilities provided by an external agent (defined via an `agent-profile`) and then invoke those capabilities, including streaming.
+
+### 13.1 Agent Profile Definition Example
+
+First, let's define an agent profile for a hypothetical "Polyglot Agent" that offers translation services.
+
+```acl
+;; File: polyglot-agent-profile.rtfs
+(agent-profile :id "polyglot-agent-v1"
+  :metadata {
+    :name "Polyglot Translation Agent"
+    :version "1.2.0"
+    :description "Provides text translation and continuous translation feed services."
+    :owner "linguistics-inc"
+  }
+
+  :capabilities [
+    { :capability-id "translate-text-batch-v1.2"
+      :description "Translates a batch of texts from a source language to a target language."
+      :type :task
+      :input-schema [:map 
+                       [:texts [:vector :string]]
+                       [:source-language :keyword]
+                       [:target-language :keyword]]
+      :output-schema [:map 
+                        [:translations [:vector :string]]
+                        [:detected-source-language :keyword?]]
+      :annotations { :cost :medium :batch-size-limit 100 }
+    }
+    { :capability-id "live-translation-feed-v1.0"
+      :description "Provides a continuous stream of translations for incoming text chunks."
+      :type :stream-source
+      :input-schema [:map ;; Parameters to start the stream
+                       [:source-language :keyword]
+                       [:target-language :keyword]
+                       [:filter-topics [:vector :string]?]]
+      :output-schema [:map ;; Schema for each item in the output stream
+                        [:original-chunk :string]
+                        [:translated-chunk :string]
+                        [:timestamp :string]]
+      :annotations { :real-time true }
+    }
+  ]
+
+  :communication-endpoints [
+    { :endpoint-id "main-jsonrpc"
+      :protocol :json-rpc
+      :transport :http
+      :uri "https://api.polyglot-agent.example.com/rpc"
+      :details {
+        :http-methods [:POST]
+        :authentication { :type :oauth2 :flow :client-credentials }
+      }
+      :provides-capabilities ["translate-text-batch-v1.2"]
+    }
+    { :endpoint-id "stream-ws"
+      :protocol :websocket
+      :transport :wss
+      :uri "wss://stream.polyglot-agent.example.com/feed"
+      :details {
+        :message-format :json
+        :authentication { :type :bearer-token }
+        :stream-options {
+          :subscription-message-schema [:map 
+                                         [:action :subscribe]
+                                         [:feed-id :string] ;; e.g., "live-translation-feed-v1.0"
+                                         [:params [:map [:source-language :keyword] [:target-language :keyword]]]]
+          :unsubscription-message-schema [:map [:action :unsubscribe] [:feed-id :string]]
+        }
+      }
+      :provides-capabilities ["live-translation-feed-v1.0"]
+    }
+  ]
+
+  :discovery-mechanisms [
+    { :type :registry
+      :registry-uri "https://rtfs-registry.example.com/agents"
+      :registration-id "polyglot-agent-v1"
+    }
+  ]
+)
+```
+
+### 13.2 Task Requiring and Invoking a Standard Agent Capability
+
+This task needs to translate a document using the `translate-text-batch-v1.2` capability from the `polyglot-agent-v1`.
+
+```acl
+(task :id "task-translate-doc"
+  :intent {
+    :action :translate-document
+    :document-content "Hello world. This is an example."
+    :target-language :es
+  }
+  :contracts {
+    :input-schema [:map [:document-content :string] [:target-language :keyword]]
+    :output-schema [:map [:translated-document :string]]
+    :requires [ ;; Declaring dependency on an external capability
+      { :capability-id "polyglot-agent-v1/translate-text-batch-v1.2" ;; Fully qualified ID: <agent-id>/<capability-id>
+        ;; Optional: :agent-profile-uri "./polyglot-agent-profile.rtfs" (if known locally)
+        :alias translator ;; Local alias for use in the plan
+        :timeout-ms 5000
+        :retry-policy { :max-attempts 3 :delay-ms 1000 }
+      }
+    ]
+  }
+  :plan
+  (do
+    (tool:log "Starting document translation.")
+    (let [content :string (:document-content @input) ;; Assuming @input is populated based on :input-schema
+          target-lang :keyword (:target-language @input)]
+      
+      ;; Invoke the aliased capability
+      (let [translation-result :map (invoke translator
+                                        ;; Arguments map, matching the capability's :input-schema
+                                        { :texts [content] 
+                                          :source-language :en ;; Assuming source is English
+                                          :target-language target-lang }
+                                        ;; Optional: Override invocation options from :contracts/:requires
+                                        { :timeout-ms 7000 })]
+        
+        (match translation-result
+          ;; Assuming 'invoke' itself returns a result structure or propagates errors
+          ;; For simplicity, let's assume direct success or failure from invoke
+          ;; A more robust invoke might return [:ok actual-output] | [:error details]
+          
+          ;; If invoke returns the direct output-schema of the capability on success:
+          { :translations translated-texts }
+          (do
+            (tool:log "Translation successful.")
+            { :translated-document (first translated-texts) })
+          
+          ;; If invoke can return an error structure (e.g. if it wraps the call)
+          [:error err-details]
+          (do
+            (tool:log-error (str "Translation failed: " err-details))
+            { :translated-document "[Translation Failed]" })
+
+          ;; Fallback if the structure is unexpected (should align with how 'invoke' behaves)
+          _ 
+          (do
+            (tool:log-error (str "Unexpected result from translation service: " translation-result))
+            { :translated-document "[Unexpected Translation Result]" }
+          )
+        )
+      )
+    )
+  )
+)
+```
+
+### 13.3 Task Consuming a Stream from an Agent
+
+This task connects to the `live-translation-feed-v1.0` capability to process a stream of translations.
+
+```acl
+(task :id "task-live-translate-feed-consumer"
+  :intent {
+    :action :monitor-live-translations
+    :source-language :en
+    :target-language :fr
+    :duration-seconds 60
+  }
+  :contracts {
+    :requires [
+      { :capability-id "polyglot-agent-v1/live-translation-feed-v1.0"
+        :alias live-translator
+      }
+    ]
+  }
+  :plan
+  (do
+    (tool:log "Starting to consume live translation feed.")
+    (let [source-lang :keyword (:source-language @intent)
+          target-lang :keyword (:target-language @intent)
+          monitoring-duration :int (:duration-seconds @intent)]
+
+      ;; Consume the stream provided by the 'live-translator' capability
+      (consume-stream live-translator
+        ;; Parameters to initiate the stream, matching capability's :input-schema
+        { :source-language source-lang 
+          :target-language target-lang }
+        
+        ;; Handler block for each item from the stream
+        ;; 'item' will be a map matching the capability's :output-schema for stream items
+        { item => 
+          (do
+            (tool:log (str "Received live translation: " (:original-chunk item) " -> " (:translated-chunk item)))
+            ;; Further processing of 'item'
+            (tool:store-translation item)) ;; Example: store each translated item
+        }
+        
+        ;; Optional: Stream-level options
+        { :on-error (fn [err] (tool:log-error (str "Stream error: " err)))
+          :on-complete (fn [] (tool:log "Live translation stream completed."))
+          :timeout-ms (* monitoring-duration 1000) ;; Overall timeout for the consumption
+        }
+      )
+      (tool:log "Finished consuming live translation feed (or timed out).")))
+)
+```
+
+## 14. End-to-End Example: Human Request to MCP Tool Call and Logging
+
+This example demonstrates a complete flow: a human request is translated into an RTFS task intent, an RTFS task is defined to handle this intent by calling an external MCP (Model Context Protocol) agent, and finally, a simulated execution log shows the interaction.
+
+### 14.1 Human Request
+
+"What's the current temperature in Paris in Celsius?"
+
+### 14.2 Generated RTFS Task Intent
+
+An RTFS-compatible system (e.g., an orchestrator or a higher-level AI) would parse the human request into a structured task intent:
+
+```acl
+{
+  :action :get-current-weather
+  :location "Paris"
+  :units "Celsius"
+  :context {
+    :original-request "What's the current temperature in Paris in Celsius?"
+    :user-id "user-7742"
+    :session-id "session-b3f9-4a1c"
+    :preferred-language "en-US"
+  }
+}
+```
+
+### 14.3 Hypothetical MCP Weather Agent
+
+Assume an MCP agent exists that provides weather information. Its (simplified) profile and relevant tool might look like this:
+
+*   **Agent Profile ID:** `weather-mcp-agent-profile-v1`
+*   **Tool ID (within Agent Profile):** `get-current-temperature`
+*   **MCP Tool Input Schema (JSON Schema):**
+    ```json
+    {
+      "type": "object",
+      "properties": {
+        "city": { "type": "string", "description": "The city name." },
+        "units": { "type": "string", "enum": ["Celsius", "Fahrenheit"], "default": "Celsius" }
+      },
+      "required": ["city"]
+    }
+    ```
+*   **MCP Tool Output Schema (JSON Schema):**
+    ```json
+    {
+      "type": "object",
+      "properties": {
+        "city": { "type": "string" },
+        "temperature": { "type": "number" },
+        "units": { "type": "string" },
+        "condition": { "type": "string", "description": "e.g., Sunny, Cloudy" },
+        "humidity": { "type": "number", "description": "Percentage" }
+      },
+      "required": ["city", "temperature", "units", "condition"]
+    }
+    ```
+This agent profile would be discoverable through an agent registry.
+
+### 14.4 RTFS Task Definition
+
+The RTFS task to handle the intent and call the MCP agent:
+
+```acl
+(task :id "fetch-city-temperature-mcp"
+  :version "1.0.0"
+  :intent-schema { ;; Schema for the intent this task can handle
+    :action [:val :get-current-weather]
+    :location :string
+    :units [:enum "Celsius" "Fahrenheit"]
+    :context :map? ;; Optional context map
+  }
+  :contracts {
+    :input-schema { ;; Task's own input, derived from intent
+      :city :string
+      :temperature-units [:enum "Celsius" "Fahrenheit"]
+    }
+    :output-schema { ;; Task's own output
+      :city :string
+      :current-temperature :float
+      :units :string
+      :weather-condition :string
+      :details :string
+    }
+    :requires [
+      { ;; Declare dependency on the MCP tool
+        :capability-id "weather-mcp-agent-profile-v1/get-current-temperature"
+        :alias weather-service ;; Local alias for the plan
+        :protocol :mcp ;; Explicitly state it's an MCP tool
+        ;; Input schema for the *required* capability (matches MCP tool's input)
+        :input-schema [:map 
+                         [:city :string] 
+                         [:units [:enum "Celsius" "Fahrenheit"]?]]
+        ;; Output schema for the *required* capability (matches MCP tool's output)
+        :output-schema [:map
+                         [:city :string]
+                         [:temperature :number]
+                         [:units :string]
+                         [:condition :string]
+                         [:humidity :number?]]
+        :timeout-ms 10000
+        :retry-policy { :max-attempts 2 :delay-ms 500 }
+      }
+    ]
+  }
+  :plan
+  (do
+    (tool:log (str "Preparing to fetch weather for city: " (:city @input) 
+                   " in " (:temperature-units @input) " units."))
+
+    ;; Invoke the MCP weather service
+    (let [mcp-params {:city (:city @input) :units (:temperature-units @input)}
+          weather-result (invoke weather-service mcp-params)]
+      
+      (match weather-result
+        ;; Success case: MCP tool returned data matching its output schema
+        { :city city-name 
+          :temperature temp 
+          :units units-val 
+          :condition cond 
+          :humidity hum? } ;; humidity is optional
+        (do
+          (tool:log (str "Successfully received weather data from MCP agent for " city-name))
+          ;; Construct the task's output based on the MCP response
+          { :city city-name
+            :current-temperature (to-float temp) ;; Ensure float type
+            :units units-val
+            :weather-condition cond
+            :details (str "Current weather in " city-name " is " temp " " units-val ", " cond 
+                          (if hum? (str ", with " hum? "% humidity.") "."))
+          })
+
+        ;; Error case from 'invoke' (e.g., timeout, network issue, MCP error response)
+        [:error error-details]
+        (do
+          (tool:log-error (str "Error calling MCP weather service: " error-details))
+          ;; Return a structured error output matching task's :output-schema (partially)
+          { :city (:city @input)
+            :current-temperature -999.0 ;; Indicate error
+            :units (:temperature-units @input)
+            :weather-condition "Unknown"
+            :details (str "Failed to retrieve weather. Error: " (:message error-details "N/A"))
+          })
+        
+        ;; Fallback for unexpected structure from 'invoke' (should be rare)
+        _
+        (do
+          (tool:log-error (str "Unexpected response structure from MCP weather service: " weather-result))
+          { :city (:city @input)
+            :current-temperature -999.0
+            :units (:temperature-units @input)
+            :weather-condition "Error"
+            :details "Unexpected error during weather data retrieval."
+          })
+      )
+    )
+  )
+)
+```
+
+### 14.5 Simulated Execution Log
+
+The RTFS runtime would produce a detailed execution log. This log can be represented in various formats. Below are examples in RTFS format (native to the RTFS ecosystem) and JSON format (common for interoperability).
+
+#### 14.5.1 RTFS Format
+
+This format uses RTFS data structures (vectors of maps with keyword keys) for the log entries.
+It's important to note that for fields like `:payload` in `:agent-request` and `:agent-response` events that represent data for external protocols (like MCP, which uses JSON), the RTFS representation within the log aims to accurately reflect the structure of that external data. Thus, string keys from JSON are preserved as string keys in these specific nested maps, rather than being converted to keywords, to maintain fidelity with the external protocol. Other parts of the log use keywords as is idiomatic for RTFS.
+
+```acl
+;; Vector of log events
+[
+  { ;; Event 1: task-start
+    :event-type :task-start
+    :timestamp "2025-06-08T10:30:01.100Z"
+    :task-id "fetch-city-temperature-mcp"
+    :task-version "1.0.0"
+    :invocation-id "inv-xyz-789"
+    :intent {
+      :action :get-current-weather
+      :location "Paris"
+      :units "Celsius"
+      :context {
+        :original-request "What's the current temperature in Paris in Celsius?"
+        :user-id "user-7742"
+        :session-id "session-b3f9-4a1c"
+        :preferred-language "en-US"
+      }
+    }
+    :input {
+      :city "Paris"
+      :temperature-units "Celsius"
+    }
+  }
+  { ;; Event 2: log-message
+    :event-type :log-message
+    :timestamp "2025-06-08T10:30:01.105Z"
+    :invocation-id "inv-xyz-789"
+    :level :info
+    :message "Preparing to fetch weather for city: Paris in Celsius units."
+  }
+  { ;; Event 3: log-step-start
+    :event-type :log-step-start
+    :timestamp "2025-06-08T10:30:01.110Z"
+    :invocation-id "inv-xyz-789"
+    :step-id "invoke-weather-service-1"
+    :step-type :agent-call
+    :details {
+      :alias "weather-service"
+      :capability-id "weather-mcp-agent-profile-v1/get-current-temperature"
+      :protocol :mcp
+    }
+  }
+  { ;; Event 4: agent-request
+    :event-type :agent-request
+    :timestamp "2025-06-08T10:30:01.115Z"
+    :invocation-id "inv-xyz-789"
+    :step-id "invoke-weather-service-1"
+    :protocol :mcp
+    :direction :request
+    :target-agent-id "weather-mcp-agent-profile-v1"
+    :target-tool-id "get-current-temperature"
+    :payload { ;; RTFS map representing the JSON payload sent to MCP. String keys are preserved.
+      "city" "Paris"
+      "units" "Celsius"
+    }
+  }
+  { ;; Event 5: agent-response
+    :event-type :agent-response
+    :timestamp "2025-06-08T10:30:01.950Z"
+    :invocation-id "inv-xyz-789"
+    :step-id "invoke-weather-service-1"
+    :protocol :mcp
+    :direction :response
+    :source-agent-id "weather-mcp-agent-profile-v1"
+    :source-tool-id "get-current-temperature"
+    :status :success
+    :payload { ;; RTFS map representing the JSON payload received from MCP. String keys are preserved.
+      "city" "Paris"
+      "temperature" 22.5
+      "units" "Celsius"
+      "condition" "Partly Cloudy"
+      "humidity" 65
+    }
+  }
+  { ;; Event 6: log-message
+    :event-type :log-message
+    :timestamp "2025-06-08T10:30:01.955Z"
+    :invocation-id "inv-xyz-789"
+    :level :info
+    :message "Successfully received weather data from MCP agent for Paris"
+  }
+  { ;; Event 7: log-step-end
+    :event-type :log-step-end
+    :timestamp "2025-06-08T10:30:01.960Z"
+    :invocation-id "inv-xyz-789"
+    :step-id "invoke-weather-service-1"
+    :status :success
+    :duration-ms 850
+    :result { ;; The internal RTFS result of the (invoke ...) expression
+      :city "Paris"
+      :temperature 22.5
+      :units "Celsius"
+      :condition "Partly Cloudy"
+      :humidity 65
+    }
+  }
+  { ;; Event 8: task-end
+    :event-type :task-end
+    :timestamp "2025-06-08T10:30:01.970Z"
+    :invocation-id "inv-xyz-789"
+    :status :success
+    :duration-ms 870
+    :output {
+      :city "Paris"
+      :current-temperature 22.5
+      :units "Celsius"
+      :weather-condition "Partly Cloudy"
+      :details "Current weather in Paris is 22.5 Celsius, Partly Cloudy, with 65% humidity."
+    }
+  }
+]
+```
+
+#### 14.5.2 JSON Format
+
+This format is useful for interoperability with systems that primarily consume JSON.
+
+```json
+[
+  {
+    "event-type": "task-start",
+    "timestamp": "2025-06-08T10:30:01.100Z",
+    "task-id": "fetch-city-temperature-mcp",
+    "task-version": "1.0.0",
+    "invocation-id": "inv-xyz-789",
+    "intent": {
+      "action": "get-current-weather",
+      "location": "Paris",
+      "units": "Celsius",
+      "context": {
+        "original-request": "What's the current temperature in Paris in Celsius?",
+        "user-id": "user-7742",
+        "session-id": "session-b3f9-4a1c",
+        "preferred-language": "en-US"
+      }
+    },
+    "input": {
+      "city": "Paris",
+      "temperature-units": "Celsius"
+    }
+  },
+  {
+    "event-type": "log-message",
+    "timestamp": "2025-06-08T10:30:01.105Z",
+    "invocation-id": "inv-xyz-789",
+    "level": "info",
+    "message": "Preparing to fetch weather for city: Paris in Celsius units."
+  },
+  {
+    "event-type": "log-step-start",
+    "timestamp": "2025-06-08T10:30:01.110Z",
+    "invocation-id": "inv-xyz-789",
+    "step-id": "invoke-weather-service-1", 
+    "step-type": "agent-call",
+    "details": {
+      "alias": "weather-service",
+      "capability-id": "weather-mcp-agent-profile-v1/get-current-temperature",
+      "protocol": "mcp"
+    }
+  },
+  {
+    "event-type": "agent-request",
+    "timestamp": "2025-06-08T10:30:01.115Z",
+    "invocation-id": "inv-xyz-789",
+    "step-id": "invoke-weather-service-1",
+    "protocol": "mcp",
+    "direction": "request",
+    "target-agent-id": "weather-mcp-agent-profile-v1",
+    "target-tool-id": "get-current-temperature",
+    "payload": { 
+      "city": "Paris",
+      "units": "Celsius"
+    }
+  },
+  {
+    "event-type": "agent-response",
+    "timestamp": "2025-06-08T10:30:01.950Z",
+    "invocation-id": "inv-xyz-789",
+    "step-id": "invoke-weather-service-1",
+    "protocol": "mcp",
+    "direction": "response",
+    "source-agent-id": "weather-mcp-agent-profile-v1",
+    "source-tool-id": "get-current-temperature",
+    "status": "success", 
+    "payload": { 
+      "city": "Paris",
+      "temperature": 22.5,
+      "units": "Celsius",
+      "condition": "Partly Cloudy",
+      "humidity": 65
+    }
+  },
+  {
+    "event-type": "log-message",
+    "timestamp": "2025-06-08T10:30:01.955Z",
+    "invocation-id": "inv-xyz-789",
+    "level": "info",
+    "message": "Successfully received weather data from MCP agent for Paris"
+  },
+  {
+    "event-type": "log-step-end",
+    "timestamp": "2025-06-08T10:30:01.960Z",
+    "invocation-id": "inv-xyz-789",
+    "step-id": "invoke-weather-service-1",
+    "status": "success",
+    "duration-ms": 850,
+    "result": { 
+      "city": "Paris",
+      "temperature": 22.5,
+      "units": "Celsius",
+      "condition": "Partly Cloudy",
+      "humidity": 65
+    }
+  },
+  {
+    "event-type": "task-end",
+    "timestamp": "2025-06-08T10:30:01.970Z",
+    "invocation-id": "inv-xyz-789",
+    "status": "success",
+    "duration-ms": 870,
+    "output": {
+      "city": "Paris",
+      "current-temperature": 22.5,
+      "units": "Celsius",
+      "weather-condition": "Partly Cloudy",
+      "details": "Current weather in Paris is 22.5 Celsius, Partly Cloudy, with 65% humidity."
+    }
+  }
+]
+```
+
+This comprehensive example covers the lifecycle from a user's need to a structured task execution involving external MCP communication, and how such an interaction would be logged for observability and debugging.
+
+## 15. Agent Discovery and Dynamic Invocation
+
+This section illustrates the complete workflow of defining an agent, how it might be discovered, and how an RTFS task can dynamically find and invoke its capabilities.
+
+### 15.1 Example Agent Profile: Weather Reporter
+
+This agent profile defines a hypothetical "Weather Reporter Agent" that provides current weather information.
+
+```acl
+;; File: weather-reporter-agent-profile.rtfs
+(agent-profile :id "weather-reporter-agent-v1"
+  :metadata {
+    :name "Weather Reporter Agent"
+    :version "1.0.0"
+    :description "Provides current weather information for a given location."
+    :owner "weather-services-inc"
+    :discovery-tags [:weather :forecast :location-based "real-time-data"]
+  }
+
+  :capabilities [
+    { :capability-id "get-current-weather-v1.0"
+      :description "Fetches the current weather for a specified city."
+      :type :task
+      :input-schema [:map
+                       [:city :string]
+                       [:units [:enum :celsius :fahrenheit]? {:default :celsius}]]
+      :output-schema [:map
+                        [:city :string]
+                        [:temperature :float]
+                        [:condition :string]
+                        [:humidity :float?]
+                        [:wind-speed :float?]
+                        [:units :keyword]]
+      :annotations { :cost :low :data-freshness "up-to-the-minute" }
+    }
+  ]
+
+  :communication-endpoints [
+    { :endpoint-id "main-jsonrpc"
+      :protocol :json-rpc
+      :transport :http
+      :uri "https://api.weather-reporter.example.com/rpc"
+      :details {
+        :http-methods [:POST]
+        :authentication { :type :api-key :header "X-API-Key" }
+      }
+      :provides-capabilities ["get-current-weather-v1.0"]
+    }
+  ]
+
+  :discovery-mechanisms [
+    { :type :registry
+      :registry-uri "https://rtfs-registry.example.com/agents"
+      :registration-id "weather-reporter-agent-v1" ;; ID used for registration
+    }
+    { :type :well-known-uri ;; For direct discovery if the agent hosts its own profile
+      :uri "httpsis://api.weather-reporter.example.com/.well-known/rtfs-agent-profile"
+    }
+  ]
+)
+```
+
+This profile includes:
+*   Basic metadata and `:discovery-tags` for searchability.
+*   A single capability `get-current-weather-v1.0` with defined input/output schemas.
+*   A communication endpoint detailing how to reach the agent.
+*   Discovery mechanisms, including a pointer to a central registry and a well-known URI for direct discovery. The `:uri` from the `:well-known-uri` mechanism would be used to populate `agent_card.agent_profile_uri` if discovered this way.
+
+### 15.2 Conceptual Agent Card
+
+When the "Weather Reporter Agent" registers with a discovery service (like the one at `https://rtfs-registry.example.com/agents`), or when its `agent-profile` is fetched and processed, an `agent_card` is generated. This card is a summary used in discovery results.
+
+Based on the profile above and the definitions in `agent_discovery.md`, the `agent_card` for `weather-reporter-agent-v1` would look something like this (represented in JSON for clarity, though RTFS structures would be used internally):
+
+```json
+{
+  "agent_id": "weather-reporter-agent-v1",
+  "agent_profile_uri": "httpsis://api.weather-reporter.example.com/.well-known/rtfs-agent-profile", // or URI from registry
+  "name": "Weather Reporter Agent",
+  "version": "1.0.0",
+  "description": "Provides current weather information for a given location.",
+  "discovery_tags": ["weather", "forecast", "location-based", "real-time-data"],
+  "capabilities_summary": [
+    {
+      "capability_id": "get-current-weather-v1.0",
+      "description": "Fetches the current weather for a specified city.",
+      "type": "task"
+      // Schemas might be URIs or summarized further depending on registry policy
+    }
+  ],
+  "communication_summary": [
+    {
+      "endpoint_id": "main-jsonrpc",
+      "protocol": "json-rpc",
+      "transport": "http",
+      "uri": "httpsis://api.weather-reporter.example.com/rpc"
+      // Other details like auth might be included or require fetching the full profile
+    }
+  ],
+  "provider_id": "weather-services-inc", // from :owner
+  "last_updated": "2025-06-09T10:00:00Z" // Added by the registry
+  // Other fields like :rank, :score, :trust_level might be added by the registry
+}
+```
+**Note:** The exact structure and content of the `agent_card` are defined by the `agent_discovery.md` specification and can be influenced by the registry's specific implementation (e.g., how it summarizes capabilities or adds metadata like `last_updated` or `rank`). The `agent_profile_uri` would typically point to where the full `agent-profile.rtfs` can be retrieved.
+
+### 15.3 Task: Discovering and Invoking the Weather Agent
+
+This RTFS task demonstrates how to discover the Weather Reporter Agent and then invoke its capability.
+
+It shows two approaches for requirements:
+1.  **Static Requirement (Commented Out):** If the agent and its capability are known beforehand, it can be declared directly in `:contracts :requires`.
+2.  **Dynamic Discovery:** The task uses `(discover-agents ...)` to find suitable agents.
+
+```acl
+(task :id "task-dynamic-weather-report"
+  :intent {
+    :action :get-weather-dynamically
+    :city "London"
+    :preferred-units :celsius
+  }
+  :contracts {
+    :input-schema [:map [:city :string] [:preferred-units :keyword]]
+    :output-schema [:map [:report :string] [:error :string?]]
+    ;; --- Static Requirement Example (if agent is known) ---
+    ;; This shows how one might require the capability if its details were fixed.
+    ;; For dynamic discovery, this specific block might be omitted or be more general.
+    #_(:requires [ 
+      { :capability-id "weather-reporter-agent-v1/get-current-weather-v1.0"
+        :alias static-weather-service
+        :timeout-ms 3000
+      }
+    ])
+    ;; --- Capabilities needed for the discovery and invocation process itself ---
+    :capabilities-required [
+      { :type :tool-call :tool-name "tool:log" } 
+      ;; Implicit: discover-agents special form, invoke special form
+    ]
+  }
+  :plan
+  (do
+    (tool:log (str "Attempting to discover a weather agent for city: " (:city @input)))
+
+    ;; 1. Discover agents that can provide weather information
+    (let [discovery-results :vector 
+          (discover-agents 
+            :discovery-tags [:weather "real-time-data"] ;; Search by tags
+            :capability-constraints { ;; Further filter by capability properties (conceptual)
+              :type :task 
+              ;; :input-schema-contains { :city :string } ;; More advanced query
+            }
+            :limit 5 ;; Get up to 5 results
+            ;; :discovery-query { ;; Alternative: Free-form query for advanced registries
+            ;;   "metadata.owner": "weather-services-inc"
+            ;; }
+            )]
+      
+      (tool:log (str "Discovery returned " (count discovery-results) " agent(s)."))
+
+      (if (empty? discovery-results)
+        (do
+          (tool:log "No suitable weather agent found.")
+          { :report "N/A" :error "Failed to discover a weather service." })
+        
+        (do
+          ;; 2. Select an agent from the results (e.g., the first one)
+          ;; In a real scenario, might involve ranking or selection logic
+          (let [selected-agent-card :map (first discovery-results)
+                agent-id :string (:agent_id selected-agent-card) 
+                ;; Assuming capability ID is known or also discoverable from card
+                capability-id :string "get-current-weather-v1.0" 
+                ;; Endpoint URI could also be extracted if needed for :endpoint-override
+                ;; endpoint-uri :string (get-in selected-agent-card [:communication_summary 0 :uri]) 
+                ]
+            
+            (tool:log (str "Selected agent: " agent-id 
+                           " (Profile: " (:agent_profile_uri selected-agent-card) ")"))
+
+            ;; 3. Invoke the capability on the discovered agent
+            (tool:log (str "Invoking " capability-id " on agent " agent-id 
+                           " for city: " (:city @input)))
+            
+            (let [invoke-params {:city (:city @input) :units (:preferred-units @input)}
+                  ;; Use :agent-id-override to target the dynamically discovered agent
+                  weather-response (invoke capability-id ;; Base capability ID
+                                     invoke-params
+                                     { :agent-id-override agent-id 
+                                       ;; :endpoint-override endpoint-uri ;; If needed
+                                       :timeout-ms 4500 })]
+
+              ;; 4. Process the response
+              (match weather-response
+                { :city c :temperature temp :condition cond :units u }
+                (do
+                  (let [report-string (str "Weather in " c ": " temp " " u ", " cond)]
+                    (tool:log (str "Successfully retrieved weather: " report-string))
+                    { :report report-string }))
+                
+                [:error err-details]
+                (do
+                  (tool:log-error (str "Error invoking weather service on " agent-id ": " err-details))
+                  { :report "N/A" :error (str "Error from " agent-id ": " (:message err-details "Unknown error")) })
+                
+                _ ;; Default case for unexpected response structure
+                (do
+                  (tool:log-error (str "Unexpected response from " agent-id ": " weather-response))
+                  { :report "N/A" :error (str "Unexpected response from " agent-id) })
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+```
+
+This example demonstrates:
+*   An `agent-profile` for a `weather-reporter-agent-v1`.
+*   A conceptual `agent_card` that would be generated from this profile.
+*   An RTFS task that:
+    *   Includes a commented-out example of a static `:contracts :requires` for comparison.
+    *   Uses `(discover-agents ...)` with `:discovery-tags` to find suitable agents.
+    *   Selects an agent from the discovery results (here, simply the first one).
+    *   Extracts the `:agent_id` from the chosen `agent_card`.
+    *   Uses `(invoke ...)` with the `:agent-id-override` option to call the desired capability on the dynamically selected agent.
+    *   Processes the response from the `invoke` call.
+
+This flow shows how an RTFS task can adapt to available services at runtime, rather than being hardcoded to a specific agent instance, by leveraging the agent discovery mechanism.
+The `:contracts :requires` section can be used to declare a *need* for a certain type of capability (e.g., by specifying `:capability-type` or `:discovery-tags` within a requirement entry, if the spec evolves to support that directly in `:requires`), which the runtime could then attempt to satisfy via discovery if a specific `:capability-id` isn't statically resolvable. For now, the example uses `discover-agents` explicitly in the plan.
+
 
 
