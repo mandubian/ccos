@@ -6,7 +6,7 @@ This document defines the structure and node types for the canonical Intermediat
 
 *   **Canonical Representation:** Provide a single, unambiguous representation of parsed RTFS code.
 *   **Language Independent:** Defined purely based on RTFS semantics, not tied to any source syntax details or target language specifics.
-*   **Strongly Typed:** Embed type information directly within the IR nodes, as determined by annotations or type inference. The type can be `:any` for dynamically typed parts.
+*   **Strongly Typed:** Embed type information directly within the IR nodes, as determined by annotations or type inference. The type can be `:any` to support gradual typing and interaction with external, untyped systems, allowing for flexibility where static typing is not feasible or desired.
 *   **Analyzable & Transformable:** Structured to facilitate static analysis, type checking, optimization, and code generation.
 *   **Serializable:** Should be easily serializable/deserializable (e.g., using formats like EDN, JSON, or binary representations).
 
@@ -16,7 +16,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 
 *   **Node Format:** Each IR node typically includes:
     *   `node-type`: A keyword identifier for the kind of construct (e.g., `:ir/let`, `:ir/if`, `:ir/type-int`).
-    *   `type`: The inferred or annotated type of the expression represented by this node (crucial for typed IR). This can be an `:ir/type-*` node or `:any`.
+    *   `type`: For nodes representing expressions or values, this field holds the inferred or annotated type of the construct (crucial for typed IR). This can be an `:ir/type-*` node or `:any`. Structural nodes or those not directly evaluating to a typed value (e.g., type definitions themselves, pattern nodes) may omit this field.
     *   `source-location`: Optional information mapping back to the original source code (line, column) for error reporting.
     *   Specific fields containing child nodes or literal values relevant to the construct.
 
@@ -33,21 +33,21 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `intent`: Expression node (typically `:ir/literal` with `literal-type` :map).
     *   `contracts`: `:ir/contracts` node.
     *   `plan`: Expression node (e.g., `:ir/do`).
-    *   `execution-trace`: `:ir/literal` node (with `literal-type` :vector, containing `:ir/log-entry` nodes).
+    *   `execution-trace`: `:ir/literal` node (with `literal-type` :vector, containing `:ir/log-entry` nodes). The `type` of this literal node should be an `:ir/type-vector` with its `element-type` being the type of an `:ir/log-entry`.
     *   `type`: The type of the task itself (e.g., a specific Task record type).
     *   `source-location`: Optional.
 
 *   **`:ir/contracts`**: Holds contract information.
     *   `node-type`: `:ir/contracts`
-    *   `input-schema`: `:ir/schema` node.
-    *   `output-schema`: `:ir/schema` node.
-    *   `capabilities-required`: `:ir/literal` node (with `literal-type` :vector, containing `:ir/capability-requirement` nodes).
+    *   `input-schema`: `:ir/type` node (e.g., `:ir/type-map`, `:ir/type-record`, or `:ir/type-symbol-ref` representing the expected input structure).
+    *   `output-schema`: `:ir/type` node (e.g., `:ir/type-map`, `:ir/type-record`, or `:ir/type-symbol-ref` representing the expected output structure).
+    *   `capabilities-required`: `:ir/literal` node (with `literal-type` :vector, containing `:ir/capability-requirement` nodes). The `type` of this literal node should be an `:ir/type-vector` with its `element-type` being the type of an `:ir/capability-requirement`.
     *   `type`: Type representing the contracts structure.
     *   `source-location`: Optional.
 
 *   **`:ir/log-entry`**: Represents an entry in the execution trace.
     *   `node-type`: `:ir/log-entry`
-    *   `timestamp`: `:ir/literal` node (e.g., with `literal-type` :string or :int).
+    *   `timestamp`: `:ir/literal` node (e.g., with `literal-type` :string for ISO 8601 datetime, or :int for Unix epoch). Its `type` field should be the corresponding `:ir/type` (e.g. `:ir/type-string` or `:ir/type-int`). Consider introducing `:ir/type-datetime`.
     *   `agent`: `:ir/literal` node (e.g., with `literal-type` :string).
     *   `event`: `:ir/literal` node (e.g., with `literal-type` :keyword).
     *   `details`: Expression node (typically `:ir/literal` with `literal-type` :map).
@@ -67,9 +67,9 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/capability-requirement`**: Represents a required capability.
     *   `node-type`: `:ir/capability-requirement`
     *   `capability-type`: `:ir/literal` node (with `literal-type` :keyword, e.g., `:tool-call`, `:resource-access`).
-    *   `identifier`: `:ir/literal` node (with `literal-type` :map, specifying the target, e.g., `{ :tool-name "tool:fetch-url:v1" }`).
-    *   `permissions`: Optional `:ir/literal` node (with `literal-type` :vector of keyword literals, e.g., `[:read :write]`).
-    *   `constraints`: Optional `:ir/literal` node (with `literal-type` :map where keys are constraint keywords (e.g., `:path`, `:port`) and values are `:ir/schema-predicate` nodes defining the constraint).
+    *   `identifier`: `:ir/literal` node (with `literal-type` :map, specifying the target, e.g., `{ :tool-name \"tool:fetch-url:v1\" }`). The expected structure of this map may vary based on `capability-type`.
+    *   `permissions`: Optional `:ir/literal` node (with `literal-type` :vector of keyword literals, e.g., `[:read :write]`). The `type` of this literal node should be an `:ir/type-vector` with `element-type` :ir/type-keyword.
+    *   `constraints`: Optional `:ir/literal` node (with `literal-type` :map where keys are constraint keywords (e.g., `:path`, `:port`) and values are `:ir/schema-predicate` nodes defining the constraint). *(Note: `:ir/schema-predicate` needs further definition. It could be an expression node evaluating to a boolean, or a specific type predicate structure.)*
     *   `type`: Type representing the capability structure.
     *   `source-location`: Optional.
 
@@ -87,7 +87,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `node-type`: `:ir/variable-lookup`
     *   `name`: String (variable name).
     *   `type`: Inferred/resolved type of the variable.
-    *   `scope-info`: Optional info linking to the definition site.
+    *   `scope-info`: Optional information linking to the definition site (e.g., a unique ID of the defining node like `:ir/defn`, `:ir/let-binding`, or `:ir/param`, or a direct reference if the IR structure supports it).
     *   `source-location`: Optional.
 
 *   **`:ir/task-context-access`**: Accessing task fields like `@intent`.
@@ -98,7 +98,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 
 *   **`:ir/if`**: Conditional expression.
     *   `node-type`: `:ir/if`
-    *   `condition`: Expression node (must have type :bool or compatible).
+    *   `condition`: Expression node (must evaluate to `:ir/type-bool`).
     *   `then-branch`: Expression node.
     *   `else-branch`: Expression node.
     *   `type`: The common supertype of the then/else branches.
@@ -115,7 +115,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `params`: List of `[:ir/param ...]` nodes.
     *   `return-type-annotation`: Optional `:ir/type` node.
     *   `body`: List of expression nodes.
-    *   `captured-environment`: Optional info about captured lexical variables.
+    *   `captured-environment`: Optional information about captured lexical variables (e.g., a list of structures identifying each captured variable by name and a reference/ID to its original definition site).
     *   `type`: Function type `[:ir/type-fn ...]`.
     *   `source-location`: Optional.
 
@@ -130,8 +130,8 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `node-type`: `:ir/map-destructuring-pattern`
     *   `key-bindings`: List of `:ir/map-key-binding` nodes.
     *   `defaults`: Map from String (variable name) to `:ir/literal` node (default value).
-    *   `bind-rest-to`: Optional String (variable name for `&`).
-    *   `bind-whole-to`: Optional String (variable name for `:as`).
+    *   `bind-rest-to`: Optional `[:ir/variable-binding node]` (variable for `&`).
+    *   `bind-whole-to`: Optional `[:ir/variable-binding node]` (variable for `:as`).
     *   `source-location`: Optional.
 
 *   **`:ir/map-key-binding`**: Represents a key binding within map destructuring.
@@ -144,8 +144,8 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/vector-destructuring-pattern`**: Vector destructuring pattern.
     *   `node-type`: `:ir/vector-destructuring-pattern`
     *   `element-patterns`: List of `:ir/binding-pattern` or `:ir/ignore-pattern` nodes.
-    *   `bind-rest-to`: Optional String (variable name for `&`).
-    *   `bind-whole-to`: Optional String (variable name for `:as`).
+    *   `bind-rest-to`: Optional `[:ir/variable-binding node]` (variable for `&`).
+    *   `bind-whole-to`: Optional `[:ir/variable-binding node]` (variable for `:as`).
     *   `source-location`: Optional.
 
 *   **`:ir/ignore-pattern`**: Represents the `_` ignore pattern.
@@ -184,7 +184,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 
 *   **`:ir/parallel`**: Parallel execution block.
     *   `node-type`: `:ir/parallel`
-    *   `bindings`: List of `[:ir/parallel-binding ...]` nodes.
+    *   `bindings`: List of `:ir/parallel-binding` nodes.
     *   `type`: Map type `[:ir/type-map ...]` representing the combined results.
     *   `source-location`: Optional.
 
@@ -209,13 +209,14 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `node-type`: `:ir/try-catch`
     *   `try-body`: List of expression nodes.
     *   `catch-clauses`: List of `:ir/catch-clause` nodes.
+    *   `finally-body`: Optional list of expression nodes (for `finally` block).
     *   `type`: Common supertype of the try-body's last expression and all catch bodies.
     *   `source-location`: Optional.
 
 *   **`:ir/catch-clause`**: A single catch block.
     *   `node-type`: `:ir/catch-clause`
     *   `error-type`: `:ir/type` node or keyword (e.g., `:any`) specifying the error type/structure to catch.
-    *   `binding-name`: String for the caught error object.
+    *   `binding`: `:ir/variable-binding` node for the caught error object.
     *   `body`: List of expression nodes.
     *   `type`: Type of the last expression in the body.
     *   `source-location`: Optional.
@@ -230,7 +231,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/match-clause`**: A single clause in a match expression.
     *   `node-type`: `:ir/match-clause`
     *   `pattern`: An `:ir/pattern-*` node.
-    *   `guard`: Optional expression node (must evaluate to boolean).
+    *   `guard`: Optional expression node (must evaluate to `:ir/type-bool`).
     *   `body`: List of expression nodes.
     *   `type`: Type of the last expression in the body.
     *   `source-location`: Optional.
@@ -264,13 +265,19 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/pattern-vector`**: Matches a vector structure.
     *   `node-type`: `:ir/pattern-vector`
     *   `elements`: List of `:ir/pattern-*` nodes.
-    *   `rest-binding`: Optional string (for `& rest` binding).
+    *   `rest-binding`: Optional `[:ir/variable-binding node]` (for `& rest` binding).
     *   `source-location`: Optional.
 
 *   **`:ir/pattern-map`**: Matches a map structure.
     *   `node-type`: `:ir/pattern-map`
-    *   `entries`: List of `[key-literal, :ir/pattern-*]` pairs. Keys are `:ir/literal` nodes.
-    *   `rest-binding`: Optional string (for `& rest` binding).
+    *   `entries`: List of `[:ir/map-pattern-entry ...]` nodes.
+    *   `rest-binding`: Optional `[:ir/variable-binding node]` (for `& rest` binding).
+    *   `source-location`: Optional.
+
+*   **`:ir/map-pattern-entry`**: Represents a key-pattern pair within a map pattern.
+    *   `node-type`: `:ir/map-pattern-entry`
+    *   `key`: `:ir/literal` node (keyword or string, representing the key to match).
+    *   `value-pattern`: `:ir/pattern-*` node (the pattern to match against the key's value).
     *   `source-location`: Optional.
 
 *   **`:ir/pattern-type`**: Matches based on type (less common in structural typing, maybe for tagged unions).
@@ -280,6 +287,8 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 
 ### 3.4. Types & Schemas
 
+*(Note: This section details the IR nodes used to represent types. RTFS `[:enum V1 V2 ...]` types, as described in `type_system.md`, are represented in IR as an `:ir/type-union` of multiple `:ir/type-literal-value` nodes.)*
+
 *   **`:ir/type-*`**: Nodes representing types themselves.
     *   `node-type`: e.g., `:ir/type-int`, `:ir/type-float`, `:ir/type-string`, `:ir/type-bool`, `:ir/type-nil`, `:ir/type-keyword`, `:ir/type-symbol`, `:ir/type-any`, `:ir/type-never`.
     *   `source-location`: Optional.
@@ -287,13 +296,13 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/type-vector`**: Vector type.
     *   `node-type`: `:ir/type-vector`
     *   `element-type`: `:ir/type` node.
-    *   `shape`: Optional list containing a single dimension (`:ir/literal` node with `literal-type` :int, or a special marker like `:ir/unknown-dimension`). If absent, size is unknown/unchecked.
+    *   `size`: Optional node, either an `:ir/literal` (with `literal-type` :int and a non-negative integer value) representing the fixed size, or an `:ir/unknown-dimension` node. If absent, the vector's size is unconstrained by its type.
     *   `source-location`: Optional.
 
 *   **`:ir/type-array`**: Multi-dimensional array/tensor type.
     *   `node-type`: `:ir/type-array`
     *   `element-type`: `:ir/type` node.
-    *   `shape`: List of dimensions (`:ir/literal` node with `literal-type` :int, or a special marker like `:ir/unknown-dimension`).
+    *   `shape`: List of dimensions (each dimension is either an `:ir/literal` node with `literal-type` :int and a non-negative integer value, or an `:ir/unknown-dimension` node).
     *   `source-location`: Optional.
 
 *   **`:ir/unknown-dimension`**: Represents an unknown dimension (`?`) in a shape.
@@ -304,6 +313,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `node-type`: `:ir/type-list`
     *   `element-type`: `:ir/type` node.
     *   `source-location`: Optional.
+    *   *(Note: Represents an ordered collection, typically corresponding to RTFS `[:list T]`. Unlike `:ir/type-vector`, its size is not part of its type definition. It may imply different underlying data structures or access patterns compared to vectors.)*
 
 *   **`:ir/type-tuple`**: Tuple type.
     *   `node-type`: `:ir/type-tuple`
@@ -313,7 +323,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/type-map`**: Map type.
     *   `node-type`: `:ir/type-map`
     *   `entries`: List of `[:ir/map-type-entry ...]` nodes.
-    *   `is-open`: Boolean (allows extra keys if true, corresponds to `[:* :any]` in syntax).
+    *   `wildcard-entry-type`: Optional `:ir/type` node. If present, the map is "open," allowing additional keys not explicitly defined in `entries`. All such additional keys must conform to this `wildcard-entry-type`. If absent, the map is "closed," and no other keys are allowed. (This corresponds to `[:* ValueType]` in the type syntax).
     *   `source-location`: Optional.
 
 *   **`:ir/map-type-entry`**: Entry in a map type definition.
@@ -331,7 +341,7 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
 *   **`:ir/type-intersection`**: Intersection type (`:and`).
     *   `node-type`: `:ir/type-intersection`
     *   `base-type`: `:ir/type` node.
-    *   `predicates`: List of `:ir/schema-predicate` nodes.
+    *   `predicates`: List of `:ir/schema-predicate` or expression nodes that evaluate to boolean and refer to the value being typed.
     *   `source-location`: Optional.
 
 *   **`:ir/type-fn`**: Function type (`:=>`).
@@ -346,57 +356,843 @@ The IR is a tree structure composed of nodes. Each node represents a specific la
     *   `name`: String (e.g., "FileHandle", "TensorHandle").
     *   `source-location`: Optional.
 
+*   **`:ir/type-literal-value`**: Represents a type inhabited by a single literal value.
+    *   `node-type`: `:ir/type-literal-value`
+    *   `value`: The actual literal value (e.g., `10`, `"hello"`, `:my-keyword`, `true`). This is the raw value, not an IR node.
+    *   `literal-type`: The specific literal type keyword of the `value` (e.g., `:int`, `:string`, `:keyword`, `:bool`).
+    *   `source-location`: Optional.
+    *   *(Note: This represents a type that is inhabited by a single, specific literal value. Used for constructing enum types via `:ir/type-union` with multiple `:ir/type-literal-value` nodes, corresponding to RTFS `[:enum V1 V2]` or `[:val V]` syntax.)*
+
+*   **`:ir/type-stream`**: Represents a stream type.
+    *   `node-type`: `:ir/type-stream`
+    *   `element-type`: `:ir/type` node, specifying the type of elements in the stream.
+    *   `source-location`: Optional.
+    *   *(Note: Represents a stream of values, typically used in task contracts for streaming inputs or outputs, corresponding to RTFS `[:stream ElementType]` syntax.)*
+
 *   **`:ir/schema`**: Represents a schema definition (used in contracts).
     *   `node-type`: `:ir/schema`
-    *   `schema-type`: The `:ir/type-*` node defining the schema structure.
+    *   `schema-type`: The `:ir/type-*` node defining the schema structure (e.g. `:ir/type-map`, `:ir/type-record`).
     *   `source-location`: Optional.
 
 *   **`:ir/schema-predicate`**: Represents a predicate within a schema (`:and`) or capability constraint.
     *   `node-type`: `:ir/schema-predicate`
-    *   `predicate-name`: `:ir/literal` node (with `literal-type` :keyword or :symbol, e.g., `:>`, `:string-starts-with`).
-    *   `arguments`: List of `:ir/literal` nodes (e.g., `[0]`, `["http://"]`).
-    *   `type`: Boolean (implicitly).
+    *   `predicate-name`: `:ir/literal` node (with `literal-type` :keyword or :symbol, e.g., `:>`, `:string-starts-with`) or an expression node that evaluates to a predicate function.
+    *   `arguments`: List of `:ir/literal` nodes or other expression nodes (e.g., `[0]`, `["http://"]`). These are arguments to the predicate, excluding the value being tested.
+    *   `type`: Boolean (implicitly, as predicates must evaluate to true or false).
     *   `source-location`: Optional.
+    *   *(Note: This node is used to define conditions that a value must satisfy. The `predicate-name` can be a known operator or a custom function. The value being tested by the predicate is implicitly the value that the overall schema or type intersection is being applied to.)*
 
-### 3.5. Module System (Conceptual)
+### 3.5. Module System
 
-*   **`:ir/module`**: Represents a module definition.
+This section defines IR nodes related to code organization at the module level. Modules allow for encapsulation, namespacing, and reusability of RTFS code.
+
+*   **`:ir/module`**: Represents a compiled module.
     *   `node-type`: `:ir/module`
-    *   `name`: String or symbol (module name).
-    *   `imports`: List of `:ir/import` nodes.
-    *   `definitions`: List of definition nodes (e.g., `:ir/def`, `:ir/defn`).
-    *   `exports`: List of `:ir/export` nodes.
+    *   `name`: String (fully qualified module name, e.g., "my.company/data/utils").
+    *   `docstring`: Optional String (module-level documentation).
+    *   `imports`: List of `:ir/import` nodes, specifying dependencies on other modules.
+    *   `definitions`: List of definition nodes (e.g., `:ir/def`, `:ir/defn`) that constitute the module's content.
+    *   `exports`: List of `:ir/export-spec` nodes, specifying which definitions are public.
+    *   `metadata`: Optional `:ir/literal` node (with `literal-type` :map) for arbitrary module metadata.
+    *   `source-location`: Optional (path to the source file or main source location).
+
+*   **`:ir/def`**: Represents a top-level value/variable definition within a module.
+    *   `node-type`: `:ir/def`
+    *   `name`: String (the name of the defined variable/value).
+    *   `docstring`: Optional String.
+    *   `type-annotation`: Optional `:ir/type` node.
+    *   `init-expr`: IR node for the expression providing the value.
+    *   `type`: Inferred/resolved type of the defined value.
     *   `source-location`: Optional.
 
-*   **`:ir/def` / `:ir/defn`**: Top-level definitions within a module.
-    *   Similar to `:ir/let-binding` or `:ir/fn` but representing top-level definitions.
-    *   Includes visibility info (public/private based on exports).
+*   **`:ir/defn`**: Represents a top-level function definition within a module.
+    *   `node-type`: `:ir/defn`
+    *   `name`: String (the name of the defined function).
+    *   `docstring`: Optional String.
+    *   `params`: List of `[:ir/param ...]` nodes (see `:ir/fn`).
+    *   `return-type-annotation`: Optional `:ir/type` node (see `:ir/fn`).
+    *   `body`: List of expression nodes (see `:ir/fn`).
+    *   `type`: Function type `[:ir/type-fn ...]` (see `:ir/fn`).
+    *   `source-location`: Optional.
 
-*   **`:ir/import`**: Represents an import statement.
+*   **`:ir/import`**: Represents an import statement, bringing symbols or modules into scope.
     *   `node-type`: `:ir/import`
-    *   `module-name`: String or symbol.
-    *   `alias`: Optional string/symbol.
-    *   `only`: Optional list of symbols to import.
-    *   `refer-all`: Boolean.
+    *   `module-name`: String (fully qualified name of the module to import).
+    *   `alias`: Optional String (local alias for the entire module, e.g., `m` for `m/foo`). If present, imported symbols are accessed via this alias. This is mutually exclusive with `refer-spec`.
+    *   `refer-spec`: Optional `:ir/import-refer-spec` node (used when symbols are to be brought directly into the current namespace). This is mutually exclusive with `alias`.
     *   `source-location`: Optional.
 
-*   **`:ir/export`**: Represents an export statement.
-    *   `node-type`: `:ir/export`
-    *   `symbol-name`: String or symbol being exported.
+*   **`:ir/import-refer-spec`**: Abstract type for import referral specifications. Concrete types below.
+
+*   **`:ir/import-refer-all`**: Specifies that all public symbols from the imported module should be referred (brought into the current namespace directly).
+    *   `node-type`: `:ir/import-refer-all`
+    *   `source-location`: Optional.
+
+*   **`:ir/import-refer-selective`**: Specifies a list of symbols to refer from the imported module, potentially with local aliasing.
+    *   `node-type`: `:ir/import-refer-selective`
+    *   `symbols`: List of `[:ir/symbol-mapping ...]` nodes.
+    *   `source-location`: Optional.
+
+*   **`:ir/symbol-mapping`**: Maps an original symbol name from an imported module to an optional local alias during selective referral.
+    *   `node-type`: `:ir/symbol-mapping`
+    *   `original-name`: String (name of the symbol in the exporting module).
+    *   `local-name`: Optional String (name to use in the importing module; if `original-name` is used if absent).
+    *   `source-location`: Optional.
+
+*   **`:ir/export-spec`**: Specifies a symbol to be exported from a module, making it public.
+    *   `node-type`: `:ir/export-spec`
+    *   `name`: String (the local name of the definition within the module to be exported, e.g., "my-function").
+    *   `as-name`: Optional String (the name under which it is exported, if different from its local name, e.g., "exportedFunction"). If absent, the `name` is used as the export name.
     *   `source-location`: Optional.
 
 ## 4. Processing Pipeline
 
 1.  **Parsing:** Source Text (e.g., `.rtfs` file) -> Raw Syntax Tree (Untyped, syntax-focused, potentially using S-expression structure).
-2.  **IR Generation & Validation:** Raw Syntax Tree -> Typed IR (this specification). This phase involves:
-    *   Resolving variable scopes and linking lookups to definitions.
-    *   Performing type checking based on annotations and inference rules (populating the `type` field in each node).
-    *   Validating contracts (`:input-schema`, `:output-schema`) against plan structure and types.
-    *   Validating `:capabilities-required` against tool calls present in the plan.
-    *   Resolving tool signatures (requires external mechanism, see `language_semantics.md`).
-    *   Transforming syntax into canonical IR nodes.
-    *   Reporting static errors (type errors, scope errors, contract violations).
+2.  **IR Generation & Validation:** Raw Syntax Tree -> Typed IR (this specification). This phase involves several sub-stages, which may be interleaved:
+    *   **Scope Resolution:** Identifying the definition site for every variable lookup and linking them. This populates `scope-info` where applicable.
+    *   **Canonicalization:** Transforming syntax-specific AST nodes into their canonical IR counterparts (e.g., various loop forms into a standard loop/recursion structure, if applicable, or specific destructuring syntaxes into generic destructuring IR nodes).
+    *   **Type Inference & Checking:** Determining the type of each expression. This involves:
+        *   Using explicit type annotations.
+        *   Applying inference rules based on language semantics (e.g., the type of an `if` expression is the common supertype of its branches).
+        *   Propagating type information through the IR tree.
+        *   Populating the `type` field in each relevant IR node.
+        *   Reporting type errors if inconsistencies are found.
+    *   **Contract Validation:** Checking that the `plan` (or module implementations) adheres to declared `:input-schema` and `:output-schema` in `:ir/contracts` or function type signatures.
+    *   **Capability Validation:** Ensuring that any operations requiring specific capabilities (e.g., tool calls, resource access) are declared in `:capabilities-required` and that their usage is consistent with permissions and constraints.
+    *   **Tool Signature Resolution:** For `:ir/apply` nodes where `is-tool-call` is true, fetching or verifying the signature of the called tool (this might involve an external lookup mechanism as detailed in `language_semantics.md` or a pre-compiled tool manifest).
+    *   **Static Error Reporting:** Accumulating and reporting any errors found during these stages (e.g., scope errors, type mismatches, contract violations, undefined tool calls).
+
+    #### 4.1. Illustrative Syntax to IR Transformation Example
+
+    The transformation from a raw syntax tree (AST) to the Typed IR is a complex process involving semantic analysis. Below is a conceptual illustration for a `let` expression.
+
+    **RTFS Source Example:**
+    ```rtfs
+    (let [x 10
+          {:keys [a] :as all-data} {:a "alpha" :b "beta"}]
+      (str x " " a " " (:b all-data)))
+    ```
+
+    **Conceptual Transformation Steps:**
+
+    1.  **Outer `let` expression:** An `:ir/let` node is created.
+    2.  **Binding `x 10`:**
+        *   Pattern `x` becomes `[:ir/variable-binding { name: "x", source-location: ... }]`.
+        *   Initializer `10` becomes `[:ir/literal { value: 10, literal-type: :int, type: {node-type: :ir/type-int}, source-location: ... }]`.
+        *   These form an `[:ir/let-binding ...]` node. The type of the variable `x` is inferred as `:ir/type-int`.
+    3.  **Binding `{:keys [a] :as all-data} {:a "alpha" :b "beta"}`:**
+        *   Pattern `{:keys [a] :as all-data}` becomes an `[:ir/map-destructuring-pattern ...]` node:
+            *   `key-bindings`: Contains an `[:ir/map-key-binding ...]` for `a` (key `:a`, target pattern `[:ir/variable-binding { name: "a" }]`, `is-keys-shorthand: true`).
+            *   `bind-whole-to`: `{:node-type :ir/variable-binding, :name "all-data"}`.
+        *   Initializer `{:a "alpha", :b "beta"}` becomes `[:ir/literal { value: {:a "alpha", :b "beta"}, literal-type: :map, type: {node-type: :ir/type-map, entries: [{:key :a, :value-type {:node-type :ir/type-string}}, {:key :b, :value-type {:node-type :ir/type-string}}], is-open: true}, source-location: ... }]`.
+        *   These form another `[:ir/let-binding ...]` node. The types for `a` (string) and `all-data` (map) would be determined based on the pattern and initializer. For instance, `a` would be `:ir/type-string` and `all-data` would be `{:node-type :ir/type-map, :entries [{:key :a, :value-type {:node-type :ir/type-string}}, {:key :b, :value-type {:node-type :ir/type-string}}], :is-open: true}`.
+    4.  **Body `(str x " " a " " (:b all-data))`:**
+        *   This transforms into an `:ir/apply` node for the `str` function.
+        *   `x` becomes `[:ir/variable-lookup { name: "x", type: {:node-type :ir/type-int}, scope-info: ...} ]` (linking to its definition).
+        *   `" "` becomes `[:ir/literal { value: " ", literal-type: :string, type: {:node-type :ir/type-string} }]`.
+        *   `a` becomes `[:ir/variable-lookup { name: "a", type: {:node-type :ir/type-string}, scope-info: ...} ]`.
+        *   `(:b all-data)` becomes `[:ir/get-property { object: [:ir/variable-lookup { name: "all-data", type: {:node-type :ir/type-map, :entries [{:key :a, :value-type {:node-type :ir/type-string}}, {:key :b, :value-type {:node-type :ir/type-string}}], :is-open: true} }], property-key: :b, type: {:node-type :ir/type-string} }]`.
+    5.  **Final `:ir/let` node:**
+        *   `bindings`: Contains the two `:ir/let-binding` nodes.
+        *   `body`: Contains the single `:ir/apply` node for `str`.
+        *   `type`: The type of the body's last expression (e.g., `:ir/type-string` if `str` returns a string).
+
+    This example highlights how syntactic forms are mapped to canonical IR nodes, scopes are resolved, and type information is embedded. The actual process involves detailed rules for each language construct and type inference algorithm.
+
 3.  **Optimization (Optional):** Typed IR -> Optimized Typed IR (e.g., constant folding, dead code elimination).
 4.  **Code Generation/Interpretation:** Typed IR -> Target Code (e.g., Clojure, Rust, Python bytecode) or Direct Execution by an RTFS runtime.
 
 This typed IR serves as the crucial, verified intermediate step before execution or transpilation, capturing the full semantics and type information of the RTFS program.
+
+## 5. IR Node Examples
+
+This section provides concrete examples of RTFS source code snippets and their corresponding IR representations. This is intended to clarify the structure of IR nodes and the transformation process.
+*(Note: For brevity, `source-location` fields are often omitted in these examples, but would typically be present. Similarly, `type` fields in expression nodes are shown with their keyword representation, e.g., `:ir/type-int`, but in a real IR tree, these would be full `:ir/type-*` nodes as defined in Section 3.4.)*
+
+### 5.1. `:ir/literal`
+
+**RTFS Source:**
+```rtfs
+"hello"
+42
+:my-keyword
+true
+[1 (+ 2 3)]
+{:a 1 :b "two"}
+```
+
+**Conceptual IR (Illustrative Snippets):**
+```clojure
+; For "hello"
+{:node-type :ir/literal
+ :value "hello"
+ :literal-type :string
+ :type {:node-type :ir/type-string}}
+
+; For 42
+{:node-type :ir/literal
+ :value 42
+ :literal-type :int
+ :type {:node-type :ir/type-int}}
+
+; For :my-keyword
+{:node-type :ir/literal
+ :value :my-keyword  ; Represented as a keyword/symbol type in the host language
+ :literal-type :keyword
+ :type {:node-type :ir/type-keyword}}
+
+; For [1 (+ 2 3)]
+{:node-type :ir/literal
+ :value [                         ; The 'value' contains IR nodes for non-literal elements
+          {:node-type :ir/literal, :value 1, :literal-type :int, :type {:node-type :ir/type-int}}
+          {:node-type :ir/apply   ; Inner expression is an :ir/apply node
+           :function {:node-type :ir/variable-lookup, :name \"+\", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-int}, {:node-type :ir/type-int}], :return-type {:node-type :ir/type-int}}}
+           :arguments [
+                       {:node-type :ir/literal, :value 2, :literal-type :int, :type {:node-type :ir/type-int}}
+                       {:node-type :ir/literal, :value 3, :literal-type :int, :type {:node-type :ir/type-int}}
+                     ]
+           :type {:node-type :ir/type-int} ; Type of the apply expression itself
+          }
+        ]
+ :literal-type :vector ; Added
+ :type {:node-type :ir/type-vector ; Added
+        :element-types [{:node-type :ir/type-int} {:node-type :ir/type-int}]}}
+
+; For {:a 1 :b "two"}
+{:node-type :ir/literal
+ :value {
+          :a {:node-type :ir/literal, :value 1, :literal-type :int, :type {:node-type :ir/type-int}},
+          :b {:node-type :ir/literal, :value "two", :literal-type :string, :type {:node-type :ir/type-string}}
+         }
+ :literal-type :map
+ :type {:node-type :ir/type-map
+        :entries [{:key :a, :value-type {:node-type :ir/type-int}}
+                  {:key :b, :value-type {:node-type :ir/type-string}}]
+        :is-open false ; Assuming it's a closed map literal
+       }}
+```
+
+### 5.2. `:ir/fn` (Anonymous Function) and `:ir/apply`
+
+**RTFS Source:**
+```rtfs
+( (fn [x y :int] :int (+ x y)) 10 20 )
+( (fn [z] (str z \"!\")) \"hello\")
+```
+
+**Conceptual IR:**
+```clojure
+; Example 1: ( (fn [x y :int] :int (+ x y)) 10 20 )
+{:node-type :ir/apply
+ :function {:node-type :ir/fn
+            :params [
+                     {:node-type :ir/param
+                      :binding {:node-type :ir/variable-binding, :name "x"}
+                      ; :type-annotation is nil, type will be inferred during type checking
+                      ; For this example, let's assume it's inferred as :ir/type-int due to usage with (+ ... y) where y is :int
+                      :type {:node-type :ir/type-int}} ; Post-inference
+                     {:node-type :ir/param
+                      :binding {:node-type :ir/variable-binding, :name "y"}
+                      :type-annotation {:node-type :ir/type-int}
+                      :type {:node-type :ir/type-int}}
+                     ]
+            :return-type-annotation {:node-type :ir/type-int}
+            :body [
+                   {:node-type :ir/apply
+                    :function {:node-type :ir/variable-lookup, :name "+", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-int}, {:node-type :ir/type-int}], :return-type {:node-type :ir/type-int}}}
+                    :arguments [
+                                {:node-type :ir/variable-lookup, :name "x", :type {:node-type :ir/type-int}, :scope-info ...} ; Type updated post-inference
+                                {:node-type :ir/variable-lookup, :name "y", :type {:node-type :ir/type-int}, :scope-info ...}
+                                ]
+                    :type {:node-type :ir/type-int}} ; Type of the (+) expression
+                   ]
+            :captured-environment {} ; Assuming no captures for simplicity
+            :type {:node-type :ir/type-fn   ; Type of the fn itself
+                   :param-types [{:node-type :ir/type-int} {:node-type :ir/type-int}] ; x inferred as :ir/type-int
+                   :return-type {:node-type :ir/type-int}}}
+ :arguments [
+             {:node-type :ir/literal, :value 10, :literal-type :int, :type {:node-type :ir/type-int}}
+             {:node-type :ir/literal, :value 20, :literal-type :int, :type {:node-type :ir/type-int}}
+             ]
+ :type {:node-type :ir/type-int}} ; Return type of the outer apply, from the fn's signature
+
+; Example 2: ( (fn [z] (str z \"!\")) \"hello\")
+{:node-type :ir/apply
+ :function {:node-type :ir/fn
+            :params [
+                     {:node-type :ir/param
+                      :binding {:node-type :ir/variable-binding, :name "z"}
+                      :type {:node-type :ir/type-string}} ; Inferred from usage with (str ...)
+                     ]
+            :return-type-annotation nil ; No explicit annotation
+            :body [
+                   {:node-type :ir/apply
+                    :function {:node-type :ir/variable-lookup, :name "str", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}, {:node-type :ir/type-string}], :return-type {:node-type :ir/type-string}}} ; Simplified str type
+                    :arguments [
+                                {:node-type :ir/variable-lookup, :name "z", :type {:node-type :ir/type-string}, :scope-info ...}
+                                {:node-type :ir/literal, :value \"!\", :literal-type :string, :type {:node-type :ir/type-string}}
+                                ]
+                    :type {:node-type :ir/type-string}}
+                   ]
+            :captured-environment {}
+            :type {:node-type :ir/type-fn
+                   :param-types [{:node-type :ir/type-string}]
+                   :return-type {:node-type :ir/type-string}}} ; Inferred from body
+ :arguments [
+             {:node-type :ir/literal, :value \"hello\", :literal-type :string, :type {:node-type :ir/type-string}}
+             ]
+ :type {:node-type :ir/type-string}} ; Inferred from fn's return type
+```
+
+### 5.3. `:ir/if`
+
+**RTFS Source:**
+```rtfs
+(if (> x 0) "positive" "non-positive")
+(if (and flag1 flag2) (do-this) (do-that))
+```
+
+**Conceptual IR:**
+```clojure
+; Example 1: (if (> x 0) "positive" "non-positive")
+{:node-type :ir/if
+ :condition {:node-type :ir/apply
+             :function {:node-type :ir/variable-lookup, :name ">", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-numeric}, {:node-type :ir/type-numeric}], :return-type {:node-type :ir/type-bool}} }
+             :arguments [
+                         {:node-type :ir/variable-lookup, :name "x", :type {:node-type :ir/type-int}, :scope-info ...} ; Assuming x is int
+                         {:node-type :ir/literal, :value 0, :literal-type :int, :type {:node-type :ir/type-int}}
+                         ]
+             :type {:node-type :ir/type-bool}}
+ :then-branch {:node-type :ir/literal, :value "positive", :literal-type :string, :type {:node-type :ir/type-string}}
+ :else-branch {:node-type :ir/literal, :value "non-positive", :literal-type :string, :type {:node-type :ir/type-string}}
+ :type {:node-type :ir/type-string}} ; Common supertype of branches
+
+; Example 2: (if (and flag1 flag2) (do-this) (do-that))
+; Assuming (do-this) results in :ir/type-A and (do-that) in :ir/type-B
+; and common supertype is :ir/type-C
+{:node-type :ir/if
+ :condition {:node-type :ir/apply
+             :function {:node-type :ir/variable-lookup, :name "and", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-bool}, {:node-type :ir/type-bool}], :return-type {:node-type :ir/type-bool}} }
+             :arguments [
+                         {:node-type :ir/variable-lookup, :name "flag1", :type {:node-type :ir/type-bool}, :scope-info ...}
+                         {:node-type :ir/variable-lookup, :name "flag2", :type {:node-type :ir/type-bool}, :scope-info ...}
+                         ]
+             :type {:node-type :ir/type-bool}}
+ :then-branch {:node-type :ir/apply ; Assuming (do-this) is a function call
+               :function {:node-type :ir/variable-lookup, :name "do-this", :type {:node-type :ir/type-fn, :param-types [], :return-type {:node-type :ir/type-A}} }
+               :arguments []
+               :type {:node-type :ir/type-A}}
+ :else-branch {:node-type :ir/apply ; Assuming (do-that) is a function call
+               :function {:node-type :ir/variable-lookup, :name "do-that", :type {:node-type :ir/type-fn, :param-types [], :return-type {:node-type :ir/type-B}} }
+               :arguments []
+               :type {:node-type :ir/type-B}}
+ :type {:node-type :ir/type-C}} ; Common supertype of branches
+```
+
+### 5.4. `:ir/defn` (Module-Level Function)
+
+Defines a function at the module level.
+
+*   **RTFS Source Code Example:**
+    ```clojure
+    ;; Defines a function 'add' that takes two integers and returns an integer.
+    (defn add [x :int y :int] :int
+      (+ x y))
+    ```
+
+    ```json
+    {
+      "node-type": ":ir/defn",
+      "name": "add",
+      "docstring": null,
+      "params": [
+        {
+          "node-type": ":ir/param",
+          "binding": {
+            "node-type": ":ir/variable-binding",
+            "name": "x"
+          },
+          "type-annotation": { "node-type": ":ir/type-int" },
+          "type": { "node-type": ":ir/type-int" }
+        },
+        {
+          "node-type": ":ir/param",
+          "binding": {
+            "node-type": ":ir/variable-binding",
+            "name": "y"
+          },
+          "type-annotation": { "node-type": ":ir/type-int" },
+          "type": { "node-type": ":ir/type-int" }
+        }
+      ],
+      "return-type-annotation": { "node-type": ":ir/type-int" },
+      "body": [
+        {
+          "node-type": ":ir/apply",
+          "function": {
+            "node-type": ":ir/variable-lookup",
+            "name": "+",
+            "type": {
+              "node-type": ":ir/type-fn",
+              "param-types": [
+                { "node-type": ":ir/type-int" },
+                { "node-type": ":ir/type-int" }
+              ],
+              "return-type": { "node-type": ":ir/type-int" }
+            }
+          },
+          "arguments": [
+            {
+              "node-type": ":ir/variable-lookup",
+              "name": "x",
+              "type": { "node-type": ":ir/type-int" }
+            },
+            {
+              "node-type": ":ir/variable-lookup",
+              "name": "y",
+              "type": { "node-type": ":ir/type-int" }
+            }
+          ],
+          "type": { "node-type": ":ir/type-int" }
+        }
+      ],
+      "type": {
+        "node-type": ":ir/type-fn",
+        "param-types": [
+          { "node-type": ":ir/type-int" },
+          { "node-type": ":ir/type-int" }
+        ],
+        "return-type": { "node-type": ":ir/type-int" }
+      }
+    }
+    ```
+
+### 5.5. `:ir/variable-lookup` and `:ir/task-context-access`
+
+**RTFS Source:**
+```rtfs
+(let [my-var @intent
+      id-val @id]
+  (do-something my-var id-val))
+```
+
+**Conceptual IR (Snippets):**
+```clojure
+; For the `let` binding of `my-var`
+; Initializer for my-var:
+{:node-type :ir/task-context-access
+ :field-name :intent
+ :type {:node-type :ir/type-map}} ; Or a more specific type for intent, e.g., from task schema
+
+; For the `let` binding of `id-val`
+; Initializer for id-val:
+{:node-type :ir/task-context-access
+ :field-name :id
+ :type {:node-type :ir/type-string}} ; Or a more specific ID type, e.g., from task schema
+
+; In the (do-something ...) call:
+; For my-var lookup:
+{:node-type :ir/variable-lookup
+ :name "my-var"
+ :type {:node-type :ir/type-map} ; Inferred from @intent binding
+ :scope-info { :source-node-id <id_of_my_var_binding>, :depth ...} } ; Links to the let binding
+
+; For id-val lookup:
+{:node-type :ir/variable-lookup
+ :name "id-val"
+ :type {:node-type :ir/type-string} ; Inferred from @id binding
+ :scope-info { :source-node-id <id_of_id_val_binding>, :depth ...} } ; Links to the let binding
+```
+
+### 5.6. Destructuring with `:ir/let`, `:ir/map-destructuring-pattern`, `:ir/vector-destructuring-pattern`
+
+**RTFS Source:**
+```rtfs
+(let [point {:x 10 :y 20 :label "A"}
+      [first second & rest-items] [1 2 3 4 5]]
+  (do
+    (tool:log "Point X:" (point :x))
+    (tool:log "First item:" first)
+    (tool:log "Rest items count:" (count rest-items))))
+```
+
+**Conceptual IR (Illustrative Snippets for Bindings):**
+```clojure
+; Part of the :ir/let node's 'bindings'
+[
+  ; Binding for 'point' (simple variable binding, init-expr is an :ir/literal map)
+  {:node-type :ir/let-binding
+   :pattern {:node-type :ir/variable-binding, :name "point" ; Type for 'point' will be the type of init-expr
+             :type {:node-type :ir/type-map ; Added type to variable-binding
+                    :entries [
+                              {:key :x, :value-type {:node-type :ir/type-int}, :is-optional false}
+                              {:key :y, :value-type {:node-type :ir/type-int}, :is-optional false}
+                              {:key :label, :value-type {:node-type :ir/type-string}, :is-optional false}
+                              ]
+                    :is-open false}}
+   :init-expr {:node-type :ir/literal
+               :value {\n                       :x {:node-type :ir/literal, :value 10, :literal-type :int, :type {:node-type :ir/type-int}},\n                       :y {:node-type :ir/literal, :value 20, :literal-type :int, :type {:node-type :ir/type-int}},\n                       :label {:node-type :ir/literal, :value "A", :literal-type :string, :type {:node-type :ir/type-string}}\n                      }\n               :literal-type :map
+               :type {:node-type :ir/type-map
+                      :entries [
+                                {:key :x, :value-type {:node-type :ir/type-int}, :is-optional false} ; Simplified map-type-entry
+                                {:key :y, :value-type {:node-type :ir/type-int}, :is-optional false}
+                                {:key :label, :value-type {:node-type :ir/type-string}, :is-optional false}
+                                ]
+                      :is-open false}} ; Closed map, as per literal structure
+   ; :type field for :ir/let-binding is implicitly the type of the pattern/init-expr
+   }
+
+  ; Binding for vector destructuring '[first second & rest-items]'
+  {:node-type :ir/let-binding
+   :pattern {:node-type :ir/vector-destructuring-pattern
+             :element-patterns [
+                                {:node-type :ir/variable-binding, :name "first", :type {:node-type :ir/type-int}} ; Type inferred
+                                {:node-type :ir/variable-binding, :name "second", :type {:node-type :ir/type-int}} ; Type inferred
+                                ]
+             :bind-rest-to {:node-type :ir/variable-binding, :name "rest-items", :type {:node-type :ir/type-vector, :element-types [{:node-type :ir/type-int}]}} ; Type inferred
+             :bind-whole-to nil}
+   :init-expr {:node-type :ir/literal
+               :value [ ; IR nodes for elements if they were not simple literals
+                       {:node-type :ir/literal, :value 1, :literal-type :int, :type {:node-type :ir/type-int}},
+                       {:node-type :ir/literal, :value 2, :literal-type :int, :type {:node-type :ir/type-int}},
+                       {:node-type :ir/literal, :value 3, :literal-type :int, :type {:node-type :ir/type-int}},
+                       {:node-type :ir/literal, :value 4, :literal-type :int, :type {:node-type :ir/type-int}},
+                       {:node-type :ir/literal, :value 5, :literal-type :int, :type {:node-type :ir/type-int}}
+                       ]
+               :literal-type :vector
+               :type {:node-type :ir/type-vector, :element-types [{:node-type :ir/type-int}, {:node-type :ir/type-int}, {:node-type :ir/type-int}, {:node-type :ir/type-int}, {:node-type :ir/type-int}]}}
+   ; :type for :ir/let-binding is implicitly the type of the init-expr
+   }
+
+  ; Example of map destructuring within a let binding
+  ; RTFS Source: (let [{:keys [name age] :as person-data} user-map] ...)
+  ; Conceptual IR for the :ir/let-binding node:
+  {:node-type :ir/let-binding
+   :pattern {:node-type :ir/map-destructuring-pattern
+             :key-bindings [
+                            {:node-type :ir/map-key-binding ; For :name
+                             :key {:node-type :ir/literal, :value :name, :literal-type :keyword, :type {:node-type :ir/type-keyword}}
+                             :target-pattern {:node-type :ir/variable-binding, :name "name", :type {:node-type :ir/type-string}} ; Assuming user-map has name:string
+                             :is-keys-shorthand true}
+                            {:node-type :ir/map-key-binding ; For :age
+                             :key {:node-type :ir/literal, :value :age, :literal-type :keyword, :type {:node-type :ir/type-keyword}}
+                             :target-pattern {:node-type :ir/variable-binding, :name "age", :type {:node-type :ir/type-int}} ; Assuming user-map has age:int
+                             :is-keys-shorthand true}
+                            ]
+             :bind-whole-to {:node-type :ir/variable-binding, :name "person-data", :type {:node-type :ir/type-map, :entries [...]}} ; Type of user-map
+             :expected-type {:node-type :ir/type-map, :entries [{:key :name, :value-type {:node-type :ir/type-string}}, {:key :age, :value-type {:node-type :ir/type-int}}], :is-open true} ; Type expected for matching
+            }
+   :init-expr {:node-type :ir/variable-lookup, :name "user-map", :type {:node-type :ir/type-map, :entries [...]}} ; Type of user-map
+   ; :type for :ir/let-binding is implicitly the type of init-expr
+  }
+]
+````
+
+### 5.7. `:ir/match` with various patterns
+
+**RTFS Source:**
+```rtfs
+(match item
+  10 (tool:log "Item is ten")
+  "hello" (tool:log "Item is hello")
+  [:vector x y] (tool:log "Item is a vector:" x y)
+  {:type :event :payload p} (tool:log "Item is an event with payload:" p)
+  _ (tool:log "Item is something else"))
+```
+
+**Conceptual IR (Illustrative for the `:ir/match` node and one clause):**
+```clojure
+{:node-type :ir/match
+ :expression {:node-type :ir/variable-lookup, :name "item", :type {:node-type :ir/type-any}} ; Type of 'item'
+ :clauses [
+           ; Clause 1: 10 (tool:log "Item is ten")
+           {:node-type :ir/match-clause
+            :pattern {:node-type :ir/pattern-literal, :value 10, :literal-type :int}
+            :guard nil
+            :body [{:node-type :ir/apply, :function {:node-type :ir/variable-lookup, :name "tool:log", :type {:node-type :ir/type-fn, ...}}, :arguments [...]}]
+            :type {:node-type :ir/type-any}} ; Type of the log call's result
+
+           ; Clause 2: "hello" (tool:log "Item is hello")
+           {:node-type :ir/match-clause
+            :pattern {:node-type :ir/pattern-literal, :value "hello", :literal-type :string}
+            :guard nil
+            :body [...]
+            :type {:node-type :ir/type-any}}
+
+           ; Clause 3: [:vector x y] (tool:log "Item is a vector:" x y)
+           {:node-type :ir/match-clause
+            :pattern {:node-type :ir/pattern-vector
+                      :elements [
+                                 {:node-type :ir/pattern-literal, :value :vector, :literal-type :keyword} ; Matches the keyword :vector literally
+                                 {:node-type :ir/pattern-variable, :name "x", :type {:node-type :ir/type-any}} ; Type inferred based on item's vector element type
+                                 {:node-type :ir/pattern-variable, :name "y", :type {:node-type :ir/type-any}} ; Type inferred
+                                 ]
+                      :rest-binding nil
+                      :expected-type {:node-type :ir/type-vector, :element-types [{:node-type :ir/type-keyword} {:node-type :ir/type-any} {:node-type :ir/type-any}]}} ; Expected structure for matching
+            :guard nil
+            :body [...] ; Body would use 'x' and 'y'
+            :type {:node-type :ir/type-any}}
+
+           ; Clause 4: {:type :event :payload p} (tool:log "Item is an event with payload:" p)
+           {:node-type :ir/match-clause
+            :pattern {:node-type :ir/pattern-map
+                      :entries [
+                                {:node-type :ir/map-pattern-entry ; For :type :event
+                                 :key {:node-type :ir/literal, :value :type, :literal-type :keyword, :type {:node-type :ir/type-keyword}}
+                                 :value-pattern {:node-type :ir/pattern-literal, :value :event, :literal-type :keyword}}
+                                {:node-type :ir/map-pattern-entry ; For :payload p
+                                 :key {:node-type :ir/literal, :value :payload, :literal-type :keyword, :type {:node-type :ir/type-keyword}}
+                                 :value-pattern {:node-type :ir/pattern-variable, :name "p", :type {:node-type :ir/type-any}}} ; Type inferred
+                                ]
+                      :rest-binding nil
+                      :expected-type {:node-type :ir/type-map, :entries [{:key :type, :value-type {:node-type :ir/type-keyword}}, {:key :payload, :value-type {:node-type :ir/type-any}}], :is-open true} ; Expected structure for matching
+                     }
+            :guard nil
+            :body [...] ; Body would use 'p'
+            :type {:node-type :ir/type-any}}
+
+           ; Clause 5: _ (tool:log "Item is something else")
+           {:node-type :ir/match-clause
+            :pattern {:node-type :ir/pattern-wildcard}
+            :guard nil
+            :body [...]
+            :type {:node-type :ir/type-any}}
+           ]
+ :type {:node-type :ir/type-any}} ; Common supertype of all clause bodies
+```
+
+### 5.8. `:ir/try-catch`
+
+**RTFS Source:**
+```rtfs
+(try
+  (tool:risky-operation data)
+  (catch :error/network err
+    (tool:log "Network error:" (err :message))
+    "fallback_network")
+  (catch :error/validation val-err
+    (tool:log "Validation error:" (val-err :details))
+    "fallback_validation")
+  (catch other-err ; Catches any other error if :error/any or similar is not explicitly defined
+    (tool:log "Unknown error:" (other-err :message))
+    "fallback_unknown"))
+```
+
+**Conceptual IR:**
+```clojure
+{:node-type :ir/try-catch
+ :try-body [
+            {:node-type :ir/apply
+             :function {:node-type :ir/variable-lookup, :name "tool:risky-operation", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-any}], :return-type {:node-type :ir/type-any}} }
+             :arguments [{:node-type :ir/variable-lookup, :name "data", :type {:node-type :ir/type-any}}]
+             :type {:node-type :ir/type-any}} ; Type of risky-operation's result, or :ir/type-never if it always throws
+            ]
+ :catch-clauses [
+                 {:node-type :ir/catch-clause
+                  :error-type {:node-type :ir/type-literal-value, :value :error/network, :literal-type :keyword, :type {:node-type :ir/type-keyword}} ; Type of the error being caught
+                  :binding {:node-type :ir/variable-binding, :name "err", :type {:node-type :ir/type-map}} ; Assuming error objects are maps
+                  :body [
+                         {:node-type :ir/apply ; (tool:log ...)
+                          :function {:node-type :ir/variable-lookup, :name "tool:log", :type {:node-type :ir/type-fn, ...}}
+                          :arguments [
+                                      {:node-type :ir/literal, :value "Network error:", :literal-type :string, :type {:node-type :ir/type-string}},
+                                      {:node-type :ir/get-property ; (err :message)
+                                       :object {:node-type :ir/variable-lookup, :name "err", :type {:node-type :ir/type-map}}
+                                       :property-key :message
+                                       :type {:node-type :ir/type-string}} ; Assuming message is a string
+                                      ]
+                          :type {:node-type :ir/type-any}} ; Type of tool:log result
+                         {:node-type :ir/literal, :value "fallback_network", :literal-type :string, :type {:node-type :ir/type-string}}
+                         ]
+                  :type {:node-type :ir/type-string}} ; Type of the last expression in this catch body
+
+                 {:node-type :ir/catch-clause
+                  :error-type {:node-type :ir/type-literal-value, :value :error/validation, :literal-type :keyword, :type {:node-type :ir/type-keyword}}
+                  :binding {:node-type :ir/variable-binding, :name "val-err", :type {:node-type :ir/type-map}}
+                  :body [; Similar structure for (tool:log ...) and (val-err :details)
+                         {:node-type :ir/apply, ...}
+                         {:node-type :ir/literal, :value "fallback_validation", :literal-type :string, :type {:node-type :ir/type-string}}
+                        ]
+                  :type {:node-type :ir/type-string}}
+
+                 {:node-type :ir/catch-clause
+                  :error-type {:node-type :ir/type-any} ; Catch-all
+                  :binding {:node-type :ir/variable-binding, :name "other-err", :type {:node-type :ir/type-any}}
+                  :body [; Similar structure for (tool:log ...) and (other-err :message)
+                         {:node-type :ir/apply, ...}
+                         {:node-type :ir/literal, :value "fallback_unknown", :literal-type :string, :type {:node-type :ir/type-string}}
+                        ]
+                  :type {:node-type :ir/type-string}}
+                 ]
+ :finally-body nil ; Assuming no finally block in this example
+ :type {:node-type :ir/type-string}} ; Common supertype of try-body's result and all catch bodies' results
+```
+
+### 5.9. Module Definition, Export, and Import
+
+This example illustrates how modules are defined, how symbols are exported, and how they are imported and used in another module.
+
+**RTFS Source (Conceptual - `my/string/utils.rtfs`):**
+```rtfs
+;; Module definition for my/string/utils
+(module my/string/utils
+  :exports [capitalize count-chars]
+
+  (defn capitalize [s :string] :string
+    ;; ... implementation for capitalizing a string ...
+    (string/upper-case (string/substring s 0 1)) ; Simplified
+    (string/concat (string/upper-case (string/substring s 0 1)) (string/substring s 1)))
+
+  (def version "1.0") ; Not exported
+
+  (defn count-chars [s :string] :int
+    (string/length s)))
+```
+
+**Conceptual IR for `my/string/utils.rtfs`:**
+```clojure
+{:node-type :ir/module
+ :name "my/string/utils" ; Typically a namespaced symbol or string
+ :docstring "Module definition for my/string/utils"
+ :imports [ ; Example: if string/upper-case, etc. were from a core module
+           ; {:node-type :ir/import, :module-name "rtfs.core.string", :alias "string"}
+           ] 
+ :definitions [
+               {:node-type :ir/defn
+                :name "capitalize"
+                :docstring nil
+                :params [{:node-type :ir/param, :binding {:node-type :ir/variable-binding, :name "s"}, :type-annotation {:node-type :ir/type-string}, :type {:node-type :ir/type-string}}]
+                :return-type-annotation {:node-type :ir/type-string}
+                :body [; IR for (string/concat (string/upper-case (string/substring s 0 1)) (string/substring s 1))
+                       {:node-type :ir/apply
+                        :function {:node-type :ir/variable-lookup, :name "string/concat" ; Assuming string is an alias or functions are qualified
+                                   :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string} {:node-type :ir/type-string}], :return-type {:node-type :ir/type-string}} }
+                        :arguments [
+                                    {:node-type :ir/apply
+                                     :function {:node-type :ir/variable-lookup, :name "string/upper-case", :type {:node-type :ir/type-fn, ...}}
+                                     :arguments [{:node-type :ir/apply
+                                                  :function {:node-type :ir/variable-lookup, :name "string/substring", :type {:node-type :ir/type-fn, ...}}
+                                                  :arguments [{:node-type :ir/variable-lookup, :name "s", :type {:node-type :ir/type-string}}
+                                                              {:node-type :ir/literal, :value 0, :literal-type :int, :type {:node-type :ir/type-int}}
+                                                              {:node-type :ir/literal, :value 1, :literal-type :int, :type {:node-type :ir/type-int}}]
+                                                  :type {:node-type :ir/type-string}}]
+                                     :type {:node-type :ir/type-string}}
+                                    {:node-type :ir/apply
+                                     :function {:node-type :ir/variable-lookup, :name "string/substring", :type {:node-type :ir/type-fn, ...}}
+                                     :arguments [{:node-type :ir/variable-lookup, :name "s", :type {:node-type :ir/type-string}}
+                                                 {:node-type :ir/literal, :value 1, :literal-type :int, :type {:node-type :ir/type-int}}]
+                                     :type {:node-type :ir/type-string}}
+                                    ]
+                                               :type {:node-type :ir/type-string}} ; Type of the concat expression
+                       ]
+                :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}], :return-type {:node-type :ir/type-string}}}
+
+               {:node-type :ir/def
+                :name "version"
+                :docstring nil
+                :type-annotation nil ; Could be {:node-type :ir/type-string}
+                :init-expr {:node-type :ir/literal, :value "1.0", :literal-type :string, :type {:node-type :ir/type-string}}
+                :type {:node-type :ir/type-string}}
+
+               {:node-type :ir/defn
+                :name "count-chars"
+                :docstring nil
+                :params [{:node-type :ir/param, :binding {:node-type :ir/variable-binding, :name "s"}, :type-annotation {:node-type :ir/type-string}, :type {:node-type :ir/type-string}}]
+                :return-type-annotation {:node-type :ir/type-int}
+                :body [{:node-type :ir/apply
+                        :function {:node-type :ir/variable-lookup, :name "string/length", :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}], :return-type {:node-type :ir/type-int}} }
+                        :arguments [{:node-type :ir/variable-lookup, :name "s", :type {:node-type :ir/type-string}}]
+                        :type {:node-type :ir/type-int}}]
+                :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}], :return-type {:node-type :ir/type-int}}}
+               ]
+ :exports [
+           {:node-type :ir/export-spec, :original-name "capitalize", :export-as-name nil} ; Clarified field names
+           {:node-type :ir/export-spec, :original-name "count-chars", :export-as-name nil} ; Clarified field names
+           ]
+ :metadata {:source-file "my/string/utils.rtfs"} ; Example metadata
+}
+```
+
+**RTFS Source (Conceptual - `main.rtfs`):**
+```rtfs
+(module main
+  ;; Import specific symbols from my/string/utils
+  (import [my/string/utils :refer [capitalize count-chars]])
+  ;; Import entire module with an alias
+  (import [my/string/utils :as str-utils])
+
+  (defn process-text [text :string] :string
+    (let [char-count (count-chars text) ; Using referred symbol
+          cap-text (str-utils/capitalize text)] ; Using aliased module
+      (tool:log "Original:" text " Count:" char-count " Capitalized:" cap-text)
+      cap-text)))
+```
+
+**Conceptual IR for `main.rtfs` (Focus on Imports and `process-text` body):**
+```clojure
+{:node-type :ir/module
+ :name "main"
+ :docstring nil
+ :imports [
+           ; Import with :refer
+           {:node-type :ir/import
+            :module-name "my/string/utils"
+            :alias nil
+            :refer-spec {:node-type :ir/import-refer-selective
+                         :symbols [
+                                   {:node-type :ir/symbol-mapping, :original-name "capitalize", :local-alias nil} ; Clarified field names
+                                   {:node-type :ir/symbol-mapping, :original-name "count-chars", :local-alias nil} ; Clarified field names
+                                   ]}}
+           ; Import with :as
+           {:node-type :ir/import
+            :module-name "my/string/utils"
+            :alias "str-utils" ; This makes str-utils/capitalize available
+            :refer-spec nil} ; No direct symbol referrals for this import
+           ]
+ :definitions [
+               {:node-type :ir/defn
+                :name "process-text"
+                :params [{:node-type :ir/param, :binding {:node-type :ir/variable-binding, :name "text"}, :type-annotation {:node-type :ir/type-string}, :type {:node-type :ir/type-string}}]
+                :return-type-annotation {:node-type :ir/type-string}
+                :body [
+                       {:node-type :ir/let
+                        :bindings [
+                                   {:node-type :ir/let-binding
+                                    :pattern {:node-type :ir/variable-binding, :name "char-count", :type {:node-type :ir/type-int}}
+                                    :init-expr {:node-type :ir/apply
+                                                :function {:node-type :ir/variable-lookup, :name "count-chars" ; Resolved to my/string/utils.count-chars
+                                                           :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}], :return-type {:node-type :ir/type-int}} }
+                                                :arguments [{:node-type :ir/variable-lookup, :name "text", :type {:node-type :ir/type-string}}]
+                                                :type {:node-type :ir/type-int}} 
+                                    }
+                                   {:node-type :ir/let-binding
+                                    :pattern {:node-type :ir/variable-binding, :name "cap-text", :type {:node-type :ir/type-string}}
+                                    :init-expr {:node-type :ir/apply
+                                                :function {:node-type :ir/variable-lookup, :name "str-utils/capitalize" ; Resolved to my/string/utils.capitalize via alias
+                                                           :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}], :return-type {:node-type :ir/type-string}} }
+                                                :arguments [{:node-type :ir/variable-lookup, :name "text", :type {:node-type :ir/type-string}}]
+                                                :type {:node-type :ir/type-string}}
+                                    }
+                                   ]
+                        :body [
+                               {:node-type :ir/apply ; (tool:log ...)
+                                :function {:node-type :ir/variable-lookup, :name "tool:log", :type {:node-type :ir/type-fn, ...}}
+                                :arguments [
+                                            {:node-type :ir/literal, :value "Original:", :literal-type :string, :type {:node-type :ir/type-string}},
+                                            {:node-type :ir/variable-lookup, :name "text", :type {:node-type :ir/type-string}},
+                                            {:node-type :ir/literal, :value " Count:", :literal-type :string, :type {:node-type :ir/type-string}},
+                                            {:node-type :ir/variable-lookup, :name "char-count", :type {:node-type :ir/type-int}},
+                                            {:node-type :ir/literal, :value " Capitalized:", :literal-type :string, :type {:node-type :ir/type-string}},
+                                            {:node-type :ir/variable-lookup, :name "cap-text", :type {:node-type :ir/type-string}}
+                                            ]
+                                :type {:node-type :ir/type-any}} ; Type of tool:log result
+                               {:node-type :ir/variable-lookup, :name "cap-text", :type {:node-type :ir/type-string}} ; Return value of the let, and thus the function
+                               ]
+                        :type {:node-type :ir/type-string}} ; Type of the let expression
+                       ]
+                :type {:node-type :ir/type-fn, :param-types [{:node-type :ir/type-string}], :return-type {:node-type :ir/type-string}}}
+               ]
+ :exports []
+ :metadata {:source-file "main.rtfs"}
+}
+````
