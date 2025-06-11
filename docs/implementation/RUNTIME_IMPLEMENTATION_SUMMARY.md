@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the complete implementation of the RTFS (Rust Task Flow Specification) runtime system, which provides a fully functional execution environment for RTFS code.
+This document summarizes the complete implementation of the RTFS (Reasoning Task Flow Specification) runtime system, which provides a fully functional execution environment for RTFS code.
 
 ## Completed Features
 
