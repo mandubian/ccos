@@ -7,6 +7,7 @@ use crate::ir::*;
 use crate::runtime::{Value, RuntimeError, RuntimeResult, Environment};
 use crate::runtime::values::{Function, Arity, ResourceHandle, ResourceState, ErrorValue};
 use crate::runtime::stdlib::StandardLibrary;
+use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ast::{Keyword, MapKey};
 
 /// IR-based runtime executor
@@ -14,6 +15,7 @@ pub struct IrRuntime {
     global_env: Rc<Environment>,
     node_cache: HashMap<NodeId, Value>, // Cache for pure expressions
     call_stack: Vec<CallFrame>,
+    module_registry: ModuleRegistry,
 }
 
 /// Call frame for debugging and error reporting
@@ -55,8 +57,7 @@ impl IrEnvironment {
             self.parent.as_ref().and_then(|p| p.lookup(binding_id))
         })
     }
-    
-    pub fn update(&mut self, binding_id: NodeId, value: Value) -> bool {
+      pub fn update(&mut self, binding_id: NodeId, value: Value) -> bool {
         if self.bindings.contains_key(&binding_id) {
             self.bindings.insert(binding_id, value);
             true
@@ -64,16 +65,21 @@ impl IrEnvironment {
             false
         }
     }
+    
+    /// Get the number of bindings in the current scope (used for generating unique IDs)
+    pub fn binding_count(&self) -> usize {
+        self.bindings.len()
+    }
 }
 
-impl IrRuntime {
-    /// Create a new IR runtime with standard library
+impl IrRuntime {    /// Create a new IR runtime with standard library
     pub fn new() -> Self {
         let global_env = StandardLibrary::create_global_environment();
         IrRuntime {
             global_env: Rc::new(global_env),
             node_cache: HashMap::new(),
             call_stack: Vec::new(),
+            module_registry: ModuleRegistry::new(),
         }
     }
     
@@ -174,12 +180,18 @@ impl IrRuntime {
                 let function_value = self.execute_node(lambda, env)?;
                 env.define(node.id(), function_value.clone());
                 Ok(function_value)
-            }
-            
-            IrNode::VariableDef { name, init_expr, .. } => {
+            }            IrNode::VariableDef { name, init_expr, .. } => {
                 let value = self.execute_node(init_expr, env)?;
                 env.define(node.id(), value.clone());
                 Ok(value)
+            }
+            
+            IrNode::Module { name, exports, definitions, .. } => {
+                self.execute_module(name, exports, definitions, env)
+            }
+            
+            IrNode::Import { module_name, alias, imports, .. } => {
+                self.execute_import(module_name, alias.as_deref(), imports.as_ref(), env)
             }
             
             _ => {
@@ -342,6 +354,78 @@ impl IrRuntime {
         };
         
         Ok(Value::Function(func))
+    }    /// Execute a module definition
+    fn execute_module(&mut self, name: &str, exports: &[String], definitions: &[IrNode], env: &mut IrEnvironment) -> RuntimeResult<Value> {
+        // For now, we'll execute definitions in the current environment
+        // In a full implementation, we would create a proper module environment
+        // and handle module registration
+        
+        println!("Executing module '{}' with {} exports and {} definitions", 
+                 name, exports.len(), definitions.len());
+        
+        // Execute all definitions in the module
+        for definition in definitions {
+            self.execute_node(definition, env)?;
+        }
+        
+        Ok(Value::Nil) // Module definition doesn't return a value
+    }
+    
+    /// Execute an import statement
+    fn execute_import(&mut self, module_name: &str, alias: Option<&str>, imports: Option<&Vec<String>>, env: &mut IrEnvironment) -> RuntimeResult<Value> {
+        // For now, we'll implement a basic mock import system
+        // In a full implementation, this would:
+        // 1. Load the module from the registry
+        // 2. Import the specified symbols
+        // 3. Handle aliasing and qualified names
+        
+        println!("Importing from module '{}' with alias {:?} and imports {:?}", 
+                 module_name, alias, imports);
+        
+        // Create mock symbols for demonstration
+        match module_name {
+            "rtfs.core.string" => {
+                // Mock string utilities
+                if let Some(import_list) = imports {
+                    for symbol_name in import_list {
+                        match symbol_name.as_str() {
+                            "length" => {
+                                // Create a mock string length function
+                                let mock_value = Value::Function(crate::runtime::values::Function::Builtin {
+                                    name: "string/length".to_string(),
+                                    arity: crate::runtime::values::Arity::Exact(1),
+                                    func: |args| {
+                                        if let Some(Value::String(s)) = args.get(0) {
+                                            Ok(Value::Integer(s.len() as i64))                                        } else {
+                                            Err(RuntimeError::TypeError {
+                                                expected: "string".to_string(),
+                                                actual: args.get(0).map_or("nil".to_string(), |v| v.type_name().to_string()),
+                                                operation: "string/length".to_string(),
+                                            })
+                                        }
+                                    }
+                                });
+                                // Use a unique ID for the import binding
+                                let binding_id = 1000 + symbol_name.len() as u64; // Simple ID generation
+                                env.define(binding_id, mock_value);
+                            }
+                            _ => {
+                                // Mock other string functions
+                                let mock_value = Value::Nil;
+                                let binding_id = 1000 + symbol_name.len() as u64;
+                                env.define(binding_id, mock_value);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Mock other modules by doing nothing for now
+                println!("Warning: Mock import for module '{}' - no symbols loaded", module_name);
+            }
+        }
+        
+        Ok(Value::Nil) // Import doesn't return a value
     }
     
     // Placeholder implementations for remaining methods

@@ -7,6 +7,7 @@ pub mod values;
 pub mod environment;
 pub mod error;
 pub mod ir_runtime;
+pub mod module_runtime;
 
 pub use evaluator::Evaluator;
 pub use values::Value;
