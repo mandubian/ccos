@@ -103,6 +103,8 @@ pub struct IrConverter {
     scope_stack: Vec<HashMap<String, BindingInfo>>,
     type_context: TypeContext,
     capture_analysis: HashMap<NodeId, Vec<IrCapture>>,
+    /// Optional module registry for resolving qualified symbols during conversion
+    module_registry: Option<*const crate::runtime::module_runtime::ModuleRegistry>,
 }
 
 impl IrConverter {
@@ -115,6 +117,7 @@ impl IrConverter {
                 constraints: Vec::new(),
             },
             capture_analysis: HashMap::new(),
+            module_registry: None,
         };
         
         // Add built-in functions to global scope
@@ -255,8 +258,7 @@ impl IrConverter {
             source_location: None,
         })
     }
-    
-    /// Convert symbol reference (variable lookup)
+      /// Convert symbol reference (variable lookup)
     fn convert_symbol_ref(&mut self, sym: Symbol) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let name = sym.0.clone();
@@ -268,6 +270,19 @@ impl IrConverter {
                 id,
                 field_name: Keyword(field_name),
                 ir_type: IrType::Any,
+                source_location: None,
+            });
+        }
+        
+        // Check if it's a qualified symbol (e.g., "module/symbol")
+        if crate::runtime::module_runtime::ModuleRegistry::is_qualified_symbol(&name) {
+            // For qualified symbols, create a special VariableRef that will be resolved at runtime
+            // The IR runtime knows how to handle qualified symbols
+            return Ok(IrNode::VariableRef {
+                id,
+                name,
+                binding_id: 0, // Use 0 to indicate this is a qualified symbol reference
+                ir_type: IrType::Any, // Type will be determined at runtime
                 source_location: None,
             });
         }
@@ -1106,6 +1121,21 @@ impl IrConverter {
             ir_type: function_type,
             source_location: None,
         })
+    }
+    
+    /// Set the module registry for qualified symbol resolution
+    pub fn set_module_registry(&mut self, registry: &crate::runtime::module_runtime::ModuleRegistry) {
+        self.module_registry = Some(registry as *const _);
+    }
+    
+    /// Check if module registry is available
+    fn has_module_registry(&self) -> bool {
+        self.module_registry.is_some()
+    }
+    
+    /// Get module registry reference (unsafe but controlled)
+    fn get_module_registry(&self) -> Option<&crate::runtime::module_runtime::ModuleRegistry> {
+        self.module_registry.map(|ptr| unsafe { &*ptr })
     }
 }
 
