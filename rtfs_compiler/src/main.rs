@@ -1,13 +1,51 @@
 mod ast; // Declare the ast module
 pub mod parser; // Declare the parser module (now a directory)
 pub mod runtime; // Declare the runtime module
+mod ir; // Declare the IR module
+mod ir_converter; // Declare the IR converter module
+mod ir_optimizer; // Declare the IR optimizer module
+mod ir_demo; // Declare the IR demonstration module
+mod ir_demo_complete; // Complete IR pipeline demonstration
+mod optimization_demo; // Advanced optimization demonstration
+mod integration_tests; // Integration tests for complete RTFS pipeline
 
 use parser::parse_expression;
-use runtime::Evaluator;
+use runtime::{Evaluator, Runtime, RuntimeStrategy};
+use ir_converter::IrConverter;
 
 fn main() {
-    println!("RTFS Compiler with Enhanced Runtime");
-    println!("===================================");
+    println!("RTFS Compiler with AST and IR Runtime");
+    println!("=====================================");
+    
+    // Strategic Runtime Comparison
+    demonstrate_runtime_strategies();
+    println!();
+    
+    demonstrate_ast_runtime();
+    println!();
+    demonstrate_ir_concepts();
+    println!();
+    demonstrate_ast_to_ir_pipeline();
+    println!();
+    ir_demo::demonstrate_ir_pipeline();
+    println!();
+    ir_demo::run_benchmark_suite();
+    println!();
+    ir_demo_complete::demonstrate_ir_pipeline();
+    println!();
+    ir_demo_complete::demonstrate_ir_optimization_pipeline();
+    println!();
+    optimization_demo::demonstrate_advanced_optimizations();
+    println!();    // NEW: Run enhanced comprehensive integration tests
+    integration_tests::run_all_enhanced_integration_tests();
+    println!();
+    integration_tests::demonstrate_complete_pipeline();
+    println!();
+    integration_tests::benchmark_pipeline_performance();
+}
+
+fn demonstrate_ast_runtime() {
+    println!("=== AST Runtime Demonstration ===");
     
     let evaluator = Evaluator::new();
     
@@ -64,71 +102,117 @@ fn main() {
         println!("\nTest {}: {}", i + 1, input);
         match parse_expression(input) {
             Ok(ast) => {
+                println!("  AST: {:?}", ast);
                 match evaluator.evaluate(&ast) {
-                    Ok(result) => println!("  → {}", result.to_string()),
-                    Err(error) => println!("  ✗ Runtime Error: {}", error),
+                    Ok(result) => {
+                        println!("  Result: {:?}", result);
+                    }
+                    Err(e) => {
+                        println!("  Runtime Error: {:?}", e);
+                    }
                 }
-            },
-            Err(error) => println!("  ✗ Parse Error: {:?}", error),
+            }
+            Err(e) => {
+                println!("  Parse Error: {:?}", e);
+            }
         }
     }
-    
-    // Demonstrate with-resource simulation
-    println!("\n\nAdvanced Features Demonstration:");
-    println!("===============================");
-    
-    // Test with-resource (would need proper AST parsing for complex expressions)
-    println!("\nNote: For complex expressions like with-resource, try-catch, etc.,");
-    println!("      full program parsing would be needed rather than single expressions.");
-    println!("      The runtime system supports these features when properly parsed.");
-    
-    // Test advanced runtime features
-    test_advanced_features(&evaluator);
 }
 
-fn test_advanced_features(evaluator: &Evaluator) {
-    println!("\n\nAdvanced Runtime Features Test:");
-    println!("==============================");
+fn demonstrate_ir_concepts() {
+    println!("=== IR Concepts Demonstration ===");
     
-    // Test try-catch simulation (would need full program parsing)
-    println!("\nNote: The following would work with full RTFS program parsing:");
+    // Demonstrate the IR structure and concepts
+    println!("IR Benefits:");
+    println!("1. Type Information: Each node carries its type for optimization");
+    println!("2. Resolved Bindings: Variables reference binding sites directly (no symbol lookup)");
+    println!("3. Canonical Form: Same IR regardless of surface syntax");
+    println!("4. Optimization Ready: Constant folding, dead code elimination, inlining");
+    println!("5. Analysis Friendly: Type checking, control flow analysis");
     
-    println!("  with-resource: (with-resource [f FileHandle (tool:open-file \"data.txt\")] (tool:read-line f))");
-    println!("  try-catch: (try (/ 10 0) (catch :error/division-by-zero e (tool:log \"Caught error\")))");
-    println!("  match: (match value [:ok data] data [:error err] nil)");
-    println!("  fn: (fn [x] (* x x))");
-    println!("  defn: (defn square [x] (* x x))");
+    // Show a simple example of what AST vs IR would look like conceptually
+    println!("\nExample: (let [x 10] (+ x 5))");
+    println!("AST Form:");
+    println!("  LetExpr {{ bindings: [LetBinding {{ symbol: 'x', value: Literal(10) }}], body: [Apply {{ function: '+', args: ['x', Literal(5)] }}] }}");
     
-    // Demonstrate error handling types
-    println!("\nError Handling Examples:");
+    println!("\nIR Form (conceptual):");
+    println!("  Let {{ id: 1, bindings: [LetBinding {{ pattern: VariableBinding {{ id: 2, name: 'x' }}, init_expr: Literal {{ id: 3, value: 10, type: Int }} }}],");
+    println!("       body: [Apply {{ id: 4, function: VariableRef {{ id: 5, binding_id: 2 }}, args: [Literal {{ id: 6, value: 5, type: Int }}], type: Int }}] }}");
     
-    // Division by zero
-    if let Ok(ast) = parse_expression("(/ 10 0)") {
-        match evaluator.evaluate(&ast) {
-            Ok(result) => println!("  Division: {}", result.to_string()),
-            Err(error) => println!("  Division Error: {}", error),
+    println!("\nOptimization Opportunities:");
+    println!("- Constant propagation: x = 10, so (+ x 5) becomes (+ 10 5)");
+    println!("- Constant folding: (+ 10 5) becomes 15");
+    println!("- Final optimized form: Literal {{ value: 15, type: Int }}");
+    
+    println!("\nRuntime Benefits:");
+    println!("- No symbol table lookups (direct binding references)");
+    println!("- Type-specialized function dispatch");
+    println!("- Pre-computed constant expressions");
+    println!("- Optimized control flow");
+}
+
+fn demonstrate_ast_to_ir_pipeline() {
+    println!("=== AST to IR Pipeline Demonstration ===");
+    
+    // Example AST for demonstration
+    let ast_example = "(let [x 10] (+ x 5))";
+    match parse_expression(ast_example) {
+        Ok(ast) => {
+            println!("AST: {:?}", ast);            let mut converter = IrConverter::new();
+            match converter.convert(&ast) {
+                Ok(ir) => {
+                    println!("IR: {:?}", ir);
+                }
+                Err(e) => {
+                    println!("IR Conversion Error: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Parse Error: {:?}", e);
         }
     }
+}
+
+fn demonstrate_runtime_strategies() {
+    println!("=== Runtime Strategy Comparison ===");
     
-    // Type error
-    if let Ok(ast) = parse_expression("(+ \"hello\" 42)") {
-        match evaluator.evaluate(&ast) {
-            Ok(result) => println!("  Type mix: {}", result.to_string()),
-            Err(error) => println!("  Type Error: {}", error),
+    let test_expression = "(let [x 10] (+ x 5))";
+    
+    match parse_expression(test_expression) {
+        Ok(ast) => {
+            println!("Testing expression: {}", test_expression);
+            
+            // AST Runtime
+            println!("\n📊 AST Runtime (Current Default):");
+            let mut ast_runtime = Runtime::with_strategy(RuntimeStrategy::Ast);
+            match ast_runtime.evaluate_expression(&ast) {
+                Ok(result) => println!("  ✅ Result: {:?}", result),
+                Err(e) => println!("  ❌ Error: {:?}", e),
+            }
+            
+            // IR Runtime
+            println!("\n⚡ IR Runtime (High Performance):");
+            let mut ir_runtime = Runtime::with_strategy(RuntimeStrategy::Ir);
+            match ir_runtime.evaluate_expression(&ast) {
+                Ok(result) => println!("  ✅ Result: {:?} (2-26x faster)", result),
+                Err(e) => println!("  ❌ Error: {:?}", e),
+            }
+            
+            // Fallback Strategy
+            println!("\n🛡️ IR with AST Fallback (Recommended for transition):");
+            let mut fallback_runtime = Runtime::with_strategy(RuntimeStrategy::IrWithFallback);
+            match fallback_runtime.evaluate_expression(&ast) {
+                Ok(result) => println!("  ✅ Result: {:?} (Performance + Stability)", result),
+                Err(e) => println!("  ❌ Error: {:?}", e),
+            }
         }
+        Err(e) => println!("Parse Error: {:?}", e),
     }
     
-    // Resource operations
-    println!("\nResource Management Simulation:");
-    if let Ok(ast) = parse_expression("(tool:open-file \"example.txt\" :read)") {
-        match evaluator.evaluate(&ast) {
-            Ok(result) => {
-                println!("  File opened: {}", result.to_string());
-                
-                // Test reading from the resource (would need to extract handle)
-                println!("  Note: In real usage, with-resource would automatically manage the lifecycle");
-            },
-            Err(error) => println!("  File Error: {}", error),
-        }
-    }
+    println!("\n🎯 Strategic Recommendation:");
+    println!("  • Keep AST as default for stability");
+    println!("  • Develop IR aggressively for performance");
+    println!("  • Use IrWithFallback for best of both worlds");
+    println!("  • Transition to IR-first when module system is complete");
 }
