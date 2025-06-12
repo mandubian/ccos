@@ -5,9 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use crate::ir::*;
-use crate::runtime::{Value, RuntimeError, RuntimeResult, Environment};
+use crate::runtime::{Value, RuntimeError, RuntimeResult};
 use crate::runtime::ir_runtime::{IrRuntime, IrEnvironment};
-use crate::ast::Symbol;
 
 /// Module registry that manages all loaded modules
 #[derive(Debug)]
@@ -125,9 +124,7 @@ impl ModuleRegistry {
         self.modules.insert(module_name, Rc::new(module));
         
         Ok(())
-    }
-
-    /// Load and compile a module
+    }    /// Load and compile a module
     pub fn load_module(&mut self, module_name: &str, ir_runtime: &mut IrRuntime) -> RuntimeResult<Rc<CompiledModule>> {
         // Check if already loaded
         if let Some(module) = self.modules.get(module_name) {
@@ -145,289 +142,270 @@ impl ModuleRegistry {
         // Add to loading stack
         self.loading_stack.push(module_name.to_string());
 
-        // For now, create a mock module since we don't have file loading yet
-        let result = self.create_mock_module(module_name, ir_runtime);
+        // Load module from file
+        let result = self.load_module_from_file(module_name, ir_runtime);
 
         // Remove from loading stack
         self.loading_stack.pop();
 
         result
+    }    /// Load and compile a module from a source file
+    fn load_module_from_file(&mut self, module_name: &str, ir_runtime: &mut IrRuntime) -> RuntimeResult<Rc<CompiledModule>> {
+        // Resolve module path from module name
+        let module_path = self.resolve_module_path(module_name)?;
+        
+        // Read the source file
+        let source_content = self.read_module_source(&module_path)?;
+        
+        // Parse the module source
+        let parsed_ast = self.parse_module_source(&source_content, &module_path)?;
+        
+        // Convert module AST to IR and compile
+        let compiled_module = self.compile_module_ast(module_name, parsed_ast, &module_path, ir_runtime)?;
+          // Register the compiled module
+        self.register_module((*compiled_module).clone())?;
+        
+        Ok(compiled_module)
     }
 
-    /// Create a mock module for demonstration (would be replaced with actual file loading)
-    fn create_mock_module(&mut self, module_name: &str, ir_runtime: &mut IrRuntime) -> RuntimeResult<Rc<CompiledModule>> {
+    /// Resolve a module name to a file path
+    /// Examples:
+    /// - "rtfs.core.string" -> "rtfs/core/string.rtfs"
+    /// - "my.company/utils" -> "my/company/utils.rtfs"
+    fn resolve_module_path(&self, module_name: &str) -> RuntimeResult<std::path::PathBuf> {
+        use std::path::PathBuf;
+        
+        // Convert module name to file path
+        // Replace dots and slashes with path separators
+        let path_str = module_name
+            .replace('.', "/")  // Convert dots to slashes
+            .replace("/", std::path::MAIN_SEPARATOR_STR); // Use OS-specific path separator
+        
+        // Add .rtfs extension
+        let filename = format!("{}.rtfs", path_str);
+          // Try to find the file in module search paths
+        for search_path in &self.module_paths {
+            let full_path = search_path.join(&filename);
+            if full_path.exists() {
+                return Ok(full_path);
+            }
+        }
+        
+        // If not found in search paths, try relative to current directory
+        let default_path = PathBuf::from(&filename);
+        if default_path.exists() {
+            return Ok(default_path);
+        }
+        
+        Err(RuntimeError::ModuleError(format!(
+            "Module file not found: {} (tried {})",
+            module_name, filename
+        )))
+    }
+
+    /// Read module source from file
+    fn read_module_source(&self, path: &std::path::Path) -> RuntimeResult<String> {
+        use std::fs;
+        
+        fs::read_to_string(path).map_err(|err| {
+            RuntimeError::ModuleError(format!(
+                "Failed to read module file '{}': {}",
+                path.display(),
+                err
+            ))
+        })
+    }
+
+    /// Parse module source into AST
+    fn parse_module_source(&self, source: &str, path: &std::path::Path) -> RuntimeResult<crate::ast::ModuleDefinition> {
+        use crate::parser::parse;
+        
+        // Parse the entire source file
+        let top_levels = parse(source).map_err(|err| {
+            RuntimeError::ModuleError(format!(
+                "Failed to parse module file '{}': {:?}",
+                path.display(),
+                err
+            ))
+        })?;
+        
+        // Find the module definition
+        for top_level in top_levels {
+            if let crate::ast::TopLevel::Module(module_def) = top_level {
+                return Ok(module_def);
+            }
+        }
+        
+        Err(RuntimeError::ModuleError(format!(
+            "No module definition found in file '{}'",
+            path.display()
+        )))
+    }    /// Compile module AST to a CompiledModule
+    fn compile_module_ast(
+        &mut self,
+        module_name: &str,
+        module_def: crate::ast::ModuleDefinition,
+        source_path: &std::path::Path,
+        _ir_runtime: &mut IrRuntime
+    ) -> RuntimeResult<Rc<CompiledModule>> {
+        use crate::ir_converter::IrConverter;
+        use std::collections::HashMap;
+        
+        // Create module metadata
         let metadata = ModuleMetadata {
             name: module_name.to_string(),
-            docstring: Some(format!("Mock module: {}", module_name)),
-            source_file: None,
-            version: Some("1.0.0".to_string()),
+            docstring: None, // Could extract from module comments
+            source_file: Some(source_path.to_path_buf()),
+            version: None, // Could extract from module metadata
             compiled_at: std::time::SystemTime::now(),
         };
 
-        // Create module namespace
+        // Create module namespace environment
         let mut module_env = IrEnvironment::new();
-
-        // Add some mock exports based on module name
-        let mut exports = HashMap::new();
         
-        match module_name {
-            "rtfs.core.string" => {
-                // Mock string utilities
-                self.add_string_module_exports(&mut module_env, &mut exports)?;
-            }
-            "rtfs.core.math" => {
-                // Mock math utilities
-                self.add_math_module_exports(&mut module_env, &mut exports)?;
-            }
-            _ => {
-                // Generic mock module
-                self.add_generic_module_exports(&mut module_env, &mut exports, module_name)?;
+        // Process module dependencies first
+        let mut dependencies = Vec::new();
+        for definition in &module_def.definitions {
+            if let crate::ast::ModuleLevelDefinition::Import(import_def) = definition {
+                let dep_module_name = import_def.module_name.0.clone();
+                
+                // For now, just track dependencies - in full implementation would load them
+                dependencies.push(dep_module_name);
+                
+                // Note: import_symbols_from_module would be implemented to handle actual imports
             }
         }
 
-        // Create IR node for the module
-        let ir_node = IrNode::Module {
-            id: 1, // Would use proper ID generation
+        // Convert module definitions to IR
+        let mut ir_converter = IrConverter::new();
+        let mut ir_definitions = Vec::new();
+        let mut exports = HashMap::new();
+        
+        for definition in &module_def.definitions {
+            match definition {
+                crate::ast::ModuleLevelDefinition::Import(_) => {
+                    // Already processed above
+                    continue;
+                }                crate::ast::ModuleLevelDefinition::Def(def_expr) => {
+                    // Convert def expression to Expression and then to IR
+                    let expr = crate::ast::Expression::Def(Box::new(def_expr.clone()));
+                    let ir_node = ir_converter.convert_expression(expr)
+                        .map_err(|e| RuntimeError::ModuleError(format!("IR conversion failed: {:?}", e)))?;
+                    ir_definitions.push(ir_node);
+                    
+                    // Check if this definition should be exported
+                    let symbol_name = def_expr.symbol.0.clone();
+                    if self.should_export_symbol(&symbol_name, &module_def.exports) {
+                        self.add_symbol_export(&symbol_name, &def_expr.value, &mut exports, &mut module_env)?;
+                    }
+                }
+                crate::ast::ModuleLevelDefinition::Defn(defn_expr) => {
+                    // Convert defn expression to Expression and then to IR
+                    let expr = crate::ast::Expression::Defn(Box::new(defn_expr.clone()));
+                    let ir_node = ir_converter.convert_expression(expr)
+                        .map_err(|e| RuntimeError::ModuleError(format!("IR conversion failed: {:?}", e)))?;
+                    ir_definitions.push(ir_node);
+                    
+                    // Check if this function should be exported
+                    let symbol_name = defn_expr.name.0.clone();
+                    if self.should_export_symbol(&symbol_name, &module_def.exports) {
+                        self.add_function_export(&symbol_name, defn_expr, &mut exports, &mut module_env)?;
+                    }
+                }
+            }
+        }
+
+        // Create the module IR node using a simple ID generator
+        static mut MODULE_ID_COUNTER: u64 = 1000;
+        let module_id = unsafe { 
+            MODULE_ID_COUNTER += 1; 
+            MODULE_ID_COUNTER 
+        };
+
+        let module_ir_node = IrNode::Module {
+            id: module_id,
             name: module_name.to_string(),
             exports: exports.keys().cloned().collect(),
-            definitions: Vec::new(), // Would contain actual definitions
+            definitions: ir_definitions,
             source_location: None,
-        };
-
-        let module = CompiledModule {
+        };        let compiled_module = CompiledModule {
             metadata,
-            ir_node,
+            ir_node: module_ir_node,
             exports,
             namespace: Rc::new(module_env),
-            dependencies: Vec::new(),
+            dependencies,
         };
 
-        self.register_module(module.clone())?;
-        Ok(Rc::new(module))
+        Ok(Rc::new(compiled_module))
     }
 
-    /// Add string module exports (mock implementation)
-    fn add_string_module_exports(
+    /// Check if a symbol should be exported based on module export specification
+    fn should_export_symbol(&self, symbol_name: &str, export_spec: &Option<Vec<crate::ast::Symbol>>) -> bool {
+        match export_spec {
+            None => false, // No exports specified means nothing is exported
+            Some(exports) => exports.iter().any(|sym| sym.0 == symbol_name),
+        }
+    }    /// Add a variable/constant export to the module
+    fn add_symbol_export(
         &self,
-        env: &mut IrEnvironment,
+        symbol_name: &str,
+        _value_expr: &crate::ast::Expression,
         exports: &mut HashMap<String, ModuleExport>,
+        env: &mut IrEnvironment
     ) -> RuntimeResult<()> {
-        use crate::runtime::values::{Function, Arity};
-
-        // length function
-        let length_fn = Value::Function(Function::Builtin {
-            name: "length".to_string(),
-            func: |args| {                if let Some(Value::String(s)) = args.first() {
-                    Ok(Value::Integer(s.len() as i64))
-                } else {
-                    Err(RuntimeError::TypeError {
-                        expected: "string".to_string(),
-                        actual: "non-string".to_string(),
-                        operation: "string length function".to_string(),
-                    })
-                }
-            },
-            arity: Arity::Exact(1),
+        // For now, create a simple export - in a full implementation this would
+        // evaluate the expression in the module context
+        let placeholder_value = Value::String(format!("exported:{}", symbol_name));
+        
+        let node_id = (env.binding_count() + 1000) as u64; // Generate unique ID
+        env.define(node_id, placeholder_value.clone());
+        
+        exports.insert(symbol_name.to_string(), ModuleExport {
+            original_name: symbol_name.to_string(),
+            export_name: symbol_name.to_string(),
+            value: placeholder_value,
+            ir_type: IrType::Any, // Would determine from expression analysis
+            export_type: ExportType::Variable,
         });
-
-        env.define(1001, length_fn.clone());
-        exports.insert("length".to_string(), ModuleExport {
-            original_name: "length".to_string(),
-            export_name: "length".to_string(),
-            value: length_fn,
-            ir_type: IrType::Function {
-                param_types: vec![IrType::String],
-                variadic_param_type: None,
-                return_type: Box::new(IrType::Int),
-            },
-            export_type: ExportType::Function,
-        });
-
-        // upper-case function
-        let upper_fn = Value::Function(Function::Builtin {
-            name: "upper-case".to_string(),
-            func: |args| {                if let Some(Value::String(s)) = args.first() {
-                    Ok(Value::String(s.to_uppercase()))
-                } else {
-                    Err(RuntimeError::TypeError {
-                        expected: "string".to_string(),
-                        actual: "non-string".to_string(),
-                        operation: "string upper-case function".to_string(),
-                    })
-                }
-            },
-            arity: Arity::Exact(1),
-        });
-
-        env.define(1002, upper_fn.clone());
-        exports.insert("upper-case".to_string(), ModuleExport {
-            original_name: "upper-case".to_string(),
-            export_name: "upper-case".to_string(),
-            value: upper_fn,
-            ir_type: IrType::Function {
-                param_types: vec![IrType::String],
-                variadic_param_type: None,
-                return_type: Box::new(IrType::String),
-            },
-            export_type: ExportType::Function,
-        });
-
-        // substring function
-        let substring_fn = Value::Function(Function::Builtin {
-            name: "substring".to_string(),
-            func: |args| {
-                match args {
-                    [Value::String(s), Value::Integer(start), Value::Integer(end)] => {
-                        let start = *start as usize;
-                        let end = (*end as usize).min(s.len());
-                        if start <= end && start <= s.len() {
-                            Ok(Value::String(s.chars().skip(start).take(end - start).collect()))
-                        } else {
-                            Err(RuntimeError::InvalidArgument("Invalid substring indices".to_string()))
-                        }
-                    }
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "(string, int, int)".to_string(),
-                        actual: "other types".to_string(),
-                        operation: "substring function".to_string(),
-                    })
-                }
-            },
-            arity: Arity::Exact(3),
-        });
-
-        env.define(1003, substring_fn.clone());
-        exports.insert("substring".to_string(), ModuleExport {
-            original_name: "substring".to_string(),
-            export_name: "substring".to_string(),
-            value: substring_fn,
-            ir_type: IrType::Function {
-                param_types: vec![IrType::String, IrType::Int, IrType::Int],
-                variadic_param_type: None,
-                return_type: Box::new(IrType::String),
-            },
-            export_type: ExportType::Function,
-        });
-
-        // concat function
-        let concat_fn = Value::Function(Function::Builtin {
-            name: "concat".to_string(),
-            func: |args| {
-                let mut result = String::new();
-                for arg in args {
-                    match arg {
-                        Value::String(s) => result.push_str(s),
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "string".to_string(),
-                            actual: "non-string".to_string(),
-                            operation: "string concat function".to_string(),
-                        }),
-                    }
-                }
-                Ok(Value::String(result))
-            },
-            arity: Arity::AtLeast(0),
-        });
-
-        env.define(1004, concat_fn.clone());
-        exports.insert("concat".to_string(), ModuleExport {
-            original_name: "concat".to_string(),
-            export_name: "concat".to_string(),
-            value: concat_fn,
-            ir_type: IrType::Function {
-                param_types: vec![IrType::String],
-                variadic_param_type: Some(Box::new(IrType::String)),
-                return_type: Box::new(IrType::String),
-            },
-            export_type: ExportType::Function,
-        });
-
+        
         Ok(())
-    }
-
-    /// Add math module exports (mock implementation)
-    fn add_math_module_exports(
+    }    /// Add a function export to the module
+    fn add_function_export(
         &self,
-        env: &mut IrEnvironment,
+        symbol_name: &str,
+        _defn_expr: &crate::ast::DefnExpr,
         exports: &mut HashMap<String, ModuleExport>,
+        env: &mut IrEnvironment
     ) -> RuntimeResult<()> {
         use crate::runtime::values::{Function, Arity};
-
-        // abs function
-        let abs_fn = Value::Function(Function::Builtin {
-            name: "abs".to_string(),
-            func: |args| {
-                match args.first() {
-                    Some(Value::Integer(n)) => Ok(Value::Integer(n.abs())),
-                    Some(Value::Float(f)) => Ok(Value::Float(f.abs())),
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "numeric".to_string(),
-                        actual: "non-numeric".to_string(),
-                        operation: "abs function".to_string(),
-                    }),
-                }
-            },
-            arity: Arity::Exact(1),
+        
+        // Create a placeholder function for now - define it outside to avoid closure issues
+        fn placeholder_function(_args: &[Value]) -> Result<Value, RuntimeError> {
+            Ok(Value::String("Placeholder function".to_string()))
+        }
+        
+        let placeholder_fn = Value::Function(Function::Builtin {
+            name: symbol_name.to_string(),
+            func: placeholder_function,
+            arity: Arity::Any, // Would determine from defn parameters
         });
-
-        env.define(2001, abs_fn.clone());
-        exports.insert("abs".to_string(), ModuleExport {
-            original_name: "abs".to_string(),
-            export_name: "abs".to_string(),
-            value: abs_fn,
+        
+        let node_id = (env.binding_count() + 1000) as u64; // Generate unique ID
+        env.define(node_id, placeholder_fn.clone());
+        
+        exports.insert(symbol_name.to_string(), ModuleExport {
+            original_name: symbol_name.to_string(),
+            export_name: symbol_name.to_string(),
+            value: placeholder_fn,
             ir_type: IrType::Function {
-                param_types: vec![IrType::Any],
+                param_types: Vec::new(), // Would determine from defn parameters
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Any),
             },
             export_type: ExportType::Function,
         });
-
-        // PI constant
-        let pi_value = Value::Float(std::f64::consts::PI);
-        env.define(2002, pi_value.clone());
-        exports.insert("PI".to_string(), ModuleExport {
-            original_name: "PI".to_string(),
-            export_name: "PI".to_string(),
-            value: pi_value,
-            ir_type: IrType::Float,
-            export_type: ExportType::Variable,
-        });
-
-        Ok(())
-    }
-
-    /// Add generic module exports (mock implementation)
-    fn add_generic_module_exports(
-        &self,
-        env: &mut IrEnvironment,
-        exports: &mut HashMap<String, ModuleExport>,
-        module_name: &str,
-    ) -> RuntimeResult<()> {
-        use crate::runtime::values::{Function, Arity};        // info function that returns module info
-        let info_fn = Value::Function(Function::Builtin {
-            name: "info".to_string(),
-            func: |_args| Ok(Value::String("Generic module info".to_string())),
-            arity: Arity::Exact(0),
-        });
-
-        env.define(3001, info_fn.clone());
-        exports.insert("info".to_string(), ModuleExport {
-            original_name: "info".to_string(),
-            export_name: "info".to_string(),
-            value: info_fn,
-            ir_type: IrType::Function {
-                param_types: vec![],
-                variadic_param_type: None,
-                return_type: Box::new(IrType::String),
-            },
-            export_type: ExportType::Function,
-        });
-
-        Ok(())
-    }
-
-    /// Get a loaded module
+        
+        Ok(())    }    /// Get a loaded module
     pub fn get_module(&self, module_name: &str) -> Option<Rc<CompiledModule>> {
         self.modules.get(module_name).cloned()
     }
@@ -464,13 +442,11 @@ impl ModuleRegistry {
                 
                 // In a full implementation, you would set up namespace resolution
                 // so that alias.symbol_name resolves to the module's exported symbol
-            }
-
-            // Import specific symbols: (import [module :refer [sym1 sym2]])
+            }            // Import specific symbols: (import [module :refer [sym1 sym2]])
             (None, Some(symbols), false) => {
                 for symbol_import in symbols {
                     let export_name = &symbol_import.original_name;
-                    let local_name = symbol_import.local_name.as_ref().unwrap_or(export_name);
+                    let _local_name = symbol_import.local_name.as_ref().unwrap_or(export_name);
 
                     if let Some(export) = module.exports.get(export_name) {
                         let binding_id = target_env.binding_count() as u64 + 20000;
@@ -487,7 +463,7 @@ impl ModuleRegistry {
 
             // Import all symbols: (import [module :refer :all])
             (None, None, true) => {
-                for (export_name, export) in &module.exports {
+                for (_export_name, export) in &module.exports {
                     let binding_id = target_env.binding_count() as u64 + 30000;
                     target_env.define(binding_id, export.value.clone());
                 }
@@ -701,30 +677,33 @@ mod tests {
     fn test_module_registry_creation() {
         let registry = ModuleRegistry::new();
         assert_eq!(registry.loaded_modules().len(), 0);
-    }
-
-    #[test]
-    fn test_mock_string_module_loading() {
+    }    #[test]
+    fn test_module_loading_from_file() {
         let mut registry = ModuleRegistry::new();
+        registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let mut ir_runtime = IrRuntime::new();
         
-        let module = registry.load_module("rtfs.core.string", &mut ir_runtime).unwrap();
-        assert_eq!(module.metadata.name, "rtfs.core.string");
-        assert!(module.exports.contains_key("length"));
-        assert!(module.exports.contains_key("upper-case"));
-    }
-
-    #[test]
+        // Test loading the math.utils module
+        let module = registry.load_module("math.utils", &mut ir_runtime).unwrap();
+        assert_eq!(module.metadata.name, "math.utils");
+        
+        // Check that the expected exports are present
+        let expected_exports = vec!["add", "multiply", "square"];
+        for export in expected_exports {
+            assert!(module.exports.contains_key(export), "Missing export: {}", export);
+        }
+    }    #[test]
     fn test_qualified_symbol_resolution() {
         let mut registry = ModuleRegistry::new();
+        registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let mut ir_runtime = IrRuntime::new();
         
-        // Load string module
-        registry.load_module("rtfs.core.string", &mut ir_runtime).unwrap();
+        // Load math.utils module from file
+        registry.load_module("math.utils", &mut ir_runtime).unwrap();
         
-        // Resolve qualified symbol
-        let result = registry.resolve_qualified_symbol("rtfs.core.string/length");
-        assert!(result.is_ok());
+        // Resolve qualified symbol - should succeed now
+        let result = registry.resolve_qualified_symbol("math.utils/add");
+        assert!(result.is_ok(), "Should resolve math.utils/add symbol");
     }
 
     #[test]
@@ -737,11 +716,9 @@ mod tests {
         let result = registry.load_module("module-a", &mut ir_runtime);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Circular dependency"));
-    }
-
-    #[test]
+    }    #[test]
     fn test_module_aware_runtime() {
-        let mut runtime = ModuleAwareRuntime::new();
+        let runtime = ModuleAwareRuntime::new();
         
         // Test that we can access both IR runtime and module registry
         assert_eq!(runtime.module_registry().loaded_modules().len(), 0);
