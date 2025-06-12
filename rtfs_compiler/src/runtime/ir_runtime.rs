@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::path::PathBuf;
 use crate::ir::*;
 use crate::runtime::{Value, RuntimeError, RuntimeResult, Environment};
 use crate::runtime::values::{Function, Arity, ResourceHandle, ResourceState, ErrorValue};
@@ -120,14 +121,19 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
     fn execute_node_uncached(&mut self, node: &IrNode, env: &mut IrEnvironment) -> RuntimeResult<Value> {
         match node {
             IrNode::Literal { value, .. } => self.execute_literal(value),
-            
-            IrNode::VariableRef { binding_id, name, .. } => {
+              IrNode::VariableRef { binding_id, name, .. } => {
                 match env.lookup(*binding_id) {
                     Some(value) => Ok(value.clone()),
                     None => {
-                        // Fallback to global environment lookup by name
-                        let mut global_env = Environment::with_parent(self.global_env.clone());
-                        global_env.lookup(&crate::ast::Symbol(name.clone()))
+                        // Check if it's a qualified symbol (e.g., "module/symbol")
+                        if ModuleRegistry::is_qualified_symbol(name) {
+                            // Resolve through module registry
+                            self.module_registry.resolve_qualified_symbol(name)
+                        } else {
+                            // Fallback to global environment lookup by name
+                            let mut global_env = Environment::with_parent(self.global_env.clone());
+                            global_env.lookup(&crate::ast::Symbol(name.clone()))
+                        }
                     }
                 }
             }
@@ -552,6 +558,19 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
     /// Get current call stack for debugging
     pub fn call_stack(&self) -> &[CallFrame] {
         &self.call_stack
+    }    /// Add a module path to the module registry
+    pub fn add_module_path(&mut self, path: PathBuf) {
+        self.module_registry.add_module_path(path);
+    }
+
+    /// Get access to the module registry (for testing)
+    pub fn module_registry(&self) -> &ModuleRegistry {
+        &self.module_registry
+    }
+
+    /// Get mutable access to the module registry (for testing)
+    pub fn module_registry_mut(&mut self) -> &mut ModuleRegistry {
+        &mut self.module_registry
     }
 }
 
