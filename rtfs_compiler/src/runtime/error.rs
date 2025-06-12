@@ -45,9 +45,14 @@ pub enum RuntimeError {
         resource_type: String,
         message: String,
     },
-    
-    /// I/O errors
+      /// I/O errors
     IoError(String),
+    
+    /// Module loading/execution errors
+    ModuleError(String),
+    
+    /// Invalid argument errors
+    InvalidArgument(String),
     
     /// Network errors
     NetworkError(String),
@@ -100,9 +105,14 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::ResourceError { resource_type, message } => {
                 write!(f, "Resource error ({}): {}", resource_type, message)
-            },
-            RuntimeError::IoError(msg) => {
+            },            RuntimeError::IoError(msg) => {
                 write!(f, "I/O error: {}", msg)
+            },
+            RuntimeError::ModuleError(msg) => {
+                write!(f, "Module error: {}", msg)
+            },
+            RuntimeError::InvalidArgument(msg) => {
+                write!(f, "Invalid argument: {}", msg)
             },
             RuntimeError::NetworkError(msg) => {
                 write!(f, "Network error: {}", msg)
