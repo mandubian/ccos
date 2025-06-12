@@ -57,13 +57,21 @@ pub enum RuntimeError {
     
     /// Pattern matching errors
     MatchError(String),
-    
-    /// Custom application errors
+      /// Custom application errors
     ApplicationError {
         error_type: Keyword,
         message: String,
         data: Option<Value>,
     },
+    
+    /// Invalid program structure (for IR runtime)
+    InvalidProgram(String),
+    
+    /// Not implemented functionality
+    NotImplemented(String),
+    
+    /// Value is not callable
+    NotCallable(String),
     
     /// Internal runtime errors (should not normally occur)
     InternalError(String),
@@ -104,9 +112,17 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::MatchError(msg) => {
                 write!(f, "Match error: {}", msg)
-            },
-            RuntimeError::ApplicationError { error_type, message, .. } => {
+            },            RuntimeError::ApplicationError { error_type, message, .. } => {
                 write!(f, "Application error ({}): {}", error_type.0, message)
+            },
+            RuntimeError::InvalidProgram(msg) => {
+                write!(f, "Invalid program: {}", msg)
+            },
+            RuntimeError::NotImplemented(msg) => {
+                write!(f, "Not implemented: {}", msg)
+            },
+            RuntimeError::NotCallable(msg) => {
+                write!(f, "Not callable: {}", msg)
             },
             RuntimeError::InternalError(msg) => {
                 write!(f, "Internal error: {}", msg)
