@@ -1,0 +1,16 @@
+(module math.utils
+  (:exports [add multiply square])
+  
+  (def PI 3.14159)
+  
+  (defn add [x y]
+    (+ x y))
+  
+  (defn multiply [x y]
+    (* x y))
+  
+  (defn square [x]
+    (* x x))
+  
+  (defn private-helper [x]
+    (+ x 1)))

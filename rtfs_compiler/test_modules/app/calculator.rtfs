@@ -1,0 +1,15 @@
+(module app.calculator
+  (:exports [calculate])
+  
+  (import math.utils :as math)
+  (import string.helpers :as str)
+  
+  (defn calculate [operation x y]
+    (match operation
+      :add (math/add x y)
+      :multiply (math/multiply x y)
+      :square (math/square x)
+      _ nil))
+  
+  (defn format-result [result]
+    (str/concat "Result: " (str result))))
