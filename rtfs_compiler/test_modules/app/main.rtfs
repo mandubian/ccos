@@ -1,0 +1,20 @@
+;; App main module for testing file-based module loading
+(module app.main
+  (:exports [entry chain_entry])
+  
+  (import math.utils :as math)
+  
+  (defn entry []
+    "Application entry point - returns a test value"
+    42)
+  
+  (defn chain_entry []
+    "Entry point for dependency chain testing"
+    (+ 1 2 3))
+  
+  (defn calculate [x y]
+    (math/add x y))
+  
+  (defn main []
+    "Main application function"
+    (calculate 10 20)))

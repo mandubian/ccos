@@ -1,0 +1,17 @@
+;; Circular import test module A
+(module circular.a
+  (:exports [entry helper_a])
+  
+  (import circular.b :as cb)
+  
+  (defn entry []
+    "Entry point that may trigger circular dependency"
+    (cb/helper_b 42))
+  
+  (defn helper_a [x]
+    "Helper function from module A"
+    (+ x 10))
+  
+  (defn test_circular []
+    "Function that uses both modules"
+    (+ (helper_a 5) (cb/helper_b 3))))

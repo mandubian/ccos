@@ -1,0 +1,7 @@
+﻿;; Dummy test module 9
+(module dummy_mod_9
+  (:exports [func_9])
+  
+  (defn func_9 [x]
+    "Dummy function 9"
+    (+ x 9)))
