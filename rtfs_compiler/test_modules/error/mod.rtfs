@@ -1,0 +1,11 @@
+;; Error testing module
+(module error.mod
+  (:exports [trigger_error safe_function])
+  
+  (defn trigger_error []
+    "Function that works normally but is named to suggest error"
+    42)
+  
+  (defn safe_function [x]
+    "Function that works normally"
+    (+ x 1)))

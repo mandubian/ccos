@@ -1,0 +1,12 @@
+[package]
+name = "test_runner"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test_enhanced"
+path = "test_enhanced.rs"
+
+[dependencies]
+pest = "2.7"
+pest_derive = "2.7"

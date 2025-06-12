@@ -1,0 +1,15 @@
+;; Circular import test module B
+(module circular.b
+  (:exports [helper_b])
+  
+  (import circular.a :as ca)
+  
+  (defn helper_b [x]
+    "Helper function from module B"
+    (if (> x 100)
+      x
+      (ca/helper_a (+ x 5))))
+  
+  (defn internal_func [y]
+    "Internal function"
+    (* y 2)))
