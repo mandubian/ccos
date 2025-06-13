@@ -152,7 +152,7 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // --- Special Forms ---
 log_step_expr = { "(" ~ log_step_keyword ~ ":id" ~ string ~ expression ~ ")" }
 
-special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr }
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
 do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
@@ -200,6 +200,9 @@ match_expr    =  { "(" ~ match_keyword ~ expression ~ (match_clause_content)+ ~ 
 match_clause_content = { match_pattern ~ (WHEN ~ expression)? ~ expression } // pattern, optional guard, then body expressions
 WHEN = @{ "when" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Keyword for guard - now atomic
 
+// Agent discovery expression: (discover-agents criteria-map options-map?)
+discover_agents_expr = { "(" ~ discover_agents_keyword ~ expression ~ expression? ~ ")" }
+
 // --- Top-Level Definitions ---z
 task_keyword = @{ "task" }
 module_keyword = @{ "module" }
@@ -218,6 +221,7 @@ catch_keyword = @{ "catch" }
 finally_keyword = @{ "finally" }
 match_keyword = @{ "match" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Made atomic
 log_step_keyword = @{ "log-step" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Made atomic
+discover_agents_keyword = @{ "discover-agents" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Agent discovery keyword
 
 
 task_definition =  { "(" ~ task_keyword ~ task_property+ ~ ")" }

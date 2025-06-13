@@ -1,6 +1,6 @@
 use super::common::{build_literal, build_map_key, build_symbol}; // Removed build_keyword
 use super::special_forms::{
-    build_def_expr, build_defn_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
+    build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
     build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
     build_with_resource_expr,
 };
@@ -57,10 +57,12 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         )?)),
         Rule::match_expr => Ok(Expression::Match(Box::new(build_match_expr(
             pair.into_inner(),
-        )?))),
-        Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(
+        )?))),        Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(
             pair.into_inner(),
         )?))),
+        Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(
+            pair.into_inner(),
+        )?)),
         Rule::list => {
             let mut inner_pairs = pair.into_inner().peekable();
 

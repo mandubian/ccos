@@ -97,21 +97,21 @@ impl EnhancedIrOptimizer {
                     }
                 }
             },
-            
-            IrNode::Do { id, expressions, ir_type, source_location } => {
+              IrNode::Do { id, expressions, ir_type, source_location } => {
                 // Optimize each expression and remove unnecessary intermediates
                 let mut optimized_exprs = Vec::new();
-                for expr in expressions {
+                let expr_count = expressions.len();
+                
+                for (i, expr) in expressions.into_iter().enumerate() {
                     let optimized = self.optimize_control_flow(expr);
-                    // Keep expressions with side effects and the last expression
-                    if self.has_side_effects(&optimized) || optimized_exprs.is_empty() {
+                    // Keep expressions with side effects and the last expression (return value)
+                    if self.has_side_effects(&optimized) || i == expr_count - 1 {
                         optimized_exprs.push(optimized);
                     }
                 }
                 
                 if optimized_exprs.len() == 1 {
-                    optimized_exprs.into_iter().next().unwrap()
-                } else {
+                    optimized_exprs.into_iter().next().unwrap()                } else {
                     IrNode::Do {
                         id,
                         expressions: optimized_exprs,
@@ -483,8 +483,7 @@ mod tests {
             panic!("Expected constant folded result");
         }
     }
-    
-    #[test]
+      #[test]
     fn test_enhanced_dead_code_elimination() {
         let mut optimizer = EnhancedIrOptimizer::new();
         
@@ -499,14 +498,13 @@ mod tests {
             ir_type: IrType::Int,
             source_location: None,
         };
-        
-        let optimized = optimizer.optimize_with_control_flow(node);
+          let optimized = optimizer.optimize_with_control_flow(node);
         
         // Should eliminate intermediate expressions and return the last one
         if let IrNode::Literal { value: Literal::Integer(result), .. } = optimized {
             assert_eq!(result, 42);
         } else {
-            panic!("Expected dead code eliminated result");
+            panic!("Expected dead code eliminated result, got: {:?}", optimized);
         }
     }
 }

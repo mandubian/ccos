@@ -492,7 +492,6 @@ mod tests {
         Keyword,
         LetBinding,        LetExpr,
         Literal,        MapKey,
-        MapMatchEntry,
         MatchClause,
         MatchExpr,
         MatchPattern,
@@ -1220,5 +1219,122 @@ mod tests {
                 ],
             }))
         );
+    }    #[test]
+    fn test_parse_discover_agents_basic() {
+        // Test basic discover-agents with criteria only
+        let parse_result = RTFSParser::parse(Rule::expression, r#"(discover-agents {:capabilities ["nlp" "web"]})"#);
+        assert!(parse_result.is_ok(), "Failed to parse: {:?}", parse_result.err());
+        
+        let pair = parse_result.unwrap().next().unwrap();
+        let expr = build_expression(pair).unwrap();
+        
+        // Verify it's a DiscoverAgents expression
+        match expr {
+            Expression::DiscoverAgents(discover_expr) => {
+                // Verify criteria is a Map
+                match discover_expr.criteria.as_ref() {
+                    Expression::Map(map) => {
+                        assert!(map.contains_key(&MapKey::Keyword(Keyword("capabilities".to_string()))));
+                    },
+                    _ => panic!("Expected criteria to be a Map"),
+                }
+                // Verify options is None
+                assert!(discover_expr.options.is_none());
+            },
+            _ => panic!("Expected DiscoverAgents expression, got: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_discover_agents_with_options() {
+        // Test discover-agents with both criteria and options
+        let parse_result = RTFSParser::parse(Rule::expression, r#"(discover-agents {:type "llm"} {:timeout 5000})"#);
+        assert!(parse_result.is_ok(), "Failed to parse: {:?}", parse_result.err());
+        
+        let pair = parse_result.unwrap().next().unwrap();
+        let expr = build_expression(pair).unwrap();
+        
+        // Verify it's a DiscoverAgents expression
+        match expr {
+            Expression::DiscoverAgents(discover_expr) => {
+                // Verify criteria is a Map with correct key
+                match discover_expr.criteria.as_ref() {
+                    Expression::Map(map) => {
+                        assert!(map.contains_key(&MapKey::Keyword(Keyword("type".to_string()))));
+                    },
+                    _ => panic!("Expected criteria to be a Map"),
+                }
+                // Verify options is Some and contains timeout
+                match discover_expr.options.as_ref() {
+                    Some(options) => {
+                        match options.as_ref() {
+                            Expression::Map(map) => {
+                                assert!(map.contains_key(&MapKey::Keyword(Keyword("timeout".to_string()))));
+                            },
+                            _ => panic!("Expected options to be a Map"),
+                        }
+                    },
+                    None => panic!("Expected options to be Some"),
+                }
+            },
+            _ => panic!("Expected DiscoverAgents expression, got: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_discover_agents_complex_criteria() {
+        // Test discover-agents with complex criteria
+        let parse_result = RTFSParser::parse(Rule::expression, r#"(discover-agents {:capabilities ["nlp" "vision"] :model-size "large"})"#);
+        assert!(parse_result.is_ok(), "Failed to parse: {:?}", parse_result.err());
+        
+        let pair = parse_result.unwrap().next().unwrap();
+        let expr = build_expression(pair).unwrap();
+        
+        // Verify it's a DiscoverAgents expression
+        match expr {
+            Expression::DiscoverAgents(discover_expr) => {
+                // Verify criteria is a Map with multiple keys
+                match discover_expr.criteria.as_ref() {
+                    Expression::Map(map) => {
+                        assert!(map.contains_key(&MapKey::Keyword(Keyword("capabilities".to_string()))));
+                        assert!(map.contains_key(&MapKey::Keyword(Keyword("model-size".to_string()))));
+                        assert_eq!(map.len(), 2);
+                    },
+                    _ => panic!("Expected criteria to be a Map"),
+                }
+                // Verify options is None
+                assert!(discover_expr.options.is_none());
+            },
+            _ => panic!("Expected DiscoverAgents expression, got: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_parse_discover_agents_with_whitespace() {
+        // Test discover-agents with various whitespace
+        let parse_result = RTFSParser::parse(Rule::expression, r#"(discover-agents
+                {:type "assistant"}
+                {:timeout 3000}
+            )"#);
+        assert!(parse_result.is_ok(), "Failed to parse: {:?}", parse_result.err());
+        
+        let pair = parse_result.unwrap().next().unwrap();
+        let expr = build_expression(pair).unwrap();
+        
+        // Verify it's a DiscoverAgents expression
+        match expr {
+            Expression::DiscoverAgents(discover_expr) => {
+                // Verify criteria is a Map
+                match discover_expr.criteria.as_ref() {
+                    Expression::Map(map) => {
+                        assert!(map.contains_key(&MapKey::Keyword(Keyword("type".to_string()))));
+                    },
+                    _ => panic!("Expected criteria to be a Map"),
+                }
+                // Verify options is Some
+                assert!(discover_expr.options.is_some());
+            },
+            _ => panic!("Expected DiscoverAgents expression, got: {:?}", expr),
+        }
     }
 }
