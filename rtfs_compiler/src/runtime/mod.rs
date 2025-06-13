@@ -36,29 +36,35 @@ pub struct Runtime {
     strategy: RuntimeStrategy,
     ast_evaluator: evaluator::Evaluator,
     ir_runtime: Option<ir_runtime::IrRuntime>,
+    // Persistent environment for REPL usage
+    persistent_env: Environment,
 }
 
-impl Runtime {
-    pub fn new() -> Self {
+impl Runtime {    pub fn new() -> Self {
+        let ast_evaluator = evaluator::Evaluator::new();
+        let persistent_env = stdlib::StandardLibrary::create_global_environment();
         Runtime {
             strategy: RuntimeStrategy::default(),
-            ast_evaluator: evaluator::Evaluator::new(),
+            ast_evaluator,
             ir_runtime: Some(ir_runtime::IrRuntime::new()),
+            persistent_env,
         }
     }
     
     pub fn with_strategy(strategy: RuntimeStrategy) -> Self {
+        let ast_evaluator = evaluator::Evaluator::new();
+        let persistent_env = stdlib::StandardLibrary::create_global_environment();
         Runtime {
             strategy,
-            ast_evaluator: evaluator::Evaluator::new(),
+            ast_evaluator,
             ir_runtime: Some(ir_runtime::IrRuntime::new()),
+            persistent_env,
         }
     }
-    
-    pub fn evaluate_expression(&mut self, expr: &crate::ast::Expression) -> RuntimeResult<Value> {
+      pub fn evaluate_expression(&mut self, expr: &crate::ast::Expression) -> RuntimeResult<Value> {
         match self.strategy {
             RuntimeStrategy::Ast => {
-                self.ast_evaluator.evaluate(expr)
+                self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env)
             }
             RuntimeStrategy::Ir => {
                 if let Some(ir_runtime) = &mut self.ir_runtime {
@@ -69,27 +75,28 @@ impl Runtime {
                             let mut env = ir_runtime::IrEnvironment::new();
                             ir_runtime.execute_node(&ir_node, &mut env)
                         },
-                        Err(_) => self.ast_evaluator.evaluate(expr) // Fallback to AST
+                        Err(_) => self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env) // Fallback to AST
                     }
                 } else {
-                    self.ast_evaluator.evaluate(expr)
+                    self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env)
                 }
             }
             RuntimeStrategy::IrWithFallback => {
                 // Try IR first, fallback to AST on any issues
                 if let Some(ir_runtime) = &mut self.ir_runtime {
                     let mut converter = crate::ir_converter::IrConverter::new();
-                    match converter.convert(expr) {                        Ok(ir_node) => {
+                    match converter.convert(expr) {
+                        Ok(ir_node) => {
                             let mut env = ir_runtime::IrEnvironment::new();
                             match ir_runtime.execute_node(&ir_node, &mut env) {
                                 Ok(result) => Ok(result),
-                                Err(_) => self.ast_evaluator.evaluate(expr) // Fallback
+                                Err(_) => self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env) // Fallback
                             }
                         }
-                        Err(_) => self.ast_evaluator.evaluate(expr) // Fallback
+                        Err(_) => self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env) // Fallback
                     }
                 } else {
-                    self.ast_evaluator.evaluate(expr)
+                    self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env)
                 }
             }
         }

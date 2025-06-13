@@ -16,6 +16,14 @@ path = "src/main_enhanced_tests.rs"
 name = "summary_demo"
 path = "src/summary_demo.rs"
 
+[[bin]]
+name = "rtfs-repl"
+path = "src/bin/rtfs_repl.rs"
+
+[[bin]]
+name = "repl_deployment_demo"
+path = "src/repl_deployment_demo.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
