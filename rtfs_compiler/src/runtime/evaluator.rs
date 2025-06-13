@@ -20,12 +20,6 @@ impl Evaluator {
         }
     }
     
-    /// Evaluate an expression in the global environment
-    pub fn evaluate(&self, expr: &Expression) -> RuntimeResult<Value> {
-        let mut env = Environment::with_parent(self.global_env.clone());
-        self.eval_expr(expr, &mut env)
-    }
-    
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
@@ -87,6 +81,16 @@ impl Evaluator {
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
         }
+    }
+      /// Evaluate an expression in the global environment
+    pub fn evaluate(&self, expr: &Expression) -> RuntimeResult<Value> {
+        let mut env = Environment::with_parent(self.global_env.clone());
+        self.eval_expr(expr, &mut env)
+    }
+    
+    /// Evaluate an expression with a provided environment
+    pub fn evaluate_with_env(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
+        self.eval_expr(expr, env)
     }
     
     fn eval_literal(&self, lit: &Literal) -> RuntimeResult<Value> {
@@ -365,7 +369,13 @@ impl Evaluator {
     }
     
     fn eval_def(&self, def_expr: &DefExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        let value = self.eval_expr(&def_expr.value, env)?;
+        let mut value = self.eval_expr(&def_expr.value, env)?;
+        
+        // Apply type checking and coercion if type annotation is present
+        if let Some(type_annotation) = &def_expr.type_annotation {
+            value = self.coerce_value_to_type(value, type_annotation)?;
+        }
+        
         env.define(&def_expr.symbol, value.clone());
         Ok(value)
     }
@@ -606,6 +616,139 @@ impl Evaluator {
                 // Symbol patterns match any error (catch-all)
                 Ok(matches!(error_value, Value::Error(_)))
             },
+        }
+    }    
+    /// Coerce a value to match a type annotation, with type checking
+    fn coerce_value_to_type(&self, value: Value, type_expr: &TypeExpr) -> RuntimeResult<Value> {
+        match type_expr {
+            TypeExpr::Primitive(primitive_type) => {
+                self.coerce_to_primitive_type(value, primitive_type)
+            }
+            TypeExpr::Alias(symbol) => {
+                // Handle common type aliases like :float, :int, :string, etc.
+                match symbol.0.as_str() {
+                    "float" => self.coerce_to_primitive_type(value, &PrimitiveType::Float),
+                    "int" => self.coerce_to_primitive_type(value, &PrimitiveType::Int),
+                    "string" => self.coerce_to_primitive_type(value, &PrimitiveType::String),
+                    "bool" => self.coerce_to_primitive_type(value, &PrimitiveType::Bool),
+                    "nil" => self.coerce_to_primitive_type(value, &PrimitiveType::Nil),
+                    "keyword" => self.coerce_to_primitive_type(value, &PrimitiveType::Keyword),
+                    "symbol" => self.coerce_to_primitive_type(value, &PrimitiveType::Symbol),
+                    _ => {
+                        // For unknown aliases, just validate compatibility
+                        if self.value_matches_type(&value, type_expr) {
+                            Ok(value)
+                        } else {
+                            Err(RuntimeError::TypeError {
+                                expected: format!("{:?}", type_expr),
+                                actual: self.value_type_name(&value),
+                                operation: "type annotation in def".to_string(),
+                            })
+                        }
+                    }
+                }
+            }
+            // For now, only implement primitive type coercion
+            // Future: Add support for Vector, Map, Function, etc.
+            _ => {
+                // For non-primitive types, just validate compatibility
+                if self.value_matches_type(&value, type_expr) {
+                    Ok(value)
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: format!("{:?}", type_expr),
+                        actual: self.value_type_name(&value),
+                        operation: "type annotation in def".to_string(),
+                    })
+                }
+            }
+        }
+    }
+    
+    /// Coerce a value to a primitive type
+    fn coerce_to_primitive_type(&self, value: Value, primitive_type: &PrimitiveType) -> RuntimeResult<Value> {
+        match (primitive_type, &value) {
+            // Same type - no coercion needed
+            (PrimitiveType::Int, Value::Integer(_)) => Ok(value),
+            (PrimitiveType::Float, Value::Float(_)) => Ok(value),
+            (PrimitiveType::String, Value::String(_)) => Ok(value),
+            (PrimitiveType::Bool, Value::Boolean(_)) => Ok(value),
+            (PrimitiveType::Nil, Value::Nil) => Ok(value),
+            (PrimitiveType::Keyword, Value::Keyword(_)) => Ok(value),
+            (PrimitiveType::Symbol, Value::Symbol(_)) => Ok(value),
+            
+            // Coercion from int to float
+            (PrimitiveType::Float, Value::Integer(i)) => Ok(Value::Float(*i as f64)),
+            
+            // Coercion from float to int (with precision loss warning)
+            (PrimitiveType::Int, Value::Float(f)) => {
+                if f.fract() == 0.0 && f.is_finite() {
+                    Ok(Value::Integer(*f as i64))                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "integer".to_string(),
+                        actual: format!("float with fractional part or non-finite: {}", f),
+                        operation: "type coercion in def".to_string(),
+                    })
+                }
+            }            // String coercion - only allow specific conversions
+            (PrimitiveType::String, Value::Integer(i)) => Ok(Value::String(i.to_string())),
+            (PrimitiveType::String, Value::Float(f)) => Ok(Value::String(f.to_string())),
+            (PrimitiveType::String, Value::Boolean(b)) => Ok(Value::String(b.to_string())),
+            (PrimitiveType::String, Value::Keyword(k)) => Ok(Value::String(format!(":{}", k.0))),
+            (PrimitiveType::String, Value::Symbol(s)) => Ok(Value::String(s.0.clone())),
+            (PrimitiveType::String, Value::Nil) => Ok(Value::String("nil".to_string())),
+            
+            // No valid coercion
+            _ => Err(RuntimeError::TypeError {
+                expected: format!("{:?}", primitive_type),
+                actual: self.value_type_name(&value),
+                operation: "type coercion in def".to_string(),
+            })
+        }
+    }
+    
+    /// Check if a value matches a type expression
+    fn value_matches_type(&self, value: &Value, type_expr: &TypeExpr) -> bool {
+        match (type_expr, value) {
+            (TypeExpr::Primitive(prim), _) => self.value_matches_primitive_type(value, prim),
+            (TypeExpr::Any, _) => true,
+            (TypeExpr::Vector(elem_type), Value::Vector(elements)) => {
+                elements.iter().all(|elem| self.value_matches_type(elem, elem_type))
+            }
+            // Add more type matching as needed
+            _ => false,
+        }
+    }
+    
+    /// Check if a value matches a primitive type
+    fn value_matches_primitive_type(&self, value: &Value, primitive_type: &PrimitiveType) -> bool {
+        match (primitive_type, value) {
+            (PrimitiveType::Int, Value::Integer(_)) => true,
+            (PrimitiveType::Float, Value::Float(_)) => true,
+            (PrimitiveType::String, Value::String(_)) => true,
+            (PrimitiveType::Bool, Value::Boolean(_)) => true,
+            (PrimitiveType::Nil, Value::Nil) => true,
+            (PrimitiveType::Keyword, Value::Keyword(_)) => true,
+            (PrimitiveType::Symbol, Value::Symbol(_)) => true,
+            _ => false,
+        }
+    }
+      /// Get the type name of a value for error messages
+    fn value_type_name(&self, value: &Value) -> String {
+        match value {
+            Value::Integer(_) => "integer".to_string(),
+            Value::Float(_) => "float".to_string(),
+            Value::String(_) => "string".to_string(),
+            Value::Boolean(_) => "boolean".to_string(),
+            Value::Nil => "nil".to_string(),
+            Value::Keyword(_) => "keyword".to_string(),
+            Value::Symbol(_) => "symbol".to_string(),
+            Value::Vector(_) => "vector".to_string(),
+            Value::Map(_) => "map".to_string(),
+            Value::Function(_) => "function".to_string(),
+            Value::Resource(_) => "resource".to_string(),
+            Value::Ok(_) => "ok".to_string(),
+            Value::Error(_) => "error".to_string(),
         }
     }
 }
