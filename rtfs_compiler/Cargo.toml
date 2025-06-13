@@ -3,6 +3,19 @@ name = "rtfs_compiler"
 version = "0.1.0"
 edition = "2021"
 
+# Binary targets for different execution modes
+[[bin]]
+name = "rtfs_compiler"
+path = "src/main.rs"
+
+[[bin]]
+name = "main_enhanced_tests"
+path = "src/main_enhanced_tests.rs"
+
+[[bin]]
+name = "summary_demo"
+path = "src/summary_demo.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

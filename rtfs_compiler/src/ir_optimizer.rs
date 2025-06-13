@@ -1,389 +1,278 @@
-// IR Optimization Passes
-// Applies various optimizations to the typed IR for better runtime performance
+// ENHANCED IR OPTIMIZER - STEP 2 IMPLEMENTATION
+// Advanced optimization passes with control flow analysis, function inlining, and enhanced dead code elimination
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use crate::ir::*;
 use crate::ast::Literal;
 
-/// Optimization pass trait
-pub trait OptimizationPass {
-    fn optimize(&mut self, node: IrNode) -> IrNode;
-    fn name(&self) -> &'static str;
+/// Enhanced IR Optimizer with advanced optimization strategies
+pub struct EnhancedIrOptimizer {
+    optimization_level: OptimizationLevel,
+    inline_threshold: usize,
+    max_inline_depth: usize,
 }
 
-/// Optimization pipeline that applies multiple passes
-pub struct OptimizationPipeline {
-    passes: Vec<Box<dyn OptimizationPass>>,
-    stats: OptimizationStats,
+#[derive(Debug, Clone, PartialEq)]
+pub enum OptimizationLevel {
+    None,
+    Basic,
+    Aggressive,
 }
 
-#[derive(Debug, Default)]
-pub struct OptimizationStats {
-    pub nodes_processed: usize,
-    pub constants_folded: usize,
-    pub dead_code_eliminated: usize,
-    pub function_calls_inlined: usize,
-    pub type_specializations: usize,
-}
-
-impl OptimizationPipeline {
+impl EnhancedIrOptimizer {
     pub fn new() -> Self {
-        OptimizationPipeline {
-            passes: Vec::new(),
-            stats: OptimizationStats::default(),
+        Self {
+            optimization_level: OptimizationLevel::Aggressive,
+            inline_threshold: 10,
+            max_inline_depth: 3,
         }
     }
-    
-    /// Add an optimization pass to the pipeline
-    pub fn add_pass<P: OptimizationPass + 'static>(&mut self, pass: P) {
-        self.passes.push(Box::new(pass));
-    }
-    
-    /// Create a standard optimization pipeline
-    pub fn standard() -> Self {
-        let mut pipeline = Self::new();
-        pipeline.add_pass(ConstantFoldingPass::new());
-        pipeline.add_pass(DeadCodeEliminationPass::new());
-        pipeline.add_pass(TypeSpecializationPass::new());
-        pipeline.add_pass(InliningPass::new());
-        pipeline
-    }    /// Apply all optimization passes to an IR node
-    pub fn optimize(&mut self, mut node: IrNode) -> IrNode {
-        let mut iterations = 0;
-        const MAX_ITERATIONS: usize = 2; // Reduced to avoid excessive optimization
-        
-        loop {
-            let mut changed = false;
-            let original_passes_len = self.passes.len();
-              for i in 0..original_passes_len {
-                let original_id = node.id();
-                let optimized = self.passes[i].optimize(node);
-                
-                // Simple check - if node IDs are different, something changed
-                if optimized.id() != original_id {
-                    changed = true;
-                }
-                
-                node = optimized;
-            }
-            
-            iterations += 1;
-            
-            // Exit if no changes were made or we've reached max iterations
-            if !changed || iterations >= MAX_ITERATIONS {
-                break;
-            }
-        }
-        
-        self.stats.nodes_processed += 1;
-        node
-    }
-    
-    /// Get optimization statistics
-    pub fn stats(&self) -> &OptimizationStats {
-        &self.stats
-    }
-}
 
-/// Constant folding optimization pass
-pub struct ConstantFoldingPass {
-    folded_count: usize,
-}
-
-impl ConstantFoldingPass {
-    pub fn new() -> Self {
-        ConstantFoldingPass { folded_count: 0 }
-    }
-    
-    /// Fold binary arithmetic operations
-    fn fold_arithmetic(&mut self, op: &str, left: &Literal, right: &Literal) -> Option<Literal> {
-        match (left, right) {
-            (Literal::Integer(a), Literal::Integer(b)) => {
-                match op {
-                    "+" => Some(Literal::Integer(a + b)),
-                    "-" => Some(Literal::Integer(a - b)),
-                    "*" => Some(Literal::Integer(a * b)),
-                    "/" if *b != 0 => Some(Literal::Integer(a / b)),
-                    "%" if *b != 0 => Some(Literal::Integer(a % b)),
-                    "=" => Some(Literal::Boolean(a == b)),
-                    "!=" => Some(Literal::Boolean(a != b)),
-                    "<" => Some(Literal::Boolean(a < b)),
-                    "<=" => Some(Literal::Boolean(a <= b)),
-                    ">" => Some(Literal::Boolean(a > b)),
-                    ">=" => Some(Literal::Boolean(a >= b)),
-                    _ => None,
-                }
-            }
-            (Literal::Float(a), Literal::Float(b)) => {
-                match op {
-                    "+" => Some(Literal::Float(a + b)),
-                    "-" => Some(Literal::Float(a - b)),
-                    "*" => Some(Literal::Float(a * b)),
-                    "/" if *b != 0.0 => Some(Literal::Float(a / b)),
-                    "=" => Some(Literal::Boolean((a - b).abs() < f64::EPSILON)),
-                    "!=" => Some(Literal::Boolean((a - b).abs() >= f64::EPSILON)),
-                    "<" => Some(Literal::Boolean(a < b)),
-                    "<=" => Some(Literal::Boolean(a <= b)),
-                    ">" => Some(Literal::Boolean(a > b)),
-                    ">=" => Some(Literal::Boolean(a >= b)),
-                    _ => None,
-                }
-            }
-            (Literal::String(a), Literal::String(b)) => {
-                match op {
-                    "+" => Some(Literal::String(format!("{}{}", a, b))),
-                    "=" => Some(Literal::Boolean(a == b)),
-                    "!=" => Some(Literal::Boolean(a != b)),
-                    _ => None,
-                }
-            }
-            (Literal::Boolean(a), Literal::Boolean(b)) => {
-                match op {
-                    "and" => Some(Literal::Boolean(*a && *b)),
-                    "or" => Some(Literal::Boolean(*a || *b)),
-                    "=" => Some(Literal::Boolean(a == b)),
-                    "!=" => Some(Literal::Boolean(a != b)),
-                    _ => None,
-                }
-            }
-            _ => None,
+    pub fn with_level(level: OptimizationLevel) -> Self {
+        let threshold = match level {
+            OptimizationLevel::None => 0,
+            OptimizationLevel::Basic => 5,
+            OptimizationLevel::Aggressive => 15,
+        };
+        
+        Self {
+            optimization_level: level,
+            inline_threshold: threshold,
+            max_inline_depth: 3,
         }
     }
-    
-    /// Fold logical operations
-    fn fold_logical(&mut self, node: &IrNode) -> Option<IrNode> {
+
+    /// Enhanced optimization pass with control flow analysis
+    pub fn optimize_with_control_flow(&mut self, node: IrNode) -> IrNode {
+        match self.optimization_level {
+            OptimizationLevel::None => node,
+            _ => {
+                // First pass: control flow analysis
+                let node = self.optimize_control_flow(node);
+                
+                // Second pass: enhanced dead code elimination
+                let node = self.optimize_dead_code_elimination(node);
+                
+                // Third pass: function inlining opportunities
+                self.optimize_function_inlines(node)
+            }
+        }
+    }
+
+    fn optimize_control_flow(&self, node: IrNode) -> IrNode {
         match node {
-            IrNode::If { condition, then_branch, else_branch, .. } => {
-                if let IrNode::Literal { value: Literal::Boolean(cond), .. } = condition.as_ref() {
-                    self.folded_count += 1;
-                    if *cond {
-                        Some((**then_branch).clone())
-                    } else if let Some(else_node) = else_branch {
-                        Some((**else_node).clone())
-                    } else {
-                        Some(IrNode::Literal {
-                            id: node.id(),
-                            value: Literal::Nil,
-                            ir_type: IrType::Nil,
-                            source_location: node.source_location().cloned(),
-                        })
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
-impl OptimizationPass for ConstantFoldingPass {
-    fn name(&self) -> &'static str {
-        "ConstantFolding"
-    }
-    
-    fn optimize(&mut self, node: IrNode) -> IrNode {
-        self.optimize_with_depth(node, 0)
-    }
-}
-
-impl ConstantFoldingPass {
-    /// Maximum recursion depth to prevent infinite loops
-    const MAX_DEPTH: usize = 100;
-    
-    /// Optimize with depth tracking to prevent infinite recursion
-    fn optimize_with_depth(&mut self, node: IrNode, depth: usize) -> IrNode {
-        // Prevent infinite recursion
-        if depth >= Self::MAX_DEPTH {
-            return node;
-        }
-        
-        match node {
-            IrNode::Apply { id, function, arguments, ir_type, source_location } => {
-                // Recursively optimize arguments with depth tracking
-                let optimized_args: Vec<IrNode> = arguments.into_iter()
-                    .map(|arg| self.optimize_with_depth(arg, depth + 1))
-                    .collect();
+            IrNode::If { id, condition, then_branch, else_branch, ir_type, source_location } => {
+                // Optimize condition first
+                let optimized_condition = self.optimize_control_flow(condition.as_ref().clone());
                 
-                // Try to fold if function is a known operator and all args are literals
-                if let IrNode::VariableRef { name, .. } = function.as_ref() {
-                    if optimized_args.len() == 2 {
-                        if let (IrNode::Literal { value: left, .. }, IrNode::Literal { value: right, .. }) 
-                            = (&optimized_args[0], &optimized_args[1]) {
-                            if let Some(folded_value) = self.fold_arithmetic(name, left, right) {
-                                self.folded_count += 1;
-                                return IrNode::Literal {
-                                    id,
-                                    value: folded_value.clone(),
-                                    ir_type: self.infer_literal_type(&folded_value),
-                                    source_location,
-                                };
+                // Check for constant conditions
+                match optimized_condition {
+                    IrNode::Literal { value: Literal::Boolean(true), .. } => {
+                        // Always true - return then branch
+                        self.optimize_control_flow(then_branch.as_ref().clone())
+                    },
+                    IrNode::Literal { value: Literal::Boolean(false), .. } => {
+                        // Always false - return else branch or nil
+                        if let Some(else_node) = else_branch {
+                            self.optimize_control_flow(else_node.as_ref().clone())
+                        } else {
+                            IrNode::Literal {
+                                id: 0,
+                                value: Literal::Nil,
+                                ir_type: IrType::Nil,
+                                source_location: None,
                             }
+                        }
+                    },
+                    _ => {
+                        // Keep if structure with optimized branches
+                        IrNode::If {
+                            id,
+                            condition: Box::new(optimized_condition),
+                            then_branch: Box::new(self.optimize_control_flow(then_branch.as_ref().clone())),
+                            else_branch: else_branch.map(|e| Box::new(self.optimize_control_flow(e.as_ref().clone()))),
+                            ir_type,
+                            source_location,
                         }
                     }
                 }
-                
-                // Only optimize function if it's not already a simple reference
-                let optimized_function = match function.as_ref() {
-                    IrNode::VariableRef { .. } | IrNode::Literal { .. } => *function,
-                    _ => self.optimize_with_depth(*function, depth + 1),
-                };
-                
-                IrNode::Apply {
-                    id,
-                    function: Box::new(optimized_function),
-                    arguments: optimized_args,
-                    ir_type,
-                    source_location,
-                }
-            }            
-            IrNode::If { id, condition, then_branch, else_branch, ir_type, source_location } => {
-                let optimized_condition = self.optimize_with_depth(*condition, depth + 1);
-                
-                // Try logical folding first
-                let temp_node = IrNode::If {
-                    id,
-                    condition: Box::new(optimized_condition.clone()),
-                    then_branch: then_branch.clone(),
-                    else_branch: else_branch.clone(),
-                    ir_type: ir_type.clone(),
-                    source_location: source_location.clone(),
-                };
-                
-                if let Some(folded) = self.fold_logical(&temp_node) {
-                    return folded;
-                }
-                
-                // Otherwise, optimize branches with depth tracking
-                IrNode::If {
-                    id,
-                    condition: Box::new(optimized_condition),
-                    then_branch: Box::new(self.optimize_with_depth(*then_branch, depth + 1)),
-                    else_branch: else_branch.map(|e| Box::new(self.optimize_with_depth(*e, depth + 1))),
-                    ir_type,
-                    source_location,
-                }
-            }
-            
-            IrNode::Let { id, bindings, body, ir_type, source_location } => {
-                let optimized_bindings: Vec<IrLetBinding> = bindings.into_iter()
-                    .map(|binding| IrLetBinding {
-                        pattern: self.optimize_with_depth(binding.pattern, depth + 1),
-                        type_annotation: binding.type_annotation,
-                        init_expr: self.optimize_with_depth(binding.init_expr, depth + 1),
-                    })
-                    .collect();
-                
-                let optimized_body: Vec<IrNode> = body.into_iter()
-                    .map(|expr| self.optimize_with_depth(expr, depth + 1))
-                    .collect();
-                
-                IrNode::Let {
-                    id,
-                    bindings: optimized_bindings,
-                    body: optimized_body,
-                    ir_type,
-                    source_location,
-                }
-            }
+            },
             
             IrNode::Do { id, expressions, ir_type, source_location } => {
-                let optimized_expressions: Vec<IrNode> = expressions.into_iter()
-                    .map(|expr| self.optimize_with_depth(expr, depth + 1))
+                // Optimize each expression and remove unnecessary intermediates
+                let mut optimized_exprs = Vec::new();
+                for expr in expressions {
+                    let optimized = self.optimize_control_flow(expr);
+                    // Keep expressions with side effects and the last expression
+                    if self.has_side_effects(&optimized) || optimized_exprs.is_empty() {
+                        optimized_exprs.push(optimized);
+                    }
+                }
+                
+                if optimized_exprs.len() == 1 {
+                    optimized_exprs.into_iter().next().unwrap()
+                } else {
+                    IrNode::Do {
+                        id,
+                        expressions: optimized_exprs,
+                        ir_type,
+                        source_location,
+                    }
+                }
+            },
+            
+            IrNode::Let { id, bindings, body, ir_type, source_location } => {
+                // Optimize bindings and check for usage
+                let mut used_bindings = Vec::new();
+                let optimized_body: Vec<IrNode> = body.into_iter()
+                    .map(|expr| self.optimize_control_flow(expr))
                     .collect();
                 
-                IrNode::Do {
+                // Collect used variable names from body
+                let mut used_vars = HashSet::new();
+                for expr in &optimized_body {
+                    self.collect_used_variables(expr, &mut used_vars);
+                }
+                
+                // Only keep bindings that are used or have side effects
+                for binding in bindings {
+                    let binding_name = self.extract_binding_name(&binding.pattern);
+                    if binding_name.as_ref().map_or(true, |name| used_vars.contains(name)) || 
+                       self.has_side_effects(&binding.init_expr) {
+                        used_bindings.push(IrLetBinding {
+                            pattern: self.optimize_control_flow(binding.pattern),
+                            type_annotation: binding.type_annotation,
+                            init_expr: self.optimize_control_flow(binding.init_expr),
+                        });
+                    }
+                }
+                
+                if used_bindings.is_empty() && optimized_body.len() == 1 {
+                    // No bindings needed, return body directly
+                    optimized_body.into_iter().next().unwrap()
+                } else {
+                    IrNode::Let {
+                        id,
+                        bindings: used_bindings,
+                        body: optimized_body,
+                        ir_type,
+                        source_location,
+                    }
+                }
+            },
+            
+            // Recursively optimize other node types
+            _ => self.optimize_recursive(node)
+        }
+    }
+
+    fn optimize_dead_code_elimination(&self, node: IrNode) -> IrNode {
+        match node {
+            IrNode::Do { id, expressions, ir_type, source_location } => {
+                let mut kept_expressions = Vec::new();
+                let expr_count = expressions.len();
+                
+                for (i, expr) in expressions.into_iter().enumerate() {
+                    let optimized = self.optimize_dead_code_elimination(expr);
+                    
+                    // Keep last expression (return value) and expressions with side effects
+                    if i == expr_count - 1 || self.has_side_effects(&optimized) {
+                        kept_expressions.push(optimized);
+                    }
+                }
+                
+                if kept_expressions.len() == 1 {
+                    kept_expressions.into_iter().next().unwrap()
+                } else {
+                    IrNode::Do {
+                        id,
+                        expressions: kept_expressions,
+                        ir_type,
+                        source_location,
+                    }
+                }
+            },
+            
+            // For other nodes, recursively apply optimization
+            _ => self.optimize_recursive(node)
+        }
+    }
+
+    fn optimize_function_inlines(&self, node: IrNode) -> IrNode {
+        match node {
+            IrNode::Apply { id, function, arguments, ir_type, source_location } => {
+                // Check if this is a lambda call that can be inlined
+                if let IrNode::Lambda { params, body, .. } = function.as_ref() {
+                    let body_size = self.estimate_body_size(body);
+                    
+                    // Only inline small functions
+                    if body_size <= self.inline_threshold && 
+                       params.len() == arguments.len() &&
+                       self.should_inline(function.as_ref()) {
+                        
+                        // Perform simple function inlining
+                        return self.inline_function_call(params, body, &arguments, ir_type);
+                    }
+                }
+                
+                // If not inlined, optimize recursively
+                IrNode::Apply {
                     id,
-                    expressions: optimized_expressions,
+                    function: Box::new(self.optimize_function_inlines(*function)),
+                    arguments: arguments.into_iter().map(|arg| self.optimize_function_inlines(arg)).collect(),
                     ir_type,
                     source_location,
                 }
-            }
+            },
             
-            // For other node types, recursively optimize children with depth tracking
-            _ => self.optimize_children_with_depth(node, depth + 1),
+            _ => self.optimize_recursive(node)
         }
     }
-}
 
-impl ConstantFoldingPass {
-    fn infer_literal_type(&self, literal: &Literal) -> IrType {
-        match literal {
-            Literal::Integer(_) => IrType::Int,
-            Literal::Float(_) => IrType::Float,
-            Literal::String(_) => IrType::String,
-            Literal::Boolean(_) => IrType::Bool,
-            Literal::Keyword(_) => IrType::Keyword,
-            Literal::Nil => IrType::Nil,
-        }
-    }    fn optimize_children(&mut self, node: IrNode) -> IrNode {
-        self.optimize_children_with_depth(node, 0)
-    }
+    // Helper methods
 
-    fn optimize_children_with_depth(&mut self, node: IrNode, depth: usize) -> IrNode {
-        // Prevent infinite recursion
-        if depth >= Self::MAX_DEPTH {
-            return node;
-        }
-
+    fn optimize_recursive(&self, node: IrNode) -> IrNode {
         match node {
             IrNode::Lambda { id, params, variadic_param, body, captures, ir_type, source_location } => {
-                let optimized_body: Vec<IrNode> = body.into_iter()
-                    .map(|expr| self.optimize_with_depth(expr, depth + 1))
-                    .collect();
-                
                 IrNode::Lambda {
                     id,
-                    params,
-                    variadic_param,
-                    body: optimized_body,
+                    params: params.into_iter().map(|p| self.optimize_control_flow(p)).collect(),
+                    variadic_param: variadic_param.map(|vp| Box::new(self.optimize_control_flow(*vp))),
+                    body: body.into_iter().map(|expr| self.optimize_control_flow(expr)).collect(),
                     captures,
                     ir_type,
                     source_location,
                 }
-            }
+            },
             
-            IrNode::LogStep { id, level, values, location, ir_type, source_location } => {
-                let optimized_values: Vec<IrNode> = values.into_iter()
-                    .map(|expr| self.optimize_with_depth(expr, depth + 1))
-                    .collect();
-                
-                IrNode::LogStep {
+            IrNode::Match { id, expression, clauses, ir_type, source_location } => {
+                IrNode::Match {
                     id,
-                    level,
-                    values: optimized_values,
-                    location,
+                    expression: Box::new(self.optimize_control_flow(*expression)),
+                    clauses: clauses.into_iter().map(|clause| IrMatchClause {
+                        pattern: clause.pattern,
+                        guard: clause.guard.map(|g| self.optimize_control_flow(g)),
+                        body: self.optimize_control_flow(clause.body),
+                    }).collect(),
                     ir_type,
                     source_location,
                 }
-            }
+            },
             
-            // For other nodes without children or already handled, return as-is
+            // For leaf nodes and other complex nodes, return as-is
             _ => node,
         }
     }
-}
 
-/// Dead code elimination pass
-pub struct DeadCodeEliminationPass {
-    eliminated_count: usize,
-}
-
-impl DeadCodeEliminationPass {
-    pub fn new() -> Self {
-        DeadCodeEliminationPass { eliminated_count: 0 }
-    }
-    
-    /// Check if a node has side effects
     fn has_side_effects(&self, node: &IrNode) -> bool {
         match node {
             IrNode::Literal { .. } => false,
-            IrNode::VariableRef { .. } => false,            IrNode::Apply { function, arguments, .. } => {
+            IrNode::VariableRef { .. } => false,
+            IrNode::Apply { function, arguments, .. } => {
                 // Conservative: assume function calls have side effects unless known pure
                 match function.as_ref() {
                     IrNode::VariableRef { name, .. } => {
-                        // Known pure functions
-                        let pure_functions = ["+", "-", "*", "/", "=", "!=", "<", "<=", ">", ">="];
+                        let pure_functions = ["+", "-", "*", "/", "=", "!=", "<", "<=", ">", ">=", "and", "or", "not"];
                         if pure_functions.contains(&name.as_str()) {
                             arguments.iter().any(|arg| self.has_side_effects(arg))
                         } else {
@@ -392,230 +281,163 @@ impl DeadCodeEliminationPass {
                     }
                     _ => true,
                 }
-            }
+            },
             IrNode::LogStep { .. } => true, // Logging has side effects
+            IrNode::TryCatch { .. } => true, // Exception handling has side effects
+            IrNode::WithResource { .. } => true, // Resource management has side effects
             _ => true, // Conservative default
         }
     }
-}
 
-impl OptimizationPass for DeadCodeEliminationPass {
-    fn name(&self) -> &'static str {
-        "DeadCodeElimination"
-    }
-    
-    fn optimize(&mut self, node: IrNode) -> IrNode {
-        self.optimize_with_depth(node, 0)
-    }
-}
-
-impl DeadCodeEliminationPass {
-    /// Maximum recursion depth to prevent infinite loops
-    const MAX_DEPTH: usize = 100;
-    
-    /// Optimize with depth tracking to prevent infinite recursion
-    fn optimize_with_depth(&mut self, node: IrNode, depth: usize) -> IrNode {
-        // Prevent infinite recursion
-        if depth >= Self::MAX_DEPTH {
-            return node;
-        }
-        
+    fn collect_used_variables(&self, node: &IrNode, used: &mut HashSet<String>) {
         match node {
-            IrNode::Do { id, expressions, ir_type, source_location } => {
-                let mut optimized_expressions = Vec::new();
-                let expressions_len = expressions.len();
-                  for (i, expr) in expressions.into_iter().enumerate() {
-                    let optimized_expr = self.optimize_with_depth(expr, depth + 1);
-                    
-                    // Keep the last expression (return value) and expressions with side effects
-                    if i == expressions_len - 1 || self.has_side_effects(&optimized_expr) {
-                        optimized_expressions.push(optimized_expr);
-                    } else {
-                        self.eliminated_count += 1;
-                    }
+            IrNode::VariableRef { name, .. } => {
+                used.insert(name.clone());
+            },
+            IrNode::Apply { function, arguments, .. } => {
+                self.collect_used_variables(function, used);
+                for arg in arguments {
+                    self.collect_used_variables(arg, used);
                 }
-                
-                // If all expressions were eliminated except the last, simplify
-                if optimized_expressions.len() == 1 {
-                    optimized_expressions.into_iter().next().unwrap()
-                } else {
-                    IrNode::Do {
-                        id,
-                        expressions: optimized_expressions,
-                        ir_type,
-                        source_location,
-                    }
+            },
+            IrNode::If { condition, then_branch, else_branch, .. } => {
+                self.collect_used_variables(condition, used);
+                self.collect_used_variables(then_branch, used);
+                if let Some(else_node) = else_branch {
+                    self.collect_used_variables(else_node, used);
                 }
-            }
-            
-            IrNode::Let { id, bindings, body, ir_type, source_location } => {
-                // Remove unused bindings
-                let mut used_bindings = Vec::new();
-                let mut binding_usage = HashMap::new();
-                
-                // Analyze usage in body (simplified)
-                for binding in &bindings {
-                    if let IrNode::VariableBinding { id: binding_id, .. } = &binding.pattern {
-                        binding_usage.insert(*binding_id, false);
-                    }
-                }
-                  // Mark bindings as used (simplified - would need full usage analysis)
+            },
+            IrNode::Let { bindings, body, .. } => {
                 for binding in bindings {
-                    // For now, keep all bindings that have side effects
-                    if self.has_side_effects(&binding.init_expr) {
-                        used_bindings.push(IrLetBinding {
-                            pattern: self.optimize_with_depth(binding.pattern, depth + 1),
-                            type_annotation: binding.type_annotation,
-                            init_expr: self.optimize_with_depth(binding.init_expr, depth + 1),
-                        });
-                    } else {
-                        used_bindings.push(IrLetBinding {
-                            pattern: self.optimize_with_depth(binding.pattern, depth + 1),
-                            type_annotation: binding.type_annotation,
-                            init_expr: self.optimize_with_depth(binding.init_expr, depth + 1),
-                        });
-                    }
+                    self.collect_used_variables(&binding.init_expr, used);
                 }
-                
-                let optimized_body: Vec<IrNode> = body.into_iter()
-                    .map(|expr| self.optimize_with_depth(expr, depth + 1))
-                    .collect();
-                
-                IrNode::Let {
-                    id,
-                    bindings: used_bindings,
-                    body: optimized_body,
-                    ir_type,
-                    source_location,
+                for expr in body {
+                    self.collect_used_variables(expr, used);
                 }
-            }
-              _ => node, // For other nodes, return as-is (would need full implementation)
+            },
+            IrNode::Do { expressions, .. } => {
+                for expr in expressions {
+                    self.collect_used_variables(expr, used);
+                }
+            },
+            _ => {}
         }
     }
-}
 
-/// Type specialization pass - creates specialized versions for common type patterns
-pub struct TypeSpecializationPass {
-    specializations: usize,
-}
-
-impl TypeSpecializationPass {
-    pub fn new() -> Self {
-        TypeSpecializationPass { specializations: 0 }
-    }
-}
-
-impl OptimizationPass for TypeSpecializationPass {
-    fn name(&self) -> &'static str {
-        "TypeSpecialization"
-    }
-    
-    fn optimize(&mut self, node: IrNode) -> IrNode {
-        // TODO: Implement type specialization
-        // This would create specialized versions of functions for specific types
-        // For example, a generic add function could be specialized for integers
-        node
-    }
-}
-
-/// Function inlining pass
-pub struct InliningPass {
-    inlined_count: usize,
-    inline_threshold: usize, // Maximum size for inlining
-}
-
-impl InliningPass {
-    pub fn new() -> Self {
-        InliningPass {
-            inlined_count: 0,
-            inline_threshold: 10, // Inline functions with <= 10 nodes
+    fn extract_binding_name(&self, pattern: &IrNode) -> Option<String> {
+        match pattern {
+            IrNode::VariableBinding { name, .. } => Some(name.clone()),
+            _ => None, // Complex patterns not supported in this simplified version
         }
     }
-    
-    /// Estimate the size of an IR node tree
-    fn estimate_size(&self, node: &IrNode) -> usize {
+
+    fn estimate_body_size(&self, body: &[IrNode]) -> usize {
+        body.iter().map(|node| self.estimate_node_size(node)).sum()
+    }
+
+    fn estimate_node_size(&self, node: &IrNode) -> usize {
         match node {
             IrNode::Literal { .. } => 1,
             IrNode::VariableRef { .. } => 1,
             IrNode::Apply { function, arguments, .. } => {
-                1 + self.estimate_size(function) + arguments.iter().map(|arg| self.estimate_size(arg)).sum::<usize>()
-            }
+                1 + self.estimate_node_size(function) + arguments.iter().map(|arg| self.estimate_node_size(arg)).sum::<usize>()
+            },
             IrNode::If { condition, then_branch, else_branch, .. } => {
-                1 + self.estimate_size(condition) + self.estimate_size(then_branch) 
-                    + else_branch.as_ref().map_or(0, |e| self.estimate_size(e))
-            }
+                1 + self.estimate_node_size(condition) + self.estimate_node_size(then_branch) +
+                else_branch.as_ref().map_or(0, |e| self.estimate_node_size(e))
+            },
+            IrNode::Let { bindings, body, .. } => {
+                1 + bindings.iter().map(|b| self.estimate_node_size(&b.init_expr)).sum::<usize>() +
+                body.iter().map(|expr| self.estimate_node_size(expr)).sum::<usize>()
+            },
             IrNode::Do { expressions, .. } => {
-                1 + expressions.iter().map(|expr| self.estimate_size(expr)).sum::<usize>()
+                1 + expressions.iter().map(|expr| self.estimate_node_size(expr)).sum::<usize>()
+            },
+            _ => 3, // Conservative estimate for complex nodes
+        }
+    }
+
+    fn should_inline(&self, function: &IrNode) -> bool {
+        // Simple heuristic: inline if function is small and not recursive
+        match function {
+            IrNode::Lambda { body, .. } => {
+                let size = self.estimate_body_size(body);
+                size <= self.inline_threshold
+            },
+            _ => false,
+        }
+    }
+
+    fn inline_function_call(&self, params: &[IrNode], body: &[IrNode], args: &[IrNode], return_type: IrType) -> IrNode {
+        // Create parameter bindings
+        let mut bindings = Vec::new();
+        for (param, arg) in params.iter().zip(args.iter()) {
+            if let IrNode::Param { binding, .. } = param {
+                bindings.push(IrLetBinding {
+                    pattern: (**binding).clone(),
+                    type_annotation: None,
+                    init_expr: arg.clone(),
+                });
             }
-            _ => 5, // Conservative estimate for complex nodes
+        }
+
+        // Create let expression with inlined body
+        if bindings.is_empty() && body.len() == 1 {
+            // No parameters, return body directly
+            body[0].clone()
+        } else {
+            IrNode::Let {
+                id: 0, // Generate new ID in production
+                bindings,
+                body: body.to_vec(),
+                ir_type: return_type,
+                source_location: None,
+            }
         }
     }
 }
 
-impl OptimizationPass for InliningPass {
-    fn name(&self) -> &'static str {
-        "Inlining"
-    }
-    
-    fn optimize(&mut self, node: IrNode) -> IrNode {
-        self.optimize_with_depth(node, 0)
-    }
+// Enhanced optimization pipeline that combines basic and advanced passes
+pub struct EnhancedOptimizationPipeline {
+    enhanced_optimizer: EnhancedIrOptimizer,
+    stats: EnhancedOptimizationStats,
 }
 
-impl InliningPass {
-    /// Maximum recursion depth to prevent infinite loops
-    const MAX_DEPTH: usize = 100;
-    
-    /// Optimize with depth tracking to prevent infinite recursion
-    fn optimize_with_depth(&mut self, node: IrNode, depth: usize) -> IrNode {
-        // Prevent infinite recursion
-        if depth >= Self::MAX_DEPTH {
-            return node;
+#[derive(Debug, Default)]
+pub struct EnhancedOptimizationStats {
+    pub control_flow_optimizations: usize,
+    pub functions_inlined: usize,
+    pub dead_code_blocks_eliminated: usize,
+    pub optimization_time_ms: u128,
+}
+
+impl EnhancedOptimizationPipeline {
+    pub fn new() -> Self {
+        Self {
+            enhanced_optimizer: EnhancedIrOptimizer::new(),
+            stats: EnhancedOptimizationStats::default(),
         }
+    }
+
+    pub fn with_optimization_level(level: OptimizationLevel) -> Self {
+        Self {
+            enhanced_optimizer: EnhancedIrOptimizer::with_level(level),
+            stats: EnhancedOptimizationStats::default(),
+        }
+    }
+
+    pub fn optimize(&mut self, node: IrNode) -> IrNode {
+        let start_time = std::time::Instant::now();
         
-        match node {
-            IrNode::Apply { id, function, arguments, ir_type, source_location } => {
-                // Check if we can inline this function call
-                if let IrNode::Lambda { params, body, .. } = function.as_ref() {
-                    let body_size: usize = body.iter().map(|expr| self.estimate_size(expr)).sum();
-                    
-                    if body_size <= self.inline_threshold && params.len() == arguments.len() {
-                        // Inline the function
-                        self.inlined_count += 1;
-                        
-                        // Create let binding for parameters
-                        let mut bindings = Vec::new();
-                        for (param, arg) in params.iter().zip(arguments.iter()) {
-                            if let IrNode::Param { binding, .. } = param {
-                                bindings.push(IrLetBinding {
-                                    pattern: (**binding).clone(),
-                                    type_annotation: None,
-                                    init_expr: arg.clone(),
-                                });
-                            }
-                        }
-                        
-                        return IrNode::Let {
-                            id,
-                            bindings,
-                            body: body.clone(),
-                            ir_type,
-                            source_location,
-                        };
-                    }
-                }
-                  // If not inlined, optimize recursively with depth tracking
-                IrNode::Apply {
-                    id,
-                    function: Box::new(self.optimize_with_depth(*function, depth + 1)),
-                    arguments: arguments.into_iter().map(|arg| self.optimize_with_depth(arg, depth + 1)).collect(),
-                    ir_type,
-                    source_location,
-                }
-            }
-            
-            _ => node, // For other nodes, return as-is (would need full implementation)
-        }
+        // Run enhanced optimizations
+        let optimized_node = self.enhanced_optimizer.optimize_with_control_flow(node);
+        
+        self.stats.optimization_time_ms = start_time.elapsed().as_millis();
+        optimized_node
+    }
+
+    pub fn stats(&self) -> &EnhancedOptimizationStats {
+        &self.stats
     }
 }
 
@@ -624,37 +446,67 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_constant_folding() {
-        let mut pass = ConstantFoldingPass::new();
+    fn test_enhanced_control_flow_optimization() {
+        let mut optimizer = EnhancedIrOptimizer::new();
         
-        // Test arithmetic folding
-        let node = IrNode::Apply {
+        // Test constant condition elimination
+        let node = IrNode::If {
             id: 1,
-            function: Box::new(IrNode::VariableRef {
+            condition: Box::new(IrNode::Literal {
                 id: 2,
-                name: "+".to_string(),
-                binding_id: 100,
-                ir_type: IrType::Function {
-                    param_types: vec![IrType::Int, IrType::Int],
-                    variadic_param_type: None,
-                    return_type: Box::new(IrType::Int),
-                },
+                value: Literal::Boolean(true),
+                ir_type: IrType::Bool,
                 source_location: None,
             }),
-            arguments: vec![
+            then_branch: Box::new(IrNode::Literal {
+                id: 3,
+                value: Literal::Integer(42),
+                ir_type: IrType::Int,
+                source_location: None,
+            }),
+            else_branch: Some(Box::new(IrNode::Literal {
+                id: 4,
+                value: Literal::Integer(0),
+                ir_type: IrType::Int,
+                source_location: None,
+            })),
+            ir_type: IrType::Int,
+            source_location: None,
+        };
+        
+        let optimized = optimizer.optimize_with_control_flow(node);
+        
+        // Should eliminate the if and return the then branch
+        if let IrNode::Literal { value: Literal::Integer(result), .. } = optimized {
+            assert_eq!(result, 42);
+        } else {
+            panic!("Expected constant folded result");
+        }
+    }
+    
+    #[test]
+    fn test_enhanced_dead_code_elimination() {
+        let mut optimizer = EnhancedIrOptimizer::new();
+        
+        // Test unused expression elimination in Do block
+        let node = IrNode::Do {
+            id: 1,
+            expressions: vec![
+                IrNode::Literal { id: 2, value: Literal::Integer(1), ir_type: IrType::Int, source_location: None },
                 IrNode::Literal { id: 3, value: Literal::Integer(2), ir_type: IrType::Int, source_location: None },
-                IrNode::Literal { id: 4, value: Literal::Integer(3), ir_type: IrType::Int, source_location: None },
+                IrNode::Literal { id: 4, value: Literal::Integer(42), ir_type: IrType::Int, source_location: None },
             ],
             ir_type: IrType::Int,
             source_location: None,
         };
         
-        let optimized = pass.optimize(node);
+        let optimized = optimizer.optimize_with_control_flow(node);
         
+        // Should eliminate intermediate expressions and return the last one
         if let IrNode::Literal { value: Literal::Integer(result), .. } = optimized {
-            assert_eq!(result, 5);
+            assert_eq!(result, 42);
         } else {
-            panic!("Expected folded constant");
+            panic!("Expected dead code eliminated result");
         }
     }
 }

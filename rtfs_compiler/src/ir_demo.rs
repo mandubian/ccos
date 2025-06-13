@@ -1,11 +1,10 @@
 // Example demonstrating AST to IR conversion and optimization
 // This shows the complete pipeline from source code to optimized IR
 
-use std::collections::HashMap;
 use crate::ast::*;
 use crate::ir::*;
 // use crate::ir_converter::*; // Temporarily disabled
-use crate::ir_optimizer::*;
+use crate::ir_optimizer::EnhancedOptimizationPipeline;
 
 /// Stub implementation for demo purposes
 pub struct IrConverter {
@@ -185,9 +184,8 @@ pub fn demonstrate_ir_pipeline() {
     
     println!("\n1. IR (simplified representation):");
     print_ir_simplified(&ir);
-    
-    // Step 2: Apply optimizations
-    let mut optimizer = OptimizationPipeline::standard();
+      // Step 2: Apply optimizations
+    let mut optimizer = EnhancedOptimizationPipeline::new();
     let optimized_ir = optimizer.optimize(ir);
     
     println!("\n2. Optimized IR:");
