@@ -62,7 +62,27 @@ pub enum RuntimeError {
     
     /// Pattern matching errors
     MatchError(String),
-      /// Custom application errors
+    
+    /// Agent discovery and communication errors
+    AgentDiscoveryError {
+        message: String,
+        registry_uri: String,
+    },
+    
+    /// Agent communication errors
+    AgentCommunicationError {
+        message: String,
+        agent_id: String,
+        endpoint: String,
+    },
+    
+    /// Agent profile parsing/validation errors
+    AgentProfileError {
+        message: String,
+        profile_uri: Option<String>,
+    },
+
+    /// Custom application errors
     ApplicationError {
         error_type: Keyword,
         message: String,
@@ -122,7 +142,21 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::MatchError(msg) => {
                 write!(f, "Match error: {}", msg)
-            },            RuntimeError::ApplicationError { error_type, message, .. } => {
+            },
+            RuntimeError::AgentDiscoveryError { message, registry_uri } => {
+                write!(f, "Agent discovery error: {} (registry: {})", message, registry_uri)
+            },
+            RuntimeError::AgentCommunicationError { message, agent_id, endpoint } => {
+                write!(f, "Agent communication error: {} (agent: {}, endpoint: {})", message, agent_id, endpoint)
+            },
+            RuntimeError::AgentProfileError { message, profile_uri } => {
+                match profile_uri {
+                    Some(uri) => write!(f, "Agent profile error: {} (profile: {})", message, uri),
+                    None => write!(f, "Agent profile error: {}", message),
+                }
+            },
+
+            RuntimeError::ApplicationError { error_type, message, .. } => {
                 write!(f, "Application error ({}): {}", error_type.0, message)
             },
             RuntimeError::InvalidProgram(msg) => {

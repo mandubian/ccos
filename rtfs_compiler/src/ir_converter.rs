@@ -228,9 +228,9 @@ impl IrConverter {
             Expression::TryCatch(try_expr) => self.convert_try_catch(try_expr),
             Expression::Parallel(parallel_expr) => self.convert_parallel(parallel_expr),
             Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),
-            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),
-            Expression::Def(def_expr) => self.convert_def(*def_expr),
+            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),            Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
+            Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(&discover_expr),
         }
     }
     
@@ -1136,6 +1136,39 @@ impl IrConverter {
     /// Get module registry reference (unsafe but controlled)
     fn get_module_registry(&self) -> Option<&crate::runtime::module_runtime::ModuleRegistry> {
         self.module_registry.map(|ptr| unsafe { &*ptr })
+    }
+      /// Convert a discover-agents expression to IR
+    fn convert_discover_agents(&mut self, discover_expr: &crate::ast::DiscoverAgentsExpr) -> IrConversionResult<IrNode> {
+        // For now, convert as a placeholder function call
+        // This will be properly implemented once the agent system is integrated
+        
+        let criteria_ir = self.convert_expression(*discover_expr.criteria.clone())?;
+        
+        let mut args = vec![criteria_ir];
+        
+        if let Some(options) = &discover_expr.options {
+            let options_ir = self.convert_expression(*options.clone())?;
+            args.push(options_ir);
+        }        Ok(IrNode::Apply {
+            id: self.next_id(),
+            function: Box::new(IrNode::VariableRef {
+                id: self.next_id(),
+                name: "discover-agents".to_string(),
+                binding_id: 0, // Placeholder for now
+                ir_type: IrType::Function {
+                    param_types: vec![IrType::Map {
+                        entries: vec![],
+                        wildcard: Some(Box::new(IrType::Any)),
+                    }],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+                },
+                source_location: None,
+            }),
+            arguments: args,
+            ir_type: IrType::Vector(Box::new(IrType::Any)),
+            source_location: None,
+        })
     }
 }
 

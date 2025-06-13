@@ -167,6 +167,7 @@ pub enum Expression {
     Parallel(ParallelExpr),
     Def(Box<DefExpr>),   // Added for def as an expression
     Defn(Box<DefnExpr>), // Added for defn as an expression
+    DiscoverAgents(DiscoverAgentsExpr), // Added for agent discovery
 }
 
 // Struct for Match Expression
@@ -327,4 +328,14 @@ pub struct ImportDefinition {
     pub module_name: Symbol,       // Namespaced identifier
     pub alias: Option<Symbol>,     // :as alias
     pub only: Option<Vec<Symbol>>, // :only [sym1 sym2]
+}
+
+/// Discover Agents Expression - for (discover-agents ...) special form
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiscoverAgentsExpr {
+    /// Discovery criteria map (required)
+    pub criteria: Box<Expression>, // Must be a Map expression
+    
+    /// Options map (optional)
+    pub options: Option<Box<Expression>>, // Optional Map expression
 }
