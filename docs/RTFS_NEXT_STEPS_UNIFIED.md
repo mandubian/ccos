@@ -102,9 +102,27 @@
 
 ## 🎯 **CURRENT HIGH PRIORITY ITEMS**
 
+### **📋 PRIORITY DECISION SUMMARY** 
+
+**Current Status:** Steps 1-3 completed successfully → Need to choose next focus
+
+#### **🚨 CRITICAL INSIGHT: Missing Core RTFS Feature**
+The agent system (discovery, profiles, communication) is **specified but not implemented**. This is a foundational RTFS capability that should be prioritized.
+
+#### **🎯 RECOMMENDED PRIORITY ORDER:**
+1. **🤖 AGENT SYSTEM** (Critical missing core feature) 
+2. **🚀 REPL Deployment** (Ready for immediate deployment)
+3. **🔧 Language Server** (Professional development experience)
+4. **⚡ Production Optimizer** (Performance improvements)
+
+---
+
 ### **NEXT STEPS AFTER STEPS 1-3 COMPLETION** 🚀
 
 **Current Status:** Steps 1-3 successfully completed on June 13, 2025
+
+**⚡ DECISION NEEDED:** Choose your next priority from the options below ⬇️  
+**📋 See "PRIORITY DECISION GUIDE" section above for detailed recommendations**
 
 #### **✅ Major Strategic Achievements:**
 - **Integration Crisis Resolved**: Fixed 67+ compilation errors that were blocking development
@@ -112,6 +130,84 @@
 - **Professional Development Environment**: Complete REPL + testing framework ready for deployment
 - **Performance Infrastructure**: Baseline testing and optimization metrics established
 - **Modular Design**: All components work independently and together
+
+### 🤖 **AGENT SYSTEM IMPLEMENTATION** 🔥 🔥 **CRITICAL PRIORITY** - CORE RTFS FEATURE
+
+**Status:** 🚨 **MISSING CRITICAL FEATURE** - Comprehensive specifications exist but no implementation
+
+**Why Critical:** Agent discovery, agent profiles, and agent communication are foundational to RTFS's multi-agent vision. We have detailed specifications but zero implementation.
+
+#### **Current State Analysis:**
+- ✅ **Complete specifications** in `docs/specs/agent_discovery.md` (201 lines)
+- ✅ **Language semantics** for `(discover-agents ...)` special form defined
+- ✅ **Agent profile and agent_card** data structures specified  
+- ✅ **Communication protocols** and registry API defined
+- ❌ **ZERO implementation** - No agent-related code exists in codebase
+- ❌ **No runtime support** for `(discover-agents ...)` special form
+- ❌ **No agent registry** service implementation
+- ❌ **No agent communication** client/server
+
+#### 🤖.1 Agent Discovery Registry Implementation
+**Target:** Core agent discovery infrastructure
+**Files:** Create new `src/agent/` module structure
+**Steps:**
+1. **Agent Registry Service** (`src/agent/registry.rs`)
+   - Implement `AgentRegistry` with agent registration/discovery
+   - Support for `agent_card` storage and capability-based queries
+   - JSON-RPC protocol for registry communication
+   - Health monitoring and TTL management
+
+2. **Agent Discovery Client** (`src/agent/discovery.rs`)
+   - HTTP client for registry communication
+   - `discover_agents()` function implementation
+   - Connection pooling and error handling
+   - Registry failover and caching
+
+3. **Data Structures** (`src/agent/types.rs`)
+   - `AgentCard`, `AgentProfile`, `DiscoveryQuery` types
+   - Capability matching and filtering logic
+   - JSON serialization/deserialization
+   - Schema validation
+
+#### 🤖.2 Runtime Integration for `(discover-agents ...)` 
+**Target:** Language runtime support for agent discovery
+**Files:** `src/runtime/agent_runtime.rs`, `src/ast.rs`
+**Steps:**
+1. **AST Support** - Add `DiscoverAgents` expression variant
+2. **Parser Integration** - Parse `(discover-agents criteria-map)` syntax
+3. **Runtime Evaluation** - Implement discovery special form evaluation
+4. **Error Handling** - Agent discovery error types and propagation
+5. **Registry Configuration** - Runtime registry endpoint configuration
+
+#### 🤖.3 Agent Communication Framework
+**Target:** Agent-to-agent communication capabilities
+**Files:** `src/agent/communication.rs`
+**Steps:**
+1. **Communication Client** - HTTP/gRPC clients for agent invocation
+2. **Protocol Support** - Multi-protocol agent communication
+3. **Message Serialization** - RTFS value serialization for agent messages
+4. **Connection Management** - Connection pooling and lifecycle
+5. **Security Integration** - Authentication and authorization
+
+#### 🤖.4 Agent Profile Management
+**Target:** Agent identity and capability management
+**Files:** `src/agent/profile.rs`
+**Steps:**
+1. **Profile Parser** - Parse RTFS agent-profile files
+2. **Agent Card Generation** - Convert agent-profile to agent_card
+3. **Capability Registry** - Local capability management
+4. **Profile Validation** - Schema validation and consistency checks
+5. **Metadata Management** - Version, tags, and discovery metadata
+
+#### 🤖.5 Integration with Enhanced REPL (Step 3)
+**Target:** Interactive agent development and testing
+**Files:** `src/development_tooling.rs` (extend existing)
+**Steps:**
+1. **REPL Agent Commands** - `:discover`, `:register`, `:agents`
+2. **Agent Testing Framework** - Test agent discovery and communication
+3. **Mock Agent Support** - Local agent simulation for development
+4. **Registry Monitoring** - Real-time registry status in REPL
+5. **Agent Profile Editor** - Interactive agent profile creation
 
 ### 4. **Language Server Capabilities** 🔥 **HIGH PRIORITY** - NEXT TARGET
 
@@ -247,19 +343,13 @@
 
 ## 📋 **LOWER PRIORITY ITEMS**
 
-### 8. **Agent Discovery and Communication**
-- [ ] **Agent Discovery Registry**: Implement prototype registry system
-- [ ] **`(discover-agents ...)` Integration**: Connect runtime to discovery service
-- [ ] **Agent Profile Management**: Implement agent-profile to agent_card conversion
-- [ ] **Communication Protocols**: MCP and A2A protocol integration
-
-### 9. **Security and Safety**
+### 8. **Security and Safety**
 - [ ] **Contract Validation**: Runtime verification of task contracts
 - [ ] **Permission System**: Fine-grained capability management
 - [ ] **Execution Tracing**: Cryptographic integrity of execution logs
 - [ ] **Sandboxing**: Isolated execution environments
 
-### 10. **LLM Training and Integration**
+### 9. **LLM Training and Integration**
 - [ ] **Training Corpus Compilation**: Collect and curate RTFS examples
 - [ ] **IR Optimization for LLMs**: Design IR specifically for AI consumption
 - [ ] **Few-shot Learning**: Develop effective prompting strategies
@@ -369,15 +459,17 @@
 - ✅ **Mock system eliminated** - production-ready module loading - Foundation
 
 ### **Next Milestone Targets - Phase 2B**
+- [ ] **🤖 AGENT SYSTEM IMPLEMENTATION** - Critical missing core feature ✅ **TOP PRIORITY**
+- [ ] **Agent Discovery Registry** implementation with `(discover-agents ...)` runtime support
+- [ ] **Agent Communication Framework** with multi-protocol support
+- [ ] **Agent Profile Management** and agent_card generation
+- [ ] **REPL Agent Commands** - `:discover`, `:register`, `:agents` integration
 - [ ] **Language Server Protocol (LSP)** implementation for IDE integration
 - [ ] **REPL deployment** as standalone binary (`cargo run --bin rtfs-repl`)
 - [ ] **Production optimizer integration** into main compilation pipeline
 - [ ] **VS Code extension** with syntax highlighting and debugging
-- [ ] **Enhanced REPL features** (multi-line input, file loading, session save/restore)
-- [ ] **Optimization level CLI flags** (`--opt-level=aggressive`)
-- [ ] **Test runner deployment** as standalone binary (`cargo run --bin rtfs-test`)
 - [ ] **Advanced optimization pipeline** with profile-guided optimization (PGO)
-- [ ] **200+ integration tests** including language server integration tests
+- [ ] **200+ integration tests** including agent system integration tests
 - [ ] **5,000+ expressions/second** with production-optimized pipeline
 
 ---
@@ -484,3 +576,65 @@ cargo run --release
 **Last Updated:** June 13, 2025 (Steps 1-3 Implementation milestone completed)
 
 **Major Milestone:** 🚀 **STEPS 1-3 COMPLETED** - Enhanced Integration Tests, Enhanced IR Optimizer, and Development Tooling successfully implemented and integrated.
+
+---
+
+## 🎯 **PRIORITY DECISION GUIDE - CHOOSE YOUR NEXT STEP**
+
+**Current Status:** Steps 1-3 successfully completed. Multiple high-value options available.
+
+### **🚀 IMMEDIATE OPPORTUNITIES (Ready to Deploy)**
+
+#### **Option A: REPL Deployment** ⭐ **QUICKEST WIN** 
+- **Effort:** 🟢 **LOW** (1-2 hours) - Implementation complete, just needs deployment
+- **Impact:** 🟡 **MEDIUM** - Immediate interactive development capability
+- **Next Steps:** Add binary target to `Cargo.toml`, documentation, usage examples
+- **Dependencies:** None - ready to deploy now
+- **Result:** `cargo run --bin rtfs-repl` immediately available for users
+
+#### **Option B: Production Optimizer Integration** ⭐ **HIGH VALUE**
+- **Effort:** 🟡 **MEDIUM** (4-6 hours) - Integration and CLI flags
+- **Impact:** 🟢 **HIGH** - Production compilation with enhanced optimizer
+- **Next Steps:** CLI flags, main pipeline integration, optimization reports
+- **Dependencies:** None - enhanced optimizer is complete and working
+- **Result:** `cargo build --opt-level=aggressive` with 2-26x performance improvements
+
+### **🔧 STRATEGIC DEVELOPMENT (Medium-term)**
+
+#### **Option C: Language Server Capabilities** ⭐ **LONG-TERM VALUE**
+- **Effort:** 🔴 **HIGH** (15-20 hours) - New LSP implementation from scratch
+- **Impact:** 🟢 **HIGH** - Professional IDE integration, wide adoption potential
+- **Next Steps:** LSP protocol implementation, VS Code extension, debugging integration
+- **Dependencies:** None - can build on existing parser and REPL foundation
+- **Result:** Professional IDE support with syntax highlighting, auto-completion, debugging
+
+#### **Option D: Test Framework Deployment** 
+- **Effort:** 🟡 **MEDIUM** (3-4 hours) - Binary target and file-based test discovery
+- **Impact:** 🟡 **MEDIUM** - Standalone testing capabilities for RTFS projects
+- **Next Steps:** Test runner binary, configuration files, CI/CD integration
+- **Dependencies:** None - testing framework is complete
+- **Result:** `cargo run --bin rtfs-test` for project-based testing
+
+### **🎲 RECOMMENDED DECISION MATRIX**
+
+| Priority | Option | Reason | Timeline |
+|----------|--------|---------|----------|
+| **1st** | **REPL Deployment (A)** | Quickest win, immediate user value, builds momentum | **Today** |
+| **2nd** | **Production Optimizer (B)** | High impact, leverages major Step 2 achievement | **This week** |
+| **3rd** | **Language Server (C)** | Strategic long-term value, professional ecosystem | **Next sprint** |
+| **4th** | **Test Framework (D)** | Supports ecosystem development, builds on Step 1 | **Future** |
+
+### **💡 STRATEGIC RECOMMENDATION**
+
+**Recommended approach: Sequential Quick Wins → Strategic Development**
+
+1. **Start with REPL Deployment (Option A)** - Get immediate user value and momentum
+2. **Follow with Production Optimizer (Option B)** - Maximize the Step 2 investment
+3. **Then tackle Language Server (Option C)** - Build professional development environment
+4. **Finally add Test Framework (Option D)** - Complete the development ecosystem
+
+This approach provides:
+- ✅ **Quick momentum** with immediate deployable features
+- ✅ **Maximum ROI** on completed Steps 1-3 work
+- ✅ **Strategic progression** toward professional development environment
+- ✅ **User value** at each step
