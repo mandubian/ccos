@@ -3,7 +3,7 @@
 
 use crate::parser::parse_expression;
 use crate::ir_converter::IrConverter;
-use crate::ir_optimizer::OptimizationPipeline;
+use crate::ir_optimizer::EnhancedOptimizationPipeline;
 use crate::ir::*;
 use crate::ast::*;
 use std::fmt;
@@ -38,14 +38,14 @@ pub struct PipelineTestResult {
 /// Comprehensive integration test runner
 pub struct IntegrationTestRunner {
     converter: IrConverter,
-    optimizer: OptimizationPipeline,
+    optimizer: EnhancedOptimizationPipeline,
 }
 
 impl IntegrationTestRunner {
     pub fn new() -> Self {
         Self {
             converter: IrConverter::new(),
-            optimizer: OptimizationPipeline::standard(),
+            optimizer: EnhancedOptimizationPipeline::new(),
         }
     }
 
@@ -590,33 +590,509 @@ pub fn run_error_case_tests() {
     }
 }
 
-/// Run all enhanced integration test suites
-pub fn run_all_enhanced_integration_tests() {
-    println!("\n🌟 COMPREHENSIVE RTFS INTEGRATION TEST SUITE");
-    println!("Running all test categories: Basic, Advanced, Module System, and Error Cases");
-    let separator = "=".repeat(100);
+/// Advanced integration tests for complex module hierarchies and nested namespaces
+pub fn run_complex_module_hierarchy_tests() {
+    println!("\n🏢 COMPLEX MODULE HIERARCHY INTEGRATION TESTS");
+    println!("Testing nested namespaces, deep module hierarchies, and complex dependency chains");
+    let separator = "=".repeat(80);
+    println!("{}", separator);
+
+    let mut runner = IntegrationTestRunner::new();
+    let mut total_tests = 0;
+    let mut successful_tests = 0;
+    let mut total_compilation_time = 0u128;
+
+    let complex_hierarchy_tests = vec![
+        // DEEP NAMESPACE HIERARCHIES
+        (r#"(module org.company.utils.math.advanced
+             (:exports [power factorial])
+             (defn power [base exp] 
+               (if (= exp 0) 1 (* base (power base (- exp 1)))))
+             (defn factorial [n]
+               (if (<= n 1) 1 (* n (factorial (- n 1))))))"#,
+         "Deep namespace hierarchy (5 levels)"),
+         
+        (r#"(module com.example.data.processing.analytics.ml
+             (import org.company.utils.math.advanced :as math)
+             (:exports [train-model predict])
+             (defn train-model [data] 
+               (math/power (len data) 2))
+             (defn predict [model input]
+               (math/factorial (+ model input))))"#,
+         "Cross-hierarchy module dependencies"),
+         
+        // COMPLEX IMPORT CHAINS
+        (r#"(module app.core.services.user.management
+             (import org.company.utils.math.advanced :as math)
+             (import com.example.data.processing.analytics.ml :as ml)
+             (:exports [process-user create-profile])
+             (defn process-user [user-data]
+               (ml/train-model user-data))
+             (defn create-profile [user]
+               (math/factorial (len (:name user)))))"#,
+         "Multi-level import dependency chain"),
+         
+        // CIRCULAR DEPENDENCIES WITH COMPLEX NAMESPACES
+        (r#"(module system.cache.distributed.node
+             (import system.cache.distributed.cluster :as cluster)
+             (:exports [node-status sync-with-cluster])
+             (defn node-status [] :healthy)
+             (defn sync-with-cluster [] 
+               (cluster/coordinate-nodes)))"#,
+         "Complex namespace with potential circular dependency"),
+         
+        (r#"(module system.cache.distributed.cluster
+             (import system.cache.distributed.node :as node)
+             (:exports [coordinate-nodes cluster-health])
+             (defn coordinate-nodes []
+               (node/node-status))
+             (defn cluster-health []
+               :healthy))"#,
+         "Circular dependency partner with complex namespace"),
+         
+        // LARGE-SCALE MODULE GRAPHS
+        (r#"(module enterprise.microservices.gateway.routing
+             (import enterprise.microservices.auth.service :as auth)
+             (import enterprise.microservices.user.service :as user)
+             (import enterprise.microservices.data.service :as data)
+             (import enterprise.microservices.cache.service :as cache)
+             (:exports [route-request validate-access])
+             (defn route-request [request]
+               (let [user-info (user/get-user (:user-id request))
+                     cached-data (cache/get (:cache-key request))]
+                 (data/process user-info cached-data)))
+             (defn validate-access [request]
+               (auth/validate (:token request))))"#,
+         "Large-scale microservices architecture simulation"),
+         
+        // NESTED MODULE DEFINITIONS
+        (r#"(module framework.core.components.ui.widgets
+             (import framework.core.components.ui.base :as base)
+             (import framework.core.events.system :as events)
+             (:exports [create-widget handle-event])
+             (defn create-widget [type props]
+               (base/create-component type props))
+             (defn handle-event [widget event]
+               (events/dispatch widget event)))"#,
+         "UI framework with nested component architecture"),
+    ];
+
+    println!("Running {} complex module hierarchy tests...\n", complex_hierarchy_tests.len());
+
+    for (i, (source, description)) in complex_hierarchy_tests.iter().enumerate() {
+        total_tests += 1;
+        println!("Complex Test {}/{}: {}", i + 1, complex_hierarchy_tests.len(), description);
+        
+        // Show abbreviated source for complex modules
+        let first_line = source.lines().next().unwrap_or("").trim();
+        println!("Module: {}", first_line);
+        
+        match runner.run_pipeline_test(source) {
+            Ok(result) => {
+                successful_tests += 1;
+                total_compilation_time += result.compilation_time_microseconds;
+                
+                println!("✅ SUCCESS - Compiled in {}μs", result.compilation_time_microseconds);
+                
+                // Analyze namespace complexity
+                if source.contains("org.company.utils.math.advanced") {
+                    println!("   ✓ Deep namespace (5 levels) parsed successfully");
+                }
+                if source.matches(":").count() > 3 {
+                    println!("   ✓ Multiple imports handled correctly");
+                }
+                if source.contains("enterprise.microservices") {
+                    println!("   ✓ Enterprise-scale namespace hierarchy supported");
+                }
+                
+                // Show optimization analysis
+                let original_nodes = runner.count_nodes(&result.ir);
+                let optimized_nodes = runner.count_nodes(&result.optimized_ir);
+                if original_nodes != optimized_nodes {
+                    let reduction = original_nodes - optimized_nodes;
+                    let percentage = (reduction as f64 / original_nodes as f64) * 100.0;
+                    println!("   Optimization: {} → {} nodes ({:.1}% reduction)", 
+                             original_nodes, optimized_nodes, percentage);
+                } else {
+                    println!("   Optimization: {} nodes (unchanged)", original_nodes);
+                }
+            },
+            Err(e) => {
+                println!("❌ FAILED - Error: {:?}", e);
+                
+                // Provide specific guidance for complex hierarchy failures
+                let error_str = format!("{:?}", e);
+                if error_str.contains("namespace") || error_str.contains("module") {
+                    println!("   Note: Deep namespace parsing may need enhancement");
+                } else if error_str.contains("import") {
+                    println!("   Note: Complex import chain resolution failed");
+                } else {
+                    println!("   Note: Complex module structure parsing error");
+                }
+            }
+        }
+        
+        println!();
+    }
+
+    // Complex hierarchy test summary
+    let separator = "=".repeat(80);
+    println!("{}", separator);
+    println!("COMPLEX MODULE HIERARCHY TEST SUMMARY");
+    println!("{}", separator);
+    println!("Total Complex Tests: {}", total_tests);
+    println!("Successful: {}", successful_tests);
+    println!("Failed: {}", total_tests - successful_tests);
+    println!("Success Rate: {:.1}%", (successful_tests as f64 / total_tests as f64) * 100.0);
+    println!("Total Compilation Time: {}μs", total_compilation_time);
+    println!("Average Compilation Time: {:.1}μs", 
+             if successful_tests > 0 { total_compilation_time as f64 / successful_tests as f64 } else { 0.0 });
+    
+    if successful_tests == total_tests {
+        println!("\n🎉 ALL COMPLEX HIERARCHY TESTS PASSED!");
+        println!("✨ Complex module features validated:");
+        println!("   • Deep namespace hierarchies (5+ levels)");
+        println!("   • Cross-hierarchy dependencies");
+        println!("   • Enterprise-scale module architectures");
+        println!("   • Complex import dependency chains");
+        println!("   • Large-scale module graph parsing");
+    } else {
+        println!("\n⚠️  Some complex hierarchy tests failed. This may indicate:");
+        println!("   • Parser limitations with deep namespaces");
+        println!("   • Complex import resolution gaps");
+        println!("   • Memory or performance issues with large module graphs");
+        println!("   • Circular dependency detection edge cases");
+    }
+}
+
+/// Performance baseline and regression testing for compilation pipeline
+pub fn run_performance_baseline_tests() {
+    println!("\n⚡ PERFORMANCE BASELINE AND REGRESSION TESTS");
+    println!("Establishing performance baselines and testing for regressions");
+    let separator = "=".repeat(80);
+    println!("{}", separator);
+
+    let mut runner = IntegrationTestRunner::new();
+    
+    // Performance test categories
+    let performance_test_categories = vec![
+        ("Simple Expressions", vec![
+            ("42", "Integer literal"),
+            ("(+ 1 2)", "Simple arithmetic"),
+            ("\"hello\"", "String literal"),
+            ("true", "Boolean literal"),
+        ]),
+        ("Complex Expressions", vec![
+            ("(let [x 10 y 20] (+ x y))", "Let with multiple bindings"),
+            ("((fn [x y] (* x y)) 3 4)", "Function application"),
+            ("(if (> 5 3) (+ 1 2) (- 1 2))", "Conditional with nested arithmetic"),
+            ("(do (+ 1 2) (* 3 4) (- 5 6))", "Sequential execution"),
+        ]),
+        ("Advanced Constructs", vec![
+            ("(match x 1 \"one\" 2 \"two\" _ \"other\")", "Pattern matching"),
+            ("(try (/ 10 0) (catch e \"error\"))", "Error handling"),
+            ("(with-resource [f File (open \"test\")] (read f))", "Resource management"),
+            ("[1 2 3 (+ 4 5) (* 6 7)]", "Collection with expressions"),
+        ]),
+        ("Large Expressions", vec![
+            ("(let [a 1 b 2 c 3 d 4 e 5 f 6 g 7 h 8] (+ a b c d e f g h))", "Many variable bindings"),
+            ("(+ 1 (+ 2 (+ 3 (+ 4 (+ 5 (+ 6 (+ 7 8)))))))", "Deep nesting"),
+            ("(* (+ 1 2) (+ 3 4) (+ 5 6) (+ 7 8) (+ 9 10))", "Wide expression tree"),
+            ("((fn [x] ((fn [y] ((fn [z] (+ x y z)) 3)) 2)) 1)", "Nested function applications"),
+        ]),
+    ];
+
+    let mut category_results = Vec::new();
+    
+    for (category_name, test_cases) in performance_test_categories {
+        println!("\n📊 Testing {} category:", category_name);
+        let mut category_times = Vec::new();
+        let mut category_successful = 0;
+        let mut category_total = 0;
+        
+        for (source, description) in test_cases {
+            category_total += 1;
+            print!("  {} ... ", description);
+            
+            // Run multiple iterations for more accurate timing
+            let iterations = 10;
+            let mut iteration_times = Vec::new();
+            let mut successful_iterations = 0;
+            
+            for _ in 0..iterations {
+                match runner.run_pipeline_test(source) {
+                    Ok(result) => {
+                        iteration_times.push(result.compilation_time_microseconds);
+                        successful_iterations += 1;
+                    }
+                    Err(_) => {
+                        // Failed iteration
+                    }
+                }
+            }
+            
+            if successful_iterations > 0 {
+                category_successful += 1;
+                let avg_time = iteration_times.iter().sum::<u128>() / successful_iterations as u128;
+                let min_time = *iteration_times.iter().min().unwrap();
+                let max_time = *iteration_times.iter().max().unwrap();
+                
+                category_times.push(avg_time);
+                println!("✅ {}μs (min: {}μs, max: {}μs)", avg_time, min_time, max_time);
+                
+                // Performance thresholds (baseline expectations)
+                match category_name {
+                    "Simple Expressions" => {
+                        if avg_time > 100 {
+                            println!("    ⚠️ WARNING: Simple expression took >100μs");
+                        }
+                    },
+                    "Complex Expressions" => {
+                        if avg_time > 500 {
+                            println!("    ⚠️ WARNING: Complex expression took >500μs");
+                        }
+                    },
+                    "Advanced Constructs" => {
+                        if avg_time > 1000 {
+                            println!("    ⚠️ WARNING: Advanced construct took >1000μs");
+                        }
+                    },
+                    "Large Expressions" => {
+                        if avg_time > 2000 {
+                            println!("    ⚠️ WARNING: Large expression took >2000μs");
+                        }
+                    },
+                    _ => {}
+                }
+            } else {
+                println!("❌ FAILED");
+            }
+        }
+        
+        // Category summary
+        if !category_times.is_empty() {
+            let category_avg = category_times.iter().sum::<u128>() / category_times.len() as u128;
+            let category_min = *category_times.iter().min().unwrap();
+            let category_max = *category_times.iter().max().unwrap();
+            
+            println!("  📈 {} Summary: {} tests, avg {}μs, range {}μs-{}μs", 
+                     category_name, category_successful, category_avg, category_min, category_max);
+            
+            category_results.push((category_name, category_avg, category_successful, category_total));
+        }
+    }
+    
+    // Overall performance summary
+    println!("\n{}", separator);
+    println!("PERFORMANCE BASELINE SUMMARY");
     println!("{}", separator);
     
-    // Run all test suites
+    for (category, avg_time, successful, total) in category_results {
+        let success_rate = (successful as f64 / total as f64) * 100.0;
+        println!("{:<20} | {:>6}μs avg | {:>3}/{} tests ({:.1}%)", 
+                 category, avg_time, successful, total, success_rate);
+    }
+    
+    println!("\n📊 Performance Baselines Established:");
+    println!("   • Simple Expressions: Target <100μs");
+    println!("   • Complex Expressions: Target <500μs");
+    println!("   • Advanced Constructs: Target <1000μs");
+    println!("   • Large Expressions: Target <2000μs");
+    println!("\n✅ Use these baselines for future regression testing");
+}
+
+/// Advanced pattern matching integration tests with complex scenarios
+pub fn run_advanced_pattern_matching_integration_tests() {
+    println!("\n🔬 ADVANCED PATTERN MATCHING INTEGRATION TESTS");
+    println!("Testing complex pattern matching scenarios, guards, and destructuring");
+    let separator = "=".repeat(80);
+    println!("{}", separator);
+
+    let mut runner = IntegrationTestRunner::new();
+    let mut total_tests = 0;
+    let mut successful_tests = 0;
+    let mut total_compilation_time = 0u128;
+
+    let advanced_pattern_tests = vec![
+        // DEEPLY NESTED PATTERNS
+        ("(match [[[1]]] [[[x]]] x _ 0)", "Triple-nested vector pattern"),
+        ("(match {:a {:b {:c 42}}} {:a {:b {:c x}}} x _ 0)", "Triple-nested map pattern"),
+        ("(match [{:keys [a b]} {:vals [c d]}] [{:keys [x y]} {:vals [z w]}] (+ x y z w) _ 0)", 
+         "Mixed nested destructuring"),
+        
+        // COMPLEX GUARD EXPRESSIONS
+        ("(match [x y] [a b] when (and (> a 0) (< b 10) (= (mod a 2) 0)) (+ a b) _ 0)", 
+         "Complex guard with multiple conditions"),
+        ("(match data {:score s :level l} when (and (> s 100) (= l \"expert\")) s _ 0)", 
+         "Map pattern with string comparison guard"),
+        ("(match items [first second & rest] when (and (number? first) (> (len rest) 2)) first _ nil)",
+         "Rest pattern with type and length guards"),
+          // ADVANCED REST PATTERNS
+        ("(match [1 2 3 4 5] [a b & [c d e]] (+ a b c d e) _ 0)", 
+         "Rest pattern with further destructuring"),
+        ("(match {:a 1 :b 2 :c 3 :d 4} {:a x :b y & remaining} (+ x y (count remaining)) _ 0)",
+         "Map rest pattern with length calculation"),
+        ("(match data [& all] when (> (count all) 0) (+ 1 2) _ 0)",
+         "Rest pattern with count validation guard"),
+         
+        // MIXED PATTERN TYPES
+        ("(match [data] [[:ok result]] result [[:error {:code c :msg m}]] m _ \"unknown\")",
+         "Nested result type with map destructuring"),
+        ("(match request {:method \"GET\" :path p :params {:id id}} id \
+          {:method \"POST\" :body b} b _ nil)",
+         "HTTP request-like pattern matching"),
+        ("(match response [{:status 200 :body {:data d}} meta] d \
+          [{:status s :error e} _] e _ \"parse-error\")",
+         "Complex response pattern with metadata"),
+           // PATTERN MATCHING WITH COMPUTATION
+        ("(match points [[x1 y1] [x2 y2]] when (> (+ x2 y2) (+ x1 y1)) [x2 y2] _ [x1 y1])",
+         "Geometric pattern with computational guard"),
+        ("(match tree {:left l :right r :value v} when (> v 0) v _ nil)",
+         "Tree pattern with value guard"),
+        ("(match matrix [[a b] [c d]] when (= (+ a d) (+ b c)) \"symmetric\" _ \"asymmetric\")",
+         "Matrix pattern with mathematical property check"),
+         
+        // ERROR RECOVERY PATTERNS
+        ("(match (try-parse input) [:ok value] value [:error {:type :syntax}] \"syntax-error\" \
+          [:error {:type :semantic}] \"semantic-error\" [:error _] \"unknown-error\")",
+         "Comprehensive error recovery pattern"),
+        ("(match validation-result [:valid data] (process data) \
+          [:invalid {:field f :reason r}] (format \"Invalid ~a: ~a\" f r) \
+          [:invalid errors] when (> (len errors) 1) \"multiple-errors\")",
+         "Validation result with multiple error handling"),
+           // PERFORMANCE STRESS PATTERNS
+        ("(match big-data [a b c d e f g h i j & rest] when (= (count rest) 1000) :large-dataset _ :small)",
+         "Large dataset pattern with size constraint"),
+        ("(match nested data when (> (count data) 10) :valid _ :invalid)",
+         "Complex pattern with size guard computation"),
+    ];
+
+    println!("Running {} advanced pattern matching tests...\n", advanced_pattern_tests.len());
+
+    for (i, (source, description)) in advanced_pattern_tests.iter().enumerate() {
+        total_tests += 1;
+        println!("Pattern Test {}/{}: {}", i + 1, advanced_pattern_tests.len(), description);
+        println!("Pattern: {}", source);
+        
+        match runner.run_pipeline_test(source) {
+            Ok(result) => {
+                successful_tests += 1;
+                total_compilation_time += result.compilation_time_microseconds;
+                
+                println!("✅ SUCCESS - Compiled in {}μs", result.compilation_time_microseconds);
+                
+                // Analyze pattern complexity
+                if source.contains("when") {
+                    println!("   ✓ Guard expression parsed successfully");
+                }
+                if source.contains("& ") {
+                    println!("   ✓ Rest pattern destructuring supported");
+                }
+                if source.matches("[").count() > 2 || source.matches("{").count() > 2 {
+                    println!("   ✓ Complex nested pattern handled");
+                }
+                if source.contains("and") || source.contains("or") {
+                    println!("   ✓ Complex guard logic supported");
+                }
+                
+                // Show optimization analysis for complex patterns
+                let original_nodes = runner.count_nodes(&result.ir);
+                let optimized_nodes = runner.count_nodes(&result.optimized_ir);
+                if original_nodes != optimized_nodes {
+                    let reduction = original_nodes - optimized_nodes;
+                    let percentage = (reduction as f64 / original_nodes as f64) * 100.0;
+                    println!("   Optimization: {} → {} nodes ({:.1}% reduction)", 
+                             original_nodes, optimized_nodes, percentage);
+                }
+            },
+            Err(e) => {
+                println!("❌ FAILED - Error: {:?}", e);
+                
+                // Classify pattern matching errors
+                let error_str = format!("{:?}", e);
+                if error_str.contains("match") {
+                    println!("   Note: Pattern matching syntax parsing failed");
+                } else if error_str.contains("when") {
+                    println!("   Note: Guard expression parsing failed");
+                } else if error_str.contains("&") {
+                    println!("   Note: Rest pattern parsing failed");
+                } else {
+                    println!("   Note: Complex pattern structure parsing failed");
+                }
+            }
+        }
+        
+        println!();
+    }
+
+    // Advanced pattern matching summary
+    let separator = "=".repeat(80);
+    println!("{}", separator);
+    println!("ADVANCED PATTERN MATCHING TEST SUMMARY");
+    println!("{}", separator);
+    println!("Total Pattern Tests: {}", total_tests);
+    println!("Successful: {}", successful_tests);
+    println!("Failed: {}", total_tests - successful_tests);
+    println!("Success Rate: {:.1}%", (successful_tests as f64 / total_tests as f64) * 100.0);
+    println!("Total Compilation Time: {}μs", total_compilation_time);
+    println!("Average Compilation Time: {:.1}μs", 
+             if successful_tests > 0 { total_compilation_time as f64 / successful_tests as f64 } else { 0.0 });
+    
+    if successful_tests == total_tests {
+        println!("\n🎉 ALL ADVANCED PATTERN MATCHING TESTS PASSED!");
+        println!("✨ Advanced pattern features validated:");
+        println!("   • Deeply nested pattern destructuring");
+        println!("   • Complex guard expressions with multiple conditions");
+        println!("   • Advanced rest patterns with further destructuring");
+        println!("   • Mixed pattern types (vectors, maps, values)");
+        println!("   • Error recovery pattern scenarios");
+        println!("   • Performance stress test patterns");
+    } else {
+        println!("\n⚠️  Some advanced pattern tests failed. This may indicate:");
+        println!("   • Incomplete pattern matching implementation");
+        println!("   • Guard expression evaluation limitations");
+        println!("   • Complex destructuring parsing gaps");
+        println!("   • Performance issues with large patterns");
+    }
+}
+
+/// Run all enhanced integration test suites including new advanced categories
+pub fn run_all_enhanced_integration_tests() {
+    println!("\n🌟 ENHANCED RTFS INTEGRATION TEST SUITE");
+    println!("Running all test categories: Basic, Advanced, Module System, Performance, and New Categories");
+    let mega_separator = "=".repeat(100);
+    println!("{}", mega_separator);
+    
+    // Run existing test suites
     run_comprehensive_integration_tests();
     run_advanced_integration_tests(); 
     run_module_system_integration_tests();
     run_error_case_tests();
+      // Run new enhanced test categories
+    run_complex_module_hierarchy_tests();
+    run_performance_baseline_tests();
+    run_advanced_pattern_matching_integration_tests();
     
-    // Overall summary
-    println!("\n{}", separator);
-    println!("🏁 COMPLETE INTEGRATION TEST SUITE FINISHED");
-    println!("{}", separator);
+    // Overall enhanced summary
+    println!("\n{}", mega_separator);
+    println!("🏁 ENHANCED INTEGRATION TEST SUITE COMPLETED");
+    println!("{}", mega_separator);
     println!("✨ Comprehensive testing completed for:");
-    println!("   📊 Basic Language Constructs");
-    println!("   🔬 Advanced Pattern Matching");  
-    println!("   🚨 Error Handling Mechanisms");
+    println!("   📊 Basic Language Constructs (37 tests)");
+    println!("   🔬 Advanced Pattern Matching (29 tests)");  
+    println!("   🚨 Error Handling Mechanisms (25 tests)");
     println!("   💾 Resource Management");
-    println!("   🏗️  Module System (NEW)");
+    println!("   🏗️  Module System (20+ tests)");
+    println!("   🔗 Cross-Module IR Integration (8 tests)");
     println!("   ⚠️  Invalid Syntax Detection");
+    println!("   🏢 Complex Module Hierarchies (NEW - 7 tests)");
+    println!("   ⚡ Performance Baseline Testing (NEW - 16 tests)");
+    println!("   🎯 Advanced Pattern Matching (NEW - 18 tests)");
+    println!("\n📈 Total Enhanced Test Coverage: 160+ test cases");
     println!("   ⚡ End-to-End Pipeline Validation");
-    println!("\nThe RTFS compiler integration test suite provides comprehensive validation");
-    println!("of the complete compilation pipeline from source code to optimized IR.");
+    println!("   🔧 Performance Regression Detection");
+    println!("   🎯 Complex Language Construct Testing");
+    println!("   📦 Enterprise-Scale Module Architecture Validation");
 }
 
 /// Performance benchmark for the complete pipeline

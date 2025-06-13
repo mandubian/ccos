@@ -4,6 +4,9 @@ pub mod runtime; // Declare the runtime module
 mod ir; // Declare the IR module
 mod ir_converter; // Declare the IR converter module
 mod ir_optimizer; // Declare the IR optimizer module
+mod enhanced_ir_optimizer; // Enhanced IR optimizer with advanced passes (Step 2)
+mod enhanced_ir_demo; // Enhanced IR optimizer demonstration (Step 2)
+mod development_tooling; // Development tooling: REPL, testing framework (Step 3)
 mod ir_demo; // Declare the IR demonstration module
 mod ir_demo_complete; // Complete IR pipeline demonstration
 mod optimization_demo; // Advanced optimization demonstration
@@ -16,10 +19,14 @@ use ir_converter::IrConverter;
 
 fn main() {
     println!("RTFS Compiler with AST and IR Runtime");
-    println!("=====================================");
-    
-    // Strategic Runtime Comparison
+    println!("=====================================");    // Strategic Runtime Comparison
     demonstrate_runtime_strategies();
+    
+    // Enhanced IR Optimizer Demonstration (Step 2) - TODO: Fix enhanced_ir_demo compilation
+    // enhanced_ir_demo::run_enhanced_ir_optimizer_demo();
+    
+    // Development Tooling Demonstration (Step 3)
+    development_tooling::run_development_tooling_demo();
     println!();
     
     demonstrate_ast_runtime();

@@ -4,7 +4,7 @@
 use crate::ast::*;
 use crate::ir::*;
 use crate::ir_converter::IrConverter;
-use crate::ir_optimizer::{OptimizationPipeline, ConstantFoldingPass, DeadCodeEliminationPass};
+use crate::ir_optimizer::EnhancedOptimizationPipeline;
 use std::collections::HashMap;
 
 /// Demonstrate the complete IR conversion pipeline
@@ -68,11 +68,8 @@ pub fn demonstrate_ir_optimization_pipeline() {
             print_ir_structure(&ir_node, 0);
             
             println!("\n🎯 Applying Optimizations...");
-            
-            // Create and apply optimization pipeline
-            let mut optimizer = OptimizationPipeline::new();
-            optimizer.add_pass(ConstantFoldingPass::new());
-            optimizer.add_pass(DeadCodeEliminationPass::new());
+              // Create and apply optimization pipeline
+            let mut optimizer = EnhancedOptimizationPipeline::new();
             
             let optimized_ir = optimizer.optimize(ir_node.clone());
             

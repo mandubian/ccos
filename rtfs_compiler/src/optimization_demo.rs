@@ -4,7 +4,7 @@
 use crate::ast::*;
 use crate::ir::*;
 use crate::ir_converter::IrConverter;
-use crate::ir_optimizer::OptimizationPipeline;
+use crate::ir_optimizer::EnhancedOptimizationPipeline;
 use std::time::Instant;
 
 /// Demonstrate advanced optimizations on complex RTFS programs
@@ -54,7 +54,7 @@ fn run_optimization_test(program: &Expression) {
             
             // Apply optimizations
             let opt_start = Instant::now();
-            let mut optimizer = OptimizationPipeline::standard();
+            let mut optimizer = EnhancedOptimizationPipeline::new();
             let optimized_ir = optimizer.optimize(original_ir.clone());
             let optimization_time = opt_start.elapsed();
             
