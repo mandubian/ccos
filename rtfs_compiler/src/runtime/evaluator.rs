@@ -437,20 +437,326 @@ impl Evaluator {
                 })
             }
         }
+    }    /// Evaluate a discover-agents expression
+    fn eval_discover_agents(&self, discover_expr: &crate::ast::DiscoverAgentsExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        use crate::agent::{AgentDiscoveryClient, AgentRegistry};
+        
+        // Evaluate criteria expression - it should be a Map
+        let criteria_value = self.eval_expr(discover_expr.criteria.as_ref(), env)?;
+        
+        // Parse criteria map into DiscoveryQuery
+        let query = match criteria_value {
+            Value::Map(criteria_map) => {
+                self.parse_discovery_query(&criteria_map)?
+            },
+            _ => return Err(RuntimeError::TypeError {
+                expected: "Map".to_string(),
+                actual: format!("{:?}", criteria_value),
+                operation: "discover-agents criteria".to_string(),
+            }),
+        };
+        
+        // Parse options if provided
+        let options = if let Some(options_expr) = &discover_expr.options {
+            let options_value = self.eval_expr(options_expr.as_ref(), env)?;
+            match options_value {
+                Value::Map(options_map) => Some(self.parse_discovery_options(&options_map)?),
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "Map".to_string(),
+                    actual: format!("{:?}", options_value),
+                    operation: "discover-agents options".to_string(),
+                }),
+            }
+        } else {
+            None
+        };
+        
+        // Initialize agent registry and discovery client
+        let _registry = AgentRegistry::new();
+        let discovery_client = AgentDiscoveryClient::new();
+        
+        // Perform agent discovery
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => {
+                match rt.block_on(discovery_client.discover_agents(&query, options.as_ref())) {
+                    Ok(discovered_agents) => {
+                        // Convert to RTFS Vector value
+                        let agent_values: Vec<Value> = discovered_agents.into_iter().map(|agent| {
+                            self.agent_card_to_value(agent)
+                        }).collect();
+                        
+                        Ok(Value::Vector(agent_values))
+                    },
+                    Err(_agent_error) => {
+                        Err(RuntimeError::AgentDiscoveryError {
+                            message: "Failed to discover agents".to_string(),
+                            registry_uri: "default".to_string(),
+                        })
+                    }
+                }
+            },
+            Err(tokio_error) => {
+                Err(RuntimeError::AgentDiscoveryError {
+                    message: format!("Failed to create async runtime: {}", tokio_error),
+                    registry_uri: "local".to_string(),
+                })
+            }
+        }
     }
-      /// Evaluate a discover-agents expression
-    fn eval_discover_agents(&self, discover_expr: &crate::ast::DiscoverAgentsExpr, _env: &mut Environment) -> RuntimeResult<Value> {
-        // For now, return a placeholder implementation
-        // This will be properly implemented once the agent system is integrated
+    
+    /// Parse a map of criteria into DiscoveryQuery
+    fn parse_discovery_query(&self, criteria_map: &std::collections::HashMap<crate::ast::MapKey, Value>) -> RuntimeResult<crate::agent::DiscoveryQuery> {
+        use crate::ast::{MapKey, Keyword};
         
-        let _criteria = &discover_expr.criteria;
-        let _options = &discover_expr.options;
+        let mut query = crate::agent::DiscoveryQuery {
+            capability_id: None,
+            version_constraint: None,
+            agent_id: None,
+            discovery_tags: None,
+            discovery_query: None,
+            limit: None,
+        };
         
-        // TODO: Implement actual agent discovery
-        // 1. Parse criteria map
-        // 2. Query agent registry
-        // 3. Return discovered agents as a vector
-          Err(RuntimeError::NotImplemented("agent discovery".to_string()))
+        for (key, value) in criteria_map {
+            match key {
+                MapKey::Keyword(Keyword(keyword_name)) => {
+                    match keyword_name.as_str() {
+                        "capabilities" => {
+                            let capabilities = self.parse_capabilities_list(value)?;
+                            if !capabilities.is_empty() {
+                                query.capability_id = Some(capabilities[0].clone());
+                            }
+                        },
+                        "capability-id" | "capability_id" => {
+                            query.capability_id = Some(self.parse_string_value(value)?);
+                        },
+                        "agent-id" | "agent_id" => {
+                            query.agent_id = Some(self.parse_string_value(value)?);
+                        },
+                        "version" | "version-constraint" | "version_constraint" => {
+                            query.version_constraint = Some(self.parse_string_value(value)?);
+                        },
+                        "tags" | "discovery-tags" | "discovery_tags" => {
+                            query.discovery_tags = Some(self.parse_capabilities_list(value)?);
+                        },
+                        "limit" | "max-results" | "max_results" => {
+                            match value {
+                                Value::Integer(i) => {
+                                    query.limit = Some(*i as u32);
+                                },
+                                _ => return Err(RuntimeError::TypeError {
+                                    expected: "Integer".to_string(),
+                                    actual: format!("{:?}", value),
+                                    operation: "parsing limit".to_string(),
+                                }),
+                            }
+                        },
+                        _ => {
+                            // Store as custom criteria in discovery_query
+                            let mut custom_map = match query.discovery_query {
+                                Some(ref map) => map.clone(),
+                                None => std::collections::HashMap::new(),
+                            };
+                            custom_map.insert(keyword_name.clone(), serde_json::Value::String(self.parse_string_value(value)?));
+                            query.discovery_query = Some(custom_map);
+                        }
+                    }
+                },
+                MapKey::String(string_key) => {
+                    // Handle string keys as custom criteria
+                    let mut custom_map = match query.discovery_query {
+                        Some(ref map) => map.clone(),
+                        None => std::collections::HashMap::new(),
+                    };
+                    custom_map.insert(string_key.clone(), serde_json::Value::String(self.parse_string_value(value)?));
+                    query.discovery_query = Some(custom_map);
+                },
+                MapKey::Integer(int_key) => {
+                    // Handle integer keys as custom criteria
+                    let mut custom_map = match query.discovery_query {
+                        Some(ref map) => map.clone(),
+                        None => std::collections::HashMap::new(),
+                    };
+                    custom_map.insert(int_key.to_string(), serde_json::Value::String(self.parse_string_value(value)?));
+                    query.discovery_query = Some(custom_map);
+                },
+            }
+        }
+        
+        Ok(query)
+    }
+    
+    /// Parse capabilities from a Value (should be a Vector of Strings)
+    fn parse_capabilities_list(&self, value: &Value) -> RuntimeResult<Vec<String>> {
+        match value {
+            Value::Vector(vec) => {
+                let mut capabilities = Vec::new();
+                for item in vec {
+                    capabilities.push(self.parse_string_value(item)?);
+                }
+                Ok(capabilities)
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "Vector".to_string(),
+                actual: format!("{:?}", value),
+                operation: "parsing capabilities".to_string(),
+            }),
+        }
+    }
+    
+    /// Parse a string value from a Value
+    fn parse_string_value(&self, value: &Value) -> RuntimeResult<String> {
+        match value {
+            Value::String(s) => Ok(s.clone()),
+            _ => Err(RuntimeError::TypeError {
+                expected: "String".to_string(),
+                actual: format!("{:?}", value),
+                operation: "parsing string value".to_string(),
+            }),
+        }
+    }
+    
+    /// Convert a Value to JSON string representation
+    fn value_to_json_string(&self, value: &Value) -> RuntimeResult<String> {
+        // Simple conversion - in a real implementation, this would be more comprehensive
+        match value {
+            Value::String(s) => Ok(format!("\"{}\"", s)),
+            Value::Integer(i) => Ok(i.to_string()),
+            Value::Float(f) => Ok(f.to_string()),
+            Value::Boolean(b) => Ok(b.to_string()),
+            Value::Nil => Ok("null".to_string()),
+            _ => Ok(format!("{:?}", value)), // Fallback
+        }
+    }
+    
+    /// Parse discovery options from a map
+    fn parse_discovery_options(&self, options_map: &std::collections::HashMap<crate::ast::MapKey, Value>) -> RuntimeResult<crate::agent::DiscoveryOptions> {
+        use crate::ast::{MapKey, Keyword};
+        
+        let mut options = crate::agent::DiscoveryOptions {
+            registry_uri: None,
+            timeout_ms: None,
+            cache_policy: None,
+        };
+        
+        for (key, value) in options_map {
+            match key {
+                MapKey::Keyword(Keyword(keyword_name)) => {
+                    match keyword_name.as_str() {
+                        "registry-uri" | "registry_uri" => {
+                            options.registry_uri = Some(self.parse_string_value(value)?);
+                        },
+                        "timeout" | "timeout-ms" | "timeout_ms" => {
+                            match value {
+                                Value::Integer(i) => {
+                                    options.timeout_ms = Some(*i as u64);
+                                },
+                                _ => return Err(RuntimeError::TypeError {
+                                    expected: "Integer".to_string(),
+                                    actual: format!("{:?}", value),
+                                    operation: "parsing timeout".to_string(),
+                                }),
+                            }
+                        },
+                        "cache-policy" | "cache_policy" => {
+                            let cache_policy_str = self.parse_string_value(value)?;
+                            match cache_policy_str.as_str() {
+                                "use-cache" | "use_cache" => {
+                                    options.cache_policy = Some(crate::agent::CachePolicy::UseCache);
+                                },
+                                "no-cache" | "no_cache" => {
+                                    options.cache_policy = Some(crate::agent::CachePolicy::NoCache);
+                                },
+                                "refresh-cache" | "refresh_cache" => {
+                                    options.cache_policy = Some(crate::agent::CachePolicy::RefreshCache);
+                                },
+                                _ => return Err(RuntimeError::TypeError {
+                                    expected: "Valid cache policy (use-cache, no-cache, refresh-cache)".to_string(),
+                                    actual: cache_policy_str,
+                                    operation: "parsing cache policy".to_string(),
+                                }),
+                            }
+                        },
+                        _ => {
+                            // Ignore unknown options for now
+                        }
+                    }
+                },
+                MapKey::String(_) | MapKey::Integer(_) => {
+                    // Ignore non-keyword keys for options
+                },
+            }
+        }
+        
+        Ok(options)
+    }
+    
+    /// Convert an AgentCard to an RTFS Value
+    fn agent_card_to_value(&self, agent_card: crate::agent::AgentCard) -> Value {
+        use std::collections::HashMap;
+        use crate::ast::{MapKey, Keyword};
+        
+        let mut map = HashMap::new();
+        
+        map.insert(
+            MapKey::Keyword(Keyword("agent-id".to_string())),
+            Value::String(agent_card.agent_id)
+        );
+        
+        map.insert(
+            MapKey::Keyword(Keyword("name".to_string())),
+            Value::String(agent_card.name)
+        );
+        
+        map.insert(
+            MapKey::Keyword(Keyword("description".to_string())),
+            Value::String(agent_card.description)
+        );
+        
+        map.insert(
+            MapKey::Keyword(Keyword("version".to_string())),
+            Value::String(agent_card.version)
+        );
+        
+        // Convert capabilities to Vector
+        let capabilities: Vec<Value> = agent_card.capabilities.into_iter()
+            .map(|cap| Value::String(cap.capability_id))
+            .collect();
+        map.insert(
+            MapKey::Keyword(Keyword("capabilities".to_string())),
+            Value::Vector(capabilities)
+        );
+        
+        // Convert endpoints to Vector of Maps
+        let endpoints: Vec<Value> = agent_card.communication.endpoints.into_iter()
+            .map(|endpoint| {
+                let mut endpoint_map = HashMap::new();
+                endpoint_map.insert(
+                    MapKey::Keyword(Keyword("protocol".to_string())),
+                    Value::String(endpoint.protocol)
+                );
+                endpoint_map.insert(
+                    MapKey::Keyword(Keyword("uri".to_string())),
+                    Value::String(endpoint.uri)
+                );
+                Value::Map(endpoint_map)
+            })
+            .collect();
+        map.insert(
+            MapKey::Keyword(Keyword("endpoints".to_string())),
+            Value::Vector(endpoints)
+        );
+        
+        // Add discovery tags
+        let tags: Vec<Value> = agent_card.discovery_tags.into_iter()
+            .map(|tag| Value::String(tag))
+            .collect();
+        map.insert(
+            MapKey::Keyword(Keyword("discovery-tags".to_string())),
+            Value::Vector(tags)
+        );
+        
+        Value::Map(map)
     }
     
     /// Bind a pattern to a value in an environment (placeholder implementation)

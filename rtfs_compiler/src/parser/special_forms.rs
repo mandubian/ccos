@@ -1147,3 +1147,54 @@ pub(super) fn build_log_step_expr(mut pairs: Pairs<Rule>) -> Result<LogStepExpr,
         location: Some(label),
     })
 }
+/// Build a discover-agents expression from parsed pairs
+/// Syntax: (discover-agents criteria-map options-map?)
+pub(super) fn build_discover_agents_expr(mut pairs: Pairs<Rule>) -> Result<crate::ast::DiscoverAgentsExpr, PestParseError> {
+    // Skip the discover-agents keyword if present
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else if p.as_rule() == Rule::discover_agents_keyword {
+            pairs.next();
+            // Skip whitespace after keyword
+            while let Some(p) = pairs.peek() {
+                if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+                    pairs.next();
+                } else {
+                    break;
+                }
+            }
+            break;
+        } else {
+            break;
+        }
+    }
+    
+    // Parse the required criteria expression (usually a map)
+    let criteria_pair = pairs
+        .next()
+        .ok_or_else(|| PestParseError::InvalidInput("discover-agents requires criteria expression".to_string()))?;
+    
+    let criteria = Box::new(build_expression(criteria_pair)?);
+    
+    // Skip whitespace
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
+        }
+    }
+    
+    // Parse the optional options expression
+    let options = if let Some(options_pair) = pairs.next() {
+        Some(Box::new(build_expression(options_pair)?))
+    } else {
+        None
+    };
+    
+    Ok(crate::ast::DiscoverAgentsExpr {
+        criteria,
+        options,
+    })
+}
