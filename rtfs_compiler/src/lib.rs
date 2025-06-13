@@ -10,8 +10,10 @@ pub mod ir_optimizer;
 pub mod enhanced_ir_optimizer;
 pub mod development_tooling;
 pub mod integration_tests;
+pub mod agent;
 
 // Re-export commonly used types for convenience
 pub use runtime::{Runtime, RuntimeStrategy, Evaluator};
 pub use development_tooling::{RtfsRepl, RtfsTestFramework};
 pub use parser::parse_expression;
+pub use agent::{AgentDiscoveryClient, AgentCommunicationClient, AgentRegistry, AgentProfileManager};
