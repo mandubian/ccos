@@ -1,0 +1,33 @@
+(def calculate-fibonacci (fn [n]
+  (if (< n 2)
+    n
+    (+ (calculate-fibonacci (- n 1))
+       (calculate-fibonacci (- n 2))))))
+
+(def process-data (fn [items]
+  (let [filtered (filter (fn [x] (> x 10)) items)
+        mapped (map (fn [x] (* x 2)) filtered)]
+    (reduce + 0 mapped))))
+
+(def user-data {
+  :name "Alice"
+  :age 30
+  :scores [85 92 78 96 89]
+  :active true
+})
+
+(def avg-score 
+  (let [scores (:scores user-data)
+        total (reduce + 0 scores)
+        count (length scores)]
+    (/ total count)))
+
+(def result-summary {
+  :user (:name user-data)
+  :average-score avg-score
+  :fibonacci-7 (calculate-fibonacci 7)
+  :processed-scores (process-data (:scores user-data))
+  :is-high-performer (> avg-score 85)
+})
+
+result-summary

@@ -1,0 +1,406 @@
+; RTFS Advanced Real-World Example: Data Processing Pipeline
+; This example demonstrates a complete data processing system with:
+; - Resource management and file operations
+; - Complex error handling and recovery
+; - Parallel processing and aggregation
+; - Advanced pattern matching and transformations
+; - Type safety and validation
+; - Performance monitoring and logging
+
+(task
+  :id "data-processing-pipeline-v1"
+  :source "production-system"
+  :intent {
+    :description "Process large datasets with validation, transformation, and aggregation"
+    :input-schema [:map
+                   [:data-sources [:vector :string]]
+                   [:output-format [:enum :json :csv :parquet]]
+                   [:batch-size [:and :int [:>= 100] [:<= 10000]]]
+                   [:max-parallel [:and :int [:>= 1] [:<= 20]]]]
+    :output-schema [:map
+                    [:processed-records :int]
+                    [:failed-records :int]
+                    [:processing-time-ms :int]
+                    [:output-files [:vector :string]]
+                    [:quality-metrics [:map 
+                                      [:data-completeness :float]
+                                      [:validation-pass-rate :float]
+                                      [:transformation-success-rate :float]]]]
+  }
+
+  :plan
+  (do
+    ;; Load configuration and validate environment
+    (let [config (load-pipeline-config)
+          start-time (tool:current-timestamp-ms)]
+      
+      (tool:log "Starting data processing pipeline at:" start-time)
+      
+      ;; Validate input parameters from task intent
+      (let [sources (:data-sources @intent)
+            output-format (:output-format @intent)
+            batch-size (:batch-size @intent)
+            max-parallel (:max-parallel @intent)]
+        
+        (match (validate-pipeline-inputs sources output-format batch-size max-parallel)
+          [:ok validated-params]
+          (try
+            ;; Main processing pipeline
+            (let [processing-result (execute-data-pipeline validated-params config)]
+              (match processing-result
+                [:ok results]
+                (do
+                  (let [end-time (tool:current-timestamp-ms)
+                        total-time (- end-time start-time)]
+                    (tool:log "Pipeline completed successfully in" total-time "ms")
+                    ;; Return comprehensive results
+                    {
+                      :processed-records (:processed-count results)
+                      :failed-records (:failed-count results)
+                      :processing-time-ms total-time
+                      :output-files (:output-files results)
+                      :quality-metrics (:quality-metrics results)
+                    }))
+                
+                [:error pipeline-error]
+                (do
+                  (tool:log "Pipeline failed:" (:message pipeline-error))
+                  (cleanup-pipeline-resources (:temp-files pipeline-error))
+                  [:error {:type :error/pipeline-failed
+                           :message "Data processing pipeline failed"
+                           :data pipeline-error}])))
+            
+            ;; Comprehensive error handling
+            (catch :error/resource-exhausted resource-err
+              (do
+                (tool:log "Resource exhaustion in pipeline:" (:message resource-err))
+                (scale-down-processing max-parallel)
+                [:error {:type :error/resource-exhausted
+                         :message "Pipeline failed due to resource constraints"
+                         :data {:max-parallel max-parallel :error resource-err}}]))
+            
+            (catch :error/data-validation validation-err
+              (do
+                (tool:log "Data validation failed:" (:message validation-err))
+                (generate-validation-report validation-err)
+                [:error {:type :error/data-validation
+                         :message "Input data failed validation"
+                         :data validation-err}]))
+            
+            (catch :error/network network-err
+              (do
+                (tool:log "Network error during processing:" (:message network-err))
+                (schedule-pipeline-retry (:data-sources @intent))
+                [:error {:type :error/network-failure
+                         :message "Pipeline will be retried due to network issues"
+                         :data {:retry-scheduled true :error network-err}}]))
+            
+            (finally
+              (do
+                (tool:log "Cleaning up pipeline resources")
+                (cleanup-temp-files)
+                (report-pipeline-metrics))))
+          
+          [:error validation-error]
+          (do
+            (tool:log "Input validation failed:" (:message validation-error))
+            [:error {:type :error/invalid-inputs
+                     :message "Pipeline inputs failed validation"
+                     :data validation-error}]))))
+
+  :execution-trace []
+)
+
+; Core pipeline execution function
+(defn execute-data-pipeline [params config]
+  (let [sources (:sources params)
+        batch-size (:batch-size params)
+        max-parallel (:max-parallel params)
+        output-format (:output-format params)]
+    
+    (tool:log "Processing" (count sources) "data sources with batch size" batch-size)
+    
+    ;; Parallel data loading and initial validation
+    (let [source-data (load-sources-parallel sources max-parallel)]
+      (match source-data
+        [:ok loaded-sources]
+        (do
+          (tool:log "Successfully loaded" (count loaded-sources) "data sources")
+          
+          ;; Process data in parallel batches
+          (let [batched-data (create-processing-batches loaded-sources batch-size)
+                batch-results (process-batches-parallel batched-data max-parallel config)]
+            
+            (match batch-results
+              [:ok processed-batches]
+              (do
+                ;; Aggregate results and generate output
+                (let [aggregated-results (aggregate-batch-results processed-batches)
+                      output-files (generate-output-files aggregated-results output-format)]
+                  
+                  (match output-files
+                    [:ok files]
+                    [:ok {
+                      :processed-count (:total-records aggregated-results)
+                      :failed-count (:failed-records aggregated-results)
+                      :output-files files
+                      :quality-metrics (calculate-quality-metrics aggregated-results)
+                    }]
+                    
+                    [:error file-error]
+                    [:error {:type :error/output-generation
+                             :message "Failed to generate output files"
+                             :data file-error}])))
+              
+              [:error batch-error]
+              [:error {:type :error/batch-processing
+                       :message "Failed to process data batches"
+                       :data batch-error}])))
+        
+        [:error load-error]
+        [:error {:type :error/data-loading
+                 :message "Failed to load data sources"
+                 :data load-error}]))))
+
+; Parallel data source loading with resource management
+(defn load-sources-parallel [sources max-parallel]
+  (try
+    (let [source-chunks (partition-sources sources max-parallel)
+          chunk-results (parallel-map
+                          (fn [chunk]
+                            (map-fn load-single-source chunk))
+                          source-chunks)]
+      
+      ;; Flatten and validate all loaded data
+      (let [flattened-results (flatten-results chunk-results)
+            validation-results (validate-loaded-data flattened-results)]
+        
+        (match validation-results
+          [:ok validated-data] [:ok validated-data]
+          [:error validation-error] [:error validation-error])))
+    
+    (catch :error/file-not-found file-err
+      [:error {:type :error/source-not-found
+               :message "One or more data sources could not be found"
+               :data file-err}])
+    
+    (catch :error/permission-denied perm-err
+      [:error {:type :error/source-access-denied
+               :message "Permission denied accessing data source"
+               :data perm-err}])))
+
+; Load a single data source with proper resource management
+(defn load-single-source [source-path]
+  (with-resource [file [:resource FileHandle] (tool:open-file source-path :read)]
+    (try
+      (let [file-metadata (tool:get-file-metadata file)
+            file-size (:size file-metadata)
+            file-type (detect-file-type source-path)]
+        
+        (tool:log "Loading source:" source-path "(" file-size "bytes," file-type ")")
+        
+        (match file-type
+          :json (parse-json-source file)
+          :csv (parse-csv-source file)
+          :parquet (parse-parquet-source file)
+          :xml (parse-xml-source file)
+          unknown-type [:error {:type :error/unsupported-format
+                               :message "Unsupported file format"
+                               :data {:file source-path :type unknown-type}}]))
+      
+      (catch :error/parse-failed parse-err
+        [:error {:type :error/source-parse-failed
+                 :message "Failed to parse data source"
+                 :data {:file source-path :error parse-err}}]))))
+
+; Process data batches in parallel with comprehensive error handling
+(defn process-batches-parallel [batches max-parallel config]
+  (let [batch-chunks (partition-batches batches max-parallel)]
+    
+    (parallel-map-with-error-handling
+      (fn [batch-chunk]
+        (map-fn 
+          (fn [batch]
+            (process-single-batch batch config))
+          batch-chunk))
+      batch-chunks)))
+
+; Process a single batch of data with transformations and validation
+(defn process-single-batch [batch config]
+  (let [batch-id (:id batch)
+        batch-data (:data batch)
+        transform-rules (:transform-rules config)
+        validation-rules (:validation-rules config)]
+    
+    (tool:log "Processing batch" batch-id "with" (count batch-data) "records")
+    
+    (try
+      ;; Apply transformations
+      (let [transformed-data (apply-transformations batch-data transform-rules)]
+        (match transformed-data
+          [:ok transformed-records]
+          (do
+            ;; Validate transformed data
+            (let [validation-results (validate-records transformed-records validation-rules)]
+              (match validation-results
+                [:ok {:valid valid-records :invalid invalid-records}]
+                [:ok {
+                  :batch-id batch-id
+                  :processed-count (count valid-records)
+                  :failed-count (count invalid-records)
+                  :valid-records valid-records
+                  :failed-records invalid-records
+                  :processing-metrics (calculate-batch-metrics batch transformed-records)
+                }]
+                
+                [:error validation-error]
+                [:error {:type :error/batch-validation-failed
+                         :message "Batch validation failed"
+                         :data {:batch-id batch-id :error validation-error}}])))
+          
+          [:error transform-error]
+          [:error {:type :error/batch-transformation-failed
+                   :message "Batch transformation failed"
+                   :data {:batch-id batch-id :error transform-error}}]))
+      
+      (catch :error/memory-limit memory-err
+        (do
+          (tool:log "Memory limit exceeded processing batch" batch-id)
+          [:error {:type :error/memory-exhausted
+                   :message "Batch processing exceeded memory limits"
+                   :data {:batch-id batch-id :error memory-err}}]))
+      
+      (catch :error/timeout timeout-err
+        (do
+          (tool:log "Timeout processing batch" batch-id)
+          [:error {:type :error/processing-timeout
+                   :message "Batch processing timed out"
+                   :data {:batch-id batch-id :error timeout-err}}])))))
+
+; Apply complex data transformations
+(defn apply-transformations [records transform-rules]
+  (try
+    (let [transformation-pipeline (build-transformation-pipeline transform-rules)]
+      (let [results (parallel
+                      [cleaned-data (apply-cleaning-transforms records (:cleaning transformation-pipeline))]
+                      [enriched-data (apply-enrichment-transforms records (:enrichment transformation-pipeline))]
+                      [normalized-data (apply-normalization-transforms records (:normalization transformation-pipeline))])]
+        
+        (match results
+          {:cleaned-data [:ok cleaned] :enriched-data [:ok enriched] :normalized-data [:ok normalized]}
+          (let [combined-transforms (combine-transformation-results cleaned enriched normalized)]
+            [:ok combined-transforms])
+          
+          results-with-errors
+          [:error {:type :error/transformation-failed
+                   :message "One or more transformations failed"
+                   :data results-with-errors}])))
+    
+    (catch :error/invalid-transform-rule rule-err
+      [:error {:type :error/invalid-transformation
+               :message "Invalid transformation rule encountered"
+               :data rule-err}])))
+
+; Comprehensive data validation with detailed reporting
+(defn validate-records [records validation-rules]
+  (let [validation-results (parallel
+                             [schema-validation (validate-schema records (:schema validation-rules))]
+                             [business-validation (validate-business-rules records (:business-rules validation-rules))]
+                             [integrity-validation (validate-data-integrity records (:integrity-rules validation-rules))])]
+    
+    (match validation-results
+      {:schema-validation [:ok schema-valid] 
+       :business-validation [:ok business-valid] 
+       :integrity-validation [:ok integrity-valid]}
+      (let [all-valid-records (intersect-valid-records schema-valid business-valid integrity-valid)
+            failed-records (collect-validation-failures records validation-results)]
+        [:ok {:valid all-valid-records :invalid failed-records}])
+      
+      validation-errors
+      [:error {:type :error/validation-failed
+               :message "Record validation failed"
+               :data validation-errors}])))
+
+; Generate output files in the specified format
+(defn generate-output-files [aggregated-results output-format]
+  (let [output-dir (tool:create-temp-directory "rtfs-pipeline-output")
+        timestamp (tool:format-timestamp (tool:current-timestamp) "yyyy-MM-dd-HH-mm-ss")]
+    
+    (match output-format
+      :json (generate-json-output aggregated-results output-dir timestamp)
+      :csv (generate-csv-output aggregated-results output-dir timestamp)
+      :parquet (generate-parquet-output aggregated-results output-dir timestamp)
+      unknown-format [:error {:type :error/unsupported-output-format
+                              :message "Unsupported output format"
+                              :data {:format unknown-format}}])))
+
+; Calculate comprehensive quality metrics
+(defn calculate-quality-metrics [aggregated-results]
+  (let [total-records (:total-records aggregated-results)
+        processed-records (:processed-records aggregated-results)
+        failed-records (:failed-records aggregated-results)
+        validation-failures (:validation-failures aggregated-results)
+        transformation-failures (:transformation-failures aggregated-results)]
+    
+    {
+      :data-completeness (/ processed-records total-records)
+      :validation-pass-rate (/ (- processed-records validation-failures) processed-records)
+      :transformation-success-rate (/ (- processed-records transformation-failures) processed-records)
+      :overall-quality-score (calculate-overall-quality-score 
+                               processed-records failed-records 
+                               validation-failures transformation-failures)
+    }))
+
+; Utility functions for the pipeline
+
+(defn validate-pipeline-inputs [sources output-format batch-size max-parallel]
+  (match [sources output-format batch-size max-parallel]
+    [sources :when (and (vector? sources) (> (count sources) 0))
+     format :when (contains? #{:json :csv :parquet} format)
+     batch :when (and (integer? batch) (>= batch 100) (<= batch 10000))
+     parallel :when (and (integer? parallel) (>= parallel 1) (<= parallel 20))]
+    [:ok {:sources sources :output-format format :batch-size batch :max-parallel parallel}]
+    
+    _
+    [:error {:type :error/invalid-pipeline-params
+             :message "Pipeline parameters failed validation"
+             :data {:sources sources :format output-format :batch batch :parallel parallel}}]))
+
+(defn load-pipeline-config []
+  (let [config-file "pipeline-config.json"]
+    (match (tool:file-exists? config-file)
+      true (match (tool:read-json-file config-file)
+             [:ok config] config
+             [:error _] (get-default-pipeline-config))
+      false (get-default-pipeline-config))))
+
+(defn get-default-pipeline-config []
+  {
+    :transform-rules {
+      :cleaning [:remove-nulls :trim-whitespace :standardize-formats]
+      :enrichment [:add-timestamps :calculate-derived-fields :lookup-reference-data]
+      :normalization [:standardize-units :normalize-text :validate-ranges]
+    }
+    :validation-rules {
+      :schema [:required-fields :data-types :field-constraints]
+      :business-rules [:business-logic-validation :cross-field-validation]
+      :integrity-rules [:uniqueness-constraints :referential-integrity]
+    }
+    :output-settings {
+      :compression true
+      :include-metadata true
+      :chunk-size 50000
+    }
+  })
+
+; This comprehensive example demonstrates:
+; 1. Complex task definition with detailed contracts
+; 2. Multi-level error handling and recovery strategies
+; 3. Parallel processing with resource management
+; 4. Advanced pattern matching and data transformations
+; 5. Resource lifecycle management with automatic cleanup
+; 6. Comprehensive validation and quality metrics
+; 7. Flexible output generation with multiple formats
+; 8. Performance monitoring and detailed logging
+; 9. Configuration management and environment adaptation
+; 10. Production-ready error reporting and recovery

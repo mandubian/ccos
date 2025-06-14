@@ -1,0 +1,32 @@
+; RTFS Working Features Test
+; Focus on features that should definitely work based on IR implementation
+
+; Test basic arithmetic operations
+(+ 1 2 3)
+
+; Test subtraction
+(- 10 3)
+
+; Test multiplication
+(* 6 7)
+
+; Test nested arithmetic
+(+ (* 2 3) (- 8 2))
+
+; Test let binding with arithmetic
+(let [x 5] (* x x))
+
+; Test nested let
+(let [x 10]
+  (let [y 20]
+    (+ x y)))
+
+; Test basic function definition and call (if supported)
+;; (defn square [n] (* n n))
+;; (square 4)
+
+; Test conditional (if supported)  
+;; (if true 42 0)
+
+; Focus on what we know works from successful tests
+(* (+ 2 3) (+ 4 6))

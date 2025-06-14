@@ -1,0 +1,83 @@
+(task
+  :id "advanced-data-processor"
+  :source "production-system"
+  :intent {
+    :description "Process data with advanced error handling and parallel execution"
+    :input-data [1 2 3 4 5 6 7 8 9 10]
+    :batch-size 3
+  }
+  
+  :plan
+  (do
+    (tool:log "Starting advanced data processing")
+    
+    ; Define data processing functions
+    (defn process-batch [batch]
+      (let [batch-size (count batch)
+            sum (reduce + 0 batch)
+            avg (/ sum batch-size)]
+        {
+          :batch-size batch-size
+          :sum sum
+          :average avg
+          :max (reduce max batch)
+          :min (reduce min batch)
+        }))
+    
+    ; Define error handling wrapper
+    (defn safe-process-batch [batch]
+      (try
+        [:ok (process-batch batch)]
+        (catch :error/runtime err
+          (do
+            (tool:log "Error processing batch:" (:message err))
+            [:error {:type :processing-failed :batch batch :error err}]))
+        (finally
+          (tool:log "Batch processing completed"))))
+    
+    ; Main processing logic
+    (let [input-data (:input-data @intent)
+          batch-size (:batch-size @intent)
+          batches (partition batch-size input-data)]
+      
+      (tool:log "Processing" (count batches) "batches of size" batch-size)
+      
+      ; Parallel processing with error handling
+      (let [results (parallel
+                      [batch1-result (safe-process-batch (get batches 0))]
+                      [batch2-result (safe-process-batch (get batches 1))]
+                      [batch3-result (safe-process-batch (get batches 2))]
+                      [batch4-result (safe-process-batch (get batches 3))])]
+        
+        ; Process results with pattern matching
+        (match results
+          {:batch1-result [:ok result1]
+           :batch2-result [:ok result2]
+           :batch3-result [:ok result3]
+           :batch4-result [:ok result4]}
+          (do
+            (tool:log "All batches processed successfully")
+            {
+              :status :success
+              :processed-batches 4
+              :total-sum (+ (:sum result1) (:sum result2) (:sum result3) (:sum result4))
+              :overall-average (/ (+ (:sum result1) (:sum result2) (:sum result3) (:sum result4)) 
+                                 (+ (:batch-size result1) (:batch-size result2) (:batch-size result3) (:batch-size result4)))
+              :batch-results [result1 result2 result3 result4]
+            })
+          
+          results-with-errors
+          (do
+            (tool:log "Some batches failed:" results-with-errors)
+            (let [successful-batches (filter-successful-results results-with-errors)
+                  failed-batches (filter-failed-results results-with-errors)]
+              {
+                :status :partial-success
+                :successful-batches (count successful-batches)
+                :failed-batches (count failed-batches)
+                :successful-results successful-batches
+                :errors failed-batches
+              })))))
+  
+  :execution-trace []
+)

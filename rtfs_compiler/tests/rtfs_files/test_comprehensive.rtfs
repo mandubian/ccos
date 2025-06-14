@@ -1,0 +1,7 @@
+(let [x 10
+      y 20
+      sum (+ x y)
+      is-large (> sum 25)]
+  (if is-large
+    (* sum 2)
+    (+ sum 5)))

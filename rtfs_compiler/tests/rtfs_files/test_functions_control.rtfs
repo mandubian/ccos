@@ -1,0 +1,35 @@
+; RTFS Feature Test: Functions and Control Flow
+; Testing core language features incrementally
+
+; Simple function definition
+(defn add [a b]
+  (+ a b))
+
+; Call the function
+(add 10 20)
+
+; Function with let binding
+(defn calculate [x]
+  (let [doubled (* x 2)
+        added (+ doubled 5)]
+    added))
+
+(calculate 7)
+
+; Conditional expressions
+(if (> 5 3) 
+  100 
+  200)
+
+; Nested conditionals
+(if (> 10 5)
+  (if (< 2 4)
+    "both-true"
+    "first-true")
+  "first-false")
+
+; Function that uses conditional
+(defn max-of-two [a b]
+  (if (> a b) a b))
+
+(max-of-two 15 12)

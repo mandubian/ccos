@@ -34,140 +34,91 @@ use super::types::build_type_expr; // For type annotations
 use super::utils::unescape; // For log_step_expr
 
 pub(super) fn build_let_expr(pairs: Pairs<Rule>) -> Result<LetExpr, PestParseError> {
-
     let mut iter = pairs.peekable();
+    let mut bindings = Vec::new();
+    let mut body_expressions = Vec::new();
 
+    // Skip the let_keyword if present
     if let Some(p) = iter.peek() {
         if p.as_rule() == Rule::let_keyword {
-
-            iter.next(); 
-            while let Some(sp) = iter.peek() {
-                if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
-
-                    iter.next();
-                } else {
-                    break;
-                }
-            }
-        }
-    }    let mut bindings = Vec::new();
-    let mut body_expressions_vec = Vec::new();
-
-    loop {
-        while let Some(p) = iter.peek() {
-            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-
-                iter.next(); 
-            } else {
-                break; 
-            }
-        }
-
-        if iter.peek().is_none() {
-
-            break;
-        }
-        
-        let iter_before_binding_attempt = iter.clone();
-
-
-
-        let pattern_pair_candidate = match iter.peek() {
-            Some(p) => {
-
-                p.clone()
-            }
-            None => {
-
-                break; 
-            }
-        };
-
-        match build_pattern(pattern_pair_candidate.clone()) {
-            Ok(pattern) => {
-
-                iter.next(); // Consume the pattern_pair_candidate
-
-                while let Some(p) = iter.peek() {
-                    if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-
-                        iter.next();
-                    } else {
-                        break;
-                    }
-                }
-
-                if iter.peek().is_none() {
-
-                    iter = iter_before_binding_attempt; 
-                    break; 
-                }
-
-                let value_pair_candidate = match iter.peek() {
-                    Some(p) => {
-
-                        p.clone()
-                    }
-                    None => { // Should be caught by previous check, but defensive.
-
-                        iter = iter_before_binding_attempt; 
-                        break; 
-                    }
-                };
-                
-
-                match build_expression(value_pair_candidate.clone()) {
-                    Ok(value) => {
-
-                        iter.next(); // Consume the value_pair_candidate
-
-                        bindings.push(LetBinding {
-                            pattern,
-                            type_annotation: None, 
-                            value: Box::new(value),
-                        });
-
-                    }
-                    Err(e) => {
-
-                        return Err(e); // Return error immediately for malformed binding value
-                    }
-                }            }
-            Err(_e) => {
-                break; 
-            }
+            iter.next();
         }
     }
 
-
-    while let Some(pair) = iter.next() {
+    // Parse let_binding tokens
+    for pair in iter {
         match pair.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT => { 
-
+            Rule::let_binding => {
+                let binding = build_let_binding(pair.into_inner())?;
+                bindings.push(binding);
+            }
+            Rule::WHITESPACE | Rule::COMMENT => {
+                // Skip whitespace and comments
             }
             _ => {
-
-                match build_expression(pair.clone()) { // Added clone here for safety if build_expression fails and we need pair again (though not in current logic)
-                    Ok(expr) => body_expressions_vec.push(expr),
-                    Err(e) => {
-
-                        return Err(e);
-                    }
-                }
+                // This should be a body expression
+                let expr = build_expression(pair)?;
+                body_expressions.push(expr);
             }
         }
     }
-    
 
-    if body_expressions_vec.is_empty() {
-
+    if body_expressions.is_empty() {
         return Err(PestParseError::InvalidInput(
             "let expression requires at least one body expression".to_string(),
         ));
     }
 
+    Ok(LetExpr { 
+        bindings, 
+        body: body_expressions 
+    })
+}
 
-    Ok(LetExpr { bindings, body: body_expressions_vec })
+fn build_let_binding(mut pairs: Pairs<Rule>) -> Result<LetBinding, PestParseError> {
+    let pattern_pair = pairs.next()
+        .ok_or_else(|| PestParseError::MissingToken("let_binding pattern".to_string()))?;
+    
+    let pattern = build_pattern(pattern_pair)?;
+    
+    // Check if there's a type annotation
+    let mut type_annotation = None;
+    let mut value_pair = None;
+    
+    if let Some(next_pair) = pairs.next() {
+        if next_pair.as_rule() == Rule::type_annotation {
+            // Parse type annotation
+            let type_ann_inner = next_pair.into_inner();
+            for token in type_ann_inner {
+                match token.as_rule() {
+                    Rule::COLON => continue, // Skip the colon
+                    Rule::primitive_type | Rule::vector_type | Rule::tuple_type | Rule::map_type | 
+                    Rule::function_type | Rule::resource_type | Rule::union_type | 
+                    Rule::intersection_type | Rule::literal_type | Rule::symbol => {
+                        type_annotation = Some(build_type_expr(token)?);
+                        break;
+                    }
+                    _ => continue,
+                }
+            }
+            // The next token should be the expression
+            value_pair = pairs.next();
+        } else {
+            // No type annotation, this is the expression
+            value_pair = Some(next_pair);
+        }
+    }
+    
+    let value_pair = value_pair
+        .ok_or_else(|| PestParseError::MissingToken("let_binding value".to_string()))?;
+    
+    let value = Box::new(build_expression(value_pair)?);
+    
+    Ok(LetBinding {
+        pattern,
+        type_annotation,
+        value,
+    })
 }
 
 pub(super) fn build_if_expr(mut pairs: Pairs<Rule>) -> Result<IfExpr, PestParseError> {

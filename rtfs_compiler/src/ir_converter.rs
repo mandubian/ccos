@@ -365,20 +365,24 @@ impl IrConverter {
     fn convert_let(&mut self, let_expr: LetExpr) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let mut bindings = Vec::new();
-        
-        // Enter new scope for let bindings
+          // Enter new scope for let bindings
         self.enter_scope();
           // Process bindings in order
         for binding in let_expr.bindings {
             let binding_id = self.next_id();
+            
+            // Store pattern first to avoid borrow issues
+            let pattern_clone = binding.pattern.clone();
+            
+            // Convert init expression with current scope (which may include previous bindings)
             let init_expr = self.convert_expression(*binding.value)?;
             let binding_type = init_expr.ir_type().unwrap_or(&IrType::Any);
             
-            // Convert pattern to binding - store pattern first to avoid borrow issues
-            let pattern_clone = binding.pattern.clone();
+            // Convert pattern to binding
             let pattern_node = self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
             
-            // Add binding to current scope
+            // Add binding to current scope AFTER converting the init expression
+            // This allows sequential bindings where later bindings can reference earlier ones
             if let Pattern::Symbol(sym) = &pattern_clone {
                 let binding_info = BindingInfo {
                     name: sym.0.clone(),

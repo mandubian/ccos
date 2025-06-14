@@ -1,0 +1,4 @@
+(let [x :int 10
+      y :string "hello"
+      sum (+ x 5)]
+  (str y " world, sum is " sum))

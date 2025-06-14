@@ -1,0 +1,24 @@
+(do
+  ; Complex mathematical computation example
+  (let [numbers [1 2 3 4 5 6 7 8 9 10]
+        squared (map (fn [x] (* x x)) numbers)
+        sum-squared (reduce + 0 squared)
+        factorial-5 (let [fact (fn [n acc]
+                                 (if (= n 0)
+                                   acc
+                                   (fact (- n 1) (* acc n))))]
+                      (fact 5 1))
+        complex-data {
+          :original numbers
+          :squared squared
+          :sum-squared sum-squared
+          :factorial-5 factorial-5
+          :average (/ sum-squared (count numbers))
+          :max-value (reduce max numbers)
+          :min-value (reduce min numbers)
+        }]
+    
+    ; Conditional processing based on results
+    (if (> sum-squared 300)
+      (assoc complex-data :status :high-value :bonus (* factorial-5 2))
+      (assoc complex-data :status :normal :bonus factorial-5))))

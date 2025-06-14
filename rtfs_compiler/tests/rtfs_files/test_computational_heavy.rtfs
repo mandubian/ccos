@@ -1,0 +1,63 @@
+(do
+  ; Real-world computational example using only basic operations
+  (let [a 10
+        b 20
+        c 30
+        
+        ; Complex nested calculations
+        sum (+ a b c)
+        product (* a b c)
+        difference (- sum product)
+        
+        ; Conditional logic with multiple branches
+        result (if (> sum 50)
+                 (if (< product 10000)
+                   {
+                     :category :medium
+                     :sum sum
+                     :product product
+                     :difference difference
+                     :bonus (* difference 2)
+                   }
+                   {
+                     :category :high
+                     :sum sum
+                     :product product
+                     :difference difference
+                     :bonus (* difference 3)
+                   })
+                 {
+                   :category :low
+                   :sum sum
+                   :product product
+                   :difference difference
+                   :bonus difference
+                 })
+        
+        ; More complex computations
+        recursive-sum (let [x 5]
+                        (if (= x 0)
+                          0
+                          (+ x (if (= (- x 1) 0)
+                                 0
+                                 (+ (- x 1) (if (= (- x 2) 0)
+                                              0
+                                              (+ (- x 2) (if (= (- x 3) 0)
+                                                           0
+                                                           (+ (- x 3) (- x 4)))))))))))
+        
+        ; Final comprehensive result
+        final-result {
+          :input-values [a b c]
+          :calculations result
+          :recursive-sum recursive-sum
+          :performance-score (+ (* (:sum result) 2) recursive-sum)
+          :efficiency-rating (if (> (:sum result) 60)
+                               :excellent
+                               (if (> (:sum result) 40)
+                                 :good
+                                 :needs-improvement))
+        }]
+    
+    ; Return the comprehensive analysis
+    final-result))

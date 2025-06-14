@@ -1,0 +1,4 @@
+(let [x :int 10
+      y :int 20
+      sum (+ x y)]
+  sum)

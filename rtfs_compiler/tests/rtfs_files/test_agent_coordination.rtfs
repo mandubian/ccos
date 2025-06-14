@@ -1,0 +1,490 @@
+; RTFS Advanced Real-World Example: Distributed Agent Coordination System
+; This example demonstrates advanced RTFS features for multi-agent task coordination:
+; - Agent discovery and dynamic capability matching
+; - Complex workflow orchestration with fault tolerance
+; - Advanced pattern matching and decision trees
+; - Resource sharing and coordination between agents
+; - Real-time monitoring and adaptive load balancing
+
+(task
+  :id "distributed-agent-coordination-v2"
+  :source "multi-agent-system"
+  :intent {
+    :description "Coordinate multiple AI agents to solve complex computational problems"
+    :input-schema [:map
+                   [:problem-type [:enum :data-analysis :optimization :simulation :ml-training]]
+                   [:complexity-level [:and :int [:>= 1] [:<= 10]]]
+                   [:resource-constraints [:map
+                                          [:max-memory-gb :int]
+                                          [:max-cpu-cores :int]
+                                          [:time-limit-minutes :int]]]
+                   [:quality-requirements [:map
+                                          [:accuracy-threshold :float]
+                                          [:confidence-level :float]
+                                          [:reproducibility :bool]]]]
+    :output-schema [:map
+                    [:solution-quality :float]
+                    [:execution-time-ms :int]
+                    [:agents-utilized [:vector :string]]
+                    [:resource-efficiency :float]
+                    [:coordination-overhead-ms :int]
+                    [:fault-recovery-events :int]]
+  }
+
+  :plan
+  (do
+    (tool:log "Initializing distributed agent coordination system")
+    
+    ;; Initialize coordination context
+    (let [coordination-start (tool:current-timestamp-ms)
+          problem-spec (:problem-type @intent)
+          complexity (:complexity-level @intent)
+          resource-limits (:resource-constraints @intent)
+          quality-reqs (:quality-requirements @intent)]
+      
+      (try
+        ;; Phase 1: Agent Discovery and Capability Assessment
+        (let [available-agents (discover-and-assess-agents problem-spec complexity)]
+          (match available-agents
+            [:ok agent-pool]
+            (do
+              (tool:log "Discovered" (count agent-pool) "capable agents")
+              
+              ;; Phase 2: Optimal Agent Selection and Task Decomposition
+              (let [coordination-plan (create-coordination-plan agent-pool problem-spec complexity resource-limits)]
+                (match coordination-plan
+                  [:ok plan]
+                  (do
+                    (tool:log "Created coordination plan with" (count (:selected-agents plan)) "agents")
+                    
+                    ;; Phase 3: Distributed Execution with Monitoring
+                    (let [execution-result (execute-distributed-coordination plan quality-reqs)]
+                      (match execution-result
+                        [:ok results]
+                        (let [coordination-end (tool:current-timestamp-ms)
+                              total-time (- coordination-end coordination-start)]
+                          (tool:log "Coordination completed successfully in" total-time "ms")
+                          
+                          ;; Generate comprehensive results
+                          {
+                            :solution-quality (:quality-score results)
+                            :execution-time-ms total-time
+                            :agents-utilized (:agent-ids results)
+                            :resource-efficiency (:resource-efficiency results)
+                            :coordination-overhead-ms (:coordination-overhead results)
+                            :fault-recovery-events (:fault-events results)
+                          })
+                        
+                        [:error execution-error]
+                        (do
+                          (tool:log "Distributed execution failed:" (:message execution-error))
+                          (cleanup-coordination-resources (:active-agents execution-error))
+                          [:error {:type :error/coordination-failed
+                                   :message "Distributed agent coordination failed"
+                                   :data execution-error}]))))
+                  
+                  [:error plan-error]
+                  (do
+                    (tool:log "Failed to create coordination plan:" (:message plan-error))
+                    [:error {:type :error/planning-failed
+                             :message "Could not plan agent coordination"
+                             :data plan-error}]))))
+            
+            [:error discovery-error]
+            (do
+              (tool:log "Agent discovery failed:" (:message discovery-error))
+              [:error {:type :error/agent-discovery-failed
+                       :message "Could not discover suitable agents"
+                       :data discovery-error}])))
+        
+        ;; Comprehensive error handling for coordination system
+        (catch :error/network-partition partition-err
+          (do
+            (tool:log "Network partition detected:" (:message partition-err))
+            (attempt-partition-recovery partition-err)
+            [:error {:type :error/network-partition
+                     :message "Coordination failed due to network partition"
+                     :data {:recovery-attempted true :error partition-err}}]))
+        
+        (catch :error/agent-failure agent-err
+          (do
+            (tool:log "Agent failure during coordination:" (:message agent-err))
+            (redistribute-failed-agent-tasks agent-err)
+            [:error {:type :error/agent-failure
+                     :message "Agent failure disrupted coordination"
+                     :data {:redistribution-attempted true :error agent-err}}]))
+        
+        (catch :error/resource-exhaustion resource-err
+          (do
+            (tool:log "Resource exhaustion in coordination:" (:message resource-err))
+            (scale-down-coordination resource-limits)
+            [:error {:type :error/resource-exhaustion
+                     :message "Coordination scaled down due to resource limits"
+                     :data resource-err}]))
+        
+        (finally
+          (do
+            (tool:log "Cleaning up coordination resources")
+            (cleanup-all-coordination-state)
+            (report-coordination-metrics))))))
+
+  :execution-trace []
+)
+
+; Core coordination functions
+
+(defn discover-and-assess-agents [problem-type complexity]
+  (let [discovery-criteria {
+    :capabilities-required (get-required-capabilities problem-type complexity)
+    :performance-requirements (get-performance-requirements complexity)
+    :reliability-threshold 0.95
+    :max-discovery-time-ms 30000
+  }]
+    
+    (tool:log "Starting agent discovery with criteria:" discovery-criteria)
+    
+    (try
+      ;; Use advanced agent discovery with filtering
+      (let [discovery-result (discover-agents discovery-criteria {:parallel true :timeout 30000})]
+        (match discovery-result
+          [:ok discovered-agents]
+          (do
+            (tool:log "Found" (count discovered-agents) "agents, assessing capabilities")
+            
+            ;; Parallel capability assessment
+            (let [assessment-results (parallel-map
+                                       (fn [agent]
+                                         (assess-agent-capabilities agent problem-type complexity))
+                                       discovered-agents)]
+              
+              ;; Filter and rank agents by assessment
+              (let [qualified-agents (filter-qualified-agents assessment-results)
+                    ranked-agents (rank-agents-by-suitability qualified-agents problem-type)]
+                
+                (if (>= (count ranked-agents) 1)
+                  [:ok ranked-agents]
+                  [:error {:type :error/insufficient-agents
+                           :message "Not enough qualified agents found"
+                           :data {:found (count discovered-agents) :qualified (count qualified-agents)}}]))))
+          
+          [:error discovery-error]
+          [:error {:type :error/discovery-failed
+                   :message "Agent discovery operation failed"
+                   :data discovery-error}]))
+      
+      (catch :error/discovery-timeout timeout-err
+        [:error {:type :error/discovery-timeout
+                 :message "Agent discovery timed out"
+                 :data timeout-err}]))))
+
+(defn assess-agent-capabilities [agent problem-type complexity]
+  (let [agent-id (:id agent)
+        capabilities (:capabilities agent)]
+    
+    (try
+      ;; Multi-dimensional capability assessment
+      (let [assessment-results (parallel
+                                 [compute-capacity (assess-compute-capability agent complexity)]
+                                 [problem-expertise (assess-problem-expertise agent problem-type)]
+                                 [reliability-score (assess-reliability-history agent)]
+                                 [communication-latency (assess-communication-performance agent)])]
+        
+        (match assessment-results
+          {:compute-capacity [:ok compute-score]
+           :problem-expertise [:ok expertise-score]
+           :reliability-score [:ok reliability-score]
+           :communication-latency [:ok latency-ms]}
+          (let [overall-score (calculate-agent-suitability-score 
+                                compute-score expertise-score reliability-score latency-ms)]
+            [:ok {
+              :agent-id agent-id
+              :agent agent
+              :suitability-score overall-score
+              :compute-capability compute-score
+              :problem-expertise expertise-score
+              :reliability reliability-score
+              :communication-latency latency-ms
+              :assessment-timestamp (tool:current-timestamp)
+            }])
+          
+          assessment-errors
+          [:error {:type :error/assessment-failed
+                   :message "Failed to assess agent capabilities"
+                   :data {:agent-id agent-id :errors assessment-errors}}]))
+      
+      (catch :error/agent-unresponsive unresponsive-err
+        [:error {:type :error/agent-unresponsive
+                 :message "Agent did not respond to capability assessment"
+                 :data {:agent-id agent-id :error unresponsive-err}}]))))
+
+(defn create-coordination-plan [agent-pool problem-type complexity resource-limits]
+  (let [planning-context {
+    :available-agents agent-pool
+    :problem-complexity complexity
+    :resource-constraints resource-limits
+    :optimization-objective :balanced  ;; :speed, :quality, :cost, :balanced
+  }]
+    
+    (tool:log "Creating coordination plan for" (count agent-pool) "agents")
+    
+    (try
+      ;; Advanced task decomposition
+      (let [task-decomposition (decompose-problem problem-type complexity)]
+        (match task-decomposition
+          [:ok subtasks]
+          (do
+            (tool:log "Decomposed problem into" (count subtasks) "subtasks")
+            
+            ;; Optimal agent-task assignment
+            (let [assignment-result (optimize-agent-task-assignment subtasks agent-pool resource-limits)]
+              (match assignment-result
+                [:ok assignments]
+                (let [coordination-graph (build-coordination-graph assignments)
+                      execution-schedule (create-execution-schedule coordination-graph)]
+                  [:ok {
+                    :selected-agents (map :agent-id assignments)
+                    :task-assignments assignments
+                    :coordination-graph coordination-graph
+                    :execution-schedule execution-schedule
+                    :estimated-completion-time (:completion-time execution-schedule)
+                    :resource-allocation (:resource-allocation execution-schedule)
+                  }])
+                
+                [:error assignment-error]
+                [:error {:type :error/assignment-failed
+                         :message "Failed to assign tasks to agents"
+                         :data assignment-error}])))
+          
+          [:error decomposition-error]
+          [:error {:type :error/decomposition-failed
+                   :message "Failed to decompose problem into subtasks"
+                   :data decomposition-error}]))
+      
+      (catch :error/optimization-failed opt-err
+        [:error {:type :error/planning-optimization-failed
+                 :message "Failed to optimize coordination plan"
+                 :data opt-err}]))))
+
+(defn execute-distributed-coordination [plan quality-requirements]
+  (let [execution-context {
+    :plan plan
+    :quality-reqs quality-requirements
+    :monitoring-enabled true
+    :fault-tolerance-level :high
+    :coordination-protocol :consensus-based
+  }]
+    
+    (tool:log "Starting distributed execution with" (count (:selected-agents plan)) "agents")
+    
+    (try
+      ;; Initialize coordination infrastructure
+      (let [coordination-state (initialize-coordination-state plan)]
+        (with-resource [coord-monitor [:resource CoordinationMonitor] 
+                        (create-coordination-monitor coordination-state)]
+          
+          ;; Execute coordination phases
+          (let [phase-results (execute-coordination-phases plan coord-monitor quality-requirements)]
+            (match phase-results
+              [:ok results]
+              (do
+                (tool:log "All coordination phases completed successfully")
+                
+                ;; Aggregate and validate results
+                (let [aggregated-results (aggregate-coordination-results results)
+                      validation-result (validate-solution-quality aggregated-results quality-requirements)]
+                  
+                  (match validation-result
+                    [:ok validated-solution]
+                    [:ok {
+                      :quality-score (:quality-score validated-solution)
+                      :agent-ids (:participating-agents results)
+                      :resource-efficiency (:resource-efficiency results)
+                      :coordination-overhead (:coordination-overhead-ms results)
+                      :fault-events (:fault-recovery-count results)
+                      :solution-data (:solution validated-solution)
+                    }]
+                    
+                    [:error quality-error]
+                    [:error {:type :error/quality-validation-failed
+                             :message "Solution failed quality requirements"
+                             :data quality-error}])))
+              
+              [:error phase-error]
+              [:error {:type :error/coordination-phase-failed
+                       :message "Coordination phase execution failed"
+                       :data phase-error}]))))
+      
+      (catch :error/coordination-deadlock deadlock-err
+        (do
+          (tool:log "Coordination deadlock detected:" (:message deadlock-err))
+          (break-coordination-deadlock deadlock-err)
+          [:error {:type :error/coordination-deadlock
+                   :message "Coordination deadlock required intervention"
+                   :data {:deadlock-broken true :error deadlock-err}}]))
+      
+      (catch :error/consensus-failure consensus-err
+        (do
+          (tool:log "Consensus failure in coordination:" (:message consensus-err))
+          (attempt-consensus-recovery consensus-err)
+          [:error {:type :error/consensus-failure
+                   :message "Failed to reach consensus among agents"
+                   :data {:recovery-attempted true :error consensus-err}}])))))
+
+(defn execute-coordination-phases [plan monitor quality-reqs]
+  (let [phases (:execution-schedule plan)
+        total-phases (count phases)]
+    
+    (tool:log "Executing" total-phases "coordination phases")
+    
+    (try
+      ;; Execute phases with monitoring and fault tolerance
+      (let [phase-results (sequential-execution-with-monitoring
+                            (fn [phase-index phase-spec]
+                              (execute-single-coordination-phase 
+                                phase-spec plan monitor quality-reqs))
+                            phases)]
+        
+        ;; Check if all phases completed successfully
+        (let [failed-phases (filter #(= (first %) :error) phase-results)]
+          (if (empty? failed-phases)
+            [:ok {
+              :participating-agents (collect-participating-agents phase-results)
+              :resource-efficiency (calculate-resource-efficiency phase-results)
+              :coordination-overhead-ms (calculate-coordination-overhead phase-results)
+              :fault-recovery-count (count-fault-recovery-events phase-results)
+              :phase-results phase-results
+            }]
+            [:error {:type :error/phase-failures
+                     :message "One or more coordination phases failed"
+                     :data {:failed-phases failed-phases :successful-phases (- total-phases (count failed-phases))}}])))
+      
+      (catch :error/monitoring-failure monitor-err
+        [:error {:type :error/monitoring-system-failed
+                 :message "Coordination monitoring system failed"
+                 :data monitor-err}]))))
+
+(defn execute-single-coordination-phase [phase-spec plan monitor quality-reqs]
+  (let [phase-id (:phase-id phase-spec)
+        assigned-agents (:agents phase-spec)
+        subtasks (:subtasks phase-spec)]
+    
+    (tool:log "Executing coordination phase" phase-id "with" (count assigned-agents) "agents")
+    
+    (try
+      ;; Parallel execution of subtasks with real-time monitoring
+      (let [subtask-results (parallel-with-monitoring
+                              (fn [subtask]
+                                (execute-agent-subtask subtask plan monitor))
+                              subtasks
+                              {:timeout (:timeout phase-spec)
+                               :monitor monitor
+                               :fault-tolerance :high})]
+        
+        ;; Process subtask results and handle failures
+        (let [successful-subtasks (filter-successful-results subtask-results)
+              failed-subtasks (filter-failed-results subtask-results)]
+          
+          (if (>= (count successful-subtasks) (:min-success-threshold phase-spec))
+            (do
+              (tool:log "Phase" phase-id "completed with" (count successful-subtasks) "successful subtasks")
+              
+              ;; Handle any failed subtasks with recovery
+              (when (not (empty? failed-subtasks))
+                (handle-subtask-failures failed-subtasks plan monitor))
+              
+              [:ok {
+                :phase-id phase-id
+                :successful-subtasks successful-subtasks
+                :failed-subtasks failed-subtasks
+                :execution-time-ms (:execution-time subtask-results)
+                :resource-utilization (:resource-usage subtask-results)
+              }])
+            
+            [:error {:type :error/insufficient-success
+                     :message "Phase failed - not enough successful subtasks"
+                     :data {:phase-id phase-id 
+                            :successful (count successful-subtasks) 
+                            :required (:min-success-threshold phase-spec)}}])))
+      
+      (catch :error/phase-timeout timeout-err
+        (do
+          (tool:log "Phase" phase-id "timed out")
+          [:error {:type :error/phase-timeout
+                   :message "Coordination phase execution timed out"
+                   :data {:phase-id phase-id :error timeout-err}}])))))
+
+; Utility and helper functions
+
+(defn get-required-capabilities [problem-type complexity]
+  (match [problem-type complexity]
+    [:data-analysis complexity :when (>= complexity 7)]
+    [:advanced-analytics :distributed-computing :machine-learning]
+    
+    [:data-analysis _]
+    [:data-processing :statistical-analysis :visualization]
+    
+    [:optimization complexity :when (>= complexity 8)]
+    [:mathematical-optimization :heuristic-algorithms :parallel-processing]
+    
+    [:optimization _]
+    [:optimization-algorithms :constraint-solving]
+    
+    [:simulation complexity :when (>= complexity 6)]
+    [:distributed-simulation :high-performance-computing :modeling]
+    
+    [:simulation _]
+    [:simulation-engines :numerical-methods]
+    
+    [:ml-training complexity :when (>= complexity 9)]
+    [:distributed-training :gpu-acceleration :hyperparameter-optimization]
+    
+    [:ml-training _]
+    [:machine-learning :model-training :data-preprocessing]
+    
+    [_ _]
+    [:general-computing :problem-solving]))
+
+(defn calculate-agent-suitability-score [compute-score expertise-score reliability-score latency-ms]
+  (let [compute-weight 0.3
+        expertise-weight 0.4
+        reliability-weight 0.2
+        latency-weight 0.1
+        
+        ;; Normalize latency (lower is better)
+        normalized-latency (max 0.0 (- 1.0 (/ latency-ms 1000.0)))
+        
+        weighted-score (+ (* compute-score compute-weight)
+                         (* expertise-score expertise-weight)
+                         (* reliability-score reliability-weight)
+                         (* normalized-latency latency-weight))]
+    
+    ;; Ensure score is between 0.0 and 1.0
+    (max 0.0 (min 1.0 weighted-score))))
+
+(defn optimize-agent-task-assignment [subtasks agents resource-limits]
+  ;; This would implement a sophisticated assignment algorithm
+  ;; For this example, we'll use a simplified greedy approach
+  (try
+    (let [assignments (greedy-assignment-algorithm subtasks agents resource-limits)]
+      (if (validate-assignment-feasibility assignments resource-limits)
+        [:ok assignments]
+        [:error {:type :error/infeasible-assignment
+                 :message "No feasible assignment found within resource limits"
+                 :data {:subtasks (count subtasks) :agents (count agents)}}]))
+    
+    (catch :error/assignment-optimization-failed opt-err
+      [:error {:type :error/assignment-algorithm-failed
+               :message "Assignment optimization algorithm failed"
+               :data opt-err}])))
+
+; This comprehensive distributed coordination example demonstrates:
+; 1. Complex multi-phase agent discovery and assessment
+; 2. Advanced task decomposition and optimization
+; 3. Sophisticated error handling and fault tolerance
+; 4. Real-time monitoring and adaptive coordination
+; 5. Resource management and constraint satisfaction
+; 6. Quality assurance and solution validation
+; 7. Network partition and consensus failure recovery
+; 8. Performance optimization and efficiency metrics
+; 9. Comprehensive logging and observability
+; 10. Production-ready distributed system patterns
