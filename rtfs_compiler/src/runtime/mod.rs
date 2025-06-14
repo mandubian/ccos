@@ -61,6 +61,20 @@ impl Runtime {    pub fn new() -> Self {
             persistent_env,
         }
     }
+
+    pub fn with_strategy_and_agent_discovery(
+        strategy: RuntimeStrategy,
+        agent_discovery: Box<dyn crate::agent::AgentDiscovery>,
+    ) -> Self {
+        let ast_evaluator = evaluator::Evaluator::with_agent_discovery(agent_discovery);
+        let persistent_env = stdlib::StandardLibrary::create_global_environment();
+        Runtime {
+            strategy,
+            ast_evaluator,
+            ir_runtime: Some(ir_runtime::IrRuntime::new()),
+            persistent_env,
+        }
+    }
       pub fn evaluate_expression(&mut self, expr: &crate::ast::Expression) -> RuntimeResult<Value> {
         match self.strategy {
             RuntimeStrategy::Ast => {
@@ -97,8 +111,15 @@ impl Runtime {    pub fn new() -> Self {
                     }
                 } else {
                     self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env)
-                }
-            }
+                }            }
+        }
+    }    /// Evaluate an IR node directly (for production compiler)
+    pub fn evaluate_ir(&mut self, ir_node: &crate::ir::IrNode) -> RuntimeResult<Value> {
+        if let Some(ir_runtime) = &mut self.ir_runtime {
+            let mut env = ir_runtime::IrEnvironment::new();
+            ir_runtime.execute_node(ir_node, &mut env)
+        } else {
+            Err(RuntimeError::InternalError("IR runtime not available".to_string()))
         }
     }
 }
