@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::ast::*;
-use crate::runtime::{RuntimeResult, RuntimeError, Value};
+use crate::runtime::{RuntimeResult, RuntimeError};
 use crate::parser::parse_expression;
 use super::types::*;
 
@@ -278,10 +278,9 @@ impl AgentProfileManager {
                         },
                         "discovery" => {
                             discovery = Some(self.parse_discovery(value, &profile_uri)?);
-                        },
-                        _ => {
+                        },                        _ => {
                             // Unknown field - store in extensions
-                            extensions.insert(k.0.clone(), Value::String("unknown".to_string()));
+                            extensions.insert(k.0.clone(), serde_json::Value::String("unknown".to_string()));
                         }
                     }
                 },

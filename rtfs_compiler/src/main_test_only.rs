@@ -2,10 +2,11 @@
 mod ast; 
 pub mod parser; 
 pub mod runtime; 
+pub mod agent; // Declare the agent module for agent discovery
 mod ir; 
 mod ir_converter; 
 mod ir_optimizer; 
-mod integration_tests; 
+mod integration_tests;
 
 use integration_tests::*;
 
