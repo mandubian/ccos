@@ -1,0 +1,33 @@
+; RTFS Incremental Complexity Test
+; Testing basic to moderate complexity features systematically
+
+; Test 1: Basic let binding and arithmetic
+(let [x 10
+      y 20]
+  (+ x y))
+
+; Test 2: Nested let and multiplication
+(let [a 5
+      b (let [inner 3] (* inner 2))]
+  (+ a b))
+
+; Test 3: Simple function definition and call
+(defn add-two [n]
+  (+ n 2))
+
+(add-two 5)
+
+; Test 4: Multiple argument function
+(defn multiply-add [x y z]
+  (+ (* x y) z))
+
+(multiply-add 3 4 5)
+
+; Test 5: Conditional expression
+(if (> 10 5)
+  "greater"
+  "not-greater")
+
+; Test 6: Simple data structures
+(let [data [1 2 3 4 5]]
+  data)

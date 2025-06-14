@@ -1,0 +1,7 @@
+(do
+  (let [x 42
+        y 17
+        z (+ x y)]
+    (if (> z 50)
+      { :result z :status :success :score (* z 2) }
+      { :result z :status :failure :score z })))

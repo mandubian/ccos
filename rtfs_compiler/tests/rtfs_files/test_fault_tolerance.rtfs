@@ -1,0 +1,555 @@
+; RTFS Advanced Real-World Example: Intelligent Error Recovery and Fault Tolerance System
+; This example demonstrates sophisticated error handling, recovery strategies, and system resilience:
+; - Multi-layered error recovery with adaptive strategies
+; - Circuit breaker patterns and graceful degradation
+; - System health monitoring and self-healing capabilities
+; - Complex state management and transaction rollback
+; - Advanced logging and observability with distributed tracing
+
+(task
+  :id "intelligent-fault-tolerance-system-v1"
+  :source "resilience-engineering-system"
+  :intent {
+    :description "Implement intelligent fault tolerance with adaptive recovery strategies"
+    :input-schema [:map
+                   [:system-components [:vector [:map
+                                               [:component-id :string]
+                                               [:component-type [:enum :service :database :queue :cache :external-api]]
+                                               [:criticality [:enum :critical :important :optional]]
+                                               [:failure-modes [:vector :keyword]]]]]
+                   [:recovery-policies [:map
+                                       [:max-retry-attempts [:and :int [:>= 1] [:<= 10]]]
+                                       [:backoff-strategy [:enum :linear :exponential :fibonacci]]
+                                       [:circuit-breaker-threshold :float]
+                                       [:fallback-enabled :bool]]]
+                   [:monitoring-config [:map
+                                       [:health-check-interval-ms :int]
+                                       [:metrics-retention-hours :int]
+                                       [:alert-thresholds [:map
+                                                          [:error-rate-threshold :float]
+                                                          [:latency-threshold-ms :int]
+                                                          [:availability-threshold :float]]]]]]
+    :output-schema [:map
+                    [:system-health-score :float]
+                    [:recovery-events [:vector [:map
+                                              [:event-id :string]
+                                              [:component-id :string]
+                                              [:failure-type :keyword]
+                                              [:recovery-strategy :keyword]
+                                              [:recovery-success :bool]
+                                              [:recovery-time-ms :int]]]]
+                    [:fault-tolerance-metrics [:map
+                                              [:mttr-average-ms :int]  ;; Mean Time To Recovery
+                                              [:mtbf-average-ms :int]  ;; Mean Time Between Failures
+                                              [:availability-percentage :float]
+                                              [:error-rate-percentage :float]]]
+                    [:adaptive-learning-insights [:map
+                                                 [:learned-patterns [:vector :string]]
+                                                 [:optimized-strategies [:vector :string]]
+                                                 [:predictive-indicators [:vector :string]]]]]
+  }
+
+  :plan
+  (do
+    (tool:log "Initializing intelligent fault tolerance system")
+    
+    ;; Initialize system resilience context
+    (let [system-start (tool:current-timestamp-ms)
+          components (:system-components @intent)
+          recovery-policies (:recovery-policies @intent)
+          monitoring-config (:monitoring-config @intent)]
+      
+      (try
+        ;; Phase 1: System Health Assessment and Baseline Establishment
+        (let [baseline-assessment (establish-system-baseline components monitoring-config)]
+          (match baseline-assessment
+            [:ok baseline-metrics]
+            (do
+              (tool:log "System baseline established with" (count components) "components")
+              
+              ;; Phase 2: Initialize Fault Detection and Recovery Infrastructure
+              (let [fault-tolerance-infrastructure (initialize-fault-tolerance-system 
+                                                     components recovery-policies baseline-metrics)]
+                (match fault-tolerance-infrastructure
+                  [:ok ft-system]
+                  (do
+                    (tool:log "Fault tolerance infrastructure initialized")
+                    
+                    ;; Phase 3: Continuous Monitoring and Adaptive Recovery
+                    (let [monitoring-result (run-continuous-monitoring-and-recovery 
+                                              ft-system monitoring-config)]
+                      (match monitoring-result
+                        [:ok monitoring-results]
+                        (let [system-end (tool:current-timestamp-ms)
+                              total-runtime (- system-end system-start)]
+                          (tool:log "Fault tolerance system completed monitoring cycle in" total-runtime "ms")
+                          
+                          ;; Generate comprehensive system resilience report
+                          {
+                            :system-health-score (:overall-health-score monitoring-results)
+                            :recovery-events (:recovery-events monitoring-results)
+                            :fault-tolerance-metrics (:ft-metrics monitoring-results)
+                            :adaptive-learning-insights (:learning-insights monitoring-results)
+                          })
+                        
+                        [:error monitoring-error]
+                        (do
+                          (tool:log "Continuous monitoring failed:" (:message monitoring-error))
+                          (emergency-system-recovery ft-system)
+                          [:error {:type :error/monitoring-system-failed
+                                   :message "Fault tolerance monitoring system failed"
+                                   :data monitoring-error}]))))
+                  
+                  [:error infrastructure-error]
+                  (do
+                    (tool:log "Failed to initialize fault tolerance infrastructure:" (:message infrastructure-error))
+                    [:error {:type :error/infrastructure-initialization-failed
+                             :message "Could not initialize fault tolerance system"
+                             :data infrastructure-error}]))))
+            
+            [:error baseline-error]
+            (do
+              (tool:log "Failed to establish system baseline:" (:message baseline-error))
+              [:error {:type :error/baseline-establishment-failed
+                       :message "Could not establish system health baseline"
+                       :data baseline-error}])))
+        
+        ;; Comprehensive error handling for the fault tolerance system itself
+        (catch :error/system-catastrophic-failure catastrophic-err
+          (do
+            (tool:log "CATASTROPHIC SYSTEM FAILURE:" (:message catastrophic-err))
+            (execute-disaster-recovery-protocol catastrophic-err)
+            [:error {:type :error/catastrophic-system-failure
+                     :message "System experienced catastrophic failure - disaster recovery initiated"
+                     :data {:disaster-recovery-initiated true :error catastrophic-err}}]))
+        
+        (catch :error/monitoring-infrastructure-failure monitor-infra-err
+          (do
+            (tool:log "Monitoring infrastructure failure:" (:message monitor-infra-err))
+            (switch-to-backup-monitoring-system monitor-infra-err)
+            [:error {:type :error/monitoring-infrastructure-failure
+                     :message "Primary monitoring failed - switched to backup"
+                     :data {:backup-monitoring-active true :error monitor-infra-err}}]))
+        
+        (catch :error/resource-exhaustion-critical resource-err
+          (do
+            (tool:log "Critical resource exhaustion:" (:message resource-err))
+            (execute-resource-conservation-mode resource-err)
+            [:error {:type :error/critical-resource-exhaustion
+                     :message "System entered resource conservation mode"
+                     :data {:conservation-mode-active true :error resource-err}}]))
+        
+        (finally
+          (do
+            (tool:log "Cleaning up fault tolerance system resources")
+            (cleanup-fault-tolerance-infrastructure)
+            (generate-final-resilience-report))))))
+
+  :execution-trace []
+)
+
+; Core fault tolerance system functions
+
+(defn establish-system-baseline [components monitoring-config]
+  (tool:log "Establishing system health baseline for" (count components) "components")
+  
+  (try
+    ;; Parallel baseline assessment of all components
+    (let [baseline-results (parallel-map-with-timeout
+                             (fn [component]
+                               (assess-component-baseline component monitoring-config))
+                             components
+                             (:health-check-interval-ms monitoring-config))]
+      
+      ;; Aggregate baseline metrics
+      (let [successful-baselines (filter-successful-results baseline-results)
+            failed-baselines (filter-failed-results baseline-results)]
+        
+        (if (>= (/ (count successful-baselines) (count components)) 0.8)  ;; 80% success threshold
+          (let [aggregated-baseline (aggregate-baseline-metrics successful-baselines)]
+            [:ok {
+              :baseline-timestamp (tool:current-timestamp)
+              :total-components (count components)
+              :successful-assessments (count successful-baselines)
+              :failed-assessments (count failed-baselines)
+              :baseline-metrics aggregated-baseline
+              :system-health-score (calculate-initial-health-score aggregated-baseline)
+            }])
+          
+          [:error {:type :error/insufficient-baseline-data
+                   :message "Could not establish reliable baseline - too many component failures"
+                   :data {:successful (count successful-baselines) 
+                          :total (count components)
+                          :failed-components (map :component-id failed-baselines)}}])))
+    
+    (catch :error/baseline-timeout timeout-err
+      [:error {:type :error/baseline-assessment-timeout
+               :message "Baseline assessment timed out"
+               :data timeout-err}])))
+
+(defn assess-component-baseline [component monitoring-config]
+  (let [component-id (:component-id component)
+        component-type (:component-type component)
+        criticality (:criticality component)]
+    
+    (tool:log "Assessing baseline for component:" component-id "(" component-type ")")
+    
+    (try
+      ;; Multi-dimensional component assessment
+      (let [assessment-results (parallel
+                                 [performance-metrics (measure-component-performance component)]
+                                 [availability-metrics (measure-component-availability component)]
+                                 [error-rate-metrics (measure-component-error-rates component)]
+                                 [resource-usage-metrics (measure-component-resource-usage component)])]
+        
+        (match assessment-results
+          {:performance-metrics [:ok perf-data]
+           :availability-metrics [:ok avail-data]
+           :error-rate-metrics [:ok error-data]
+           :resource-usage-metrics [:ok resource-data]}
+          [:ok {
+            :component-id component-id
+            :component-type component-type
+            :criticality criticality
+            :baseline-performance perf-data
+            :baseline-availability avail-data
+            :baseline-error-rates error-data
+            :baseline-resource-usage resource-data
+            :assessment-timestamp (tool:current-timestamp)
+            :health-indicators (calculate-component-health-indicators 
+                                 perf-data avail-data error-data resource-data)
+          }]
+          
+          assessment-errors
+          [:error {:type :error/component-assessment-failed
+                   :message "Failed to assess component baseline"
+                   :data {:component-id component-id :errors assessment-errors}}]))
+      
+      (catch :error/component-unreachable unreachable-err
+        [:error {:type :error/component-unreachable
+                 :message "Component unreachable during baseline assessment"
+                 :data {:component-id component-id :error unreachable-err}}]))))
+
+(defn initialize-fault-tolerance-system [components recovery-policies baseline-metrics]
+  (tool:log "Initializing fault tolerance infrastructure")
+  
+  (try
+    ;; Initialize core fault tolerance components
+    (let [ft-components (parallel
+                          [circuit-breakers (initialize-circuit-breakers components recovery-policies)]
+                          [retry-managers (initialize-retry-managers components recovery-policies)]
+                          [fallback-handlers (initialize-fallback-handlers components)]
+                          [health-monitors (initialize-health-monitors components baseline-metrics)]
+                          [recovery-orchestrator (initialize-recovery-orchestrator components recovery-policies)])]
+      
+      (match ft-components
+        {:circuit-breakers [:ok breakers]
+         :retry-managers [:ok retries]
+         :fallback-handlers [:ok fallbacks]
+         :health-monitors [:ok monitors]
+         :recovery-orchestrator [:ok orchestrator]}
+        [:ok {
+          :system-id (tool:generate-uuid)
+          :initialization-timestamp (tool:current-timestamp)
+          :components components
+          :recovery-policies recovery-policies
+          :baseline-metrics baseline-metrics
+          :circuit-breakers breakers
+          :retry-managers retries
+          :fallback-handlers fallbacks
+          :health-monitors monitors
+          :recovery-orchestrator orchestrator
+          :adaptive-learning-engine (initialize-adaptive-learning-engine baseline-metrics)
+          :system-state :initialized
+        }]
+        
+        ft-errors
+        [:error {:type :error/ft-initialization-failed
+                 :message "Failed to initialize fault tolerance components"
+                 :data ft-errors}]))
+    
+    (catch :error/initialization-resource-failure resource-err
+      [:error {:type :error/ft-resource-allocation-failed
+               :message "Failed to allocate resources for fault tolerance system"
+               :data resource-err}])))
+
+(defn run-continuous-monitoring-and-recovery [ft-system monitoring-config]
+  (let [monitoring-duration-ms (* (:metrics-retention-hours monitoring-config) 60 60 1000)
+        check-interval-ms (:health-check-interval-ms monitoring-config)
+        alert-thresholds (:alert-thresholds monitoring-config)]
+    
+    (tool:log "Starting continuous monitoring for" monitoring-duration-ms "ms with" check-interval-ms "ms intervals")
+    
+    (try
+      (with-resource [monitoring-session [:resource MonitoringSession] 
+                      (create-monitoring-session ft-system monitoring-config)]
+        
+        ;; Main monitoring loop with sophisticated error handling
+        (let [monitoring-results (execute-monitoring-loop 
+                                   monitoring-session 
+                                   monitoring-duration-ms 
+                                   check-interval-ms
+                                   alert-thresholds)]
+          
+          (match monitoring-results
+            [:ok results]
+            (do
+              (tool:log "Monitoring completed successfully")
+              
+              ;; Generate adaptive learning insights
+              (let [learning-insights (generate-adaptive-insights 
+                                        results 
+                                        (:adaptive-learning-engine ft-system))]
+                [:ok {
+                  :overall-health-score (:final-health-score results)
+                  :recovery-events (:recovery-events results)
+                  :ft-metrics (:fault-tolerance-metrics results)
+                  :learning-insights learning-insights
+                  :monitoring-summary (:summary results)
+                }]))
+            
+            [:error monitoring-error]
+            [:error {:type :error/monitoring-loop-failed
+                     :message "Continuous monitoring loop failed"
+                     :data monitoring-error}])))
+      
+      (catch :error/monitoring-session-failure session-err
+        [:error {:type :error/monitoring-session-failed
+                 :message "Failed to create or maintain monitoring session"
+                 :data session-err}]))))
+
+(defn execute-monitoring-loop [monitoring-session duration-ms check-interval-ms alert-thresholds]
+  (let [start-time (tool:current-timestamp-ms)
+        end-time (+ start-time duration-ms)
+        recovery-events (atom [])]
+    
+    (tool:log "Executing monitoring loop from" start-time "to" end-time)
+    
+    (try
+      ;; Main monitoring loop
+      (loop [current-time (tool:current-timestamp-ms)
+             health-history []
+             failure-patterns {}
+             adaptive-strategies {}]
+        
+        (if (< current-time end-time)
+          (do
+            ;; Comprehensive health assessment
+            (let [health-assessment (perform-comprehensive-health-check 
+                                      monitoring-session 
+                                      alert-thresholds)]
+              
+              (match health-assessment
+                [:ok health-data]
+                (do
+                  ;; Check for anomalies and trigger recovery if needed
+                  (let [anomaly-detection (detect-system-anomalies health-data health-history)]
+                    (match anomaly-detection
+                      [:ok :no-anomalies]
+                      (do
+                        (tool:log "System health normal at" current-time)
+                        ;; Continue monitoring
+                        (tool:sleep check-interval-ms)
+                        (recur (tool:current-timestamp-ms)
+                               (conj health-history health-data)
+                               failure-patterns
+                               adaptive-strategies))
+                      
+                      [:ok {:anomalies anomalies}]
+                      (do
+                        (tool:log "Anomalies detected:" (count anomalies) "issues")
+                        
+                        ;; Trigger intelligent recovery
+                        (let [recovery-result (trigger-intelligent-recovery 
+                                                monitoring-session 
+                                                anomalies 
+                                                adaptive-strategies)]
+                          (match recovery-result
+                            [:ok recovery-actions]
+                            (do
+                              (swap! recovery-events conj recovery-actions)
+                              (tool:log "Recovery actions completed")
+                              
+                              ;; Update adaptive strategies based on recovery success
+                              (let [updated-strategies (update-adaptive-strategies 
+                                                         adaptive-strategies 
+                                                         recovery-actions)]
+                                (tool:sleep check-interval-ms)
+                                (recur (tool:current-timestamp-ms)
+                                       (conj health-history health-data)
+                                       (update-failure-patterns failure-patterns anomalies)
+                                       updated-strategies)))
+                            
+                            [:error recovery-error]
+                            (do
+                              (tool:log "Recovery failed:" (:message recovery-error))
+                              ;; Continue monitoring even if recovery fails
+                              (tool:sleep check-interval-ms)
+                              (recur (tool:current-timestamp-ms)
+                                     (conj health-history health-data)
+                                     failure-patterns
+                                     adaptive-strategies)))))
+                      
+                      [:error detection-error]
+                      (do
+                        (tool:log "Anomaly detection failed:" (:message detection-error))
+                        ;; Continue with basic monitoring
+                        (tool:sleep check-interval-ms)
+                        (recur (tool:current-timestamp-ms)
+                               (conj health-history health-data)
+                               failure-patterns
+                               adaptive-strategies))))
+                
+                [:error health-error]
+                (do
+                  (tool:log "Health assessment failed:" (:message health-error))
+                  ;; Trigger emergency protocols
+                  (trigger-emergency-monitoring-protocols monitoring-session health-error)
+                  (tool:sleep check-interval-ms)
+                  (recur (tool:current-timestamp-ms)
+                         health-history
+                         failure-patterns
+                         adaptive-strategies))))
+          
+          ;; Monitoring loop completed
+          (let [final-health-score (calculate-final-health-score health-history)
+                ft-metrics (calculate-fault-tolerance-metrics @recovery-events health-history)]
+            [:ok {
+              :final-health-score final-health-score
+              :recovery-events @recovery-events
+              :fault-tolerance-metrics ft-metrics
+              :health-history health-history
+              :failure-patterns failure-patterns
+              :adaptive-strategies adaptive-strategies
+              :summary {
+                :monitoring-duration-ms (- (tool:current-timestamp-ms) start-time)
+                :health-checks-performed (count health-history)
+                :recovery-events-triggered (count @recovery-events)
+                :patterns-learned (count (keys failure-patterns))
+              }
+            }])))
+      
+      (catch :error/monitoring-loop-exception loop-err
+        [:error {:type :error/monitoring-loop-exception
+                 :message "Exception in monitoring loop"
+                 :data loop-err}]))))
+
+(defn trigger-intelligent-recovery [monitoring-session anomalies adaptive-strategies]
+  (let [recovery-start (tool:current-timestamp-ms)]
+    
+    (tool:log "Triggering intelligent recovery for" (count anomalies) "anomalies")
+    
+    (try
+      ;; Analyze anomalies and select optimal recovery strategies
+      (let [recovery-plan (create-intelligent-recovery-plan anomalies adaptive-strategies)]
+        (match recovery-plan
+          [:ok plan]
+          (do
+            (tool:log "Executing recovery plan with" (count (:actions plan)) "actions")
+            
+            ;; Execute recovery actions with monitoring
+            (let [execution-results (execute-recovery-actions-with-monitoring 
+                                      (:actions plan) 
+                                      monitoring-session)]
+              
+              (match execution-results
+                [:ok results]
+                (let [recovery-end (tool:current-timestamp-ms)
+                      recovery-time (- recovery-end recovery-start)]
+                  [:ok {
+                    :recovery-id (tool:generate-uuid)
+                    :recovery-start-time recovery-start
+                    :recovery-end-time recovery-end
+                    :recovery-duration-ms recovery-time
+                    :anomalies-addressed (count anomalies)
+                    :recovery-actions (:actions plan)
+                    :execution-results results
+                    :recovery-success (> (:success-rate results) 0.8)
+                    :adaptive-feedback (:feedback results)
+                  }])
+                
+                [:error execution-error]
+                [:error {:type :error/recovery-execution-failed
+                         :message "Failed to execute recovery actions"
+                         :data execution-error}])))
+          
+          [:error plan-error]
+          [:error {:type :error/recovery-planning-failed
+                   :message "Failed to create recovery plan"
+                   :data plan-error}]))
+      
+      (catch :error/recovery-system-failure recovery-sys-err
+        [:error {:type :error/recovery-system-failure
+                 :message "Recovery system itself failed"
+                 :data recovery-sys-err}]))))
+
+; Advanced utility functions for fault tolerance
+
+(defn create-intelligent-recovery-plan [anomalies adaptive-strategies]
+  (try
+    ;; Analyze anomaly patterns and match with adaptive strategies
+    (let [anomaly-analysis (analyze-anomaly-patterns anomalies)
+          strategy-matching (match-strategies-to-anomalies anomaly-analysis adaptive-strategies)
+          optimized-plan (optimize-recovery-plan strategy-matching)]
+      
+      [:ok {
+        :plan-id (tool:generate-uuid)
+        :created-at (tool:current-timestamp)
+        :anomalies-analyzed (count anomalies)
+        :strategies-considered (count (keys adaptive-strategies))
+        :actions optimized-plan
+        :estimated-recovery-time (estimate-recovery-time optimized-plan)
+        :success-probability (estimate-success-probability optimized-plan)
+      }])
+    
+    (catch :error/planning-failed planning-err
+      [:error {:type :error/recovery-planning-failed
+               :message "Failed to create intelligent recovery plan"
+               :data planning-err}])))
+
+(defn calculate-fault-tolerance-metrics [recovery-events health-history]
+  (let [successful-recoveries (filter :recovery-success recovery-events)
+        failed-recoveries (filter #(not (:recovery-success %)) recovery-events)
+        total-recovery-time (reduce + (map :recovery-duration-ms recovery-events))
+        
+        ;; Calculate MTTR (Mean Time To Recovery)
+        mttr (if (> (count recovery-events) 0)
+               (/ total-recovery-time (count recovery-events))
+               0)
+        
+        ;; Calculate availability from health history
+        healthy-periods (filter #(> (:health-score %) 0.8) health-history)
+        availability (if (> (count health-history) 0)
+                      (/ (count healthy-periods) (count health-history))
+                      0.0)
+        
+        ;; Calculate error rate
+        error-events (filter #(contains? % :error-count) health-history)
+        total-errors (reduce + (map :error-count error-events))
+        total-requests (reduce + (map :request-count health-history))
+        error-rate (if (> total-requests 0)
+                    (/ total-errors total-requests)
+                    0.0)]
+    
+    {
+      :mttr-average-ms (int mttr)
+      :mtbf-average-ms (calculate-mtbf health-history)
+      :availability-percentage (* availability 100.0)
+      :error-rate-percentage (* error-rate 100.0)
+      :successful-recovery-rate (/ (count successful-recoveries) 
+                                   (max 1 (count recovery-events)))
+      :total-recovery-events (count recovery-events)
+      :adaptive-strategy-effectiveness (calculate-strategy-effectiveness recovery-events)
+    }))
+
+; This comprehensive fault tolerance example demonstrates:
+; 1. Multi-layered error detection and recovery strategies
+; 2. Adaptive learning and strategy optimization
+; 3. Circuit breaker patterns and graceful degradation
+; 4. Comprehensive health monitoring and anomaly detection
+; 5. Intelligent recovery planning and execution
+; 6. Real-time system metrics and observability
+; 7. Disaster recovery and catastrophic failure handling
+; 8. Resource conservation and system protection
+; 9. Pattern recognition and predictive failure analysis
+; 10. Production-ready resilience engineering patterns

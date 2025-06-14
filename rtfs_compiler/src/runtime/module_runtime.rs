@@ -502,11 +502,14 @@ impl ModuleRegistry {
                 qualified_name
             )))
         }
-    }
-
-    /// Check if a symbol is qualified (contains '/')
+    }    /// Check if a symbol is qualified (contains '/')
     pub fn is_qualified_symbol(symbol: &str) -> bool {
-        symbol.contains('/')
+        // A qualified symbol must have a non-empty module name before the '/'
+        if let Some(slash_pos) = symbol.find('/') {
+            slash_pos > 0 && slash_pos < symbol.len() - 1
+        } else {
+            false
+        }
     }
 }
 

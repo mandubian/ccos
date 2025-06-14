@@ -159,7 +159,8 @@ do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" 
 // Added for clarity and robustness - must be followed by whitespace or delimiter to avoid matching "do-something"
 
 let_keyword = @{ "let" }
-let_expr = { "(" ~ let_keyword ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ binding_pattern ~ WHITESPACE* ~ expression)* ~ WHITESPACE* ~ "]" ~ (WHITESPACE* ~ expression)+ ~ ")" }
+let_binding = { binding_pattern ~ type_annotation? ~ expression }
+let_expr = { "(" ~ let_keyword ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ let_binding)* ~ WHITESPACE* ~ "]" ~ (WHITESPACE* ~ expression)+ ~ ")" }
 
 if_expr = { "(" ~ "if" ~ expression ~ expression ~ expression? ~ ")" }
 // Made else optional for now
