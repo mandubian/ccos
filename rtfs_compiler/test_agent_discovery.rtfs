@@ -1,0 +1,18 @@
+;; Test agent discovery functionality
+
+;; Basic agent discovery - find all agents
+(discover-agents {:capability "code-generation"})
+
+;; Discovery with specific capability and version constraint
+(discover-agents {:capability-id "data-transformation"
+                  :version "1.2.0"})
+
+;; Discovery with tags
+(discover-agents {:tags ["testing" "automation"]})
+
+;; Discovery with specific agent ID
+(discover-agents {:agent-id "code-assistant-001"})
+
+;; Discovery with limit
+(discover-agents {:capability "code-generation"}
+                 {:limit 1})

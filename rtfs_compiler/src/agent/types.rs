@@ -3,8 +3,6 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::ast::{Keyword, Symbol, Literal, Expression};
-use crate::runtime::{Value, RuntimeResult, RuntimeError};
 
 /// Agent Card - Data structure for agent discovery registry communication
 /// Derived from agent-profile and optimized for registration/querying
@@ -144,9 +142,8 @@ pub struct AgentProfile {
     
     /// Discovery configuration
     pub discovery: Option<AgentDiscoveryConfig>,
-    
-    /// Additional profile data
-    pub extensions: Option<HashMap<String, Value>>,
+      /// Additional profile data
+    pub extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Agent metadata from profile
@@ -169,10 +166,9 @@ pub struct ProfileCapability {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub version: String,
-    pub input_schema: Option<Value>,
-    pub output_schema: Option<Value>,
-    pub examples: Option<Vec<Value>>,
+    pub version: String,    pub input_schema: Option<serde_json::Value>,
+    pub output_schema: Option<serde_json::Value>,
+    pub examples: Option<Vec<serde_json::Value>>,
     pub documentation: Option<String>,
 }
 
@@ -181,7 +177,7 @@ pub struct ProfileCapability {
 pub struct AgentRequirements {
     pub runtime_version: Option<String>,
     pub dependencies: Option<Vec<String>>,
-    pub resources: Option<HashMap<String, Value>>,
+    pub resources: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Discovery configuration for agent

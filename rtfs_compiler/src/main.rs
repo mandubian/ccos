@@ -1,6 +1,7 @@
 mod ast; // Declare the ast module
 pub mod parser; // Declare the parser module (now a directory)
 pub mod runtime; // Declare the runtime module
+pub mod agent; // Declare the agent module for agent discovery
 mod ir; // Declare the IR module
 mod ir_converter; // Declare the IR converter module
 mod ir_optimizer; // Declare the IR optimizer module
