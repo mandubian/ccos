@@ -1,0 +1,4 @@
+; Simple TaskContext test
+(let [batch-size (:batch-size @intent)
+      output-format (:output-format @intent)]
+  (+ batch-size 100))
