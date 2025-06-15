@@ -22,9 +22,13 @@ use rtfs_compiler::{
 #[command(about = "RTFS Production Compiler with Advanced Optimization")]
 #[command(version = "0.1.0")]
 struct Args {
-    /// Input RTFS source file
-    #[arg(short, long)]
-    input: PathBuf,
+    /// Input RTFS source file (can be provided as positional argument or with --input flag)
+    #[arg(value_name = "FILE")]
+    input: Option<PathBuf>,
+
+    /// Input RTFS source file (alternative to positional argument)
+    #[arg(short = 'i', long = "input", value_name = "FILE", conflicts_with = "input")]
+    input_flag: Option<PathBuf>,
 
     /// Output file (optional, defaults to stdout)
     #[arg(short, long)]
@@ -96,16 +100,24 @@ impl From<RuntimeType> for RuntimeStrategy {
 fn main() {
     let args = Args::parse();
     
+    // Determine the input file path (either from positional arg or --input flag)
+    let input_path = args.input.or(args.input_flag).unwrap_or_else(|| {
+        eprintln!("❌ Error: Input file is required. Provide it as a positional argument or use --input flag.");
+        eprintln!("Usage: rtfs-compiler <FILE> [OPTIONS]");
+        eprintln!("   or: rtfs-compiler --input <FILE> [OPTIONS]");
+        std::process::exit(1);
+    });
+    
     if args.verbose {
         println!("🚀 RTFS Production Compiler v0.1.0");
-        println!("📁 Input: {}", args.input.display());
+        println!("📁 Input: {}", input_path.display());
         println!("⚡ Optimization Level: {:?}", args.opt_level);
         println!("🏃 Runtime Strategy: {:?}", args.runtime);
         println!();
     }
 
     // Read input file
-    let source_code = match fs::read_to_string(&args.input) {
+    let source_code = match fs::read_to_string(&input_path) {
         Ok(content) => content,
         Err(e) => {
             eprintln!("❌ Error reading input file: {}", e);
@@ -210,11 +222,9 @@ fn main() {
         println!("  Dead Code Blocks Eliminated: {}", stats.dead_code_blocks_eliminated);
         println!("  Optimization Time:          {}ms", stats.optimization_time_ms);
         println!();
-    }
-
-    if args.optimization_report {
+    }    if args.optimization_report {
         println!("📋 OPTIMIZATION REPORT:");
-        println!("  Input File: {}", args.input.display());
+        println!("  Input File: {}", input_path.display());
         println!("  Optimization Level: {:?}", args.opt_level);
         println!("  Total Compilation Time: {:?}", total_time);
         println!("  Optimization Impact: {:.1}% of total time", 
