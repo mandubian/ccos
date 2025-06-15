@@ -81,8 +81,7 @@ impl Evaluator {
                 
                 self.call_function(func_value, &args, env)
             },
-            Expression::If(if_expr) => self.eval_if(if_expr, env),
-            Expression::Let(let_expr) => self.eval_let(let_expr, env),
+            Expression::If(if_expr) => self.eval_if(if_expr, env),            Expression::Let(let_expr) => self.eval_let(let_expr, env),
             Expression::Do(do_expr) => self.eval_do(do_expr, env),
             Expression::Match(match_expr) => self.eval_match(match_expr, env),
             Expression::LogStep(log_expr) => self.eval_log_step(log_expr, env),
@@ -92,6 +91,7 @@ impl Evaluator {
             Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),            Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
             Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
+            Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
         }
     }
       /// Evaluate an expression in the global environment
@@ -729,6 +729,21 @@ impl Evaluator {
                 actual: format!("{:?}", value),
                 operation: "parsing string value".to_string(),
             }),
+        }    }
+    
+    /// Evaluate a task context access expression (@symbol or @keyword)
+    fn eval_task_context(&self, task_context: &crate::ast::TaskContextAccess, _env: &mut Environment) -> RuntimeResult<Value> {
+        // For now, return a placeholder value based on the context key
+        // In a real implementation, this would access actual task context
+        match &task_context.context_key {
+            crate::ast::ContextKey::Symbol(symbol) => {
+                // Return a string representation of the accessed symbol
+                Ok(Value::String(format!("@{}", symbol.0)))
+            },
+            crate::ast::ContextKey::Keyword(keyword) => {
+                // Return a string representation of the accessed keyword  
+                Ok(Value::String(format!("@{}", keyword.0)))
+            },
         }
     }
     

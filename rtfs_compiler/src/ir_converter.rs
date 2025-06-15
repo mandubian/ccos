@@ -216,8 +216,7 @@ impl IrConverter {
             Expression::Symbol(sym) => self.convert_symbol_ref(sym),
             Expression::FunctionCall { callee, arguments } => {
                 self.convert_function_call(*callee, arguments)
-            }
-            Expression::If(if_expr) => self.convert_if(if_expr),
+            }            Expression::If(if_expr) => self.convert_if(if_expr),
             Expression::Let(let_expr) => self.convert_let(let_expr),
             Expression::Do(do_expr) => self.convert_do(do_expr),
             Expression::Fn(fn_expr) => self.convert_fn(fn_expr),
@@ -231,6 +230,7 @@ impl IrConverter {
             Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),            Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
             Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(&discover_expr),
+            Expression::TaskContext(task_context) => self.convert_task_context(&task_context),
         }
     }
     
@@ -1171,6 +1171,20 @@ impl IrConverter {
             }),
             arguments: args,
             ir_type: IrType::Vector(Box::new(IrType::Any)),
+            source_location: None,        })
+    }
+      fn convert_task_context(&mut self, task_context: &crate::ast::TaskContextAccess) -> IrConversionResult<IrNode> {
+        // Convert TaskContext access to a string literal for now
+        // In a real implementation, this would generate proper IR for context access
+        let context_str = match &task_context.context_key {
+            crate::ast::ContextKey::Symbol(symbol) => format!("@{}", symbol.0),
+            crate::ast::ContextKey::Keyword(keyword) => format!("@{}", keyword.0),
+        };
+        
+        Ok(IrNode::Literal {
+            id: self.next_id(),
+            value: crate::ast::Literal::String(context_str),
+            ir_type: IrType::String,
             source_location: None,
         })
     }

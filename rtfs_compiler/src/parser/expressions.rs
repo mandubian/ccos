@@ -1,11 +1,11 @@
-use super::common::{build_literal, build_map_key, build_symbol}; // Removed build_keyword
+use super::common::{build_literal, build_map_key, build_symbol, build_keyword}; // Added build_keyword back
 use super::special_forms::{
     build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
     build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
     build_with_resource_expr,
 };
 use super::{PestParseError, Rule}; // Added PestParseError
-use crate::ast::{Expression, MapKey};
+use crate::ast::{Expression, MapKey, TaskContextAccess, ContextKey, Symbol};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -25,11 +25,10 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         } else {
             break;
         }
-    }
-
-    match pair.as_rule() {
+    }    match pair.as_rule() {
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
+        Rule::task_context_access => Ok(Expression::TaskContext(build_task_context_access(pair)?)),
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
                 .map(build_expression)
@@ -141,11 +140,37 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
             .ok_or_else(|| PestParseError::InvalidInput("Map entry missing key".to_string()))?;
         let value_pair = entry_inner
             .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-            .ok_or_else(|| PestParseError::InvalidInput("Map entry missing value".to_string()))?;
-
-        let key = build_map_key(key_pair)?;
+            .ok_or_else(|| PestParseError::InvalidInput("Map entry missing value".to_string()))?;        let key = build_map_key(key_pair)?;
         let value = build_expression(value_pair)?;
         map.insert(key, value);
     }
     Ok(map)
+}
+
+pub(super) fn build_task_context_access(pair: Pair<Rule>) -> Result<TaskContextAccess, PestParseError> {
+    if pair.as_rule() != Rule::task_context_access {
+        return Err(PestParseError::InvalidInput(format!(
+            "Expected Rule::task_context_access, found {:?}",
+            pair.as_rule()
+        )));
+    }
+    
+    let inner_pair = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| PestParseError::MissingToken("task_context_access inner".to_string()))?;
+    
+    let context_key = match inner_pair.as_rule() {
+        Rule::identifier => {
+            // Create a Symbol directly from the identifier string
+            ContextKey::Symbol(Symbol(inner_pair.as_str().to_string()))
+        },
+        Rule::keyword => ContextKey::Keyword(build_keyword(inner_pair)?),
+        rule => return Err(PestParseError::InvalidInput(format!(
+            "Expected identifier or keyword in task_context_access, found {:?}",
+            rule
+        ))),
+    };
+    
+    Ok(TaskContextAccess { context_key })
 }
