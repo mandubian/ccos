@@ -3,9 +3,11 @@
 
 use std::collections::HashMap;
 use crate::ast::{Symbol, Keyword, MapKey};
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Runtime values in RTFS
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)] // Removed PartialEq here, will implement manually
 pub enum Value {
     // Primitive values
     Integer(i64),
@@ -22,6 +24,7 @@ pub enum Value {
     
     // Function values
     Function(Function),
+    FunctionPlaceholder(Rc<RefCell<Value>>), // New variant for letrec
     
     // Special values
     Resource(ResourceHandle),
@@ -110,7 +113,7 @@ impl Value {
                 let entries: Vec<String> = m.iter().map(|(k, v)| {
                     let key_str = match k {
                         MapKey::Keyword(kw) => format!(":{}", kw.0),
-                        MapKey::String(s) => format!("\"{}\"", s),
+                        MapKey::String(s) => format!("\\\"{}\\\"", s),
                         MapKey::Integer(i) => i.to_string(),
                     };
                     format!("{} {}", key_str, v.to_string())
@@ -118,9 +121,10 @@ impl Value {
                 format!("{{{}}}", entries.join(" "))
             },
             Value::Function(_) => "#<function>".to_string(),
+            Value::FunctionPlaceholder(_) => "#<function-placeholder>".to_string(), // Handle new variant
             Value::Resource(h) => format!("#<resource:{}>", h.resource_type),
             Value::Ok(v) => format!("[:ok {}]", v.to_string()),
-            Value::Error(e) => format!("[:error :{} \"{}\"]", e.error_type.0, e.message),
+            Value::Error(e) => format!("[:error :{} \\\"{}\\\"]", e.error_type.0, e.message),
         }
     }
     
@@ -137,9 +141,37 @@ impl Value {
             Value::Vector(_) => "vector",
             Value::Map(_) => "map",
             Value::Function(_) => "function",
+            Value::FunctionPlaceholder(_) => "function-placeholder", // Handle new variant
             Value::Resource(_) => "resource",
             Value::Ok(_) => "ok",
             Value::Error(_) => "error",
+        }
+    }
+}
+
+// Manual implementation of PartialEq for Value
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Keyword(a), Value::Keyword(b)) => a == b,
+            (Value::Symbol(a), Value::Symbol(b)) => a == b,
+            (Value::Nil, Value::Nil) => true,
+            (Value::Vector(a), Value::Vector(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => a == b,
+            (Value::Function(a), Value::Function(b)) => a == b,
+            // FunctionPlaceholders are considered unique for now, or equal only if they point to the exact same Rc.
+            // For simplicity in this step, we'll consider them unequal unless it's the same Rc instance.
+            // A more robust comparison might involve checking if the underlying RefCells point to equal Values,
+            // but that could lead to infinite recursion if the placeholder is part of a cycle.
+            (Value::FunctionPlaceholder(a), Value::FunctionPlaceholder(b)) => Rc::ptr_eq(a, b),
+            (Value::Resource(a), Value::Resource(b)) => a == b,
+            (Value::Ok(a), Value::Ok(b)) => a == b,
+            (Value::Error(a), Value::Error(b)) => a == b,
+            _ => false, // Different types
         }
     }
 }

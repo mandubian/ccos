@@ -21,6 +21,7 @@ impl StandardLibrary {
         Self::load_collection_functions(&mut env);
         Self::load_type_predicate_functions(&mut env);
         Self::load_tool_functions(&mut env);
+        Self::load_agent_functions(&mut env);
         
         env
     }
@@ -47,12 +48,25 @@ impl StandardLibrary {
             arity: Arity::AtLeast(1),
             func: Self::multiply,
         }));
-        
-        // Division (/)
+          // Division (/)
         env.define(&Symbol("/".to_string()), Value::Function(Function::Builtin {
             name: "/".to_string(),
             arity: Arity::AtLeast(1),
             func: Self::divide,
+        }));
+        
+        // Max
+        env.define(&Symbol("max".to_string()), Value::Function(Function::Builtin {
+            name: "max".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::max_value,
+        }));
+        
+        // Min
+        env.define(&Symbol("min".to_string()), Value::Function(Function::Builtin {
+            name: "min".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::min_value,
         }));
     }
     
@@ -174,14 +188,13 @@ impl StandardLibrary {
             arity: Arity::Any,
             func: Self::vector,
         }));
-        
-        env.define(&Symbol("map".to_string()), Value::Function(Function::Builtin {
-            name: "map".to_string(),
+          env.define(&Symbol("hash-map".to_string()), Value::Function(Function::Builtin {
+            name: "hash-map".to_string(),
             arity: Arity::Any,
-            func: Self::map,
+            func: Self::hash_map,
         }));
-          env.define(&Symbol("map-fn".to_string()), Value::Function(Function::Builtin {
-            name: "map-fn".to_string(),
+          env.define(&Symbol("map".to_string()), Value::Function(Function::Builtin {
+            name: "map".to_string(),
             arity: Arity::AtLeast(2),
             func: Self::map_function,
         }));
@@ -337,6 +350,66 @@ impl StandardLibrary {
             name: "tool:http-fetch".to_string(),
             arity: Arity::Range(1, 2),
             func: Self::tool_http_fetch,
+        }));
+    }
+    
+    /// Load agent system functions
+    fn load_agent_functions(env: &mut Environment) {
+        // Agent discovery function
+        env.define(&Symbol("discover-agents".to_string()), Value::Function(Function::Builtin {
+            name: "discover-agents".to_string(),
+            arity: Arity::Range(1, 2),
+            func: Self::discover_agents,
+        }));
+          // Task coordination function
+        env.define(&Symbol("task".to_string()), Value::Function(Function::Builtin {
+            name: "task".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::task_coordination,
+        }));
+          // Mathematical functions
+        env.define(&Symbol("fact".to_string()), Value::Function(Function::Builtin {
+            name: "fact".to_string(),
+            arity: Arity::Exact(1),
+            func: Self::factorial,
+        }));
+        
+        env.define(&Symbol("max".to_string()), Value::Function(Function::Builtin {
+            name: "max".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::max_value,
+        }));
+        
+        env.define(&Symbol("min".to_string()), Value::Function(Function::Builtin {
+            name: "min".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::min_value,
+        }));
+        
+        env.define(&Symbol("length".to_string()), Value::Function(Function::Builtin {
+            name: "length".to_string(),
+            arity: Arity::Exact(1),
+            func: Self::length_value,
+        }));
+        
+        // Advanced agent system functions
+        env.define(&Symbol("discover-and-assess-agents".to_string()), Value::Function(Function::Builtin {
+            name: "discover-and-assess-agents".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::discover_and_assess_agents,
+        }));
+        
+        env.define(&Symbol("establish-system-baseline".to_string()), Value::Function(Function::Builtin {
+            name: "establish-system-baseline".to_string(),
+            arity: Arity::AtLeast(1),
+            func: Self::establish_system_baseline,
+        }));
+        
+        // Tool functions for agent coordination
+        env.define(&Symbol("tool:current-timestamp-ms".to_string()), Value::Function(Function::Builtin {
+            name: "tool:current-timestamp-ms".to_string(),
+            arity: Arity::Exact(0),
+            func: Self::current_timestamp_ms,
         }));
     }
 }
@@ -791,7 +864,7 @@ impl StandardLibrary {
         Ok(Value::Vector(args.to_vec()))
     }
     
-    fn map(args: &[Value]) -> RuntimeResult<Value> {
+    fn hash_map(args: &[Value]) -> RuntimeResult<Value> {
         if args.len() % 2 != 0 {
             return Err(RuntimeError::ArityMismatch {
                 function: "map".to_string(),
@@ -1414,6 +1487,92 @@ impl StandardLibrary {
             Ok(Value::Ok(Box::new(Value::String(format!("Mock response from {}", url)))))
         }
     }
+      // Agent system functions
+    fn discover_agents(args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder implementation for agent discovery
+        // This returns an empty vector for now, as a stub
+        
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "discover-agents".to_string(),
+                expected: "1 or 2".to_string(),
+                actual: 0,
+            });
+        }
+        
+        // For now, just return an empty vector regardless of criteria
+        // In the real implementation, this would:
+        // 1. Parse the criteria map
+        // 2. Query the agent registry
+        // 3. Return matching agent cards
+        Ok(Value::Vector(vec![]))
+    }
+      fn task_coordination(args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder implementation for task coordination
+        // This is a stub implementation
+        
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "task".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+        
+        // For now, just return the first argument
+        // In the real implementation, this would:
+        // 1. Create a task context
+        // 2. Handle task execution
+        // 3. Return task results
+        Ok(args[0].clone())
+    }
+    
+    fn factorial(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "fact".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+          match &args[0] {
+            Value::Integer(n) => {
+                if *n < 0 {
+                    return Err(RuntimeError::InvalidArgument("Factorial of negative number".to_string()));
+                }
+                
+                let mut result = 1i64;
+                for i in 1..=*n {
+                    result *= i;
+                }
+                Ok(Value::Integer(result))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "integer".to_string(),
+                actual: format!("{:?}", args[0]),
+                operation: "factorial".to_string(),
+            }),
+        }
+    }
+    
+    fn current_timestamp_ms(args: &[Value]) -> RuntimeResult<Value> {
+        if !args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:current-timestamp-ms".to_string(),
+                expected: "0".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        // Return current timestamp in milliseconds since Unix epoch
+        // For stub implementation, return a fixed timestamp
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => Ok(Value::Integer(duration.as_millis() as i64)),
+            Err(_) => Ok(Value::Integer(0)), // Fallback
+        }
+    }
     
     // Helper functions
     fn value_to_map_key(value: &Value) -> RuntimeResult<MapKey> {
@@ -1546,32 +1705,109 @@ impl StandardLibrary {
                 };
                 
                 let start_index = if initial.is_some() { 0 } else { 1 };
-                
-                for item in &vec[start_index..] {
-                    // For now, simulate function application
-                    // In a real implementation, we'd call the function here
+                  for item in &vec[start_index..] {
+                    // Handle specific builtin functions
                     match function {
-                        Value::Function(_) => {
-                            // For demonstration, assume it's addition
-                            // This should be replaced with actual function calling
-                            match (&accumulator, item) {
-                                (Value::Integer(a), Value::Integer(b)) => {
-                                    accumulator = Value::Integer(a + b);
+                        Value::Function(Function::Builtin { name, .. }) => {
+                            match name.as_str() {
+                                "+" => {
+                                    match (&accumulator, item) {
+                                        (Value::Integer(a), Value::Integer(b)) => {
+                                            accumulator = Value::Integer(a + b);
+                                        },
+                                        (Value::Float(a), Value::Float(b)) => {
+                                            accumulator = Value::Float(a + b);
+                                        },
+                                        (Value::Integer(a), Value::Float(b)) => {
+                                            accumulator = Value::Float(*a as f64 + b);
+                                        },
+                                        (Value::Float(a), Value::Integer(b)) => {
+                                            accumulator = Value::Float(a + *b as f64);
+                                        },
+                                        _ => {
+                                            return Err(RuntimeError::TypeError {
+                                                expected: "number".to_string(),
+                                                actual: format!("{} and {}", accumulator.type_name(), item.type_name()),
+                                                operation: "addition in reduce".to_string(),
+                                            });
+                                        }
+                                    }
                                 },
-                                (Value::Float(a), Value::Float(b)) => {
-                                    accumulator = Value::Float(a + b);
+                                "max" => {
+                                    match (&accumulator, item) {
+                                        (Value::Integer(a), Value::Integer(b)) => {
+                                            if b > a {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        (Value::Float(a), Value::Float(b)) => {
+                                            if b > a {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        (Value::Integer(a), Value::Float(b)) => {
+                                            if b > &(*a as f64) {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        (Value::Float(a), Value::Integer(b)) => {
+                                            if (*b as f64) > *a {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        _ => {
+                                            return Err(RuntimeError::TypeError {
+                                                expected: "number".to_string(),
+                                                actual: format!("{} and {}", accumulator.type_name(), item.type_name()),
+                                                operation: "max in reduce".to_string(),
+                                            });
+                                        }
+                                    }
                                 },
-                                (Value::Integer(a), Value::Float(b)) => {
-                                    accumulator = Value::Float(*a as f64 + b);
-                                },
-                                (Value::Float(a), Value::Integer(b)) => {
-                                    accumulator = Value::Float(a + *b as f64);
+                                "min" => {
+                                    match (&accumulator, item) {
+                                        (Value::Integer(a), Value::Integer(b)) => {
+                                            if b < a {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        (Value::Float(a), Value::Float(b)) => {
+                                            if b < a {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        (Value::Integer(a), Value::Float(b)) => {
+                                            if b < &(*a as f64) {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        (Value::Float(a), Value::Integer(b)) => {
+                                            if (*b as f64) < *a {
+                                                accumulator = item.clone();
+                                            }
+                                        },
+                                        _ => {
+                                            return Err(RuntimeError::TypeError {
+                                                expected: "number".to_string(),
+                                                actual: format!("{} and {}", accumulator.type_name(), item.type_name()),
+                                                operation: "min in reduce".to_string(),
+                                            });
+                                        }
+                                    }
                                 },
                                 _ => {
-                                    // For other types, just keep the accumulator
-                                    // In reality, this would depend on the function
+                                    // For other builtin functions, just keep the accumulator for now
+                                    // TODO: Implement proper function calling
                                 }
                             }
+                        },                        Value::Function(Function::UserDefined { .. }) => {
+                            // For user-defined functions, we can't call them without an evaluator
+                            // For now, just return an error
+                            return Err(RuntimeError::TypeError {
+                                expected: "builtin function".to_string(),
+                                actual: "user-defined function".to_string(),
+                                operation: "reduce".to_string(),
+                            });
                         },
                         _ => return Err(RuntimeError::TypeError {
                             expected: "function".to_string(),
@@ -1580,8 +1816,7 @@ impl StandardLibrary {
                         }),
                     }
                 }
-                
-                Ok(accumulator)
+                  Ok(accumulator)
             },
             _ => Err(RuntimeError::TypeError {
                 expected: "vector".to_string(),
@@ -1589,5 +1824,149 @@ impl StandardLibrary {
                 operation: "reduce".to_string(),
             }),
         }
+    }
+    
+    fn max_value(args: &[Value]) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "max".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+        
+        let mut max = args[0].clone();
+        for arg in &args[1..] {
+            match (&max, arg) {
+                (Value::Integer(a), Value::Integer(b)) => {
+                    if b > a {
+                        max = arg.clone();
+                    }
+                },
+                (Value::Float(a), Value::Float(b)) => {
+                    if b > a {
+                        max = arg.clone();
+                    }
+                },
+                (Value::Integer(a), Value::Float(b)) => {
+                    if b > &(*a as f64) {
+                        max = arg.clone();
+                    }
+                },
+                (Value::Float(a), Value::Integer(b)) => {
+                    if (*b as f64) > *a {
+                        max = arg.clone();
+                    }
+                },
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "number".to_string(),
+                    actual: arg.type_name().to_string(),
+                    operation: "max".to_string(),
+                }),
+            }
+        }
+        Ok(max)
+    }
+    
+    fn min_value(args: &[Value]) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "min".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+        
+        let mut min = args[0].clone();
+        for arg in &args[1..] {
+            match (&min, arg) {
+                (Value::Integer(a), Value::Integer(b)) => {
+                    if b < a {
+                        min = arg.clone();
+                    }
+                },
+                (Value::Float(a), Value::Float(b)) => {
+                    if b < a {
+                        min = arg.clone();
+                    }
+                },
+                (Value::Integer(a), Value::Float(b)) => {
+                    if b < &(*a as f64) {
+                        min = arg.clone();
+                    }
+                },
+                (Value::Float(a), Value::Integer(b)) => {
+                    if (*b as f64) < *a {
+                        min = arg.clone();
+                    }
+                },
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "number".to_string(),
+                    actual: arg.type_name().to_string(),
+                    operation: "min".to_string(),
+                }),
+            }
+        }
+        Ok(min)
+    }
+    
+    fn length_value(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "length".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        match &args[0] {
+            Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
+            Value::String(s) => Ok(Value::Integer(s.len() as i64)),
+            Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector, string, or map".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "length".to_string(),
+            }),
+        }
+    }
+    
+    fn discover_and_assess_agents(args: &[Value]) -> RuntimeResult<Value> {
+        // Stub implementation for advanced agent discovery
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "discover-and-assess-agents".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+        
+        // For now, return an empty vector
+        // In a real implementation, this would:
+        // 1. Search for available agents
+        // 2. Assess their capabilities
+        // 3. Return a list of qualified agents
+        Ok(Value::Vector(vec![]))
+    }
+    
+    fn establish_system_baseline(args: &[Value]) -> RuntimeResult<Value> {
+        // Stub implementation for system baseline establishment
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "establish-system-baseline".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+          // For now, return a simple baseline map
+        // In a real implementation, this would:
+        // 1. Analyze current system state
+        // 2. Establish performance baselines
+        // 3. Return baseline metrics
+        let mut baseline = std::collections::HashMap::new();
+        baseline.insert(MapKey::Keyword(Keyword("status".to_string())), Value::Keyword(Keyword("baseline-established".to_string())));
+        baseline.insert(MapKey::Keyword(Keyword("timestamp".to_string())), Value::Integer(1640995200000));
+        
+        Ok(Value::Map(baseline))
     }
 }

@@ -37,83 +37,6 @@ impl TestConfig {
             expected_result: None,
         }
     }
-
-    fn should_fail_compile(mut self, error_pattern: &'static str) -> Self {
-        self.should_compile = false;
-        self.should_execute = false;
-        self.expected_error = Some(error_pattern);
-        self
-    }
-
-    fn should_fail_execute(mut self, error_pattern: &'static str) -> Self {
-        self.should_execute = false;
-        self.expected_error = Some(error_pattern);
-        self
-    }
-
-    fn with_runtime(mut self, runtime: RuntimeStrategy) -> Self {
-        self.runtime = runtime;
-        self
-    }
-
-    fn expect_result(mut self, result: &'static str) -> Self {
-        self.expected_result = Some(result);
-        self
-    }
-}
-
-/// Get test configurations for all RTFS test files
-fn get_test_configs() -> Vec<TestConfig> {
-    vec![
-        // Basic arithmetic and expressions
-        TestConfig::new("test_single_expression"),
-        TestConfig::new("test_complex_expression"),
-        TestConfig::new("test_complex_math"),
-        TestConfig::new("test_nested_ops"),
-        
-        // Let bindings - these should all work now
-        TestConfig::new("test_basic_let"),
-        TestConfig::new("test_let_binding"),
-        TestConfig::new("test_let_no_type"),
-        TestConfig::new("test_typed_let"),
-        TestConfig::new("test_simple_dependent"),
-        TestConfig::new("test_dependent_let"),
-        TestConfig::new("test_multi_let"),
-        TestConfig::new("test_mixed_let_simple"),
-        TestConfig::new("test_expression_in_let"),
-        
-        // Conditionals
-        TestConfig::new("test_conditional"),
-        
-        // Functions - may have issues
-        TestConfig::new("test_simple_function"),
-        TestConfig::new("test_functions_control"),
-        
-        // Comprehensive tests
-        TestConfig::new("test_comprehensive"),
-        TestConfig::new("test_no_comments"),
-        TestConfig::new("test_working_features"),
-        
-        // Real-world and production tests
-        TestConfig::new("test_simple_real"),
-        TestConfig::new("test_basic_real"),
-        TestConfig::new("test_real_world"),
-        TestConfig::new("test_real_world_fixed"),
-        TestConfig::new("test_production"),
-        
-        // Advanced features that might fail
-        TestConfig::new("test_incrementally_complex"),
-        TestConfig::new("test_computational_heavy"),
-        TestConfig::new("test_advanced_focused"),
-        TestConfig::new("test_advanced_pipeline"),
-        TestConfig::new("test_agent_coordination"),
-        TestConfig::new("test_agent_discovery"),
-        TestConfig::new("test_fault_tolerance"),
-        
-        // Mixed let that uses unknown functions
-        TestConfig::new("test_mixed_let")
-            .should_fail_execute("UndefinedSymbol"),
-    ]
 }
 
 /// Preprocess test content to extract the actual executable expression
@@ -192,7 +115,7 @@ fn run_test_file(config: &TestConfig, runtime: &str) -> Result<String, String> {
     // Try to execute with the specified runtime
     let result = match runtime {
         "ast" => {
-            let mut evaluator = runtime::evaluator::Evaluator::new();
+            let evaluator = runtime::evaluator::Evaluator::new();
             match evaluator.evaluate(&parsed) {
                 Ok(value) => format!("{:?}", value),
                 Err(e) => return Err(format!("AST runtime error: {:?}", e)),
@@ -227,74 +150,134 @@ fn run_test_file(config: &TestConfig, runtime: &str) -> Result<String, String> {
     Ok(result)
 }
 
-#[test]
-fn test_all_rtfs_files() {
-    let configs = get_test_configs();
-    let mut passed = 0;
-    let mut failed = 0;
-    let mut failed_tests = Vec::new();
 
-    println!("Running {} RTFS test files...", configs.len());
 
-    for config in &configs {
-        let runtimes = match config.runtime {
-            RuntimeStrategy::Ast => vec!["ast"],
-            RuntimeStrategy::Ir => vec!["ir"],
-            RuntimeStrategy::Both => vec!["ast", "ir"],
-        };
+// Individual test functions for better granularity and tracking
 
-        for runtime in runtimes {
-            let test_name = format!("{} ({})", config.name, runtime);
+macro_rules! create_rtfs_test {
+    ($test_name:ident, $file_name:expr) => {
+        #[test]
+        fn $test_name() {
+            let config = TestConfig::new($file_name);
             
-            match run_test_file(config, runtime) {
-                Ok(result) => {
-                    passed += 1;
-                    println!("✅ {}: {}", test_name, result.trim());
-                    
-                    // Check expected result if specified
-                    if let Some(expected) = config.expected_result {
-                        if !result.contains(expected) {
-                            failed += 1;
-                            failed_tests.push(format!("{}: Expected '{}' but got '{}'", test_name, expected, result));
+            let runtimes = match config.runtime {
+                RuntimeStrategy::Ast => vec!["ast"],
+                RuntimeStrategy::Ir => vec!["ir"],
+                RuntimeStrategy::Both => vec!["ast", "ir"],
+            };
+
+            for runtime in runtimes {
+                let test_name = format!("{} ({})", config.name, runtime);
+                
+                match run_test_file(&config, runtime) {
+                    Ok(result) => {
+                        println!("✅ {}: {}", test_name, result.trim());
+                        
+                        // Check expected result if specified
+                        if let Some(expected) = config.expected_result {
+                            assert!(result.contains(expected), 
+                                "Expected '{}' but got '{}'", expected, result);
                         }
                     }
-                }
-                Err(error) => {
-                    // Check if this was an expected failure
-                    if !config.should_compile || !config.should_execute {
-                        if let Some(expected_error) = config.expected_error {
-                            if error.contains(expected_error) {
-                                passed += 1;
+                    Err(error) => {
+                        // Check if this was an expected failure
+                        if !config.should_compile || !config.should_execute {
+                            if let Some(expected_error) = config.expected_error {
+                                assert!(error.contains(expected_error),
+                                    "Expected error containing '{}' but got '{}'", expected_error, error);
                                 println!("✅ {} (expected failure): {}", test_name, error);
                                 continue;
                             }
                         }
+                        
+                        panic!("Test failed: {}: {}", test_name, error);
                     }
-                    
-                    failed += 1;
-                    failed_tests.push(format!("{}: {}", test_name, error));
-                    println!("❌ {}: {}", test_name, error);
                 }
             }
         }
-    }
+    };
+}
 
-    println!("\n=== Test Summary ===");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
+// Basic arithmetic tests
+create_rtfs_test!(test_single_expression, "test_single_expression");
+create_rtfs_test!(test_complex_expression, "test_complex_expression");
+create_rtfs_test!(test_nested_ops, "test_nested_ops");
+create_rtfs_test!(test_complex_math, "test_complex_math");
+
+// Let binding tests
+create_rtfs_test!(test_basic_let, "test_basic_let");
+create_rtfs_test!(test_let_binding, "test_let_binding");
+create_rtfs_test!(test_let_no_type, "test_let_no_type");
+create_rtfs_test!(test_typed_let, "test_typed_let");
+create_rtfs_test!(test_simple_dependent, "test_simple_dependent");
+create_rtfs_test!(test_dependent_let, "test_dependent_let");
+create_rtfs_test!(test_multi_let, "test_multi_let");
+create_rtfs_test!(test_mixed_let_simple, "test_mixed_let_simple");
+create_rtfs_test!(test_expression_in_let, "test_expression_in_let");
+
+// Conditional tests
+create_rtfs_test!(test_conditional, "test_conditional");
+
+// Function tests
+create_rtfs_test!(test_simple_function, "test_simple_function");
+create_rtfs_test!(test_functions_control, "test_functions_control");
+
+// Comprehensive tests
+create_rtfs_test!(test_comprehensive, "test_comprehensive");
+create_rtfs_test!(test_no_comments, "test_no_comments");
+create_rtfs_test!(test_working_features, "test_working_features");
+
+// Real-world tests
+create_rtfs_test!(test_simple_real, "test_simple_real");
+create_rtfs_test!(test_basic_real, "test_basic_real");
+create_rtfs_test!(test_real_world, "test_real_world");
+create_rtfs_test!(test_real_world_fixed, "test_real_world_fixed");
+create_rtfs_test!(test_production, "test_production");
+
+// Advanced tests
+create_rtfs_test!(test_incrementally_complex, "test_incrementally_complex");
+create_rtfs_test!(test_computational_heavy, "test_computational_heavy");
+create_rtfs_test!(test_advanced_focused, "test_advanced_focused");
+create_rtfs_test!(test_advanced_pipeline, "test_advanced_pipeline");
+
+// Agent system tests
+create_rtfs_test!(test_agent_coordination, "test_agent_coordination");
+create_rtfs_test!(test_agent_discovery, "test_agent_discovery");
+create_rtfs_test!(test_fault_tolerance, "test_fault_tolerance");
+
+// Task context tests
+create_rtfs_test!(test_task_context, "test_task_context");
+create_rtfs_test!(simple_task_context_test, "simple_task_context_test");
+
+// Special test - This test now passes so we'll treat it as a regular test
+#[test]
+fn test_mixed_let() {
+    let config = TestConfig::new("test_mixed_let");
     
-    if !failed_tests.is_empty() {
-        println!("\n=== Failed Tests ===");
-        for failure in &failed_tests {
-            println!("❌ {}", failure);
-        }
-        
-        // Don't panic on failed tests initially - let's see what needs fixing
-        // panic!("Some tests failed. See above for details.");
-        println!("\nNote: Some test failures are expected as we continue development.");
-    }
+    let runtimes = match config.runtime {
+        RuntimeStrategy::Ast => vec!["ast"],
+        RuntimeStrategy::Ir => vec!["ir"],
+        RuntimeStrategy::Both => vec!["ast", "ir"],
+    };
 
-    assert!(passed > 0, "No tests passed - something is seriously wrong");
+    for runtime in runtimes {
+        let test_name = format!("{} ({})", config.name, runtime);
+        
+        match run_test_file(&config, runtime) {
+            Ok(result) => {
+                println!("✅ {}: {}", test_name, result.trim());
+                
+                // Check expected result if specified
+                if let Some(expected) = config.expected_result {
+                    assert!(result.contains(expected), 
+                        "Expected '{}' but got '{}'", expected, result);
+                }
+            }
+            Err(error) => {
+                panic!("Test failed: {}: {}", test_name, error);
+            }
+        }
+    }
 }
 
 /// Test specific categories of functionality

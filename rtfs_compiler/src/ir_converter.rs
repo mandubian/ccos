@@ -130,10 +130,10 @@ impl IrConverter {
         self.next_node_id += 1;
         id
     }
-    
-    /// Add built-in functions to global scope
+      /// Add built-in functions to global scope
     fn add_builtin_functions(&mut self) {
         let builtins = [
+            // Arithmetic operators
             ("+", IrType::Function {
                 param_types: vec![IrType::Int, IrType::Int],
                 variadic_param_type: Some(Box::new(IrType::Int)),
@@ -154,7 +154,14 @@ impl IrConverter {
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Int),
             }),
+            
+            // Comparison operators
             ("=", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("!=", IrType::Function {
                 param_types: vec![IrType::Any, IrType::Any],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Bool),
@@ -168,6 +175,221 @@ impl IrConverter {
                 param_types: vec![IrType::Any, IrType::Any],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Bool),
+            }),
+            (">=", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("<=", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            
+            // Logical operators
+            ("and", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("or", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("not", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            
+            // String functions
+            ("str", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::String),
+            }),
+            ("string?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("string-length", IrType::Function {
+                param_types: vec![IrType::String],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),
+            ("substring", IrType::Function {
+                param_types: vec![IrType::String, IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::String),
+            }),
+            
+            // Collection functions  
+            ("map", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("vector", IrType::Function {
+                param_types: vec![],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+            }),
+            ("vector?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("map?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("count", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),
+            ("get", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("assoc", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any, IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("dissoc", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("conj", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            
+            // Type predicate functions
+            ("nil?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("bool?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("int?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("float?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("number?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("fn?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("symbol?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("keyword?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            
+            // Higher-order functions
+            ("map-fn", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("filter", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),            ("reduce", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            
+            // Agent system functions
+            ("discover-agents", IrType::Function {
+                param_types: vec![IrType::Map {
+                    entries: vec![],
+                    wildcard: Some(Box::new(IrType::Any)),
+                }],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+            }),            ("task", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+              // Mathematical functions
+            ("fact", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),
+            ("max", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("min", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("length", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),
+            
+            // Agent system functions - Advanced
+            ("discover-and-assess-agents", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+            }),
+            ("establish-system-baseline", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Map {
+                    entries: vec![],
+                    wildcard: Some(Box::new(IrType::Any)),
+                }),
+            }),
+              // Tool functions for agent coordination
+            ("tool:current-timestamp-ms", IrType::Function {
+                param_types: vec![],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),
+            ("tool:log", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Nil),
             }),
         ];
         
@@ -1055,13 +1277,34 @@ impl IrConverter {
             ir_type: IrType::Nil, // Log steps don't return values
             source_location: None,
         })
-    }
-    
-    fn convert_def(&mut self, def_expr: DefExpr) -> IrConversionResult<IrNode> {
+    }    fn convert_def(&mut self, def_expr: DefExpr) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         
-        // Convert the initialization expression
-        let init_expr = Box::new(self.convert_expression(*def_expr.value)?);
+        // Check if the value is a function expression - if so, we need to handle recursion
+        let is_function = matches!(&*def_expr.value, Expression::Fn(_));
+        
+        let init_expr = if is_function {
+            // Pre-register the function name to enable recursion
+            let placeholder_function_type = IrType::Function {
+                param_types: vec![IrType::Any; 1], // We'll update this later
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            };
+            
+            let binding_info = BindingInfo {
+                name: def_expr.symbol.0.clone(),
+                binding_id: id,
+                ir_type: placeholder_function_type,
+                kind: BindingKind::Function,
+            };
+            self.define_binding(def_expr.symbol.0.clone(), binding_info);
+            
+            // Now convert the function expression with the name available
+            Box::new(self.convert_expression(*def_expr.value)?)
+        } else {
+            // Regular variable definition - convert normally
+            Box::new(self.convert_expression(*def_expr.value)?)
+        };
         
         // Convert type annotation if present
         let type_annotation = if let Some(type_ann) = def_expr.type_annotation {
@@ -1076,14 +1319,25 @@ impl IrConverter {
             .or_else(|| init_expr.ir_type().cloned())
             .unwrap_or(IrType::Any);
         
-        // Add to global scope (def is module-level)
-        let binding_info = BindingInfo {
-            name: def_expr.symbol.0.clone(),
-            binding_id: id,
-            ir_type: var_type.clone(),
-            kind: BindingKind::Variable,
-        };
-        self.define_binding(def_expr.symbol.0.clone(), binding_info);
+        // For non-function expressions, add to global scope now
+        if !is_function {
+            let binding_info = BindingInfo {
+                name: def_expr.symbol.0.clone(),
+                binding_id: id,
+                ir_type: var_type.clone(),
+                kind: BindingKind::Variable,
+            };
+            self.define_binding(def_expr.symbol.0.clone(), binding_info);
+        } else {
+            // Update the function binding with the correct type
+            let binding_info = BindingInfo {
+                name: def_expr.symbol.0.clone(),
+                binding_id: id,
+                ir_type: var_type.clone(),
+                kind: BindingKind::Function,
+            };
+            self.define_binding(def_expr.symbol.0.clone(), binding_info);
+        }
         
         Ok(IrNode::VariableDef {
             id,
@@ -1172,18 +1426,16 @@ impl IrConverter {
             arguments: args,
             ir_type: IrType::Vector(Box::new(IrType::Any)),
             source_location: None,        })
-    }
-      fn convert_task_context(&mut self, task_context: &crate::ast::TaskContextAccess) -> IrConversionResult<IrNode> {
-        // Convert TaskContext access to a string literal for now
-        // In a real implementation, this would generate proper IR for context access
-        let context_str = match &task_context.context_key {
-            crate::ast::ContextKey::Symbol(symbol) => format!("@{}", symbol.0),
-            crate::ast::ContextKey::Keyword(keyword) => format!("@{}", keyword.0),
+    }      fn convert_task_context(&mut self, task_context: &crate::ast::TaskContextAccess) -> IrConversionResult<IrNode> {
+        // Convert TaskContext access to proper IR for context access
+        let field_name = match &task_context.context_key {
+            crate::ast::ContextKey::Symbol(symbol) => crate::ast::Keyword(symbol.0.clone()),
+            crate::ast::ContextKey::Keyword(keyword) => keyword.clone(),
         };
         
-        Ok(IrNode::Literal {
+        Ok(IrNode::TaskContextAccess {
             id: self.next_id(),
-            value: crate::ast::Literal::String(context_str),
+            field_name,
             ir_type: IrType::String,
             source_location: None,
         })
