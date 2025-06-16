@@ -1,0 +1,13 @@
+(let [func-a (fn [n]
+               (if (= n 0)
+                 :a
+                 (func-b (- n 1))))
+      func-b (fn [n]
+               (if (= n 0)
+                 :b
+                 (func-c (- n 1))))
+      func-c (fn [n]
+               (if (= n 0)
+                 :c
+                 (func-a (- n 1))))]
+  (vector (func-a 3) (func-b 3) (func-c 3)))

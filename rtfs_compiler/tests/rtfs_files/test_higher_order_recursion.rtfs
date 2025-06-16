@@ -1,0 +1,9 @@
+(let [map-recursive (fn [f lst]
+                      (if (empty? lst)
+                        []
+                        (cons (f (first lst))
+                              (map-recursive f (rest lst)))))
+      sum-squares (fn [numbers]
+                    (let [square (fn [x] (* x x))]
+                      (map-recursive square numbers)))]
+  (sum-squares [1 2 3 4 5]))

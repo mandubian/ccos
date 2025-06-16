@@ -1,0 +1,9 @@
+(let [is-even (fn [n]
+                (if (= n 0)
+                  true
+                  (is-odd (- n 1))))
+      is-odd (fn [n]
+               (if (= n 0)
+                 false
+                 (is-even (- n 1))))]
+  (vector (is-even 4) (is-odd 4) (is-even 7) (is-odd 7)))
