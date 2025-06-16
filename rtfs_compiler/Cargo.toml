@@ -3,30 +3,21 @@ name = "rtfs_compiler"
 version = "0.1.0"
 edition = "2021"
 
-# Binary targets for different execution modes
+# Binary targets - Core RTFS compiler tools
 [[bin]]
-name = "rtfs_compiler"
+name = "rtfs-main"
 path = "src/main.rs"
+doc = false
 
 [[bin]]
-name = "main_enhanced_tests"
-path = "src/main_enhanced_tests.rs"
-
-[[bin]]
-name = "summary_demo"
-path = "src/summary_demo.rs"
+name = "rtfs-cli"
+path = "src/bin/rtfs_compiler.rs"
+doc = false
 
 [[bin]]
 name = "rtfs-repl"
 path = "src/bin/rtfs_repl.rs"
-
-[[bin]]
-name = "rtfs-compiler"
-path = "src/bin/rtfs_compiler.rs"
-
-[[bin]]
-name = "repl_deployment_demo"
-path = "src/repl_deployment_demo.rs"
+doc = false
 
 
 
