@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use crate::ast::Symbol;
 use crate::runtime::{Value, RuntimeError, RuntimeResult};
 
@@ -52,7 +53,8 @@ impl Environment {
     pub fn contains(&self, symbol: &Symbol) -> bool {
         self.bindings.contains_key(&symbol.0)
     }
-      /// Update an existing binding (searches up the scope chain)
+    
+    /// Update an existing binding (searches up the scope chain)
     pub fn set(&mut self, symbol: &Symbol, value: Value) -> RuntimeResult<()> {
         if self.bindings.contains_key(&symbol.0) {
             self.bindings.insert(symbol.0.clone(), value);
@@ -71,6 +73,37 @@ impl Environment {
     /// Get all bindings in the current scope (for debugging)
     pub fn current_bindings(&self) -> &HashMap<String, Value> {
         &self.bindings
+    }
+}
+
+/// Shared mutable environment for letrec semantics
+/// This allows functions to mutually reference each other
+#[derive(Debug, Clone)]
+pub struct SharedEnvironment {
+    inner: Rc<RefCell<Environment>>,
+}
+
+impl SharedEnvironment {
+    pub fn new(env: Environment) -> Self {
+        SharedEnvironment {
+            inner: Rc::new(RefCell::new(env)),
+        }
+    }
+    
+    pub fn define(&self, symbol: &Symbol, value: Value) {
+        self.inner.borrow_mut().define(symbol, value);
+    }
+    
+    pub fn lookup(&self, symbol: &Symbol) -> RuntimeResult<Value> {
+        self.inner.borrow().lookup(symbol)
+    }
+    
+    pub fn to_environment(&self) -> Environment {
+        self.inner.borrow().clone()
+    }
+    
+    pub fn current_bindings(&self) -> HashMap<String, Value> {
+        self.inner.borrow().current_bindings().clone()
     }
 }
 
