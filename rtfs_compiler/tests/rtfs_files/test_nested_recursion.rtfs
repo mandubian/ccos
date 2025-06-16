@@ -1,0 +1,7 @@
+(let [countdown (fn [n]
+                  (let [helper (fn [x acc]
+                                 (if (= x 0)
+                                   acc
+                                   (helper (- x 1) (cons x acc))))]
+                    (helper n [])))]
+  (countdown 5))

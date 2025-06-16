@@ -1,2 +1,0 @@
-(let [numbers [1 2 3]]
-  {:max-value (reduce max numbers)})

@@ -28,41 +28,7 @@ path = "src/bin/rtfs_compiler.rs"
 name = "repl_deployment_demo"
 path = "src/repl_deployment_demo.rs"
 
-[[bin]]
-name = "debug_complex_expression"
-path = "debug_complex_expression.rs"
 
-[[bin]]
-name = "debug_fact_function"
-path = "debug_fact_function.rs"
-
-[[bin]]
-name = "debug_simple_fn"
-path = "debug_simple_fn.rs"
-
-[[bin]]
-name = "debug_environment_deep"
-path = "debug_environment_deep.rs"
-
-[[bin]]
-name = "debug_closure_issue"
-path = "debug_closure_issue.rs"
-
-[[bin]]
-name = "debug_env_analysis"
-path = "debug_env_analysis.rs"
-
-[[bin]]
-name = "debug_simple_let"
-path = "debug_simple_let.rs"
-
-[[bin]]
-name = "debug_recursive_2param"
-path = "debug_recursive_2param.rs"
-
-[[bin]]
-name = "debug_test_complex_math"
-path = "debug_test_complex_math.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

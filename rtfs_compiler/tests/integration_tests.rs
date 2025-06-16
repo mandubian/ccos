@@ -249,6 +249,12 @@ create_rtfs_test!(test_fault_tolerance, "test_fault_tolerance");
 create_rtfs_test!(test_task_context, "test_task_context");
 create_rtfs_test!(simple_task_context_test, "simple_task_context_test");
 
+// Recursive function tests
+create_rtfs_test!(test_mutual_recursion, "test_mutual_recursion");
+create_rtfs_test!(test_nested_recursion, "test_nested_recursion");
+create_rtfs_test!(test_higher_order_recursion, "test_higher_order_recursion");
+create_rtfs_test!(test_three_way_recursion, "test_three_way_recursion");
+
 // Special test - This test now passes so we'll treat it as a regular test
 #[test]
 fn test_mixed_let() {
@@ -354,6 +360,30 @@ fn test_basic_arithmetic() {
             let result = run_test_file(&config, runtime);
             assert!(result.is_ok(), 
                 "Arithmetic test '{}' with '{}' runtime failed: {:?}", 
+                test_name, runtime, result.err());
+            println!("✅ {} ({}): {}", test_name, runtime, result.unwrap().trim());
+        }
+    }
+}
+
+#[test]
+fn test_recursive_functions() {
+    let recursive_tests = vec![
+        "test_complex_math",       // Original factorial test
+        "test_mutual_recursion",   // Even/odd mutual recursion
+        "test_nested_recursion",   // Nested recursive helper functions
+        "test_higher_order_recursion", // Higher-order functions with recursion
+        "test_three_way_recursion", // Three-way mutual recursion
+    ];
+
+    for test_name in recursive_tests {
+        let config = TestConfig::new(test_name);
+        
+        // Test both runtimes
+        for runtime in ["ast", "ir"] {
+            let result = run_test_file(&config, runtime);
+            assert!(result.is_ok(), 
+                "Recursive test '{}' with '{}' runtime failed: {:?}", 
                 test_name, runtime, result.err());
             println!("✅ {} ({}): {}", test_name, runtime, result.unwrap().trim());
         }
