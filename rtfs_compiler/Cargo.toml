@@ -9,6 +9,8 @@ repository = "https://github.com/yourusername/rtfs-compiler"
 
 [features]
 default = ["pest", "regex", "repl"]
+pest = ["dep:pest"]
+regex = ["dep:regex"]
 repl = ["rustyline"]
 
 [[bin]]
@@ -26,9 +28,9 @@ required-features = ["repl"]
 
 [dependencies]
 # Parser dependencies
-pest = "2.7"
+pest = { version = "2.7", optional = true }
 pest_derive = "2.7"
-regex = "1.10"
+regex = { version = "1.10", optional = true }
 
 # Runtime dependencies
 serde = { version = "1.0", features = ["derive"] }
