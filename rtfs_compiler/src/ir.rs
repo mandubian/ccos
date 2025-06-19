@@ -90,6 +90,12 @@ pub enum IrNode {
     },
     
     // Variable operations
+    VariableBinding {
+        id: NodeId,
+        name: String,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
     VariableRef {
         id: NodeId,
         name: String,
@@ -97,10 +103,18 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
-    VariableBinding {
+    QualifiedSymbolRef {
+        id: NodeId,
+        module: String,
+        symbol: String,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
+    VariableDef {
         id: NodeId,
         name: String,
+        type_annotation: Option<IrType>,
+        init_expr: Box<IrNode>,
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
@@ -214,15 +228,6 @@ pub enum IrNode {
         id: NodeId,
         name: String,
         lambda: Box<IrNode>,
-        ir_type: IrType,
-        source_location: Option<SourceLocation>,
-    },
-    
-    VariableDef {
-        id: NodeId,
-        name: String,
-        type_annotation: Option<IrType>,
-        init_expr: Box<IrNode>,
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
@@ -341,8 +346,11 @@ impl IrNode {
             IrNode::Literal { id, .. } => *id,
             IrNode::Vector { id, .. } => *id,
             IrNode::Map { id, .. } => *id,
-            IrNode::VariableRef { id, .. } => *id,
             IrNode::VariableBinding { id, .. } => *id,
+            IrNode::VariableRef { id, .. } => *id,
+            IrNode::QualifiedSymbolRef { id, .. } => *id,
+            IrNode::VariableDef { id, .. } => *id,
+            IrNode::FunctionDef { id, .. } => *id,
             IrNode::Apply { id, .. } => *id,
             IrNode::Lambda { id, .. } => *id,
             IrNode::Param { id, .. } => *id,
@@ -355,8 +363,6 @@ impl IrNode {
             IrNode::WithResource { id, .. } => *id,
             IrNode::LogStep { id, .. } => *id,
             IrNode::Module { id, .. } => *id,
-            IrNode::FunctionDef { id, .. } => *id,
-            IrNode::VariableDef { id, .. } => *id,
             IrNode::Import { id, .. } => *id,
             IrNode::Task { id, .. } => *id,
             IrNode::TaskContextAccess { id, .. } => *id,
@@ -367,8 +373,11 @@ impl IrNode {
     pub fn ir_type(&self) -> Option<&IrType> {
         match self {
             IrNode::Literal { ir_type, .. } => Some(ir_type),
-            IrNode::VariableRef { ir_type, .. } => Some(ir_type),
             IrNode::VariableBinding { ir_type, .. } => Some(ir_type),
+            IrNode::VariableRef { ir_type, .. } => Some(ir_type),
+            IrNode::QualifiedSymbolRef { ir_type, .. } => Some(ir_type),
+            IrNode::VariableDef { ir_type, .. } => Some(ir_type),
+            IrNode::FunctionDef { ir_type, .. } => Some(ir_type),
             IrNode::Apply { ir_type, .. } => Some(ir_type),
             IrNode::Lambda { ir_type, .. } => Some(ir_type),
             IrNode::Param { ir_type, .. } => Some(ir_type),
@@ -380,12 +389,10 @@ impl IrNode {
             IrNode::Parallel { ir_type, .. } => Some(ir_type),
             IrNode::WithResource { ir_type, .. } => Some(ir_type),
             IrNode::LogStep { ir_type, .. } => Some(ir_type),
-            IrNode::FunctionDef { ir_type, .. } => Some(ir_type),
-            IrNode::VariableDef { ir_type, .. } => Some(ir_type),
-            IrNode::Task { ir_type, .. } => Some(ir_type),
-            IrNode::TaskContextAccess { ir_type, .. } => Some(ir_type),
             IrNode::Vector { ir_type, .. } => Some(ir_type),
             IrNode::Map { ir_type, .. } => Some(ir_type),
+            IrNode::Task { ir_type, .. } => Some(ir_type),
+            IrNode::TaskContextAccess { ir_type, .. } => Some(ir_type),
             _ => None,
         }
     }
@@ -395,8 +402,11 @@ impl IrNode {
         match self {
             IrNode::Program { source_location, .. } => source_location.as_ref(),
             IrNode::Literal { source_location, .. } => source_location.as_ref(),
-            IrNode::VariableRef { source_location, .. } => source_location.as_ref(),
             IrNode::VariableBinding { source_location, .. } => source_location.as_ref(),
+            IrNode::VariableRef { source_location, .. } => source_location.as_ref(),
+            IrNode::QualifiedSymbolRef { source_location, .. } => source_location.as_ref(),
+            IrNode::VariableDef { source_location, .. } => source_location.as_ref(),
+            IrNode::FunctionDef { source_location, .. } => source_location.as_ref(),
             IrNode::Apply { source_location, .. } => source_location.as_ref(),
             IrNode::Lambda { source_location, .. } => source_location.as_ref(),
             IrNode::Param { source_location, .. } => source_location.as_ref(),
@@ -409,8 +419,6 @@ impl IrNode {
             IrNode::WithResource { source_location, .. } => source_location.as_ref(),
             IrNode::LogStep { source_location, .. } => source_location.as_ref(),
             IrNode::Module { source_location, .. } => source_location.as_ref(),
-            IrNode::FunctionDef { source_location, .. } => source_location.as_ref(),
-            IrNode::VariableDef { source_location, .. } => source_location.as_ref(),
             IrNode::Import { source_location, .. } => source_location.as_ref(),
             IrNode::Task { source_location, .. } => source_location.as_ref(),
             IrNode::TaskContextAccess { source_location, .. } => source_location.as_ref(),

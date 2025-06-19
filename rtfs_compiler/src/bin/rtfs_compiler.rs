@@ -12,6 +12,7 @@ extern crate rtfs_compiler;
 use rtfs_compiler::{
     parser::parse_expression,
     runtime::{Runtime, RuntimeStrategy},
+    runtime::module_runtime::ModuleRegistry,
     ir_converter::IrConverter,
     enhanced_ir_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     agent::discovery_traits::NoOpAgentDiscovery,
@@ -176,9 +177,11 @@ fn main() {
         
         // Create runtime with agent discovery
         let agent_discovery = Box::new(NoOpAgentDiscovery);
+        let module_registry = ModuleRegistry::new();
         let mut runtime = Runtime::with_strategy_and_agent_discovery(
             args.runtime.into(),
-            agent_discovery
+            agent_discovery,
+            &module_registry
         );
         
         let result = match runtime.evaluate_ir(&optimized_ir) {

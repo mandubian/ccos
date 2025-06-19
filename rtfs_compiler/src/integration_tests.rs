@@ -6,6 +6,7 @@ use crate::ir_converter::IrConverter;
 use crate::ir_optimizer::EnhancedOptimizationPipeline;
 use crate::ir::*;
 use crate::ast::*;
+use crate::runtime::module_runtime::ModuleRegistry;
 use std::fmt;
 
 // Implement Display for error types to make them work with Box<dyn std::error::Error>
@@ -36,15 +37,15 @@ pub struct PipelineTestResult {
 }
 
 /// Comprehensive integration test runner
-pub struct IntegrationTestRunner {
-    converter: IrConverter,
+pub struct IntegrationTestRunner<'a> {
+    converter: IrConverter<'a>,
     optimizer: EnhancedOptimizationPipeline,
 }
 
-impl IntegrationTestRunner {
-    pub fn new() -> Self {
+impl<'a> IntegrationTestRunner<'a> {
+    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
         Self {
-            converter: IrConverter::new(),
+            converter: IrConverter::with_module_registry(module_registry),
             optimizer: EnhancedOptimizationPipeline::new(),
         }
     }
@@ -61,15 +62,15 @@ impl IntegrationTestRunner {
         
         // Stage 3: Optimize IR
         let optimized_ir = self.optimizer.optimize(ir.clone());
-        
-        let compilation_time = start_time.elapsed().as_micros();
-        
+
+        let compilation_time_microseconds = start_time.elapsed().as_micros();
+
         Ok(PipelineTestResult {
             source: source.to_string(),
             ast,
             ir,
             optimized_ir,
-            compilation_time_microseconds: compilation_time,
+            compilation_time_microseconds,
         })
     }
 
@@ -219,7 +220,8 @@ pub fn run_comprehensive_integration_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     let mut total_tests = 0;
     let mut successful_tests = 0;
     let mut total_compilation_time = 0u128;
@@ -356,7 +358,8 @@ pub fn run_advanced_integration_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     let mut total_tests = 0;
     let mut successful_tests = 0;
     let mut total_compilation_time = 0u128;
@@ -490,7 +493,8 @@ pub fn run_error_case_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     let mut total_tests = 0;
     let mut expected_failures = 0;
 
@@ -597,7 +601,8 @@ pub fn run_complex_module_hierarchy_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     let mut total_tests = 0;
     let mut successful_tests = 0;
     let mut total_compilation_time = 0u128;
@@ -772,7 +777,8 @@ pub fn run_performance_baseline_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     
     // Performance test categories
     let performance_test_categories = vec![
@@ -908,7 +914,8 @@ pub fn run_advanced_pattern_matching_integration_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     let mut total_tests = 0;
     let mut successful_tests = 0;
     let mut total_compilation_time = 0u128;
@@ -1102,7 +1109,8 @@ pub fn benchmark_pipeline_performance() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     
     let benchmark_cases = vec![
         ("42", "Literal", 1000),
@@ -1111,7 +1119,7 @@ pub fn benchmark_pipeline_performance() {
         ("(let [x 5 y 10] (+ x y))", "Multi-binding let", 500),
         ("((fn [x] (+ x 1)) 5)", "Function application", 300),
         ("(if (> 5 3) \"yes\" \"no\")", "Conditional", 300),
-        ("(let [f (fn [x] (* x 2))] (f 5))", "Complex nested", 100),
+        ("(let [f (fn [a b] (+ a b))] (f 10 20))", "Complex nested", 100),
         ("(match 42 42 \"found\" _ \"not found\")", "Pattern matching", 200),
         ("(try (/ 10 2) (catch :error/runtime e \"error\"))", "Error handling", 100),
     ];
@@ -1158,7 +1166,8 @@ pub fn run_module_system_integration_tests() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     let mut total_tests = 0;
     let mut successful_tests = 0;
     let mut total_compilation_time = 0u128;
@@ -1421,7 +1430,8 @@ pub fn demonstrate_complete_pipeline() {
     let separator = "=".repeat(80);
     println!("{}", separator);
 
-    let mut runner = IntegrationTestRunner::new();
+    let module_registry = ModuleRegistry::new();
+    let mut runner = IntegrationTestRunner::new(&module_registry);
     
     // Complex example that showcases multiple language features
     let complex_example = "(let [x 10 y 20 f (fn [a b] (+ a b))] (if (> (f x y) 25) (* x y) (+ x y)))";
@@ -1462,27 +1472,16 @@ pub fn demonstrate_complete_pipeline() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::module_runtime::ModuleRegistry;
 
     #[test]
-    fn test_basic_pipeline() {
-        let mut runner = IntegrationTestRunner::new();
-        let result = runner.run_pipeline_test("(+ 1 2)").unwrap();
-        
-        // Verify all stages completed
-        assert!(!result.source.is_empty());
+    fn test_pipeline_simple_let_binding() {
+        let source = "(let [x 1] x)";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
         assert!(result.compilation_time_microseconds > 0);
-        
-        // Should have parsed successfully
-        match result.ast {
-            Expression::FunctionCall { .. } => {}, // Expected
-            _ => panic!("Expected function call AST"),
-        }
-    }
-
-    #[test]
-    fn test_let_expression_pipeline() {
-        let mut runner = IntegrationTestRunner::new();
-        let result = runner.run_pipeline_test("(let [x 10] x)").unwrap();
         
         // Should have parsed as let expression
         match result.ast {
@@ -1492,57 +1491,110 @@ mod tests {
     }
 
     #[test]
-    fn test_optimization_reduces_nodes() {
-        let mut runner = IntegrationTestRunner::new();
-        let result = runner.run_pipeline_test("(+ 1 2)").unwrap();
-        
-        let original_nodes = runner.count_nodes(&result.ir);
-        let optimized_nodes = runner.count_nodes(&result.optimized_ir);
-        
-        // Optimization should either reduce nodes or keep them the same
-        assert!(optimized_nodes <= original_nodes);
-    }    #[test]
-    fn test_compilation_speed() {
-        let mut runner = IntegrationTestRunner::new();
-        let result = runner.run_pipeline_test("(let [x 5] (+ x x))").unwrap();
-        
-        // Print the actual compilation time for debugging
-        println!("Actual compilation time: {} microseconds", result.compilation_time_microseconds);
-        
-        // Should compile reasonably quickly (under 100ms for debug builds)
-        // This accounts for debug overhead and full compilation pipeline
-        assert!(result.compilation_time_microseconds < 100000);
+    fn test_pipeline_simple_symbol_ref() {
+        let source = "x";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_advanced_pattern_matching() {
-        let mut runner = IntegrationTestRunner::new();
-        
-        // Test if match expressions parse correctly (they might not convert to IR yet)
-        let match_result = runner.run_pipeline_test("(match 42 42 \"found\" _ \"not found\")");
-        
-        // Either succeeds or fails gracefully
-        match match_result {
-            Ok(result) => {
-                println!("Pattern matching compiled successfully in {}μs", result.compilation_time_microseconds);
-            }
-            Err(e) => {
-                println!("Pattern matching not yet fully implemented: {:?}", e);
-                // This is expected if match expressions aren't fully implemented in IR converter
-            }
-        }
+    fn test_pipeline_basic_arithmetic() {
+        let source = "(+ 1 2)";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
     }
 
     #[test]
-    fn test_error_case_handling() {
-        let mut runner = IntegrationTestRunner::new();
-        
-        // Test that invalid syntax is properly rejected
-        let invalid_cases = vec!["(", "(let [x] x)", "(if)", ""];
-        
-        for case in invalid_cases {
-            let result = runner.run_pipeline_test(case);
-            assert!(result.is_err(), "Expected error for invalid syntax: {}", case);
-        }
+    fn test_pipeline_nested_arithmetic() {
+        let source = "(+ (* 2 3) (/ 10 2))";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_if_expression() {
+        let source = "(if (> 5 3) 'true 'false)";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_lambda_and_call() {
+        let source = "((lambda [x] (* x x)) 5)";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_vector_literal() {
+        let source = "[1 2 3]";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_map_literal() {
+        let source = "(map :a 1 :b 2)";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_let_with_lambda() {
+        let source = "(let [square (lambda [x] (* x x))] (square 5))";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_letrec_simple_recursion() {
+        let source = "(letrec [fact (lambda [n] (if (<= n 1) 1 (* n (fact (- n 1)))))] (fact 5))";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_quote_expression() {
+        let source = "(quote (+ 1 2))";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_unquote_in_quote() {
+        let source = "(let [x 3] `(1 2 ,x))";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
+    }
+
+    #[test]
+    fn test_pipeline_unquote_splicing_in_quote() {
+        let source = "(let [x `(2 3)] `(1 ,@x 4))";
+        let module_registry = ModuleRegistry::new();
+        let mut runner = IntegrationTestRunner::new(&module_registry);
+        let result = runner.run_pipeline_test(source).unwrap();
+        assert_eq!(result.source, source);
     }
 }

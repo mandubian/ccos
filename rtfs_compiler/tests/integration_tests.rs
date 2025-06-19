@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use rtfs_compiler::*;
 use rtfs_compiler::ast::MapKey;
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
@@ -55,10 +56,11 @@ fn run_test_file(config: &TestConfig, runtime_str: &str) -> Result<String, Strin
     let content = fs::read_to_string(&test_file_path)
         .map_err(|e| format!("Failed to read file {}: {}", test_file_path, e))?;
 
+    let module_registry = ModuleRegistry::new();
     // The 'run' method handles parsing, so we don't need to parse here.
     let mut runtime = match runtime_str {
-        "ast" => runtime::Runtime::with_strategy(runtime::RuntimeStrategy::Ast),
-        "ir" => runtime::Runtime::with_strategy(runtime::RuntimeStrategy::Ir),
+        "ast" => runtime::Runtime::with_strategy(runtime::RuntimeStrategy::Ast, &module_registry),
+        "ir" => runtime::Runtime::with_strategy(runtime::RuntimeStrategy::Ir, &module_registry),
         _ => unreachable!(),
     };
 

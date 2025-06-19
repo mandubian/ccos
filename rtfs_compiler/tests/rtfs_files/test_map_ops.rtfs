@@ -1,0 +1,2 @@
+; Test map operations
+(assoc {:a 1} :b 2)

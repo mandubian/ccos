@@ -16,7 +16,7 @@ pub struct Evaluator {
     agent_discovery: Box<dyn AgentDiscovery>,
     recursion_depth: usize,
     max_recursion_depth: usize,
-    task_context: Option<Value>,
+    pub task_context: Option<Value>,
 }
 
 // Helper function to check if two values are equivalent
@@ -142,7 +142,7 @@ impl Evaluator {
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
             Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
-            Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
+            // Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
         }
     }
       /// Evaluate an expression in the global environment
@@ -889,122 +889,7 @@ impl Evaluator {
             }),
         }
     }
-      /// Evaluate a task context access expression (@symbol or @keyword)
-    fn eval_task_context(&self, task_context_access: &TaskContextAccess, _env: &mut Environment) -> RuntimeResult<Value> {
-        let context_map = match &self.task_context {
-            Some(Value::Map(map)) => map,
-            Some(_) => return Err(RuntimeError::TypeError {
-                expected: "Map".to_string(),
-                actual: self.task_context.as_ref().unwrap().type_name().to_string(),
-                operation: "Accessing task context".to_string(),
-            }),
-            None => return Ok(Value::Nil), // No context available
-        };
-
-        let key_to_lookup = match &task_context_access.context_key {
-            ContextKey::Symbol(s) => MapKey::Keyword(Keyword(s.0.clone())),
-            ContextKey::Keyword(k) => MapKey::Keyword(k.clone()),
-        };
-
-        Ok(context_map.get(&key_to_lookup).cloned().unwrap_or(Value::Nil))
-    }
-    
-    /// Bind a pattern to a value in an environment (placeholder implementation)
-    fn bind_pattern(&self, pattern: &crate::ast::Pattern, value: &Value, env: &mut Environment) -> RuntimeResult<()> {
-        match pattern {
-            crate::ast::Pattern::Symbol(symbol) => {
-                env.define(symbol, value.clone());
-                Ok(())
-            },
-            crate::ast::Pattern::Wildcard => {
-                // Wildcard does nothing, successfully "matches" any value.
-                Ok(())
-            },
-            crate::ast::Pattern::VectorDestructuring{ elements, rest, as_symbol } => {
-                if let Value::Vector(values) = value {
-                    // Handle :as binding first
-                    if let Some(sym) = as_symbol {
-                        env.define(sym, value.clone());
-                    }
-
-                    if let Some(rest_symbol) = rest {
-                        let required_len = elements.len();
-                        if values.len() < required_len {
-                            return Err(RuntimeError::MatchError(format!(
-                                "Pattern vector length mismatch: expected at least {}, got {}",
-                                required_len,
-                                values.len()
-                            )));
-                        }
-
-                        // Bind fixed part
-                        for (p, v) in elements.iter().zip(values.iter()) {
-                            self.bind_pattern(p, v, env)?;
-                        }
-
-                        // Bind rest
-                        let rest_values = values.iter().skip(required_len).cloned().collect();
-                        env.define(rest_symbol, Value::Vector(rest_values));
-                        return Ok(());
-
-                    } else {
-                        // Handle fixed-length vector patterns
-                        if elements.len() != values.len() {
-                            return Err(RuntimeError::MatchError(format!(
-                                "Pattern vector length mismatch: expected {}, got {}",
-                                elements.len(),
-                                values.len()
-                            )));
-                        }
-                        for (p, v) in elements.iter().zip(values.iter()) {
-                            self.bind_pattern(p, v, env)?;
-                        }
-                        Ok(())
-                    }
-                } else {
-                    Err(RuntimeError::TypeError {
-                        expected: "vector".to_string(),
-                        actual: value.type_name().to_string(),
-                        operation: "vector destructuring".to_string(),
-                    })
-                }
-            },
-            _ => Err(RuntimeError::NotImplemented(format!("Complex pattern binding not yet implemented for pattern: {:?}", pattern))),
-        }
-    }      /// Match a pattern against a value (placeholder implementation)
-    fn match_pattern(&self, pattern: &crate::ast::Pattern, _value: &Value, _env: &mut Environment) -> RuntimeResult<bool> {
-        // For now, only handle simple symbol patterns
-        match pattern {
-            crate::ast::Pattern::Symbol(_symbol) => {
-                // Symbols always match, binding happens elsewhere
-                Ok(true)
-            },            _ => Err(RuntimeError::NotImplemented("Complex pattern matching not yet implemented".to_string())),
-        }
-    }
-    
-    /// Evaluate map function with evaluator access      
-    fn eval_map(&self, func_expr: &Expression, collection_expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
-        let func_value = self.eval_expr(func_expr, env)?;
-        let collection_value = self.eval_expr(collection_expr, env)?;
-        
-        match collection_value {
-            Value::Vector(vec) => {
-                let mut results = Vec::new();
-                for item in vec {
-                    // Call the function with the item as argument
-                    let result = self.call_function(func_value.clone(), &[item], env)?;
-                    results.push(result);
-                }
-                Ok(Value::Vector(results))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collection_value.type_name().to_string(),
-                operation: "map".to_string(),
-            }),
-        }
-    }
-    /// Match a match pattern against a value (placeholder implementation)
+      /// Match a match pattern against a value (placeholder implementation)
     fn match_match_pattern(&self, pattern: &crate::ast::MatchPattern, value: &Value, env: &mut Environment) -> RuntimeResult<bool> {
         match pattern {
             crate::ast::MatchPattern::Symbol(symbol) => {
@@ -1093,6 +978,21 @@ impl Evaluator {
         // For now, just return the value as-is
         // TODO: Implement actual type coercion logic
         Ok(value)
+    }
+
+    /// Bind a pattern to a value in an environment (placeholder implementation)
+    fn bind_pattern(&self, pattern: &crate::ast::Pattern, value: &Value, env: &mut Environment) -> RuntimeResult<()> {
+        match pattern {
+            crate::ast::Pattern::Symbol(symbol) => {
+                env.define(symbol, value.clone());
+                Ok(())
+            },
+            crate::ast::Pattern::Wildcard => {
+                // Wildcard does nothing, successfully "matches" any value.
+                Ok(())
+            },
+            _ => Err(RuntimeError::NotImplemented("Complex patterns not yet supported".to_string()))
+        }
     }
 }
 

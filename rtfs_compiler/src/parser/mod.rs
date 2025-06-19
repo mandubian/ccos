@@ -1323,10 +1323,10 @@ mod tests {
         );
     }    #[test]
     fn test_parse_match() {
-        // Basic match expression (this should work)
+        // Basic match expression (this should work)        
         assert_expr_parses_to!(
             r#"(match my-val 1 "one" [2 3] "two-three" _ "default")"#,
-            Expression::Match(Box::new(MatchExpr {
+            Expression::Match(MatchExpr {
                 expression: Box::new(Expression::Symbol(Symbol("my-val".to_string()))),
                 clauses: vec![
                     MatchClause {
@@ -1347,20 +1347,22 @@ mod tests {
                             "two-three".to_string()
                         ))),
                     },
-                    MatchClause {
+                    MatchClause {                        
                         pattern: MatchPattern::Wildcard,
                         guard: None,
                         body: Box::new(Expression::Literal(Literal::String("default".to_string()))),
                     },
                 ],
-            }))
+            })
         );
-    }    #[test]
+    }
+
+    #[test]
     fn test_parse_match_with_guard() {
         // Test guard functionality with 'when' keyword
         assert_expr_parses_to!(
             "(match x [a b] when (> a b) (combine a b) _ nil)",
-            Expression::Match(Box::new(MatchExpr {
+            Expression::Match(MatchExpr {
                 expression: Box::new(Expression::Symbol(Symbol("x".to_string()))),
                 clauses: vec![
                     MatchClause {
@@ -1385,21 +1387,19 @@ mod tests {
                                 Expression::Symbol(Symbol("b".to_string())),
                             ],
                         }),
-                    },
-                    MatchClause {
+                    },                    MatchClause {
                         pattern: MatchPattern::Wildcard,
                         guard: None,
                         body: Box::new(Expression::Literal(Literal::Nil)),
                     },
                 ],
-            }))
+            })
         );
     }    #[test]
     fn test_parse_match_with_map() {
         // Test map pattern matching functionality
-        assert_expr_parses_to!(
-            r#"(match data {:type "user" :name n} (greet n) { :type "admin" } (admin-panel))"#,
-            Expression::Match(Box::new(MatchExpr {
+        assert_expr_parses_to!(            r#"(match data {:type "user" :name n} (greet n) { :type "admin" } (admin-panel))"#,
+            Expression::Match(MatchExpr {
                 expression: Box::new(Expression::Symbol(Symbol("data".to_string()))),
                 clauses: vec![
                     MatchClause {
@@ -1438,20 +1438,18 @@ mod tests {
                             ],
                             rest: None,
                         },
-                        guard: None,
-                        body: Box::new(Expression::FunctionCall {
+                        guard: None,                        body: Box::new(Expression::FunctionCall {
                             callee: Box::new(Expression::Symbol(Symbol("admin-panel".to_string()))),
                             arguments: vec![],
                         }),
                     },
                 ],
-            }))
+            })
         );
     }    #[test]
     fn test_parse_match_with_multiple_body_expressions() {        // Test multiple body expressions per pattern
-        assert_expr_parses_to!(
-            r#"(match my-val :case1 (do (expr1) (expr2)) _ (default-expr))"#,
-            Expression::Match(Box::new(MatchExpr {
+        assert_expr_parses_to!(            r#"(match my-val :case1 (do (expr1) (expr2)) _ (default-expr))"#,
+            Expression::Match(MatchExpr {
                 expression: Box::new(Expression::Symbol(Symbol("my-val".to_string()))),                clauses: vec![
                     MatchClause {
                         pattern: MatchPattern::Literal(Literal::Keyword(Keyword("case1".to_string()))),
@@ -1474,10 +1472,9 @@ mod tests {
                         body: Box::new(Expression::FunctionCall {
                             callee: Box::new(Expression::Symbol(Symbol("default-expr".to_string()))),
                             arguments: vec![],
-                        }),
-                    },
+                        }),                    },
                 ],
-            }))
+            })
         );
     }    #[test]
     fn test_parse_discover_agents_basic() {

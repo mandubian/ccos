@@ -2,7 +2,7 @@
 // Contains all built-in functions and tool interfaces
 
 use std::collections::HashMap;
-use crate::ast::{Symbol, Keyword, MapKey};
+use crate::ast::{Symbol, MapKey, Expression};
 use crate::runtime::{Value, RuntimeError, RuntimeResult, Environment};
 use crate::runtime::values::{Function, Arity};
 
@@ -22,6 +22,7 @@ impl StandardLibrary {
         Self::load_type_predicate_functions(&mut env);
         Self::load_tool_functions(&mut env);
         Self::load_agent_functions(&mut env);
+        Self::load_task_functions(&mut env);
         
         env
     }
@@ -439,6 +440,264 @@ impl StandardLibrary {
             arity: Arity::Exact(0),
             func: Self::current_timestamp_ms,
         }));
+    }
+
+    /// Load task-related functions
+    fn load_task_functions(env: &mut Environment) {
+        env.define(&Symbol("rtfs.task/current".to_string()), Value::Function(Function::BuiltinWithEvaluator {
+            name: "rtfs.task/current".to_string(),
+            arity: Arity::Exact(0),
+            func: Self::task_current,
+        }));
+    }
+
+    // Helper for converting Value to MapKey
+    fn value_to_map_key(value: &Value) -> RuntimeResult<MapKey> {
+        match value {
+            Value::String(s) => Ok(MapKey::String(s.clone())),
+            Value::Keyword(k) => Ok(MapKey::Keyword(k.clone())),
+            _ => Err(RuntimeError::TypeError {
+                expected: "string or keyword".to_string(),
+                actual: value.type_name().to_string(),
+                operation: "map key".to_string(),
+            }),
+        }
+    }
+
+    // All other function implementations that were missing
+    fn max_value(args: &[Value]) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "max".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+        let mut max = &args[0];
+        for item in args.iter().skip(1) {
+            let is_greater = match (max, item) {
+                (Value::Integer(a), Value::Integer(b)) => b > a,
+                (Value::Float(a), Value::Float(b)) => b > a,
+                (Value::Integer(a), Value::Float(b)) => *b > (*a as f64),
+                (Value::Float(a), Value::Integer(b)) => (*b as f64) > *a,
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "number".to_string(),
+                    actual: item.type_name().to_string(),
+                    operation: "max".to_string(),
+                })
+            };
+            if is_greater {
+                max = item;
+            }
+        }
+        Ok(max.clone())
+    }
+
+    fn min_value(args: &[Value]) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "min".to_string(),
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+        let mut min = &args[0];
+        for item in args.iter().skip(1) {
+            let is_less = match (min, item) {
+                (Value::Integer(a), Value::Integer(b)) => b < a,
+                (Value::Float(a), Value::Float(b)) => b < a,
+                (Value::Integer(a), Value::Float(b)) => *b < (*a as f64),
+                (Value::Float(a), Value::Integer(b)) => (*b as f64) < *a,
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "number".to_string(),
+                    actual: item.type_name().to_string(),
+                    operation: "min".to_string(),
+                })
+            };
+            if is_less {
+                min = item;
+            }
+        }
+        Ok(min.clone())
+    }
+
+    fn conj(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "conj".to_string(),
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let mut collection = args[0].clone();
+        match &mut collection {
+            Value::Vector(vec) => {
+                for item in &args[1..] {
+                    vec.push(item.clone());
+                }
+                Ok(collection)
+            },
+            Value::Map(map) => {
+                if args.len() != 3 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: "conj".to_string(),
+                        expected: "3 for maps".to_string(),
+                        actual: args.len(),
+                    });
+                }
+                let key = Self::value_to_map_key(&args[1])?;
+                map.insert(key, args[2].clone());
+                Ok(collection)
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or map".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "conj".to_string(),
+            }),
+        }
+    }
+
+    fn map_with_evaluator(_args: &[Expression], _evaluator: &crate::runtime::evaluator::Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
+        unimplemented!()
+    }
+
+    fn filter_with_evaluator(_args: &[Expression], _evaluator: &crate::runtime::evaluator::Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
+        unimplemented!()
+    }
+
+    fn reduce(_args: &[Value]) -> RuntimeResult<Value> {
+        unimplemented!()
+    }
+
+    fn empty_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "empty?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        match &args[0] {
+            Value::Vector(v) => Ok(Value::Boolean(v.is_empty())),
+            Value::Map(m) => Ok(Value::Boolean(m.is_empty())),
+            Value::String(s) => Ok(Value::Boolean(s.is_empty())),
+            Value::Nil => Ok(Value::Boolean(true)),
+            _ => Ok(Value::Boolean(false)),
+        }
+    }
+
+    fn cons(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "cons".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        match &args[1] {
+            Value::Vector(v) => {
+                let mut new_vec = vec![args[0].clone()];
+                new_vec.extend_from_slice(v);
+                Ok(Value::Vector(new_vec))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: args[1].type_name().to_string(),
+                operation: "cons".to_string(),
+            }),
+        }
+    }
+
+    fn first(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "first".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        match &args[0] {
+            Value::Vector(v) => Ok(v.first().cloned().unwrap_or(Value::Nil)),
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "first".to_string(),
+            }),
+        }
+    }
+
+    fn rest(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "rest".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        match &args[0] {
+            Value::Vector(v) => {
+                if v.is_empty() {
+                    Ok(Value::Vector(vec![]))
+                } else {
+                    Ok(Value::Vector(v[1..].to_vec()))
+                }
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "rest".to_string(),
+            }),
+        }
+    }
+
+    fn int_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Integer(_)))) }
+    fn float_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Float(_)))) }
+    fn number_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Integer(_) | Value::Float(_)))) }
+    fn string_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::String(_)))) }
+    fn bool_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Boolean(_)))) }
+    fn nil_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Nil))) }
+    fn map_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Map(_)))) }
+    fn vector_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Vector(_)))) }
+    fn keyword_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Keyword(_)))) }
+    fn symbol_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Symbol(_)))) }
+    fn fn_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Function(_)))) }
+
+    fn tool_log(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_print(args: &[Value]) -> RuntimeResult<Value> {
+        let s = args.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(" ");
+        println!("{}", s);
+        Ok(Value::Nil)
+    }
+    fn tool_current_time(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_parse_json(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_serialize_json(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_open_file(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_read_line(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_write_line(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_close_file(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_get_env(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_http_fetch(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn tool_file_exists_p(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+
+    fn discover_agents(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn task_coordination(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn factorial(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn length_value(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn discover_and_assess_agents(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn establish_system_baseline(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+    fn current_timestamp_ms(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
+
+    // Task functions
+    fn task_current(args: &[Expression], evaluator: &crate::runtime::evaluator::Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
+        if !args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "rtfs.task/current".to_string(),
+                expected: "0".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        Ok(evaluator.task_context.clone().unwrap_or(Value::Nil))
     }
 }
 
@@ -1002,1258 +1261,4 @@ impl StandardLibrary {
         }
     }
     
-    fn conj(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() < 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "conj".to_string(),
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::Vector(vec) => {
-                let mut new_vec = vec.clone();
-                
-                // Add all new elements
-                for value in &args[1..] {
-                    new_vec.push(value.clone());
-                }
-                
-                Ok(Value::Vector(new_vec))
-            },
-            Value::Map(map) => {
-                let mut new_map = map.clone();
-                
-                // Add key-value pairs (expected as vectors [key value])
-                for pair in &args[1..] {
-                    match pair {
-                        Value::Vector(pair_vec) if pair_vec.len() == 2 => {
-                            let key = Self::value_to_map_key(&pair_vec[0])?;
-                            let value = pair_vec[1].clone();
-                            new_map.insert(key, value);
-                        },
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "vector of length 2 [key value]".to_string(),
-                            actual: format!("{} of length {}", 
-                                pair.type_name(), 
-                                if let Value::Vector(v) = pair { v.len() } else { 0 }
-                            ),
-                            operation: "conj".to_string(),
-                        }),
-                    }
-                }
-                
-                Ok(Value::Map(new_map))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector or map".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "conj".to_string(),
-            }),
-        }
-    }
-    
-    // Type predicate functions
-    fn int_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "int?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Integer(_))))
-    }
-    
-    fn float_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "float?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Float(_))))
-    }
-    
-    fn number_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "number?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Integer(_) | Value::Float(_))))
-    }
-    
-    fn string_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "string?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::String(_))))
-    }
-    
-    fn bool_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "bool?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Boolean(_))))
-    }
-    
-    fn nil_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "nil?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Nil)))
-    }
-    
-    fn map_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "map?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Map(_))))
-    }
-    
-    fn vector_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "vector?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Vector(_))))
-    }
-    
-    fn keyword_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "keyword?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Keyword(_))))
-    }
-    
-    fn symbol_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "symbol?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
-    }
-    
-    fn fn_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "fn?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Function(_))))
-    }
-    
-    // Tool functions (placeholder implementations)
-    fn tool_log(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:log".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        println!("LOG: {}", args[0].to_string());
-        Ok(Value::Nil)
-    }
-    
-    fn tool_print(args: &[Value]) -> RuntimeResult<Value> {
-        let output = args.iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<String>>()
-            .join(" ");
-        println!("{}", output);
-        Ok(Value::Nil)
-    }
-    
-    fn tool_current_time(_args: &[Value]) -> RuntimeResult<Value> {
-        // Simple placeholder - would use actual system time in real implementation
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| RuntimeError::InternalError(format!("Time error: {}", e)))?;
-        
-        // Return timestamp as string
-        Ok(Value::String(format!("{}", now.as_secs())))
-    }
-    
-    fn tool_parse_json(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:parse-json".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let json_str = match &args[0] {
-            Value::String(s) => s,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:parse-json".to_string(),
-            }),
-        };
-        
-        // Simple JSON parser (placeholder - would use proper JSON library)
-        // For now, just handle basic cases
-        match json_str.trim() {
-            "null" => Ok(Value::Ok(Box::new(Value::Nil))),
-            "true" => Ok(Value::Ok(Box::new(Value::Boolean(true)))),
-            "false" => Ok(Value::Ok(Box::new(Value::Boolean(false)))),
-            s if s.starts_with('"') && s.ends_with('"') => {
-                let content = &s[1..s.len()-1];
-                Ok(Value::Ok(Box::new(Value::String(content.to_string()))))
-            },
-            s if s.parse::<i64>().is_ok() => {
-                let num = s.parse::<i64>().unwrap();
-                Ok(Value::Ok(Box::new(Value::Integer(num))))
-            },
-            s if s.parse::<f64>().is_ok() => {
-                let num = s.parse::<f64>().unwrap();
-                Ok(Value::Ok(Box::new(Value::Float(num))))
-            },
-            _ => Ok(Value::Error(crate::runtime::values::ErrorValue {
-                error_type: crate::ast::Keyword("error/json".to_string()),
-                message: "Invalid JSON".to_string(),
-                data: None,
-            })),
-        }
-    }
-    
-    fn tool_serialize_json(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:serialize-json".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        // Simple JSON serializer (placeholder)
-        let json_str = match &args[0] {
-            Value::Nil => "null".to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Integer(n) => n.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")),
-            Value::Vector(v) => {
-                let elements: Vec<String> = v.iter()
-                    .map(|val| match Self::tool_serialize_json(&[val.clone()]) {
-                        Ok(Value::Ok(boxed_val)) => match *boxed_val {
-                            Value::String(s) => s,
-                            _ => "null".to_string(),
-                        },
-                        _ => "null".to_string(),
-                    })
-                    .collect();
-                format!("[{}]", elements.join(","))
-            },
-            _ => return Ok(Value::Error(crate::runtime::values::ErrorValue {
-                error_type: crate::ast::Keyword("error/json".to_string()),
-                message: "Value not serializable to JSON".to_string(),
-                data: None,
-            })),
-        };
-        
-        Ok(Value::Ok(Box::new(Value::String(json_str))))
-    }
-    
-    // Enhanced tool functions for resource management
-    fn tool_open_file(args: &[Value]) -> RuntimeResult<Value> {
-        if args.is_empty() || args.len() > 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:open-file".to_string(),
-                expected: "1-3".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let filename = match &args[0] {
-            Value::String(s) => s,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:open-file filename".to_string(),
-            }),
-        };
-        
-        // Parse optional mode parameter
-        let _mode = if args.len() > 1 {
-            match &args[1] {
-                Value::Keyword(k) => k.0.as_str(),
-                _ => "read",
-            }
-        } else {
-            "read"
-        };
-        
-        // Create a resource handle for the file
-        let mut metadata = HashMap::new();
-        metadata.insert("filename".to_string(), Value::String(filename.clone()));
-        metadata.insert("mode".to_string(), Value::String(_mode.to_string()));
-        
-        let resource = crate::runtime::values::ResourceHandle {
-            id: format!("file_{}", filename),
-            resource_type: "FileHandle".to_string(),
-            metadata,
-            state: crate::runtime::values::ResourceState::Active,
-        };
-        
-        Ok(Value::Resource(resource))
-    }
-    
-    fn tool_read_line(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:read-line".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::Resource(handle) => {
-                // Check if resource is still active
-                if handle.state != crate::runtime::values::ResourceState::Active {
-                    return Err(RuntimeError::ResourceError {
-                        resource_type: handle.resource_type.clone(),
-                        message: "Attempted to read from released file handle".to_string(),
-                    });
-                }
-                
-                // Simulate reading a line (in real implementation, would use actual file I/O)
-                let filename = handle.metadata.get("filename")
-                    .and_then(|v| match v {
-                        Value::String(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
-                
-                // Return simulated content
-                Ok(Value::Ok(Box::new(Value::String(format!("Content from {}", filename)))))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "file handle".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:read-line".to_string(),
-            }),
-        }
-    }
-    
-    fn tool_write_line(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:write-line".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let handle = match &args[0] {
-            Value::Resource(h) => h,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "file handle".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:write-line".to_string(),
-            }),
-        };
-        
-        // Check if resource is still active
-        if handle.state != crate::runtime::values::ResourceState::Active {
-            return Err(RuntimeError::ResourceError {
-                resource_type: handle.resource_type.clone(),
-                message: "Attempted to write to released file handle".to_string(),
-            });
-        }
-        
-        let content = match &args[1] {
-            Value::String(s) => s,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "tool:write-line content".to_string(),
-            }),
-        };
-        
-        // Simulate writing (in real implementation, would use actual file I/O)
-        println!("Writing to {}: {}", handle.id, content);
-        
-        Ok(Value::Ok(Box::new(Value::String(format!("Wrote {} chars", content.len())))))
-    }
-    
-    fn tool_close_file(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:close-file".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::Resource(handle) => {
-                // In a real implementation, this would perform actual file closing
-                println!("Closing file handle: {}", handle.id);
-                Ok(Value::Ok(Box::new(Value::Nil)))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "file handle".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:close-file".to_string(),
-            }),
-        }
-    }
-    
-    fn tool_get_env(args: &[Value]) -> RuntimeResult<Value> {
-        if args.is_empty() || args.len() > 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:get-env".to_string(),
-                expected: "1-2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let var_name = match &args[0] {
-            Value::String(s) => s,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:get-env variable name".to_string(),
-            }),
-        };
-        
-        let default_value = if args.len() > 1 {
-            Some(args[1].clone())
-        } else {
-            None
-        };
-        
-        // Get environment variable
-        match std::env::var(var_name) {
-            Ok(value) => Ok(Value::Ok(Box::new(Value::String(value)))),
-            Err(_) => {
-                if let Some(default) = default_value {
-                    Ok(Value::Ok(Box::new(default)))
-                } else {
-                    Ok(Value::Error(crate::runtime::values::ErrorValue {
-                        error_type: crate::ast::Keyword("error/env-not-found".to_string()),
-                        message: format!("Environment variable '{}' not found", var_name),
-                        data: None,
-                    }))
-                }
-            }
-        }
-    }
-    
-    fn tool_http_fetch(args: &[Value]) -> RuntimeResult<Value> {
-        if args.is_empty() || args.len() > 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:http-fetch".to_string(),
-                expected: "1-2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let url = match &args[0] {
-            Value::String(s) => s,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:http-fetch URL".to_string(),
-            }),
-        };
-        
-        // In a real implementation, this would make actual HTTP requests
-        // For now, simulate different responses based on URL
-        if url.contains("example.com") {
-            Ok(Value::Ok(Box::new(Value::String(format!("Fetched content from {}", url)))))
-        } else if url.contains("error") {
-            Ok(Value::Error(crate::runtime::values::ErrorValue {
-                error_type: crate::ast::Keyword("error/network".to_string()),
-                message: "Network error during fetch".to_string(),
-                data: Some({
-                    let mut data = HashMap::new();
-                    data.insert("url".to_string(), Value::String(url.clone()));
-                    data
-                }),
-            }))
-        } else {
-            Ok(Value::Ok(Box::new(Value::String(format!("Mock response from {}", url)))))
-        }
-    }
-      // Agent system functions
-    fn discover_agents(args: &[Value]) -> RuntimeResult<Value> {
-        // Placeholder implementation for agent discovery
-        // This returns an empty vector for now, as a stub
-        
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "discover-agents".to_string(),
-                expected: "1 or 2".to_string(),
-                actual: 0,
-            });
-        }
-        
-        // For now, just return an empty vector regardless of criteria
-        // In the real implementation, this would:
-        // 1. Parse the criteria map
-        // 2. Query the agent registry
-        // 3. Return matching agent cards
-        Ok(Value::Vector(vec![]))
-    }
-      fn task_coordination(args: &[Value]) -> RuntimeResult<Value> {
-        // Placeholder implementation for task coordination
-        // This is a stub implementation
-        
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "task".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
-        }
-        
-        // For now, just return the first argument
-        // In the real implementation, this would:
-        // 1. Create a task context
-        // 2. Handle task execution
-        // 3. Return task results
-        Ok(args[0].clone())
-    }
-    
-    fn factorial(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "fact".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-          match &args[0] {
-            Value::Integer(n) => {
-                if *n < 0 {
-                    return Err(RuntimeError::InvalidArgument("Factorial of negative number".to_string()));
-                }
-                
-                let mut result = 1i64;
-                for i in 1..=*n {
-                    result *= i;
-                }
-                Ok(Value::Integer(result))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "integer".to_string(),
-                actual: format!("{:?}", args[0]),
-                operation: "factorial".to_string(),
-            }),
-        }
-    }
-    
-    fn current_timestamp_ms(args: &[Value]) -> RuntimeResult<Value> {
-        if !args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool:current-timestamp-ms".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        // Return current timestamp in milliseconds since Unix epoch
-        // For stub implementation, return a fixed timestamp
-        use std::time::{SystemTime, UNIX_EPOCH};
-        
-        match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(duration) => Ok(Value::Integer(duration.as_millis() as i64)),
-            Err(_) => Ok(Value::Integer(0)), // Fallback
-        }
-    }
-    
-    // Helper functions
-    fn value_to_map_key(value: &Value) -> RuntimeResult<MapKey> {
-        match value {
-            Value::Keyword(k) => Ok(MapKey::Keyword(k.clone())),
-            Value::String(s) => Ok(MapKey::String(s.clone())),
-            Value::Integer(i) => Ok(MapKey::Integer(*i)),
-            _ => Err(RuntimeError::TypeError {
-                expected: "keyword, string, or integer".to_string(),
-                actual: value.type_name().to_string(),
-                operation: "map key conversion".to_string(),
-            }),
-        }
-    }
-    
-    fn map_function(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() < 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "map-fn".to_string(),
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let function = &args[0];
-        let collections = &args[1..];
-        
-        // For now, support single collection mapping
-        if collections.len() != 1 {
-            return Err(RuntimeError::InternalError(
-                "map-fn currently supports only single collection".to_string()
-            ));
-        }
-        
-        match &collections[0] {
-            Value::Vector(vec) => {
-                let mut results = Vec::new();
-                for item in vec {
-                    // This would require a way to call the function value
-                    // For now, simulate with a simple operation
-                    match function {
-                        Value::Function(_) => {
-                            // In a real implementation, we'd call the function here
-                            // For demonstration, just return the item unchanged
-                            results.push(item.clone());
-                        },
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "function".to_string(),
-                            actual: function.type_name().to_string(),
-                            operation: "map-fn".to_string(),
-                        }),
-                    }
-                }
-                Ok(Value::Vector(results))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collections[0].type_name().to_string(),
-                operation: "map-fn".to_string(),            }),
-        }
-    }
-      /// Map function with evaluator access (for higher-order functions)
-    fn map_with_evaluator(
-        args: &[crate::ast::Expression], 
-        evaluator: &crate::runtime::evaluator::Evaluator, 
-        env: &mut crate::runtime::environment::Environment
-    ) -> RuntimeResult<Value> {
-        if args.len() < 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "map".to_string(),
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let func_value = evaluator.eval_expr(&args[0], env)?;
-        
-        // Evaluate all collection arguments
-        let mut collections = Vec::new();
-        for collection_expr in &args[1..] {
-            let collection_value = evaluator.eval_expr(collection_expr, env)?;
-            collections.push(collection_value);
-        }
-        
-        // Handle the case of a single collection
-        if collections.len() == 1 {
-            return Self::map_single_collection(func_value, &collections[0], evaluator, env);
-        }
-        
-        // Handle multiple collections (apply function to corresponding elements)
-        Self::map_multiple_collections(func_value, &collections, evaluator, env)
-    }
-    
-    /// Map over a single collection (vector, map, etc.)
-    fn map_single_collection(
-        func_value: Value,
-        collection: &Value,
-        evaluator: &crate::runtime::evaluator::Evaluator,
-        env: &mut crate::runtime::environment::Environment
-    ) -> RuntimeResult<Value> {
-        match collection {
-            Value::Vector(vec) => {
-                let mut results = Vec::new();
-                for item in vec {
-                    let result = evaluator.call_function(func_value.clone(), &[item.clone()], env)?;
-                    results.push(result);
-                }
-                Ok(Value::Vector(results))
-            },
-            Value::Map(map) => {
-                let mut result_map = std::collections::HashMap::new();
-                for (key, value) in map {
-                    // Apply function to the value, keep the key
-                    let new_value = evaluator.call_function(func_value.clone(), &[value.clone()], env)?;
-                    result_map.insert(key.clone(), new_value);
-                }
-                Ok(Value::Map(result_map))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector or map".to_string(),
-                actual: collection.type_name().to_string(),
-                operation: "map".to_string(),
-            }),
-        }
-    }
-    
-    /// Map over multiple collections (like Clojure's map with multiple sequences)
-    fn map_multiple_collections(
-        func_value: Value,
-        collections: &[Value],
-        evaluator: &crate::runtime::evaluator::Evaluator,
-        env: &mut crate::runtime::environment::Environment
-    ) -> RuntimeResult<Value> {
-        // All collections must be vectors for multi-collection map
-        let mut vectors = Vec::new();
-        for (i, collection) in collections.iter().enumerate() {
-            match collection {
-                Value::Vector(vec) => vectors.push(vec),
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "all arguments to be vectors when using map with multiple collections".to_string(),
-                    actual: format!("argument {} is {}", i + 2, collection.type_name()),
-                    operation: "map".to_string(),
-                }),
-            }
-        }
-        
-        // Find the minimum length to avoid index out of bounds
-        let min_length = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
-        
-        let mut results = Vec::new();
-        for i in 0..min_length {
-            // Collect the i-th element from each vector
-            let args: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
-            
-            // Apply the function to all corresponding elements
-            let result = evaluator.call_function(func_value.clone(), &args, env)?;
-            results.push(result);
-        }
-        
-        Ok(Value::Vector(results))
-    }
-    
-    /// Filter function with evaluator access (for higher-order functions)
-    fn filter_with_evaluator(
-        args: &[crate::ast::Expression], 
-        evaluator: &crate::runtime::evaluator::Evaluator, 
-        env: &mut crate::runtime::environment::Environment
-    ) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "filter".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let predicate_value = evaluator.eval_expr(&args[0], env)?;
-        let collection_value = evaluator.eval_expr(&args[1], env)?;
-        
-        match collection_value {
-            Value::Vector(vec) => {
-                let mut results = Vec::new();
-                for item in vec {
-                    // Call the predicate with the item as argument
-                    let predicate_result = evaluator.call_function(predicate_value.clone(), &[item.clone()], env)?;
-                    
-                    // Check if the result is truthy
-                    let is_truthy = match predicate_result {
-                        Value::Boolean(b) => b,
-                        Value::Nil => false,
-                        _ => true, // All non-nil, non-false values are truthy
-                    };
-                    
-                    if is_truthy {
-                        results.push(item);
-                    }
-                }
-                Ok(Value::Vector(results))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collection_value.type_name().to_string(),
-                operation: "filter".to_string(),
-            }),
-        }
-    }
-    
-    fn filter(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "filter".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let predicate = &args[0];
-        let collection = &args[1];
-        
-        match collection {
-            Value::Vector(vec) => {
-                let mut results = Vec::new();
-                for item in vec {
-                    // For now, simulate predicate evaluation
-                    // In a real implementation, we'd call the predicate function here
-                    match predicate {
-                        Value::Function(_) => {
-                            // For demonstration, filter for non-zero integers
-                            // This should be replaced with actual function calling
-                            match item {
-                                Value::Integer(i) if *i != 0 => results.push(item.clone()),
-                                Value::Boolean(true) => results.push(item.clone()),
-                                _ => {},
-                            }
-                        },
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "function".to_string(),
-                            actual: predicate.type_name().to_string(),
-                            operation: "filter".to_string(),
-                        }),
-                    }
-                }
-                Ok(Value::Vector(results))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collection.type_name().to_string(),
-                operation: "filter".to_string(),
-            }),
-        }
-    }
-    
-    fn reduce(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() < 2 || args.len() > 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "reduce".to_string(),
-                expected: "2 or 3".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let function = &args[0];
-        let collection = if args.len() == 3 { &args[2] } else { &args[1] };
-        let initial = if args.len() == 3 { Some(&args[1]) } else { None };
-        
-        match collection {
-            Value::Vector(vec) => {                if vec.is_empty() {
-                    return Ok(initial.cloned().unwrap_or(Value::Nil));
-                }
-                
-                let mut accumulator = if let Some(init) = initial {
-                    init.clone()
-                } else {
-                    vec[0].clone()
-                };
-                
-                let start_index = if initial.is_some() { 0 } else { 1 };
-                  for item in &vec[start_index..] {
-                    // Handle specific builtin functions
-                    match function {
-                        Value::Function(Function::Builtin { name, .. }) => {
-                            match name.as_str() {
-                                "+" => {
-                                    match (&accumulator, item) {
-                                        (Value::Integer(a), Value::Integer(b)) => {
-                                            accumulator = Value::Integer(a + b);
-                                        },
-                                        (Value::Float(a), Value::Float(b)) => {
-                                            accumulator = Value::Float(a + b);
-                                        },
-                                        (Value::Integer(a), Value::Float(b)) => {
-                                            accumulator = Value::Float(*a as f64 + b);
-                                        },
-                                        (Value::Float(a), Value::Integer(b)) => {
-                                            accumulator = Value::Float(a + *b as f64);
-                                        },
-                                        _ => {
-                                            return Err(RuntimeError::TypeError {
-                                                expected: "number".to_string(),
-                                                actual: format!("{} and {}", accumulator.type_name(), item.type_name()),
-                                                operation: "addition in reduce".to_string(),
-                                            });
-                                        }
-                                    }
-                                },
-                                "max" => {
-                                    match (&accumulator, item) {
-                                        (Value::Integer(a), Value::Integer(b)) => {
-                                            if b > a {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        (Value::Float(a), Value::Float(b)) => {
-                                            if b > a {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        (Value::Integer(a), Value::Float(b)) => {
-                                            if b > &(*a as f64) {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        (Value::Float(a), Value::Integer(b)) => {
-                                            if (*b as f64) > *a {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        _ => {
-                                            return Err(RuntimeError::TypeError {
-                                                expected: "number".to_string(),
-                                                actual: format!("{} and {}", accumulator.type_name(), item.type_name()),
-                                                operation: "max in reduce".to_string(),
-                                            });
-                                        }
-                                    }
-                                },
-                                "min" => {
-                                    match (&accumulator, item) {
-                                        (Value::Integer(a), Value::Integer(b)) => {
-                                            if b < a {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        (Value::Float(a), Value::Float(b)) => {
-                                            if b < a {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        (Value::Integer(a), Value::Float(b)) => {
-                                            if b < &(*a as f64) {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        (Value::Float(a), Value::Integer(b)) => {
-                                            if (*b as f64) < *a {
-                                                accumulator = item.clone();
-                                            }
-                                        },
-                                        _ => {
-                                            return Err(RuntimeError::TypeError {
-                                                expected: "number".to_string(),
-                                                actual: format!("{} and {}", accumulator.type_name(), item.type_name()),
-                                                operation: "min in reduce".to_string(),
-                                            });
-                                        }
-                                    }
-                                },
-                                _ => {
-                                    // For other builtin functions, just keep the accumulator for now
-                                    // TODO: Implement proper function calling
-                                }
-                            }
-                        },                        Value::Function(Function::UserDefined { .. }) => {
-                            // For user-defined functions, we can't call them without an evaluator
-                            // For now, just return an error
-                            return Err(RuntimeError::TypeError {
-                                expected: "builtin function".to_string(),
-                                actual: "user-defined function".to_string(),
-                                operation: "reduce".to_string(),
-                            });
-                        },
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "function".to_string(),
-                            actual: function.type_name().to_string(),
-                            operation: "reduce".to_string(),
-                        }),
-                    }
-                }
-                  Ok(accumulator)
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collection.type_name().to_string(),
-                operation: "reduce".to_string(),
-            }),
-        }
-    }
-    
-    fn max_value(args: &[Value]) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "max".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
-        }
-        
-        let mut max = args[0].clone();
-        for arg in &args[1..] {
-            match (&max, arg) {
-                (Value::Integer(a), Value::Integer(b)) => {
-                    if b > a {
-                        max = arg.clone();
-                    }
-                },
-                (Value::Float(a), Value::Float(b)) => {
-                    if b > a {
-                        max = arg.clone();
-                    }
-                },
-                (Value::Integer(a), Value::Float(b)) => {
-                    if b > &(*a as f64) {
-                        max = arg.clone();
-                    }
-                },
-                (Value::Float(a), Value::Integer(b)) => {
-                    if (*b as f64) > *a {
-                        max = arg.clone();
-                    }
-                },
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: arg.type_name().to_string(),
-                    operation: "max".to_string(),
-                }),
-            }
-        }
-        Ok(max)
-    }
-    
-    fn min_value(args: &[Value]) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "min".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
-        }
-        
-        let mut min = args[0].clone();
-        for arg in &args[1..] {
-            match (&min, arg) {
-                (Value::Integer(a), Value::Integer(b)) => {
-                    if b < a {
-                        min = arg.clone();
-                    }
-                },
-                (Value::Float(a), Value::Float(b)) => {
-                    if b < a {
-                        min = arg.clone();
-                    }
-                },
-                (Value::Integer(a), Value::Float(b)) => {
-                    if b < &(*a as f64) {
-                        min = arg.clone();
-                    }
-                },
-                (Value::Float(a), Value::Integer(b)) => {
-                    if (*b as f64) < *a {
-                        min = arg.clone();
-                    }
-                },
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: arg.type_name().to_string(),
-                    operation: "min".to_string(),
-                }),
-            }
-        }
-        Ok(min)
-    }
-    
-    fn length_value(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "length".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
-            Value::String(s) => Ok(Value::Integer(s.len() as i64)),
-            Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector, string, or map".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "length".to_string(),
-            }),
-        }
-    }
-    
-    fn discover_and_assess_agents(args: &[Value]) -> RuntimeResult<Value> {
-        // Stub implementation for advanced agent discovery
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "discover-and-assess-agents".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
-        }
-        
-        // For now, return an empty vector
-        // In a real implementation, this would:
-        // 1. Search for available agents
-        // 2. Assess their capabilities
-        // 3. Return a list of qualified agents
-        Ok(Value::Vector(vec![]))
-    }
-    
-    fn establish_system_baseline(args: &[Value]) -> RuntimeResult<Value> {
-        // Stub implementation for system baseline establishment
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "establish-system-baseline".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
-        }
-          // For now, return a simple baseline map
-        // In a real implementation, this would:
-        // 1. Analyze current system state
-        // 2. Establish performance baselines
-        // 3. Return baseline metrics
-        let mut baseline = std::collections::HashMap::new();
-        baseline.insert(MapKey::Keyword(Keyword("status".to_string())), Value::Keyword(Keyword("baseline-established".to_string())));
-        baseline.insert(MapKey::Keyword(Keyword("timestamp".to_string())), Value::Integer(1640995200000));
-          Ok(Value::Map(baseline))
-    }
-
-    // List manipulation functions
-    fn empty_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "empty?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Vector(v) => Ok(Value::Boolean(v.is_empty())),
-            Value::Map(m) => Ok(Value::Boolean(m.is_empty())),
-            Value::String(s) => Ok(Value::Boolean(s.is_empty())),
-            Value::Nil => Ok(Value::Boolean(true)),
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector, map, string, or nil".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "empty?".to_string(),
-            }),
-        }
-    }
-
-    fn cons(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "cons".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let element = args[0].clone();
-        match &args[1] {
-            Value::Vector(v) => {
-                let mut new_vec = vec![element];
-                new_vec.extend(v.iter().cloned());
-                Ok(Value::Vector(new_vec))
-            },
-            Value::Nil => {
-                Ok(Value::Vector(vec![element]))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector or nil".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "cons".to_string(),
-            }),
-        }
-    }
-
-    fn first(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "first".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Vector(v) => {
-                if v.is_empty() {
-                    Ok(Value::Nil)
-                } else {
-                    Ok(v[0].clone())
-                }
-            },
-            Value::Nil => Ok(Value::Nil),
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector or nil".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "first".to_string(),
-            }),
-        }
-    }
-
-    fn rest(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "rest".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Vector(v) => {
-                if v.is_empty() {
-                    Ok(Value::Vector(vec![]))
-                } else {
-                    Ok(Value::Vector(v[1..].to_vec()))
-                }
-            },
-            Value::Nil => Ok(Value::Vector(vec![])),
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector or nil".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "rest".to_string(),
-            }),
-        }
-    }
-    
-    fn tool_file_exists_p(args: &[Value]) -> RuntimeResult<Value> {
-        if let Value::String(path) = &args[0] {
-            let exists = std::path::Path::new(path).exists();
-            Ok(Value::Boolean(exists))
-        } else {
-            Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "tool:file-exists?".to_string(),
-            })
-        }
-    }
 }

@@ -1,0 +1,3 @@
+; Test wildcard destructuring
+(let [[a _ c] [1 2 3]]
+  c)

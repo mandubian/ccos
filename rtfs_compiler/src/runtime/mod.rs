@@ -16,6 +16,7 @@ pub use error::{RuntimeError, RuntimeResult};
 use crate::ir_converter;
 use crate::ast::{Expression, TopLevel, Literal};
 use crate::parser::parse;
+use crate::runtime::module_runtime::ModuleRegistry;
 
 /// Runtime execution strategy
 #[derive(Debug, Clone)]
@@ -35,38 +36,45 @@ impl Default for RuntimeStrategy {
 }
 
 /// Main runtime coordinator that can switch between AST and IR execution
-pub struct Runtime {
+pub struct Runtime<'a> {
     strategy: RuntimeStrategy,
     ast_evaluator: evaluator::Evaluator,
     ir_runtime: Option<ir_runtime::IrRuntime>,
-    converter: ir_converter::IrConverter,
+    converter: ir_converter::IrConverter<'a>,
     // Persistent environment for REPL usage
     persistent_env: Environment,
+    module_registry: &'a ModuleRegistry,
 }
 
-impl Runtime {
-    pub fn new() -> Self {
+impl<'a> Runtime<'a> {
+    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
         let ast_evaluator = evaluator::Evaluator::new();
         let persistent_env = stdlib::StandardLibrary::create_global_environment();
-        Runtime {
+        Self {
             strategy: RuntimeStrategy::default(),
             ast_evaluator,
             ir_runtime: Some(ir_runtime::IrRuntime::new()),
-            converter: ir_converter::IrConverter::new(),
+            converter: ir_converter::IrConverter::with_module_registry(module_registry),
             persistent_env,
+            module_registry,
         }
     }
     
-    pub fn with_strategy(strategy: RuntimeStrategy) -> Self {
+    pub fn with_strategy(strategy: RuntimeStrategy, module_registry: &'a ModuleRegistry) -> Self {
         let ast_evaluator = evaluator::Evaluator::new();
         let persistent_env = stdlib::StandardLibrary::create_global_environment();
-        Runtime {
+        Self {
             strategy,
             ast_evaluator,
             ir_runtime: Some(ir_runtime::IrRuntime::new()),
-            converter: ir_converter::IrConverter::new(),
+            converter: ir_converter::IrConverter::with_module_registry(module_registry),
             persistent_env,
+            module_registry,
         }
+    }
+
+    pub fn get_module_registry(&self) -> &'a ModuleRegistry {
+        self.module_registry
     }
 
     pub fn set_task_context(&mut self, context: Value) {
@@ -79,15 +87,17 @@ impl Runtime {
     pub fn with_strategy_and_agent_discovery(
         strategy: RuntimeStrategy,
         agent_discovery: Box<dyn crate::agent::AgentDiscovery>,
+        module_registry: &'a ModuleRegistry,
     ) -> Self {
         let ast_evaluator = evaluator::Evaluator::with_agent_discovery(agent_discovery);
         let persistent_env = stdlib::StandardLibrary::create_global_environment();
-        Runtime {
+        Self {
             strategy,
             ast_evaluator,
             ir_runtime: Some(ir_runtime::IrRuntime::new()),
-            converter: ir_converter::IrConverter::new(),
+            converter: ir_converter::IrConverter::with_module_registry(module_registry),
             persistent_env,
+            module_registry,
         }
     }
 

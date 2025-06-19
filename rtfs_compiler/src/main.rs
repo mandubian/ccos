@@ -17,6 +17,7 @@ mod error_reporting; // Error reporting module
 
 use parser::parse_expression;
 use runtime::{Evaluator, Runtime, RuntimeStrategy};
+use runtime::module_runtime::ModuleRegistry;
 use ir_converter::IrConverter;
 
 fn main() {
@@ -188,6 +189,7 @@ fn demonstrate_runtime_strategies() {
     println!("=== Runtime Strategy Comparison ===");
     
     let test_expression = "(let [x 10] (+ x 5))";
+    let module_registry = ModuleRegistry::new();
     
     match parse_expression(test_expression) {
         Ok(ast) => {
@@ -195,7 +197,7 @@ fn demonstrate_runtime_strategies() {
             
             // AST Runtime
             println!("\n📊 AST Runtime (Current Default):");
-            let mut ast_runtime = Runtime::with_strategy(RuntimeStrategy::Ast);
+            let mut ast_runtime = Runtime::with_strategy(RuntimeStrategy::Ast, &module_registry);
             match ast_runtime.evaluate_expression(&ast) {
                 Ok(result) => println!("  ✅ Result: {:?}", result),
                 Err(e) => println!("  ❌ Error: {:?}", e),
@@ -203,7 +205,7 @@ fn demonstrate_runtime_strategies() {
             
             // IR Runtime
             println!("\n⚡ IR Runtime (High Performance):");
-            let mut ir_runtime = Runtime::with_strategy(RuntimeStrategy::Ir);
+            let mut ir_runtime = Runtime::with_strategy(RuntimeStrategy::Ir, &module_registry);
             match ir_runtime.evaluate_expression(&ast) {
                 Ok(result) => println!("  ✅ Result: {:?} (2-26x faster)", result),
                 Err(e) => println!("  ❌ Error: {:?}", e),
@@ -211,7 +213,7 @@ fn demonstrate_runtime_strategies() {
             
             // Fallback Strategy
             println!("\n🛡️ IR with AST Fallback (Recommended for transition):");
-            let mut fallback_runtime = Runtime::with_strategy(RuntimeStrategy::IrWithFallback);
+            let mut fallback_runtime = Runtime::with_strategy(RuntimeStrategy::IrWithFallback, &module_registry);
             match fallback_runtime.evaluate_expression(&ast) {
                 Ok(result) => println!("  ✅ Result: {:?} (Performance + Stability)", result),
                 Err(e) => println!("  ❌ Error: {:?}", e),
