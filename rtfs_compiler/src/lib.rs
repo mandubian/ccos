@@ -11,6 +11,7 @@ pub mod enhanced_ir_optimizer;
 pub mod development_tooling;
 pub mod integration_tests;
 pub mod agent;
+pub mod error_reporting;
 
 // Re-export commonly used types for convenience
 pub use runtime::{Runtime, RuntimeStrategy, Evaluator};

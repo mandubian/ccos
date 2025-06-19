@@ -63,6 +63,13 @@ pub struct IrMapTypeEntry {
     pub optional: bool,
 }
 
+/// Map entry for literal map construction
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrMapEntry {
+    pub key: IrNode,
+    pub value: IrNode,
+}
+
 /// Core IR Node structure
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrNode {
@@ -247,6 +254,21 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
+    
+    // Collection literals
+    Vector {
+        id: NodeId,
+        elements: Vec<IrNode>,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
+    
+    Map {
+        id: NodeId,
+        entries: Vec<IrMapEntry>,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
 }
 
 /// Captured variable information for closures
@@ -317,6 +339,8 @@ impl IrNode {
         match self {
             IrNode::Program { id, .. } => *id,
             IrNode::Literal { id, .. } => *id,
+            IrNode::Vector { id, .. } => *id,
+            IrNode::Map { id, .. } => *id,
             IrNode::VariableRef { id, .. } => *id,
             IrNode::VariableBinding { id, .. } => *id,
             IrNode::Apply { id, .. } => *id,
@@ -360,6 +384,8 @@ impl IrNode {
             IrNode::VariableDef { ir_type, .. } => Some(ir_type),
             IrNode::Task { ir_type, .. } => Some(ir_type),
             IrNode::TaskContextAccess { ir_type, .. } => Some(ir_type),
+            IrNode::Vector { ir_type, .. } => Some(ir_type),
+            IrNode::Map { ir_type, .. } => Some(ir_type),
             _ => None,
         }
     }
@@ -388,6 +414,8 @@ impl IrNode {
             IrNode::Import { source_location, .. } => source_location.as_ref(),
             IrNode::Task { source_location, .. } => source_location.as_ref(),
             IrNode::TaskContextAccess { source_location, .. } => source_location.as_ref(),
+            IrNode::Vector { source_location, .. } => source_location.as_ref(),
+            IrNode::Map { source_location, .. } => source_location.as_ref(),
         }
     }
 }

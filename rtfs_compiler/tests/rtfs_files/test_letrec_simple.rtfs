@@ -1,0 +1,2 @@
+(letrec [f (fn [x] x)]
+  (f 42))

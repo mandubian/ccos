@@ -17,14 +17,14 @@ pub(crate) fn unescape(s: &str) -> Result<String, PestParseError> {
                     // Or return an error for invalid escapes
                     // For now, maintaining existing behavior of treating unknown escapes literally
                     // If this should be an error, it would be:
-                    // return Err(PestParseError::InvalidEscapeSequence(format!("Invalid escape sequence: \\\\{}", other)));
+                    // return Err(PestParseError::InvalidEscapeSequence { sequence: format!("Invalid escape sequence: \\\\{}", other), span: None });
                     result.push('\\');
                     result.push(other);
                 }
-                None => {
-                    return Err(PestParseError::InvalidEscapeSequence(
-                        "Incomplete escape sequence at end of string".to_string(),
-                    ))
+                None => {                    return Err(PestParseError::InvalidEscapeSequence { 
+                        sequence: "Incomplete escape sequence at end of string".to_string(), 
+                        span: None 
+                    })
                 } // Changed to PestParseError
             }
         } else {

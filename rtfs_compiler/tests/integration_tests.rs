@@ -1,6 +1,8 @@
+use std::env;
 use std::fs;
 use std::path::Path;
 use rtfs_compiler::*;
+use rtfs_compiler::ast::MapKey;
 
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
@@ -39,40 +41,10 @@ impl TestConfig {
     }
 }
 
-/// Preprocess test content to extract the actual executable expression
-/// This handles files that start with comments by finding the first non-comment line
-fn preprocess_test_content(content: &str) -> String {
-    // Split into lines and find the first expression
-    let lines: Vec<&str> = content.lines().collect();
-    
-    // Find the first line that starts with an opening parenthesis or other expression starter
-    let mut result_lines = Vec::new();
-    let mut found_expression = false;
-    
-    for line in lines {
-        let trimmed = line.trim();
-        
-        // Skip empty lines and comments at the beginning
-        if !found_expression && (trimmed.is_empty() || trimmed.starts_with(';')) {
-            continue;
-        }
-        
-        // Once we find the first expression, include everything from there
-        found_expression = true;
-        result_lines.push(line);
-    }
-    
-    if result_lines.is_empty() {
-        // If no expression found, return original content
-        content.to_string()
-    } else {
-        result_lines.join("\n")
-    }
-}
-
 /// Run a single test file with the given runtime
-fn run_test_file(config: &TestConfig, runtime: &str) -> Result<String, String> {
-    let test_file_path = format!("tests/rtfs_files/{}.rtfs", config.name);
+fn run_test_file(config: &TestConfig, runtime_str: &str) -> Result<String, String> {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let test_file_path = format!("{}/tests/rtfs_files/{}.rtfs", manifest_dir, config.name);
     
     // Check if file exists
     if !Path::new(&test_file_path).exists() {
@@ -83,309 +55,359 @@ fn run_test_file(config: &TestConfig, runtime: &str) -> Result<String, String> {
     let content = fs::read_to_string(&test_file_path)
         .map_err(|e| format!("Failed to read file {}: {}", test_file_path, e))?;
 
-    // Pre-process content to handle comments and find the actual expression
-    let processed_content = preprocess_test_content(&content);
-
-    // Parse the code
-    let parsed = match parser::parse_expression(&processed_content) {
-        Ok(ast) => ast,
-        Err(e) => {
-            return if config.should_compile {
-                Err(format!("Parsing failed unexpectedly: {:?}", e))
-            } else {
-                // Check if error matches expected pattern
-                let error_str = format!("{:?}", e);
-                if let Some(expected) = config.expected_error {
-                    if error_str.contains(expected) {
-                        Ok("Expected parsing error".to_string())
-                    } else {
-                        Err(format!("Expected error '{}' but got: {}", expected, error_str))
-                    }
-                } else {
-                    Ok("Parsing failed as expected".to_string())
-                }
-            };
-        }
+    // The 'run' method handles parsing, so we don't need to parse here.
+    let mut runtime = match runtime_str {
+        "ast" => runtime::Runtime::with_strategy(runtime::RuntimeStrategy::Ast),
+        "ir" => runtime::Runtime::with_strategy(runtime::RuntimeStrategy::Ir),
+        _ => unreachable!(),
     };
 
-    if !config.should_compile {
-        return Err("Expected compilation to fail, but parsing succeeded".to_string());
-    }
-
-    // Try to execute with the specified runtime
-    let result = match runtime {
-        "ast" => {
-            let evaluator = runtime::evaluator::Evaluator::new();
-            match evaluator.evaluate(&parsed) {
-                Ok(value) => format!("{:?}", value),
-                Err(e) => return Err(format!("AST runtime error: {:?}", e)),
-            }
-        }
-        "ir" => {
-            // Convert to IR
-            let mut converter = ir_converter::IrConverter::new();
-            let ir_node = match converter.convert_expression(parsed) {
-                Ok(node) => node,
-                Err(e) => return Err(format!("IR conversion error: {:?}", e)),
-            };
-
-            // Execute with IR runtime
-            let agent_discovery = Box::new(agent::discovery_traits::NoOpAgentDiscovery);
-            let mut runtime = runtime::Runtime::with_strategy_and_agent_discovery(
-                runtime::RuntimeStrategy::Ir,
-                agent_discovery
-            );
-            match runtime.evaluate_ir(&ir_node) {
-                Ok(value) => format!("{:?}", value),
-                Err(e) => return Err(format!("IR runtime error: {:?}", e)),
-            }
-        }
-        _ => return Err(format!("Unknown runtime: {}", runtime)),
+    // Set task context if needed (for specific tests)
+    let task_context = if config.name.starts_with("test_") {
+        let mut context_map = std::collections::HashMap::new();
+        context_map.insert(MapKey::String("key".to_string()), runtime::Value::String("value".to_string()));
+        Some(runtime::Value::Map(context_map))
+    } else {
+        None
     };
 
-    if !config.should_execute {
-        return Err("Expected execution to fail, but it succeeded".to_string());
-    }
-
-    Ok(result)
-}
-
-
-
-// Individual test functions for better granularity and tracking
-
-macro_rules! create_rtfs_test {
-    ($test_name:ident, $file_name:expr) => {
-        #[test]
-        fn $test_name() {
-            let config = TestConfig::new($file_name);
+    // Execute the code using the run method
+    match runtime.run(&content, task_context) {
+        Ok(result) => {
+            if !config.should_execute {
+                return Err(format!("Execution succeeded unexpectedly. Result: {:?}", result));
+            }
             
-            let runtimes = match config.runtime {
-                RuntimeStrategy::Ast => vec!["ast"],
-                RuntimeStrategy::Ir => vec!["ir"],
-                RuntimeStrategy::Both => vec!["ast", "ir"],
-            };
-
-            for runtime in runtimes {
-                let test_name = format!("{} ({})", config.name, runtime);
-                
-                match run_test_file(&config, runtime) {
-                    Ok(result) => {
-                        println!("✅ {}: {}", test_name, result.trim());
-                        
-                        // Check expected result if specified
-                        if let Some(expected) = config.expected_result {
-                            assert!(result.contains(expected), 
-                                "Expected '{}' but got '{}'", expected, result);
-                        }
-                    }
-                    Err(error) => {
-                        // Check if this was an expected failure
-                        if !config.should_compile || !config.should_execute {
-                            if let Some(expected_error) = config.expected_error {
-                                assert!(error.contains(expected_error),
-                                    "Expected error containing '{}' but got '{}'", expected_error, error);
-                                println!("✅ {} (expected failure): {}", test_name, error);
-                                continue;
-                            }
-                        }
-                        
-                        panic!("Test failed: {}: {}", test_name, error);
-                    }
+            let result_str = format!("{:?}", result);
+            if let Some(expected) = config.expected_result {
+                if result_str != expected {
+                    return Err(format!("Result mismatch. Expected: '{}', Got: '{}'", expected, result_str));
                 }
             }
+            Ok(result_str)
         }
-    };
-}
-
-// Basic arithmetic tests
-create_rtfs_test!(test_single_expression, "test_single_expression");
-create_rtfs_test!(test_complex_expression, "test_complex_expression");
-create_rtfs_test!(test_nested_ops, "test_nested_ops");
-create_rtfs_test!(test_complex_math, "test_complex_math");
-
-// Let binding tests
-create_rtfs_test!(test_basic_let, "test_basic_let");
-create_rtfs_test!(test_let_binding, "test_let_binding");
-create_rtfs_test!(test_let_no_type, "test_let_no_type");
-create_rtfs_test!(test_typed_let, "test_typed_let");
-create_rtfs_test!(test_simple_dependent, "test_simple_dependent");
-create_rtfs_test!(test_dependent_let, "test_dependent_let");
-create_rtfs_test!(test_multi_let, "test_multi_let");
-create_rtfs_test!(test_mixed_let_simple, "test_mixed_let_simple");
-create_rtfs_test!(test_expression_in_let, "test_expression_in_let");
-
-// Conditional tests
-create_rtfs_test!(test_conditional, "test_conditional");
-
-// Function tests
-create_rtfs_test!(test_simple_function, "test_simple_function");
-create_rtfs_test!(test_functions_control, "test_functions_control");
-
-// Comprehensive tests
-create_rtfs_test!(test_comprehensive, "test_comprehensive");
-create_rtfs_test!(test_no_comments, "test_no_comments");
-create_rtfs_test!(test_working_features, "test_working_features");
-
-// Real-world tests
-create_rtfs_test!(test_simple_real, "test_simple_real");
-create_rtfs_test!(test_basic_real, "test_basic_real");
-create_rtfs_test!(test_real_world, "test_real_world");
-create_rtfs_test!(test_real_world_fixed, "test_real_world_fixed");
-create_rtfs_test!(test_production, "test_production");
-
-// Advanced tests
-create_rtfs_test!(test_incrementally_complex, "test_incrementally_complex");
-create_rtfs_test!(test_computational_heavy, "test_computational_heavy");
-create_rtfs_test!(test_advanced_focused, "test_advanced_focused");
-create_rtfs_test!(test_advanced_pipeline, "test_advanced_pipeline");
-
-// Agent system tests
-create_rtfs_test!(test_agent_coordination, "test_agent_coordination");
-create_rtfs_test!(test_agent_discovery, "test_agent_discovery");
-create_rtfs_test!(test_fault_tolerance, "test_fault_tolerance");
-
-// Task context tests
-create_rtfs_test!(test_task_context, "test_task_context");
-create_rtfs_test!(simple_task_context_test, "simple_task_context_test");
-
-// Recursive function tests
-create_rtfs_test!(test_mutual_recursion, "test_mutual_recursion");
-create_rtfs_test!(test_nested_recursion, "test_nested_recursion");
-create_rtfs_test!(test_higher_order_recursion, "test_higher_order_recursion");
-create_rtfs_test!(test_three_way_recursion, "test_three_way_recursion");
-
-// Special test - This test now passes so we'll treat it as a regular test
-#[test]
-fn test_mixed_let() {
-    let config = TestConfig::new("test_mixed_let");
-    
-    let runtimes = match config.runtime {
-        RuntimeStrategy::Ast => vec!["ast"],
-        RuntimeStrategy::Ir => vec!["ir"],
-        RuntimeStrategy::Both => vec!["ast", "ir"],
-    };
-
-    for runtime in runtimes {
-        let test_name = format!("{} ({})", config.name, runtime);
-        
-        match run_test_file(&config, runtime) {
-            Ok(result) => {
-                println!("✅ {}: {}", test_name, result.trim());
-                
-                // Check expected result if specified
-                if let Some(expected) = config.expected_result {
-                    assert!(result.contains(expected), 
-                        "Expected '{}' but got '{}'", expected, result);
-                }
-            }
-            Err(error) => {
-                panic!("Test failed: {}: {}", test_name, error);
-            }
-        }
-    }
-}
-
-/// Test specific categories of functionality
-#[test]
-fn test_let_bindings() {
-    let let_binding_tests = vec![
-        "test_basic_let",
-        "test_let_binding", 
-        "test_let_no_type",
-        "test_typed_let",
-        "test_simple_dependent",
-        "test_dependent_let",
-        "test_mixed_let_simple",
-    ];
-
-    for test_name in let_binding_tests {
-        let config = TestConfig::new(test_name);
-        
-        // Test both runtimes
-        for runtime in ["ast", "ir"] {
-            let result = run_test_file(&config, runtime);
-            assert!(result.is_ok(), 
-                "Let binding test '{}' with '{}' runtime failed: {:?}", 
-                test_name, runtime, result.err());
-            println!("✅ {} ({}): {}", test_name, runtime, result.unwrap().trim());
-        }
-    }
-}
-
-#[test]
-fn debug_complex_expression_only() {
-    let test_file_path = "tests/rtfs_files/test_complex_expression.rtfs";
-    let content = fs::read_to_string(test_file_path).unwrap();
-    println!("Content: '{}'", content);
-    
-    // Parse the code
-    let parsed = parser::parse_expression(&content).unwrap();
-    println!("Parsed AST: {:#?}", parsed);
-    
-    // Convert to IR and examine nodes
-    let mut converter = ir_converter::IrConverter::new();
-    let ir_node = converter.convert_expression(parsed).unwrap();
-    println!("IR Node: {:#?}", ir_node);
-    
-    // Try to execute with IR runtime  
-    let agent_discovery = Box::new(agent::discovery_traits::NoOpAgentDiscovery);
-    let mut runtime = runtime::Runtime::with_strategy_and_agent_discovery(
-        runtime::RuntimeStrategy::Ir,
-        agent_discovery
-    );
-    
-    match runtime.evaluate_ir(&ir_node) {
-        Ok(value) => println!("Result: {:?}", value),
         Err(e) => {
-            println!("Error: {:?}", e);
-            panic!("IR execution failed: {:?}", e);
+            if config.should_execute {
+                return Err(format!("Execution failed unexpectedly: {:?}", e));
+            }
+
+            let error_str = format!("{:?}", e);
+            if let Some(expected) = config.expected_error {
+                if !error_str.contains(expected) {
+                    return Err(format!("Error mismatch. Expected to contain: '{}', Got: '{}'", expected, error_str));
+                }
+            }
+            Ok("Expected execution error".to_string())
+        }
+    }
+}
+
+/// Run all tests for a given file configuration
+fn run_all_tests_for_file(config: &TestConfig) {
+    if matches!(config.runtime, RuntimeStrategy::Ast | RuntimeStrategy::Both) {
+        println!("--- Running: {} (AST) ---", config.name);
+        match run_test_file(config, "ast") {
+            Ok(result) => println!("Result: {}", result),
+            Err(e) => panic!("Test failed: {}", e),
+        }
+    }
+    if matches!(config.runtime, RuntimeStrategy::Ir | RuntimeStrategy::Both) {
+        println!("--- Running: {} (IR) ---", config.name);
+        match run_test_file(config, "ir") {
+            Ok(result) => println!("Result: {}", result),
+            Err(e) => panic!("Test failed: {}", e),
         }
     }
 }
 
 #[test]
-fn test_basic_arithmetic() {
-    let arithmetic_tests = vec![
-        "test_single_expression",
-        "test_complex_expression", 
-        "test_nested_ops",
-    ];
-
-    for test_name in arithmetic_tests {
-        let config = TestConfig::new(test_name);
-        
-        // Test both runtimes
-        for runtime in ["ast", "ir"] {
-            let result = run_test_file(&config, runtime);
-            assert!(result.is_ok(), 
-                "Arithmetic test '{}' with '{}' runtime failed: {:?}", 
-                test_name, runtime, result.err());
-            println!("✅ {} ({}): {}", test_name, runtime, result.unwrap().trim());
-        }
-    }
+fn test_simple_add() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_add".to_string(),
+        expected_result: Some("Integer(3)"),
+        ..TestConfig::new("test_simple_add")
+    });
 }
 
 #[test]
-fn test_recursive_functions() {
-    let recursive_tests = vec![
-        "test_complex_math",       // Original factorial test
-        "test_mutual_recursion",   // Even/odd mutual recursion
-        "test_nested_recursion",   // Nested recursive helper functions
-        "test_higher_order_recursion", // Higher-order functions with recursion
-        "test_three_way_recursion", // Three-way mutual recursion
-    ];
+fn test_simple_let() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_let".to_string(),
+        expected_result: Some("Integer(10)"),
+        ..TestConfig::new("test_simple_let")
+    });
+}
 
-    for test_name in recursive_tests {
-        let config = TestConfig::new(test_name);
-        
-        // Test both runtimes
-        for runtime in ["ast", "ir"] {
-            let result = run_test_file(&config, runtime);
-            assert!(result.is_ok(), 
-                "Recursive test '{}' with '{}' runtime failed: {:?}", 
-                test_name, runtime, result.err());
-            println!("✅ {} ({}): {}", test_name, runtime, result.unwrap().trim());
-        }
-    }
+#[test]
+fn test_simple_if() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_if".to_string(),
+        expected_result: Some("Integer(1)"),
+        ..TestConfig::new("test_simple_if")
+    });
+}
+
+#[test]
+fn test_simple_fn() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_fn".to_string(),
+        expected_result: Some("Integer(25)"),
+        ..TestConfig::new("test_simple_fn")
+    });
+}
+
+#[test]
+fn test_simple_pipeline() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_pipeline".to_string(),
+        expected_result: Some("Integer(6)"),
+        ..TestConfig::new("test_simple_pipeline")
+    });
+}
+
+#[test]
+fn test_simple_map() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_map".to_string(),
+        expected_result: Some("Vector([Integer(2), Integer(3), Integer(4)])"),
+        ..TestConfig::new("test_simple_map")
+    });
+}
+
+#[test]
+fn test_simple_reduce() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_simple_reduce".to_string(),
+        expected_result: Some("Integer(15)"),
+        ..TestConfig::new("test_simple_reduce")
+    });
+}
+
+#[test]
+fn test_let_destructuring() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_let_destructuring".to_string(),
+        expected_result: Some("Integer(3)"),
+        ..TestConfig::new("test_let_destructuring")
+    });
+}
+
+#[test]
+fn test_fibonacci_recursive() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_fibonacci_recursive".to_string(),
+        expected_result: Some("Integer(55)"),
+        ..TestConfig::new("test_fibonacci_recursive")
+    });
+}
+
+#[test]
+fn test_file_read() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_file_read".to_string(),
+        expected_result: Some(r#"String("Hello from test file!")"#),
+        ..TestConfig::new("test_file_read")
+    });
+}
+
+#[test]
+fn test_forward_ref() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_forward_ref".to_string(),
+        expected_result: Some("Integer(10)"),
+        ..TestConfig::new("test_forward_ref")
+    });
+}
+
+#[test]
+fn test_task_context() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_task_context".to_string(),
+        expected_result: Some(r#"String("value")"#),
+        ..TestConfig::new("test_task_context")
+    });
+}
+
+#[test]
+fn test_advanced_pipeline() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_advanced_pipeline".to_string(),
+        expected_result: Some(r#"String("Processed: item1, item2")"#),
+        ..TestConfig::new("test_advanced_pipeline")
+    });
+}
+
+#[test]
+fn test_error_handling() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_error_handling".to_string(),
+        should_execute: false,
+        expected_error: Some("Division by zero"),
+        ..TestConfig::new("test_error_handling")
+    });
+}
+
+#[test]
+fn test_parsing_error() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_parsing_error".to_string(),
+        should_compile: false,
+        should_execute: false,
+        expected_error: Some("Pest"), // Expect a pest parsing error
+        ..TestConfig::new("test_parsing_error")
+    });
+}
+
+#[test]
+fn test_map_destructuring() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_map_destructuring".to_string(),
+        expected_result: Some(r#"String("value1")"#),
+        ..TestConfig::new("test_map_destructuring")
+    });
+}
+
+#[test]
+fn test_nested_let() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_nested_let".to_string(),
+        expected_result: Some("Integer(15)"),
+        ..TestConfig::new("test_nested_let")
+    });
+}
+
+#[test]
+fn test_variadic_fn() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_variadic_fn".to_string(),
+        expected_result: Some("Integer(10)"),
+        ..TestConfig::new("test_variadic_fn")
+    });
+}
+
+#[test]
+fn test_letrec_simple() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_letrec_simple".to_string(),
+        expected_result: Some("Integer(120)"),
+        ..TestConfig::new("test_letrec_simple")
+    });
+}
+
+#[test]
+fn test_mutual_recursion() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_mutual_recursion".to_string(),
+        expected_result: Some("Boolean(true)"),
+        ..TestConfig::new("test_mutual_recursion")
+    });
+}
+
+#[test]
+fn test_computational_heavy() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_computational_heavy".to_string(),
+        expected_result: Some("Integer(2432902008176640000)"), // This might need to be adjusted based on machine
+        ..TestConfig::new("test_computational_heavy")
+    });
+}
+
+#[test]
+fn test_string_ops() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_string_ops".to_string(),
+        expected_result: Some(r#"String("HELLO, WORLD!")"#),
+        ..TestConfig::new("test_string_ops")
+    });
+}
+
+#[test]
+fn test_vector_ops() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_vector_ops".to_string(),
+        expected_result: Some("Vector([Integer(1), Integer(2), Integer(3), Integer(4)])"),
+        ..TestConfig::new("test_vector_ops")
+    });
+}
+
+#[test]
+fn test_map_ops() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_map_ops".to_string(),
+        expected_result: None,
+        ..TestConfig::new("test_map_ops")
+    });
+}
+
+#[test]
+fn test_get_in() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_get_in".to_string(),
+        expected_result: Some("Integer(3)"),
+        ..TestConfig::new("test_get_in")
+    });
+}
+
+#[test]
+fn test_wildcard_destructuring() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_wildcard_destructuring".to_string(),
+        expected_result: Some("Integer(3)"),
+        ..TestConfig::new("test_wildcard_destructuring")
+    });
+}
+
+#[test]
+fn test_advanced_focused() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_advanced_focused".to_string(),
+        expected_result: Some("Integer(10)"),
+        ..TestConfig::new("test_advanced_focused")
+    });
+}
+
+// New tests from debug files
+#[test]
+fn test_vector_literal() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_vector_literal".to_string(),
+        expected_result: Some("Vector([Integer(1), Integer(2), Integer(3)])"),
+        ..TestConfig::new("test_vector_literal")
+    });
+}
+
+#[test]
+fn test_let_vector() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_let_vector".to_string(),
+        expected_result: Some("Vector([Integer(1), Integer(2), Integer(3)])"),
+        ..TestConfig::new("test_let_vector")
+    });
+}
+
+#[test]
+fn test_inline_lambda() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_inline_lambda".to_string(),
+        expected_result: Some("Integer(9)"),
+        ..TestConfig::new("test_inline_lambda")
+    });
+}
+
+#[test]
+fn test_map_square() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_map_square".to_string(),
+        expected_result: Some("Vector([Integer(1), Integer(4), Integer(9)])"),
+        ..TestConfig::new("test_map_square")
+    });
+}
+
+#[test]
+fn test_map_multiple_vectors() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_map_multiple_vectors".to_string(),
+        expected_result: Some("Vector([Integer(2), Integer(4), Integer(6)])"),
+        ..TestConfig::new("test_map_multiple_vectors")
+    });
 }

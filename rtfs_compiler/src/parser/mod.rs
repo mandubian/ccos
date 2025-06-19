@@ -1,5 +1,46 @@
 use pest::iterators::{Pair, Pairs}; // Added Pairs
 use pest::Parser;
+use crate::error_reporting::{SourceSpan, DiagnosticInfo, ErrorSeverity, ErrorHint};
+
+// Helper function to convert pest span to our SourceSpan
+pub fn pest_span_to_source_span(span: pest::Span) -> SourceSpan {
+    let (start_line, start_column) = span.start_pos().line_col();
+    let (end_line, end_column) = span.end_pos().line_col();
+    SourceSpan::new(start_line, start_column, end_line, end_column)
+        .with_source_text(span.as_str().to_string())
+}
+
+// Helper function to create SourceSpan from a Pair
+pub fn pair_to_source_span(pair: &Pair<Rule>) -> SourceSpan {
+    pest_span_to_source_span(pair.as_span())
+}
+
+// Helper functions to create errors with proper spans
+pub fn missing_token_error(token: &str, pair: &Pair<Rule>) -> PestParseError {
+    PestParseError::MissingToken {
+        token: token.to_string(),
+        span: Some(pair_to_source_span(pair)),
+    }
+}
+
+pub fn invalid_input_error(message: &str, pair: &Pair<Rule>) -> PestParseError {
+    PestParseError::InvalidInput {
+        message: message.to_string(),
+        span: Some(pair_to_source_span(pair)),
+    }
+}
+
+pub fn invalid_literal_error(message: &str, pair: &Pair<Rule>) -> PestParseError {
+    PestParseError::InvalidLiteral {
+        message: message.to_string(),
+        span: Some(pair_to_source_span(pair)),
+    }
+}
+
+// Create a default span for when we don't have access to the original pair
+pub fn default_source_span() -> SourceSpan {
+    SourceSpan::new(1, 1, 1, 1).with_source_text("(location unavailable)".to_string())
+}
 
 // Define a custom error type for parsing
 #[derive(Debug)]
@@ -8,19 +49,142 @@ pub enum PestParseError {
         expected: String,
         found: String,
         rule_text: String,
+        span: Option<SourceSpan>, // Add source location
     },
-    MissingToken(String),
-    InvalidInput(String),          // Added
-    UnsupportedRule(String),       // Added
-    InvalidLiteral(String),        // Added
-    InvalidEscapeSequence(String), // Added
-    CustomError(String),
+    MissingToken {
+        token: String,
+        span: Option<SourceSpan>,
+    },
+    InvalidInput {
+        message: String,
+        span: Option<SourceSpan>,
+    },
+    UnsupportedRule {
+        rule: String,
+        span: Option<SourceSpan>,
+    },
+    InvalidLiteral {
+        message: String,
+        span: Option<SourceSpan>,
+    },
+    InvalidEscapeSequence {
+        sequence: String,
+        span: Option<SourceSpan>,
+    },
+    CustomError {
+        message: String,
+        span: Option<SourceSpan>,
+    },
     PestError(pest::error::Error<Rule>), // For errors from Pest itself
 }
 
 impl From<pest::error::Error<Rule>> for PestParseError {
     fn from(err: pest::error::Error<Rule>) -> Self {
         PestParseError::PestError(err)
+    }
+}
+
+impl PestParseError {
+    /// Convert the parse error to a diagnostic info for enhanced error reporting
+    pub fn to_diagnostic(&self) -> DiagnosticInfo {
+        match self {
+            PestParseError::UnexpectedRule { expected, found, rule_text, span } => {
+                DiagnosticInfo {
+                    error_code: "P001".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: format!("Expected {}, found {}", expected, found),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new(&format!("Expected a {} expression here", expected))],
+                    notes: vec![format!("Rule text: {}", rule_text)],
+                    caused_by: None,
+                }
+            }
+            PestParseError::MissingToken { token, span } => {
+                DiagnosticInfo {
+                    error_code: "P002".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: format!("Missing required token: {}", token),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new(&format!("Add the missing {} token", token))],
+                    notes: vec![],
+                    caused_by: None,
+                }
+            }
+            PestParseError::InvalidInput { message, span } => {
+                DiagnosticInfo {
+                    error_code: "P003".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: message.clone(),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new("Check the syntax of your input")],
+                    notes: vec![],
+                    caused_by: None,
+                }
+            }
+            PestParseError::UnsupportedRule { rule, span } => {
+                DiagnosticInfo {
+                    error_code: "P004".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: format!("Unsupported rule: {}", rule),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new(&format!("The {} construct is not yet supported", rule))],
+                    notes: vec![],
+                    caused_by: None,
+                }
+            }
+            PestParseError::InvalidLiteral { message, span } => {
+                DiagnosticInfo {
+                    error_code: "P005".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: message.clone(),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new("Check the literal syntax")],
+                    notes: vec![],
+                    caused_by: None,
+                }
+            }
+            PestParseError::InvalidEscapeSequence { sequence, span } => {
+                DiagnosticInfo {
+                    error_code: "P006".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: format!("Invalid escape sequence: {}", sequence),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new("Use valid escape sequences like \\n, \\t, \\r, \\\\, or \\\"")],
+                    notes: vec![],
+                    caused_by: None,
+                }
+            }
+            PestParseError::CustomError { message, span } => {
+                DiagnosticInfo {
+                    error_code: "P007".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: message.clone(),
+                    primary_span: span.clone(),
+                    secondary_spans: vec![],
+                    hints: vec![],
+                    notes: vec![],
+                    caused_by: None,
+                }
+            }
+            PestParseError::PestError(pest_err) => {
+                DiagnosticInfo {
+                    error_code: "P008".to_string(),
+                    severity: ErrorSeverity::Error,
+                    primary_message: format!("Parser error: {}", pest_err.variant.message()),
+                    primary_span: pest_error_location_to_source_span(pest_err), // MODIFIED
+                    secondary_spans: vec![],
+                    hints: vec![ErrorHint::new("Check the syntax of your input")],
+                    notes: vec![format!("Details: {}", pest_err)],
+                    caused_by: None,
+                }
+            }
+        }
     }
 }
 
@@ -46,10 +210,8 @@ use crate::ast::{
 };
 
 // Import builder functions from submodules
-// Removed unused build_keyword, build_literal, build_map_key
 use common::build_symbol;
 use expressions::{build_expression, build_map}; // Added build_map
-use special_forms::{build_def_expr, build_defn_expr};
 use utils::unescape; // Added def/defn builders
 
 // Define the parser struct using the grammar file
@@ -62,6 +224,30 @@ fn next_significant<'a>(pairs: &mut Pairs<'a, Rule>) -> Option<Pair<'a, Rule>> {
     pairs.find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
 }
 
+// Helper to convert Pest span to our SourceSpan format
+fn span_from_pair(pair: &Pair<Rule>) -> Option<SourceSpan> {
+    let span = pair.as_span();
+    let (start_line, start_col) = span.start_pos().line_col();
+    let (end_line, end_col) = span.end_pos().line_col();
+    
+    Some(SourceSpan::new(start_line, start_col, end_line, end_col)
+        .with_source_text(span.as_str().to_string()))
+}
+
+// Helper to create a SourceSpan from just the input text (for cases where we don't have a specific pair)
+fn span_from_input(input: &str) -> Option<SourceSpan> {
+    if input.is_empty() {
+        return None;
+    }
+    
+    let lines: Vec<&str> = input.lines().collect();
+    let end_line = lines.len();
+    let end_col = lines.last().map(|line| line.len()).unwrap_or(0);
+    
+    Some(SourceSpan::new(1, 1, end_line, end_col)
+        .with_source_text(input.to_string()))
+}
+
 // --- Main Parsing Function ---
 
 // Parse a full RTFS program (potentially multiple top-level items)
@@ -71,7 +257,6 @@ pub fn parse(input: &str) -> Result<Vec<TopLevel>, PestParseError> {
                                                                                         // Program contains SOI ~ (task_definition | module_definition | expression)* ~ EOI
                                                                                         // The `pairs` variable is an iterator over the content matched by Rule::program.
                                                                                         // We need its single inner item (which should be the sequence inside program)
-                                                                                        // then iterate over *that* sequence's inner items.
     let program_content = pairs
         .peek()
         .expect("Parse should have yielded one program rule");
@@ -91,7 +276,10 @@ pub fn parse_expression(input: &str) -> Result<Expression, PestParseError> {
     let pairs = RTFSParser::parse(Rule::expression, input).map_err(PestParseError::from)?;
     let expr_pair = pairs
         .peek()
-        .ok_or_else(|| PestParseError::InvalidInput("No expression found".to_string()))?;
+        .ok_or_else(|| PestParseError::InvalidInput {
+            message: "No expression found".to_string(),
+            span: span_from_input(input),
+        })?;
     build_expression(expr_pair)
 }
 
@@ -128,14 +316,13 @@ fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         // Rule::task_definition => Ok(TopLevel::Task(build_task_definition(pair?)), // MODIFIED OLD
         Rule::task_definition => build_task_definition(pair).map(TopLevel::Task), // MODIFIED NEW
         // Rule::module_definition => Ok(TopLevel::Module(build_module_definition(pair?))), // MODIFIED OLD
-        Rule::module_definition => build_module_definition(pair).map(TopLevel::Module), // MODIFIED NEW
-
-        // Import definition should only appear inside a module, handle within build_module_definition
+        Rule::module_definition => build_module_definition(pair).map(TopLevel::Module), // MODIFIED NEW        // Import definition should only appear inside a module, handle within build_module_definition
         Rule::import_definition => {
             // panic!("Import definition found outside of a module context") // OLD
-            Err(PestParseError::CustomError( // NEW
-                "Import definition found outside of a module context".to_string(),
-            ))
+            Err(PestParseError::CustomError { // NEW
+                message: "Import definition found outside of a module context".to_string(),
+                span: span_from_pair(&pair),
+            })
         }
 
         // Handle unexpected rules at this level
@@ -144,11 +331,14 @@ fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         //     rule,
         //     pair.as_str()
         // ),
-        rule => Err(PestParseError::CustomError(format!( // NEW
-            "build_ast encountered unexpected top-level rule: {:?}, content: '{}'",
-            rule,
-            pair.as_str()
-        ))),
+        rule => Err(PestParseError::CustomError { // NEW
+            message: format!(
+                "build_ast encountered unexpected top-level rule: {:?}, content: '{}'",
+                rule,
+                pair.as_str()
+            ),
+            span: span_from_pair(&pair),
+        }),
     }
 }
 
@@ -246,118 +436,141 @@ fn build_task_definition(pair: Pair<Rule>) -> Result<TaskDefinition, PestParseEr
     })
 }
 
+// Helper function to convert pest::error::Error location to SourceSpan
+fn pest_error_location_to_source_span(error: &pest::error::Error<Rule>) -> Option<SourceSpan> {
+    match error.line_col {
+        pest::error::LineColLocation::Pos((line, col)) => {
+            // For a single position, we might not have the full text of the error span directly from pest's error struct easily,
+            // so we use the error message itself as a placeholder or rely on the line/col.
+            // The original text snippet that caused the error is part of pest::Error::variant (e.g., for UnexpectedToken).
+            // However, constructing a meaningful SourceSpan text from just Pos can be tricky.
+            // Let's try to get the text from the error variant if possible, or default to a generic message.
+            let text = error.variant.message().to_string(); // Or a snippet if accessible
+            Some(SourceSpan::new(line, col, line, col).with_source_text(text))
+        }
+        pest::error::LineColLocation::Span((start_line, start_col), (end_line, end_col)) => {
+            // If we have a span, we can try to get the text.
+            // The `error.variant.message()` gives the description, not necessarily the spanned text.
+            // For now, using the message as text. A more advanced way would be to re-read from source if available.
+            let text = error.variant.message().to_string();
+            Some(SourceSpan::new(start_line, start_col, end_line, end_col).with_source_text(text))
+        }
+    }
+}
+
 // Helper function to build export options
-// Expected pairs: inner of export_option rule (exports_keyword, export_symbols_vec)
-fn build_export_option(mut pairs: Pairs<Rule>) -> Result<Vec<Symbol>, PestParseError> {
+// MODIFIED: Added parent_pair for better error spanning
+fn build_export_option(parent_pair: &Pair<Rule>, mut pairs: Pairs<Rule>) -> Result<Vec<Symbol>, PestParseError> {
+    let parent_span = pair_to_source_span(parent_pair); // Use pair_to_source_span
     let exports_keyword_pair = next_significant(&mut pairs).ok_or_else(|| {
-        PestParseError::CustomError("Expected :exports keyword in export_option".to_string())
+        PestParseError::CustomError {
+            message: "Expected :exports keyword in export_option".to_string(),
+            span: Some(parent_span.clone()), // MODIFIED
+        }
     })?;
     if exports_keyword_pair.as_rule() != Rule::exports_keyword {
         return Err(PestParseError::UnexpectedRule {
             expected: ":exports keyword".to_string(),
             found: format!("{:?}", exports_keyword_pair.as_rule()),
             rule_text: exports_keyword_pair.as_str().to_string(),
+            span: Some(pair_to_source_span(&exports_keyword_pair)), // Use pair_to_source_span
         });
     }
 
     let symbols_vec_pair = next_significant(&mut pairs).ok_or_else(|| {
-        PestParseError::CustomError("Expected symbols vector in export_option".to_string())
+        PestParseError::CustomError {
+            message: "Expected symbols vector in export_option".to_string(),
+            span: Some(pair_to_source_span(&exports_keyword_pair).end_as_start()), // MODIFIED: Span after the keyword
+        }
     })?;
     if symbols_vec_pair.as_rule() != Rule::export_symbols_vec {
         return Err(PestParseError::UnexpectedRule {
-            expected: "symbols vector".to_string(),
+            expected: "symbols vector (export_symbols_vec)".to_string(),
             found: format!("{:?}", symbols_vec_pair.as_rule()),
             rule_text: symbols_vec_pair.as_str().to_string(),
+            span: Some(pair_to_source_span(&symbols_vec_pair)), 
         });
     }
 
     symbols_vec_pair
         .into_inner()
         .filter(|p| p.as_rule() == Rule::symbol)
-        // .map(|p| Ok(build_symbol(p))) // build_symbol doesn't return Result, so wrap Ok // OLD COMMENT & CODE
-        // .collect() // OLD
-        .map(build_symbol) // NEW - build_symbol now returns Result
-        .collect::<Result<Vec<Symbol>, PestParseError>>() // NEW - collect into Result
+        .map(|p| build_symbol(p.clone())) // build_symbol now returns Result, ensure pair is cloned if needed by build_symbol for span
+        .collect::<Result<Vec<Symbol>, PestParseError>>()
 }
 
 // module_definition =  { "(" ~ module_keyword ~ symbol ~ export_option? ~ definition* ~ ")" }
 // fn build_module_definition(pair: Pair<Rule>) -> ModuleDefinition { // Old signature
 fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestParseError> {
     // New signature
-    // assert_eq!(pair.as_rule(), Rule::module_definition); // Already asserted by caller build_ast
-    let mut inner_pairs = pair.into_inner(); // Consumes the Rule::module_definition pair itself
-
+    let module_def_span = pair_to_source_span(&pair); // Use pair_to_source_span
+    let mut inner_pairs = pair.clone().into_inner(); 
     // 1. module_keyword
     let module_keyword_pair = next_significant(&mut inner_pairs).ok_or_else(|| {
-        PestParseError::CustomError("Module definition missing module keyword".to_string())
+        PestParseError::CustomError {
+            message: "Module definition missing module keyword".to_string(),
+            span: Some(module_def_span.clone()), 
+        }
     })?;
     if module_keyword_pair.as_rule() != Rule::module_keyword {
         return Err(PestParseError::UnexpectedRule {
             expected: "module_keyword".to_string(),
             found: format!("{:?}", module_keyword_pair.as_rule()),
             rule_text: module_keyword_pair.as_str().to_string(),
+            span: Some(pair_to_source_span(&module_keyword_pair)),
         });
     }
 
     // 2. Name (symbol)
     let name_pair = next_significant(&mut inner_pairs).ok_or_else(|| {
-        PestParseError::CustomError("Module definition requires a name".to_string())
+        PestParseError::CustomError {
+            message: "Module definition requires a name".to_string(),
+            span: Some(pair_to_source_span(&module_keyword_pair).end_as_start()), 
+        }
     })?;
-    // As per grammar: module_definition = { "(" ~ module_keyword ~ symbol ...
     if name_pair.as_rule() != Rule::symbol {
         return Err(PestParseError::UnexpectedRule {
             expected: "symbol for module name".to_string(),
             found: format!("{:?}", name_pair.as_rule()),
             rule_text: name_pair.as_str().to_string(),
+            span: Some(pair_to_source_span(&name_pair)), 
         });
     }
-    // let name = build_symbol(name_pair); // OLD
-    let name = build_symbol(name_pair)?; // NEW
+    let name = build_symbol(name_pair.clone())?;
 
     let mut exports = None;
     let mut definitions = Vec::new();
 
-    // Use peekable to check for optional export_option
     let mut remaining_module_parts = inner_pairs.peekable();
 
-    // 3. Optional export_option
     if let Some(peeked_part) = remaining_module_parts.peek() {
         if peeked_part.as_rule() == Rule::export_option {
-            let export_pair = remaining_module_parts.next().unwrap(); // Consume it
-            exports = Some(build_export_option(export_pair.into_inner())?);
+            let export_pair = remaining_module_parts.next().unwrap(); 
+            exports = Some(build_export_option(&export_pair, export_pair.clone().into_inner())?); 
         }
     }
-
-    // 4. Definitions (def_expr | defn_expr | import_definition)*
+    
     for def_candidate_pair in remaining_module_parts {
-        // Skip whitespace and comments if they are passed (though next_significant in a loop would be better if they could be mixed)
-        // The current loop structure assumes `remaining_module_parts` only yields significant tokens.
         match def_candidate_pair.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT | Rule::EOI => continue, // EOI might appear if it\'s the last thing
+            Rule::WHITESPACE | Rule::COMMENT | Rule::EOI => continue, 
             Rule::def_expr => {
-                // let def_node = build_def_expr(def_candidate_pair.into_inner()); // OLD
-                let def_node = build_def_expr(def_candidate_pair.into_inner())?; // NEW
+                let def_node = special_forms::build_def_expr(def_candidate_pair)?;
                 definitions.push(ModuleLevelDefinition::Def(def_node));
             }
             Rule::defn_expr => {
-                eprintln!(
-                    "[build_module_definition] Calling build_defn_expr for: rule={:?}, str='{}'",
-                    def_candidate_pair.as_rule(),
-                    def_candidate_pair.as_str()
-                );
-                // let defn_node = build_defn_expr(def_candidate_pair.into_inner()); // OLD
-                let defn_node = build_defn_expr(def_candidate_pair.into_inner())?; // NEW
+                let defn_node = special_forms::build_defn_expr(def_candidate_pair)?;
                 definitions.push(ModuleLevelDefinition::Defn(defn_node));
             }
             Rule::import_definition => {
-                let import_node = build_import_definition(def_candidate_pair.into_inner())?;
+                let import_node = build_import_definition(&def_candidate_pair, def_candidate_pair.clone().into_inner())?;
                 definitions.push(ModuleLevelDefinition::Import(import_node));
-            }
+            }            
             rule => {
                 return Err(PestParseError::UnexpectedRule {
                     expected: "def_expr, defn_expr, or import_definition".to_string(),
                     found: format!("{:?}", rule),
                     rule_text: def_candidate_pair.as_str().to_string(),
+                    span: Some(pair_to_source_span(&def_candidate_pair)),
                 });
             }
         }
@@ -372,26 +585,28 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
 
 // import_definition =  { "(" ~ import_keyword ~ namespaced_identifier ~ import_options? ~ ")" }
 // fn build_import_definition(pair: Pair<Rule>) -> ImportDefinition { // Old signature
-fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, PestParseError> {
-    // New signature, takes inner pairs
-    // assert_eq!(pair.as_rule(), Rule::import_definition); // Asserted by caller
-    // let mut inner = pair.into_inner(); // Caller now passes inner pairs
-
-    // 1. import_keyword
+fn build_import_definition(parent_pair: &Pair<Rule>, mut pairs: Pairs<Rule>) -> Result<ImportDefinition, PestParseError> {
+    let parent_span = pair_to_source_span(parent_pair);
     let import_keyword_pair = next_significant(&mut pairs).ok_or_else(|| {
-        PestParseError::CustomError("Import definition missing import keyword".to_string())
+        PestParseError::CustomError {
+            message: "Import definition missing import keyword".to_string(),
+            span: Some(parent_span.clone()), 
+        }
     })?;
     if import_keyword_pair.as_rule() != Rule::import_keyword {
         return Err(PestParseError::UnexpectedRule {
             expected: "import_keyword".to_string(),
             found: format!("{:?}", import_keyword_pair.as_rule()),
             rule_text: import_keyword_pair.as_str().to_string(),
+            span: Some(pair_to_source_span(&import_keyword_pair)),
         });
     }
 
-    // 2. Module Name
     let module_name_pair = next_significant(&mut pairs).ok_or_else(|| {
-        PestParseError::CustomError("Import definition requires a module name".to_string())
+        PestParseError::CustomError {
+            message: "Import definition requires a module name".to_string(),
+            span: Some(pair_to_source_span(&import_keyword_pair).end_as_start()), 
+        }
     })?;
     if !(module_name_pair.as_rule() == Rule::namespaced_identifier
         || module_name_pair.as_rule() == Rule::symbol)
@@ -400,75 +615,120 @@ fn build_import_definition(mut pairs: Pairs<Rule>) -> Result<ImportDefinition, P
             expected: "symbol or namespaced_identifier for import module name".to_string(),
             found: format!("{:?}", module_name_pair.as_rule()),
             rule_text: module_name_pair.as_str().to_string(),
+            span: Some(pair_to_source_span(&module_name_pair)),
         });
     }
-    // let module_name = build_symbol(module_name_pair); // OLD
-    let module_name = build_symbol(module_name_pair)?; // NEW
-
-    let mut alias = None;
+    let module_name = build_symbol(module_name_pair.clone())?;    let mut alias = None;
     let mut only = None;
 
-    // Parse import_option rules (which contain ":as symbol" or ":only [symbols]")
-    while let Some(option_pair) = next_significant(&mut pairs) {
+    while let Some(option_pair) = next_significant(&mut pairs) { 
+        let current_option_span = pair_to_source_span(&option_pair);
+        
         if option_pair.as_rule() == Rule::import_option {
             let option_text = option_pair.as_str();
-            let option_inner = option_pair.into_inner();
-
-            // The first element tells us which type of option this is
+            
+            // Check which branch of the import_option rule was matched
             if option_text.starts_with(":as") {
-                // Skip the ":as" part and get the symbol
-                // The import_option rule is ":as" ~ symbol, so we need to find the symbol
-                let mut found_symbol = false;
-                for inner_pair in option_inner {
-                    if inner_pair.as_rule() == Rule::symbol {
-                        // alias = Some(build_symbol(inner_pair)); // OLD
-                        alias = Some(build_symbol(inner_pair)?); // NEW
-                        found_symbol = true;
-                        break;
-                    }
-                }
-                if !found_symbol {
-                    return Err(PestParseError::CustomError(
-                        "Import :as option missing symbol".to_string(),
-                    ));
+                // ":as" ~ symbol branch
+                let mut option_inner_pairs = option_pair.clone().into_inner();
+                let alias_symbol_pair = option_inner_pairs.next().ok_or_else(|| PestParseError::CustomError {
+                    message: "Import :as option missing symbol".to_string(),
+                    span: Some(current_option_span.end_as_start()), 
+                })?;
+                if alias_symbol_pair.as_rule() == Rule::symbol {
+                    alias = Some(build_symbol(alias_symbol_pair.clone())?);
+                } else {
+                    return Err(PestParseError::UnexpectedRule {
+                        expected: "symbol for :as alias".to_string(),
+                        found: format!("{:?}", alias_symbol_pair.as_rule()),
+                        rule_text: alias_symbol_pair.as_str().to_string(),
+                        span: Some(pair_to_source_span(&alias_symbol_pair)),
+                    });
                 }
             } else if option_text.starts_with(":only") {
-                // The import_option rule is ":only" ~ "[" ~ symbol+ ~ "]"
-                // We need to find the symbols within the brackets
-                // let mut symbols = Vec::new(); // OLD
-                // for inner_pair in option_inner { // OLD
-                //     if inner_pair.as_rule() == Rule::symbol { // OLD
-                //         symbols.push(build_symbol(inner_pair)); // OLD - build_symbol used to not return Result or was handled differently
-                //     } // OLD
-                // } // OLD
-
+                // ":only" ~ "[" ~ symbol+ ~ "]" branch
                 let collected_symbols: Result<Vec<Symbol>, PestParseError> =
-                    option_inner // NEW
-                        .filter(|p| p.as_rule() == Rule::symbol) // Ensure we only try to build symbols from symbol rules
-                        .map(build_symbol) // build_symbol returns Result<Symbol, PestParseError>
-                        .collect();
-                let symbols = collected_symbols?; // NEW - propagate error if collection failed
-
+                    option_pair.clone().into_inner()
+                        .filter(|p| p.as_rule() == Rule::symbol) 
+                        .map(|p| build_symbol(p.clone())) 
+                        .collect();                
+                let symbols = collected_symbols?; 
+                
                 if symbols.is_empty() {
-                    return Err(PestParseError::CustomError(
-                        "Import :only option requires at least one symbol".to_string(),
-                    ));
+                    return Err(PestParseError::CustomError {
+                        message: "Import :only option requires at least one symbol".to_string(),
+                        span: Some(current_option_span.end_as_start()), 
+                    });
                 }
-                only = Some(symbols); // NEW - symbols is now Vec<Symbol>
+                only = Some(symbols); 
             } else {
-                return Err(PestParseError::CustomError(format!(
-                    "Unknown import option: {}",
-                    option_text
-                )));
+                return Err(PestParseError::CustomError { 
+                    message: format!("Unknown import option structure. Expected ':as' or ':only' prefix, found '{}'", option_text),
+                    span: Some(current_option_span), 
+                });
             }
         } else {
-            return Err(PestParseError::CustomError(format!(
-                "Expected import_option, found: {:?}",
-                option_pair.as_rule()
-            )));
+            // Handle cases where import options might not be wrapped in import_option rule
+            // This could happen if pest is flattening the structure
+            match option_pair.as_str() {
+                ":as" => {
+                    // Expect the next token to be a symbol
+                    let alias_symbol_pair = next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
+                        message: "Import :as option missing symbol".to_string(),
+                        span: Some(current_option_span.end_as_start()), 
+                    })?;
+                    if alias_symbol_pair.as_rule() == Rule::symbol {
+                        alias = Some(build_symbol(alias_symbol_pair.clone())?);
+                    } else {
+                        return Err(PestParseError::UnexpectedRule {
+                            expected: "symbol for :as alias".to_string(),
+                            found: format!("{:?}", alias_symbol_pair.as_rule()),
+                            rule_text: alias_symbol_pair.as_str().to_string(),
+                            span: Some(pair_to_source_span(&alias_symbol_pair)),
+                        });
+                    }
+                }
+                ":only" => {
+                    // Expect the next token to be the opening bracket or symbols
+                    let mut only_symbols = Vec::new();
+                    let mut found_opening_bracket = false;
+                    
+                    // Look for symbols until we find the closing bracket or end of input
+                    while let Some(next_pair) = pairs.peek() {
+                        if next_pair.as_str() == "[" {
+                            found_opening_bracket = true;
+                            pairs.next(); // consume the opening bracket
+                            continue;
+                        } else if next_pair.as_str() == "]" {
+                            pairs.next(); // consume the closing bracket
+                            break;
+                        } else if next_pair.as_rule() == Rule::symbol {
+                            let symbol_pair = pairs.next().unwrap();
+                            only_symbols.push(build_symbol(symbol_pair)?);
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    if only_symbols.is_empty() {
+                        return Err(PestParseError::CustomError {
+                            message: "Import :only option requires at least one symbol".to_string(),
+                            span: Some(current_option_span.end_as_start()), 
+                        });
+                    }
+                    only = Some(only_symbols);
+                }
+                _ => {
+                    return Err(PestParseError::UnexpectedRule { 
+                        expected: "import_option (:as or :only) or end of statement".to_string(), 
+                        found: format!("rule: {:?}", option_pair.as_rule()),
+                        rule_text: option_pair.as_str().to_string(),
+                        span: Some(current_option_span), 
+                    });
+                }
+            }
         }
     }
-
     Ok(ImportDefinition {
         module_name,
         alias,

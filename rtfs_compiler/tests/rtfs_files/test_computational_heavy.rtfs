@@ -44,7 +44,7 @@
                                               0
                                               (+ (- x 2) (if (= (- x 3) 0)
                                                            0
-                                                           (+ (- x 3) (- x 4)))))))))))
+                                                           (+ (- x 3) (- x 4))))))))))
         
         ; Final comprehensive result
         final-result {

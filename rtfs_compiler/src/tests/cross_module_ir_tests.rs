@@ -91,7 +91,7 @@ mod tests {
         // Execute through IR runtime with module registry integration
         println!("🚀 Executing through IR runtime...");
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
-        let execution_result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env);
+        let execution_result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
 
         // The result should be successful (even if it returns a placeholder value)
         // The key test is that qualified symbol resolution doesn't fail
@@ -143,7 +143,7 @@ mod tests {
         let ir_node2 = ir_converter.convert_expression(ast2).unwrap();
         let mut ir_env2 = crate::runtime::ir_runtime::IrEnvironment::new();
         
-        let qualified_result = runtime.ir_runtime.execute_node(&ir_node2, &mut ir_env2);
+        let qualified_result = runtime.ir_runtime.execute_node(&ir_node2, &mut ir_env2, false);
         // This should succeed (or fail with a different error, not UndefinedSymbol)
         match qualified_result {
             Ok(_) => println!("✅ Qualified symbol resolved successfully"),
@@ -201,7 +201,7 @@ mod tests {
         let mut ir_converter = IrConverter::new();
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
-        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env);
+        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
         match result {
             Ok(value) => println!("✅ File-based module execution successful: {:?}", value),
             Err(e) => panic!("❌ File-based module execution failed: {:?}", e),
@@ -228,7 +228,7 @@ mod tests {
         let mut ir_converter = IrConverter::new();
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
-        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env);
+        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
         match result {
             Ok(value) => println!("✅ Complex dependency chain execution successful: {:?}", value),
             Err(e) => panic!("❌ Complex dependency chain execution failed: {:?}", e),
@@ -255,7 +255,7 @@ mod tests {
         let mut ir_converter = IrConverter::new();
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
-        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env);
+        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
         match result {
             Ok(value) => println!("✅ Circular import execution successful: {:?}", value),
             Err(e) => println!("⚠️  Circular import execution failed (should not deadlock): {:?}", e),
@@ -280,7 +280,7 @@ mod tests {
         let mut ir_converter = IrConverter::new();
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
-        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env);
+        let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
         match result {
             Ok(value) => println!("✅ Error module execution successful: {:?}", value),
             Err(e) => println!("⚠️  Error module execution failed (error propagation working): {:?}", e),

@@ -35,3 +35,4 @@ coverage/
 # Other common ignores
 *.bak
 *.old
+.aider*

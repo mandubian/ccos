@@ -13,6 +13,7 @@ mod ir_demo_complete; // Complete IR pipeline demonstration
 mod optimization_demo; // Advanced optimization demonstration
 mod integration_tests; // Integration tests for complete RTFS pipeline
 mod tests; // Module loading and other unit tests
+mod error_reporting; // Error reporting module
 
 use parser::parse_expression;
 use runtime::{Evaluator, Runtime, RuntimeStrategy};

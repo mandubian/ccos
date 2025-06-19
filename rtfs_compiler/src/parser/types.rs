@@ -12,7 +12,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
         Rule::type_expr => pair
             .into_inner()
             .next()
-            .ok_or_else(|| PestParseError::MissingToken("type_expr inner".to_string()))?,
+            .ok_or_else(|| PestParseError::MissingToken { token: "type_expr inner".to_string(), span: None })?,
         _ => pair,
     };
 
@@ -37,13 +37,13 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
         Rule::primitive_type => {
             // primitive_type = { symbol } according to grammar
             let symbol_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
-                PestParseError::MissingToken("expected symbol in primitive_type".to_string())
+                PestParseError::MissingToken { token: "expected symbol in primitive_type".to_string(), span: None }
             })?;
             Ok(TypeExpr::Alias(build_symbol(symbol_pair)?))
         }
         Rule::symbol => Ok(TypeExpr::Alias(build_symbol(actual_type_pair)?)),Rule::vector_type => {
             let inner_type_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
-                PestParseError::MissingToken("expected inner type for vector".to_string())
+                PestParseError::MissingToken { token: "expected inner type for vector".to_string(), span: None }
             })?;
             Ok(TypeExpr::Vector(Box::new(build_type_expr(
                 inner_type_pair,
@@ -63,17 +63,17 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
             let mut wildcard = None;            while let Some(map_entry_pair) = inner.next() {
                 match map_entry_pair.as_rule() {                    Rule::map_type_entry => {
                         let mut entry_inner = map_entry_pair.into_inner();
-                        
-                        let key_pair = entry_inner.next().ok_or_else(|| {
-                            PestParseError::MissingToken(
-                                "expected key in map type entry".to_string(),
-                            )
-                        })?;
-                        let type_pair = entry_inner.next().ok_or_else(|| {
-                            PestParseError::MissingToken(
-                                "expected type in map type entry".to_string(),
-                            )
-                        })?;                        // Check if there's an optional marker "?" after the type
+                          let key_pair = entry_inner.next().ok_or_else(|| {
+                            PestParseError::MissingToken {
+                                token: "expected key in map type entry".to_string(),
+                                span: None
+                            }
+                        })?;                        let type_pair = entry_inner.next().ok_or_else(|| {
+                            PestParseError::MissingToken {
+                                token: "expected type in map type entry".to_string(),
+                                span: None
+                            }
+                        })?;// Check if there's an optional marker "?" after the type
                         let mut optional = false;
                         for remaining_pair in entry_inner {
                             if remaining_pair.as_rule() == Rule::optional_marker {
@@ -88,18 +88,19 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                             optional,
                         });
                     }                    Rule::map_type_wildcard => {
-                        let wildcard_type_pair =
-                            map_entry_pair.into_inner().next().ok_or_else(|| {
-                                PestParseError::MissingToken(
-                                    "expected type for map wildcard".to_string(),
-                                )                            })?;
+                        let wildcard_type_pair =                            map_entry_pair.into_inner().next().ok_or_else(|| {
+                                PestParseError::MissingToken {
+                                    token: "expected type for map wildcard".to_string(),
+                                    span: None
+                                }
+                            })?;
                         wildcard = Some(Box::new(build_type_expr(wildcard_type_pair)?));
-                    }
-                    _ => {
+                    }                    _ => {
                         return Err(PestParseError::UnexpectedRule {
                             expected: "map_type_entry or map_type_wildcard".to_string(),
                             found: format!("{:?}", map_entry_pair.as_rule()),
                             rule_text: map_entry_pair.as_str().to_string(),
+                            span: None
                         })
                     }
                 }
@@ -110,7 +111,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
             // Parse the function structure
             // Expected: param_type* variadic_param_type? return_type
             let first_part = inner.next().ok_or_else(|| {
-                PestParseError::MissingToken("expected parameter list in function type".to_string())
+                PestParseError::MissingToken { token: "expected parameter list in function type".to_string(), span: None }
             })?;let mut param_types = Vec::new();
             let mut variadic_param_type = None;            // Parse all tokens - don't consume first_part yet
             let mut tokens: Vec<_> = inner.collect();
@@ -118,7 +119,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
             // Add the first_part back to the tokens since we already consumed it
             tokens.insert(0, first_part);
               let return_type_token = tokens.pop().ok_or_else(|| {
-                PestParseError::MissingToken("expected return type in function type".to_string())
+                PestParseError::MissingToken { token: "expected return type in function type".to_string(), span: None }
             })?;
             
             // Process parameter tokens
@@ -127,7 +128,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                     Rule::param_type => {
                         // param_type contains a type_expr
                         let inner_type = param_token.into_inner().next().ok_or_else(|| {
-                            PestParseError::MissingToken("expected type_expr in param_type".to_string())
+                            PestParseError::MissingToken { token: "expected type_expr in param_type".to_string(), span: None }
                         })?;
                         param_types.push(ParamType::Simple(Box::new(build_type_expr(inner_type)?)));
                     }
@@ -136,18 +137,18 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                         let type_pair = param_token.into_inner()
                             .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
                             .ok_or_else(|| {
-                                PestParseError::MissingToken("expected type in variadic param".to_string())
+                                PestParseError::MissingToken { token: "expected type in variadic param".to_string(), span: None }
                             })?;
                         variadic_param_type = Some(Box::new(build_type_expr(type_pair)?));
                     }
                     Rule::WHITESPACE | Rule::COMMENT => {
                         // Skip whitespace and comments
-                    }
-                    _ => {
+                    }                    _ => {
                         return Err(PestParseError::UnexpectedRule {
                             expected: "param_type or variadic_param_type".to_string(),
                             found: format!("{:?}", param_token.as_rule()),
                             rule_text: param_token.as_str().to_string(),
+                            span: None
                         })
                     }
                 }
@@ -159,7 +160,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
         }
         Rule::resource_type => {
             let symbol_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
-                PestParseError::MissingToken("expected symbol in resource type".to_string())
+                PestParseError::MissingToken { token: "expected symbol in resource type".to_string(), span: None }
             })?;
             Ok(TypeExpr::Resource(build_symbol(symbol_pair)?))
         }
@@ -180,7 +181,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
             Ok(TypeExpr::Intersection(type_pairs?))
         }        Rule::literal_type => {
             let literal_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
-                PestParseError::MissingToken("expected literal in literal type".to_string())
+                PestParseError::MissingToken { token: "expected literal in literal type".to_string(), span: None }
             })?;
             use super::common::build_literal;
             Ok(TypeExpr::Literal(build_literal(literal_pair)?))
@@ -196,11 +197,11 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 }
                 _ => Ok(TypeExpr::Literal(literal))
             }
-        }
-        s => Err(PestParseError::UnexpectedRule {
+        }        s => Err(PestParseError::UnexpectedRule {
             expected: "valid type expression".to_string(),
             found: format!("{:?}", s),
             rule_text: actual_type_pair.as_str().to_string(),
+            span: None
         }),
     }
 }

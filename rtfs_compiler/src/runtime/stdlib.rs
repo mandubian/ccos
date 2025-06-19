@@ -204,11 +204,35 @@ impl StandardLibrary {
             arity: Arity::Exact(2),
             func: Self::filter,
         }));
-        
-        env.define(&Symbol("reduce".to_string()), Value::Function(Function::Builtin {
+          env.define(&Symbol("reduce".to_string()), Value::Function(Function::Builtin {
             name: "reduce".to_string(),
             arity: Arity::Range(2, 3),
             func: Self::reduce,
+        }));
+
+        // List functions
+        env.define(&Symbol("empty?".to_string()), Value::Function(Function::Builtin {
+            name: "empty?".to_string(),
+            arity: Arity::Exact(1),
+            func: Self::empty_p,
+        }));
+
+        env.define(&Symbol("cons".to_string()), Value::Function(Function::Builtin {
+            name: "cons".to_string(),
+            arity: Arity::Exact(2),
+            func: Self::cons,
+        }));
+
+        env.define(&Symbol("first".to_string()), Value::Function(Function::Builtin {
+            name: "first".to_string(),
+            arity: Arity::Exact(1),
+            func: Self::first,
+        }));
+
+        env.define(&Symbol("rest".to_string()), Value::Function(Function::Builtin {
+            name: "rest".to_string(),
+            arity: Arity::Exact(1),
+            func: Self::rest,
         }));
     }
       /// Load type predicate functions (int?, float?, string?, etc.)
@@ -350,6 +374,12 @@ impl StandardLibrary {
             name: "tool:http-fetch".to_string(),
             arity: Arity::Range(1, 2),
             func: Self::tool_http_fetch,
+        }));
+
+        env.define(&Symbol("tool:file-exists?".to_string()), Value::Function(Function::Builtin {
+            name: "tool:file-exists?".to_string(),
+            arity: Arity::Exact(1),
+            func: Self::tool_file_exists_p,
         }));
     }
     
@@ -1966,7 +1996,121 @@ impl StandardLibrary {
         let mut baseline = std::collections::HashMap::new();
         baseline.insert(MapKey::Keyword(Keyword("status".to_string())), Value::Keyword(Keyword("baseline-established".to_string())));
         baseline.insert(MapKey::Keyword(Keyword("timestamp".to_string())), Value::Integer(1640995200000));
-        
-        Ok(Value::Map(baseline))
+          Ok(Value::Map(baseline))
+    }
+
+    // List manipulation functions
+    fn empty_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "empty?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => Ok(Value::Boolean(v.is_empty())),
+            Value::Map(m) => Ok(Value::Boolean(m.is_empty())),
+            Value::String(s) => Ok(Value::Boolean(s.is_empty())),
+            Value::Nil => Ok(Value::Boolean(true)),
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector, map, string, or nil".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "empty?".to_string(),
+            }),
+        }
+    }
+
+    fn cons(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "cons".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let element = args[0].clone();
+        match &args[1] {
+            Value::Vector(v) => {
+                let mut new_vec = vec![element];
+                new_vec.extend(v.iter().cloned());
+                Ok(Value::Vector(new_vec))
+            },
+            Value::Nil => {
+                Ok(Value::Vector(vec![element]))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or nil".to_string(),
+                actual: args[1].type_name().to_string(),
+                operation: "cons".to_string(),
+            }),
+        }
+    }
+
+    fn first(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "first".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => {
+                if v.is_empty() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(v[0].clone())
+                }
+            },
+            Value::Nil => Ok(Value::Nil),
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or nil".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "first".to_string(),
+            }),
+        }
+    }
+
+    fn rest(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "rest".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => {
+                if v.is_empty() {
+                    Ok(Value::Vector(vec![]))
+                } else {
+                    Ok(Value::Vector(v[1..].to_vec()))
+                }
+            },
+            Value::Nil => Ok(Value::Vector(vec![])),
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or nil".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "rest".to_string(),
+            }),
+        }
+    }
+    
+    fn tool_file_exists_p(args: &[Value]) -> RuntimeResult<Value> {
+        if let Value::String(path) = &args[0] {
+            let exists = std::path::Path::new(path).exists();
+            Ok(Value::Boolean(exists))
+        } else {
+            Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "tool:file-exists?".to_string(),
+            })
+        }
     }
 }

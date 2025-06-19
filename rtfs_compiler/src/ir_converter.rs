@@ -307,10 +307,83 @@ impl IrConverter {
             ("symbol?", IrType::Function {
                 param_types: vec![IrType::Any],
                 variadic_param_type: None,
-                return_type: Box::new(IrType::Bool),
-            }),
+                return_type: Box::new(IrType::Bool),            }),
             ("keyword?", IrType::Function {
                 param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("empty?", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("even?", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("odd?", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("zero?", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("pos?", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("neg?", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Bool),
+            }),
+            ("inc", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),
+            ("dec", IrType::Function {
+                param_types: vec![IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Int),
+            }),            ("partition", IrType::Function {
+                param_types: vec![IrType::Int, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+            }),
+            ("first", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("rest", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("cons", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("concat", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("nth", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Int],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("contains?", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Bool),
             }),
@@ -580,31 +653,71 @@ impl IrConverter {
             else_branch,
             ir_type: result_type,
             source_location: None,
-        })
-    }
+        })    }
     
     /// Convert let expression with proper scope management
     fn convert_let(&mut self, let_expr: LetExpr) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let mut bindings = Vec::new();
-          // Enter new scope for let bindings
+        
+        // Enter new scope for let bindings
         self.enter_scope();
-          // Process bindings in order
+        
+        // Two-pass approach for recursive function bindings (similar to letrec)
+        let mut function_bindings = Vec::new();
+        let mut other_bindings = Vec::new();
+        
+        // Pass 1: Identify function bindings and create placeholders
         for binding in let_expr.bindings {
-            let binding_id = self.next_id();
-            
-            // Store pattern first to avoid borrow issues
-            let pattern_clone = binding.pattern.clone();
-            
-            // Convert init expression with current scope (which may include previous bindings)
+            if let Pattern::Symbol(symbol) = &binding.pattern {
+                if matches!(binding.value.as_ref(), Expression::Fn(_)) {
+                    let binding_id = self.next_id();
+                    
+                    // Create placeholder binding info for the function
+                    let binding_info = BindingInfo {
+                        name: symbol.0.clone(),
+                        binding_id,
+                        ir_type: IrType::Function {
+                            param_types: vec![IrType::Any], // Will be refined later
+                            variadic_param_type: None,
+                            return_type: Box::new(IrType::Any),
+                        },
+                        kind: BindingKind::Function,
+                    };
+                    
+                    // Add placeholder to scope immediately
+                    self.define_binding(symbol.0.clone(), binding_info);
+                    function_bindings.push((binding, binding_id));
+                } else {
+                    other_bindings.push(binding);
+                }
+            } else {
+                other_bindings.push(binding);
+            }
+        }
+        
+        // Pass 2: Process function bindings with placeholders in scope
+        for (binding, binding_id) in function_bindings {
             let init_expr = self.convert_expression(*binding.value)?;
-            let binding_type = init_expr.ir_type().unwrap_or(&IrType::Any);
-            
-            // Convert pattern to binding
+            let binding_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
             let pattern_node = self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
             
-            // Add binding to current scope AFTER converting the init expression
-            // This allows sequential bindings where later bindings can reference earlier ones
+            bindings.push(IrLetBinding {
+                pattern: pattern_node,
+                type_annotation: binding.type_annotation.map(|t| self.convert_type_annotation(t)).transpose()?,
+                init_expr,
+            });
+        }
+        
+        // Process non-function bindings sequentially
+        for binding in other_bindings {
+            let binding_id = self.next_id();
+            let pattern_clone = binding.pattern.clone();
+            let init_expr = self.convert_expression(*binding.value)?;
+            let binding_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
+            let pattern_node = self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
+            
+            // Add non-function binding to scope after converting init expression
             if let Pattern::Symbol(sym) = &pattern_clone {
                 let binding_info = BindingInfo {
                     name: sym.0.clone(),
@@ -627,7 +740,8 @@ impl IrConverter {
         for body_expr in let_expr.body {
             body_exprs.push(self.convert_expression(body_expr)?);
         }
-          // Exit scope        
+        
+        // Exit scope
         self.exit_scope();
         
         // Infer result type from last body expression
@@ -1017,25 +1131,21 @@ impl IrConverter {
                 IrType::Union(element_types)
             }
         };
-        
-        // Create a literal vector node (representing a vector literal)
-        Ok(IrNode::Literal {
+          // Create a vector IR node
+        Ok(IrNode::Vector {
             id,
-            value: Literal::Nil, // TODO: Create proper vector literal representation
+            elements,
             ir_type: IrType::Vector(Box::new(element_type)),
             source_location: None,
         })
     }
-    
-    fn convert_map(&mut self, map: HashMap<MapKey, Expression>) -> IrConversionResult<IrNode> {
+      fn convert_map(&mut self, map: HashMap<MapKey, Expression>) -> IrConversionResult<IrNode> {
         let id = self.next_id();
-        let mut converted_entries = Vec::new();
+        let mut ir_map_entries = Vec::new();
         let mut type_entries = Vec::new();
         
         for (key, value_expr) in map {
-            let value = self.convert_expression(value_expr)?;
-            
-            // Track type information for the map type
+            let value = self.convert_expression(value_expr)?;              // Track type information for the map type before consuming the key
             if let MapKey::Keyword(ref keyword) = key {
                 if let Some(value_type) = value.ir_type() {
                     type_entries.push(IrMapTypeEntry {
@@ -1045,8 +1155,32 @@ impl IrConverter {
                     });
                 }
             }
+
+            // Convert the key to an IR node (literal)
+            let key_node = match key {
+                MapKey::String(s) => IrNode::Literal {
+                    id: self.next_id(),
+                    value: Literal::String(s),
+                    ir_type: IrType::String,
+                    source_location: None,
+                },
+                MapKey::Keyword(k) => IrNode::Literal {
+                    id: self.next_id(),
+                    value: Literal::Keyword(k.clone()),
+                    ir_type: IrType::Keyword,
+                    source_location: None,
+                },                MapKey::Integer(i) => IrNode::Literal {
+                    id: self.next_id(),
+                    value: Literal::Integer(i),
+                    ir_type: IrType::Int,
+                    source_location: None,
+                },
+            };
             
-            converted_entries.push((key, value));
+            ir_map_entries.push(IrMapEntry {
+                key: key_node,
+                value,
+            });
         }
         
         let map_type = IrType::Map {
@@ -1054,10 +1188,10 @@ impl IrConverter {
             wildcard: None,
         };
         
-        // Create a literal map node (representing a map literal)
-        Ok(IrNode::Literal {
+        // Create a map IR node
+        Ok(IrNode::Map {
             id,
-            value: Literal::Nil, // TODO: Create proper map literal representation
+            entries: ir_map_entries,
             ir_type: map_type,
             source_location: None,
         })

@@ -150,7 +150,7 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // Added wildcard
 
 // --- Special Forms ---
-log_step_expr = { "(" ~ log_step_keyword ~ ":id" ~ string ~ expression ~ ")" }
+log_step_expr = { "(" ~ log_step_keyword ~ keyword? ~ expression* ~ ")" }
 
 special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.

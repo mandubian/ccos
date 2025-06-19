@@ -14,6 +14,9 @@ use std::cell::RefCell;
 pub struct Evaluator {
     global_env: Rc<Environment>,
     agent_discovery: Box<dyn AgentDiscovery>,
+    recursion_depth: usize,
+    max_recursion_depth: usize,
+    task_context: Option<Value>,
 }
 
 // Helper function to check if two values are equivalent
@@ -40,6 +43,9 @@ impl Evaluator {
         Evaluator {
             global_env: Rc::new(global_env),
             agent_discovery: Box::new(NoOpAgentDiscovery),
+            recursion_depth: 0,
+            max_recursion_depth: 1000,
+            task_context: None,
         }
     }
 
@@ -49,8 +55,18 @@ impl Evaluator {
         Evaluator {
             global_env: Rc::new(global_env),
             agent_discovery,
+            recursion_depth: 0,
+            max_recursion_depth: 1000,
+            task_context: None,
         }
-    }    /// Evaluate an expression in a given environment
+    }
+
+    /// Set the task context for the evaluator
+    pub fn set_task_context(&mut self, context: Value) {
+        self.task_context = Some(context);
+    }
+
+    /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
             Expression::Literal(lit) => self.eval_literal(lit),            Expression::Symbol(sym) => env.lookup(sym),
@@ -855,55 +871,86 @@ impl Evaluator {
         }
     }
       /// Evaluate a task context access expression (@symbol or @keyword)
-    fn eval_task_context(&self, task_context: &crate::ast::TaskContextAccess, _env: &mut Environment) -> RuntimeResult<Value> {
-        // For testing, provide a mock context with expected values
-        match &task_context.context_key {
-            crate::ast::ContextKey::Symbol(symbol) => {
-                match symbol.0.as_str() {
-                    "intent" => {
-                        // Return a mock intent map with common task context keys
-                        let mut intent_map = HashMap::new();
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("batch-size".to_string())), Value::Integer(50));
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("output-format".to_string())), Value::String("json".to_string()));
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("max-concurrency".to_string())), Value::Integer(4));
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("timeout-ms".to_string())), Value::Integer(5000));
-                        Ok(Value::Map(intent_map))
-                    },
-                    _ => {
-                        // Return a default value for unknown symbols
-                        Ok(Value::String(format!("@{}", symbol.0)))
-                    }
-                }
-            },
-            crate::ast::ContextKey::Keyword(keyword) => {
-                match keyword.0.as_str() {
-                    "intent" => {
-                        // Return a mock intent map with common task context keys
-                        let mut intent_map = HashMap::new();
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("batch-size".to_string())), Value::Integer(50));
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("output-format".to_string())), Value::String("json".to_string()));
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("max-concurrency".to_string())), Value::Integer(4));
-                        intent_map.insert(crate::ast::MapKey::Keyword(crate::ast::Keyword("timeout-ms".to_string())), Value::Integer(5000));
-                        Ok(Value::Map(intent_map))
-                    },
-                    _ => {
-                        // Return a default value for unknown keywords
-                        Ok(Value::String(format!("@{}", keyword.0)))
-                    }
-                }
-            },
-        }
+    fn eval_task_context(&self, task_context_access: &TaskContextAccess, _env: &mut Environment) -> RuntimeResult<Value> {
+        let context_map = match &self.task_context {
+            Some(Value::Map(map)) => map,
+            Some(_) => return Err(RuntimeError::TypeError {
+                expected: "Map".to_string(),
+                actual: self.task_context.as_ref().unwrap().type_name().to_string(),
+                operation: "Accessing task context".to_string(),
+            }),
+            None => return Ok(Value::Nil), // No context available
+        };
+
+        let key_to_lookup = match &task_context_access.context_key {
+            ContextKey::Symbol(s) => MapKey::Keyword(Keyword(s.0.clone())),
+            ContextKey::Keyword(k) => MapKey::Keyword(k.clone()),
+        };
+
+        Ok(context_map.get(&key_to_lookup).cloned().unwrap_or(Value::Nil))
     }
     
     /// Bind a pattern to a value in an environment (placeholder implementation)
     fn bind_pattern(&self, pattern: &crate::ast::Pattern, value: &Value, env: &mut Environment) -> RuntimeResult<()> {
-        // For now, only handle simple symbol patterns
         match pattern {
             crate::ast::Pattern::Symbol(symbol) => {
                 env.define(symbol, value.clone());
                 Ok(())
             },
-            _ => Err(RuntimeError::NotImplemented("Complex pattern binding not yet implemented".to_string())),
+            crate::ast::Pattern::Wildcard => {
+                // Wildcard does nothing, successfully "matches" any value.
+                Ok(())
+            },
+            crate::ast::Pattern::VectorDestructuring{ elements, rest, as_symbol } => {
+                if let Value::Vector(values) = value {
+                    // Handle :as binding first
+                    if let Some(sym) = as_symbol {
+                        env.define(sym, value.clone());
+                    }
+
+                    if let Some(rest_symbol) = rest {
+                        let required_len = elements.len();
+                        if values.len() < required_len {
+                            return Err(RuntimeError::MatchError(format!(
+                                "Pattern vector length mismatch: expected at least {}, got {}",
+                                required_len,
+                                values.len()
+                            )));
+                        }
+
+                        // Bind fixed part
+                        for (p, v) in elements.iter().zip(values.iter()) {
+                            self.bind_pattern(p, v, env)?;
+                        }
+
+                        // Bind rest
+                        let rest_values = values.iter().skip(required_len).cloned().collect();
+                        env.define(rest_symbol, Value::Vector(rest_values));
+                        return Ok(());
+
+                    } else {
+                        // Handle fixed-length vector patterns
+                        if elements.len() != values.len() {
+                            return Err(RuntimeError::MatchError(format!(
+                                "Pattern vector length mismatch: expected {}, got {}",
+                                elements.len(),
+                                values.len()
+                            )));
+                        }
+                        for (p, v) in elements.iter().zip(values.iter()) {
+                            self.bind_pattern(p, v, env)?;
+                        }
+                        Ok(())
+                    }
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "vector".to_string(),
+                        actual: value.type_name().to_string(),
+                        operation: "vector destructuring".to_string(),
+                    })
+                }
+            },
+            _ => Err(RuntimeError::NotImplemented(format!("Complex pattern binding not yet implemented for pattern: {:?}", pattern))),
         }
     }
     
@@ -921,14 +968,74 @@ impl Evaluator {
     
     /// Match a match pattern against a value (placeholder implementation)
     fn match_match_pattern(&self, pattern: &crate::ast::MatchPattern, value: &Value, env: &mut Environment) -> RuntimeResult<bool> {
-        // For now, only handle simple symbol patterns
         match pattern {
             crate::ast::MatchPattern::Symbol(symbol) => {
-                // Symbols always match, binding happens elsewhere
                 env.define(symbol, value.clone());
                 Ok(true)
             },
-            _ => Err(RuntimeError::NotImplemented("Complex match pattern matching not yet implemented".to_string())),
+            crate::ast::MatchPattern::Wildcard => {
+                Ok(true) // Wildcard always matches
+            },
+            crate::ast::MatchPattern::Literal(lit_pattern) => {
+                let lit_value = self.eval_literal(lit_pattern)?;
+                Ok(lit_value == *value)
+            },
+            crate::ast::MatchPattern::Keyword(keyword_pattern) => {
+                Ok(*value == Value::Keyword(keyword_pattern.clone()))
+            },
+            crate::ast::MatchPattern::Vector { elements, rest } => {
+                if let Value::Vector(values) = value {
+                    if let Some(rest_symbol) = rest {
+                        // Pattern with a rest part (e.g., [a b ..c])
+                        if values.len() < elements.len() {
+                            return Ok(false); // Not enough values to match fixed part
+                        }
+                        // Match fixed elements
+                        let mut temp_env = env.clone();
+                        let mut all_matched = true;
+                        for (p, v) in elements.iter().zip(values.iter()) {
+                            if !self.match_match_pattern(p, v, &mut temp_env)? {
+                                all_matched = false;
+                                break;
+                            }
+                        }
+
+                        if all_matched {
+                            *env = temp_env;
+                            // Bind rest
+                            let rest_values = values.iter().skip(elements.len()).cloned().collect();
+                            env.define(rest_symbol, Value::Vector(rest_values));
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    } else {
+                        // Fixed-length vector pattern
+                        if elements.len() != values.len() {
+                            return Ok(false);
+                        }
+                        
+                        let mut temp_env = env.clone();
+                        let mut all_matched = true;
+                        for (p, v) in elements.iter().zip(values.iter()) {
+                            if !self.match_match_pattern(p, v, &mut temp_env)? {
+                                all_matched = false;
+                                break;
+                            }
+                        }
+
+                        if all_matched {
+                            *env = temp_env;
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                } else {
+                    Ok(false) // Pattern is a vector, but value is not
+                }
+            },
+            _ => Err(RuntimeError::NotImplemented(format!("Complex match pattern matching not yet implemented for: {:?}", pattern))),
         }
     }
     
@@ -948,23 +1055,6 @@ impl Evaluator {
         // For now, just return the value as-is
         // TODO: Implement actual type coercion logic
         Ok(value)
-    }
-
-    // Helper function to check if two values are equivalent
-    // This is a simplified version for the fixpoint algorithm
-    fn values_equivalent(a: &Value, b: &Value) -> bool {
-        match (a, b) {
-            (Value::Nil, Value::Nil) => true,
-            (Value::Function(Function::UserDefined { params: p1, body: b1, .. }), 
-             Value::Function(Function::UserDefined { params: p2, body: b2, .. })) => {
-                p1 == p2 && b1 == b2
-            },
-            (Value::Function(Function::Builtin { name: n1, .. }), 
-             Value::Function(Function::Builtin { name: n2, .. })) => {
-                n1 == n2
-            },
-            _ => false, // Different types or can't compare
-        }
     }
 }
 
