@@ -106,7 +106,7 @@
             (tool:log "Input validation failed:" (:message validation-error))
             [:error {:type :error/invalid-inputs
                      :message "Pipeline inputs failed validation"
-                     :data validation-error}]))))
+                     :data validation-error}])))))
 
   :execution-trace []
 )
@@ -174,7 +174,7 @@
       ;; Flatten and validate all loaded data
       (let [flattened-results (flatten-results chunk-results)
             validation-results (validate-loaded-data flattened-results)]
-        
+
         (match validation-results
           [:ok validated-data] [:ok validated-data]
           [:error validation-error] [:error validation-error])))
@@ -356,8 +356,7 @@
 (defn validate-pipeline-inputs [sources output-format batch-size max-parallel]
   (match [sources output-format batch-size max-parallel]
     [sources :when (and (vector? sources) (> (count sources) 0))
-     format :when (contains? #{:json :csv :parquet} format)
-     batch :when (and (integer? batch) (>= batch 100) (<= batch 10000))
+     format :when (and (integer? batch) (>= batch 100) (<= batch 10000))
      parallel :when (and (integer? parallel) (>= parallel 1) (<= parallel 20))]
     [:ok {:sources sources :output-format format :batch-size batch :max-parallel parallel}]
     
@@ -391,16 +390,5 @@
       :include-metadata true
       :chunk-size 50000
     }
-  })
-
-; This comprehensive example demonstrates:
-; 1. Complex task definition with detailed contracts
-; 2. Multi-level error handling and recovery strategies
-; 3. Parallel processing with resource management
-; 4. Advanced pattern matching and data transformations
-; 5. Resource lifecycle management with automatic cleanup
-; 6. Comprehensive validation and quality metrics
-; 7. Flexible output generation with multiple formats
-; 8. Performance monitoring and detailed logging
-; 9. Configuration management and environment adaptation
-; 10. Production-ready error reporting and recovery
+  }
+)

@@ -1,8 +1,11 @@
 (do
   ; Complex mathematical computation example
   (let [numbers [1 2 3 4 5 6 7 8 9 10]
+        _ (log-step :info "numbers" numbers)
         squared (map (fn [x] (* x x)) numbers)
+        _ (log-step :info "squared" squared)
         sum-squared (reduce + 0 squared)
+        _ (log-step :info "sum-squared" sum-squared)
         factorial-5 (let [fact (fn [n acc]
                                  (if (= n 0)
                                    acc

@@ -1,0 +1,19 @@
+(let [empty-vec []
+      single-item [42]
+      multi-items [1 2 3 4 5]]
+  (and
+    (empty? empty-vec)
+    (not (empty? single-item))
+    (not (empty? multi-items))
+    (= (first single-item) 42)
+    (= (first multi-items) 1)
+    (= (rest single-item) [])
+    (= (rest multi-items) [2 3 4 5])
+    (= (cons 0 multi-items) [0 1 2 3 4 5])
+    (= (cons "hello" []) ["hello"])
+    (= (first (cons 99 [1 2])) 99)
+    (= (rest (cons 99 [1 2])) [1 2])
+    (empty? (rest [42]))
+    (= (first []) nil)
+    (= (rest []) [])
+    (empty? (rest []))))

@@ -97,9 +97,18 @@ pub enum RuntimeError {
     
     /// Value is not callable
     NotCallable(String),
-    
-    /// Internal runtime errors (should not normally occur)
+
+    /// Internal runtime error, e.g. for logic errors in the interpreter
     InternalError(String),
+    
+    /// Internal error for tail call optimization
+    TailCall {
+        function: Value,
+        args: Vec<Value>,
+    },
+    
+    /// Stack overflow error
+    StackOverflow(String),
 }
 
 impl fmt::Display for RuntimeError {
@@ -171,11 +180,44 @@ impl fmt::Display for RuntimeError {
             RuntimeError::InternalError(msg) => {
                 write!(f, "Internal error: {}", msg)
             },
+            RuntimeError::TailCall { function, args } => {
+                write!(f, "Tail call to function {:?} with args {:?}", function, args)
+            },
+            RuntimeError::StackOverflow(msg) => {
+                write!(f, "Stack overflow: {}", msg)
+            },
         }
     }
 }
 
 impl std::error::Error for RuntimeError {}
+
+impl From<crate::ir_converter::IrConversionError> for RuntimeError {
+    fn from(err: crate::ir_converter::IrConversionError) -> Self {
+        use crate::ir_converter::IrConversionError;
+        match err {
+            IrConversionError::UndefinedSymbol { symbol, .. } => {
+                RuntimeError::UndefinedSymbol(crate::ast::Symbol(symbol))
+            }
+            IrConversionError::TypeMismatch { expected, found, .. } => {
+                RuntimeError::TypeError {
+                    expected: format!("{:?}", expected),
+                    actual: format!("{:?}", found),
+                    operation: "IR conversion".to_string(),
+                }
+            }
+            IrConversionError::InvalidPattern { message, .. } => {
+                RuntimeError::InvalidProgram(format!("Invalid pattern during IR conversion: {}", message))
+            }
+            IrConversionError::InvalidTypeAnnotation { message, .. } => {
+                RuntimeError::InvalidProgram(format!("Invalid type annotation during IR conversion: {}", message))
+            }
+            IrConversionError::InternalError { message } => {
+                RuntimeError::InternalError(format!("IR converter internal error: {}", message))
+            }
+        }
+    }
+}
 
 /// Convert runtime errors to RTFS error values
 impl RuntimeError {

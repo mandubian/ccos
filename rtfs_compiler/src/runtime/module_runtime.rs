@@ -559,7 +559,7 @@ impl ModuleAwareRuntime {
             _ => {
                 // Regular IR node execution
                 let mut env = IrEnvironment::new();
-                self.ir_runtime.execute_node(form, &mut env)
+                self.ir_runtime.execute_node(form, &mut env, false)
             }
         }
     }
@@ -575,7 +575,7 @@ impl ModuleAwareRuntime {
             for definition in definitions {
                 match definition {
                     IrNode::FunctionDef { name: func_name, lambda, .. } => {
-                        let func_value = self.ir_runtime.execute_node(lambda, &mut module_env)?;
+                        let func_value = self.ir_runtime.execute_node(lambda, &mut module_env, false)?;
                         let binding_id = module_env.binding_count() as u64 + 40000;
                         module_env.define(binding_id, func_value.clone());
 
@@ -591,7 +591,7 @@ impl ModuleAwareRuntime {
                         }
                     }
                     IrNode::VariableDef { name: var_name, init_expr, .. } => {
-                        let var_value = self.ir_runtime.execute_node(init_expr, &mut module_env)?;
+                        let var_value = self.ir_runtime.execute_node(init_expr, &mut module_env, false)?;
                         let binding_id = module_env.binding_count() as u64 + 50000;
                         module_env.define(binding_id, var_value.clone());
 
@@ -607,7 +607,7 @@ impl ModuleAwareRuntime {
                         }
                     }
                     _ => {
-                        self.ir_runtime.execute_node(definition, &mut module_env)?;
+                        self.ir_runtime.execute_node(definition, &mut module_env, false)?;
                     }
                 }
             }

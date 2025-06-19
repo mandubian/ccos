@@ -51,6 +51,14 @@ pub enum Function {
         body: Vec<crate::ast::Expression>,
         closure: crate::runtime::Environment, // Captured environment
     },
+    
+    /// IR-based lambda functions (for IR runtime)
+    IrLambda {
+        params: Vec<crate::ir::IrNode>,
+        variadic_param: Option<Box<crate::ir::IrNode>>,
+        body: Vec<crate::ir::IrNode>,
+        closure_env: Box<crate::runtime::ir_runtime::IrEnvironment>,
+    },
 }
 
 /// Function arity specification

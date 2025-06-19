@@ -4,13 +4,14 @@ use super::special_forms::{
     build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
     build_with_resource_expr,
 };
-use super::{PestParseError, Rule}; // Added PestParseError
+use super::{PestParseError, Rule, pair_to_source_span}; // Added PestParseError and pair_to_source_span
 use crate::ast::{Expression, MapKey, TaskContextAccess, ContextKey, Symbol};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
 pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestParseError> {
-    // Drill down through silent rules like \\\'expression\\\' or \\\'special_form\\\'
+    // Drill down through silent rules like \\'expression\\' or \\'special_form\\'
+    let original_pair_for_span = pair.clone(); // Clone for potential error reporting at the original level
     loop {
         let rule = pair.as_rule();
         if rule == Rule::expression || rule == Rule::special_form {
@@ -18,14 +19,17 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
             if let Some(next) = inner.next() {
                 pair = next;
             } else {
-                return Err(PestParseError::InvalidInput(
-                    "Expected inner rule for expression/special_form".to_string(),
-                ));
+                return Err(PestParseError::InvalidInput {
+                    message: "Expected inner rule for expression/special_form".to_string(),
+                    span: Some(pair_to_source_span(&original_pair_for_span))
+                });
             }
         } else {
             break;
         }
-    }    match pair.as_rule() {
+    }
+    let current_pair_for_span = pair.clone(); // Clone for error reporting at the current, drilled-down level
+    match pair.as_rule() {
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
         Rule::task_context_access => Ok(Expression::TaskContext(build_task_context_access(pair)?)),
@@ -35,34 +39,19 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         Rule::map => Ok(Expression::Map(build_map(pair)?)),
-        Rule::let_expr => Ok(Expression::Let(build_let_expr(pair.into_inner())?)),
-        Rule::if_expr => Ok(Expression::If(build_if_expr(pair.into_inner())?)),
+        Rule::let_expr => Ok(Expression::Let(build_let_expr(pair)?)),
+        Rule::if_expr => Ok(Expression::If(build_if_expr(pair)?)),
         Rule::do_expr => Ok(Expression::Do(build_do_expr(pair.into_inner())?)),
-        Rule::fn_expr => Ok(Expression::Fn(build_fn_expr(pair.into_inner())?)),
-        Rule::def_expr => Ok(Expression::Def(Box::new(build_def_expr(
-            pair.into_inner(),
-        )?))),
-        Rule::defn_expr => Ok(Expression::Defn(Box::new(build_defn_expr(
-            pair.into_inner(),
-        )?))),
-        Rule::parallel_expr => Ok(Expression::Parallel(build_parallel_expr(
-            pair.into_inner(),
-        )?)),
-        Rule::with_resource_expr => Ok(Expression::WithResource(build_with_resource_expr(
-            pair.into_inner(),
-        )?)),
-        Rule::try_catch_expr => Ok(Expression::TryCatch(build_try_catch_expr(
-            pair.into_inner(),
-        )?)),
-        Rule::match_expr => Ok(Expression::Match(Box::new(build_match_expr(
-            pair.into_inner(),
-        )?))),        Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(
-            pair.into_inner(),
-        )?))),
-        Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(
-            pair.into_inner(),
-        )?)),
-        Rule::list => {
+        Rule::fn_expr => Ok(Expression::Fn(build_fn_expr(pair)?)),
+        Rule::def_expr => Ok(Expression::Def(Box::new(build_def_expr(pair)?))),
+        Rule::defn_expr => Ok(Expression::Defn(Box::new(build_defn_expr(pair)?))),
+        Rule::parallel_expr => Ok(Expression::Parallel(build_parallel_expr(pair)?)),
+        Rule::with_resource_expr => Ok(Expression::WithResource(build_with_resource_expr(pair)?)),
+        Rule::try_catch_expr => Ok(Expression::TryCatch(build_try_catch_expr(pair)?)),
+        Rule::match_expr => Ok(Expression::Match(Box::new(build_match_expr(pair)?))),
+        Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(pair)?))),
+        Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(pair)?)),        Rule::list => {
+            let _list_pair_span = pair_to_source_span(&pair);
             let mut inner_pairs = pair.into_inner().peekable();
 
             if inner_pairs.peek().is_none() {
@@ -101,75 +90,93 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                         Ok(Expression::List(elements))
                     }
                 }
-            }        }
-        Rule::WHEN => Err(PestParseError::InvalidInput(
-            "'when' keyword found in unexpected context - should only appear in match expressions".to_string()
-        )),
-        rule => Err(PestParseError::UnsupportedRule(format!(
-            "build_expression not implemented for rule: {:?} - {}",
-            rule,
-            pair.as_str()
-        ))),
+            }
+        }
+        Rule::WHEN => Err(PestParseError::InvalidInput {
+            message: "'when' keyword found in unexpected context - should only appear in match expressions".to_string(),
+            span: Some(pair_to_source_span(&current_pair_for_span))
+        }),
+        rule => Err(PestParseError::UnsupportedRule {
+            rule: format!(
+                "build_expression not implemented for rule: {:?} - {}",
+                rule,
+                current_pair_for_span.as_str()
+            ),
+            span: Some(pair_to_source_span(&current_pair_for_span))
+        }),
     }
 }
 
 pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>, PestParseError> {
     if pair.as_rule() != Rule::map {
-        return Err(PestParseError::InvalidInput(format!(
-            "Expected Rule::map, found {:?} for build_map",
-            pair.as_rule()
-        )));
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected Rule::map, found {:?} for build_map",
+                pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&pair))
+        });
     }
-    let mut map = HashMap::new();
+    // let map_span = pair_to_source_span(&pair); // This was unused
+    let mut map_data = HashMap::new();
     let mut map_content = pair.into_inner();
 
     while let Some(entry_pair) = map_content.next() {
         if entry_pair.as_rule() == Rule::WHITESPACE || entry_pair.as_rule() == Rule::COMMENT {
             continue;
         }
-
+        let entry_span = pair_to_source_span(&entry_pair);
         if entry_pair.as_rule() != Rule::map_entry {
-            return Err(PestParseError::InvalidInput(format!(
-                "Expected map_entry inside map, found {:?}",
-                entry_pair.as_rule()
-            )));
+            return Err(PestParseError::InvalidInput {
+                message: format!(
+                    "Expected map_entry inside map, found {:?}",
+                    entry_pair.as_rule()
+                ),
+                span: Some(entry_span)
+            });
         }
         let mut entry_inner = entry_pair.into_inner();
         let key_pair = entry_inner
             .next()
-            .ok_or_else(|| PestParseError::InvalidInput("Map entry missing key".to_string()))?;
+            .ok_or_else(|| PestParseError::InvalidInput { message: "Map entry missing key".to_string(), span: Some(entry_span.clone()) })?;
         let value_pair = entry_inner
             .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-            .ok_or_else(|| PestParseError::InvalidInput("Map entry missing value".to_string()))?;        let key = build_map_key(key_pair)?;
+            .ok_or_else(|| PestParseError::InvalidInput { message: "Map entry missing value".to_string(), span: Some(entry_span) })?;
+        let key = build_map_key(key_pair)?;
         let value = build_expression(value_pair)?;
-        map.insert(key, value);
+        map_data.insert(key, value);
     }
-    Ok(map)
+    Ok(map_data)
 }
 
 pub(super) fn build_task_context_access(pair: Pair<Rule>) -> Result<TaskContextAccess, PestParseError> {
     if pair.as_rule() != Rule::task_context_access {
-        return Err(PestParseError::InvalidInput(format!(
-            "Expected Rule::task_context_access, found {:?}",
-            pair.as_rule()
-        )));
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected Rule::task_context_access, found {:?}",
+                pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&pair))
+        });
     }
     
+    let pair_span = pair_to_source_span(&pair); // For the case where inner_pair is None
     let inner_pair = pair
         .into_inner()
         .next()
-        .ok_or_else(|| PestParseError::MissingToken("task_context_access inner".to_string()))?;
+        .ok_or_else(|| PestParseError::MissingToken { token: "task_context_access inner".to_string(), span: Some(pair_span) })?;
     
+    let inner_pair_span = pair_to_source_span(&inner_pair);
     let context_key = match inner_pair.as_rule() {
         Rule::identifier => {
             // Create a Symbol directly from the identifier string
             ContextKey::Symbol(Symbol(inner_pair.as_str().to_string()))
         },
         Rule::keyword => ContextKey::Keyword(build_keyword(inner_pair)?),
-        rule => return Err(PestParseError::InvalidInput(format!(
+        rule => return Err(PestParseError::InvalidInput { message: format!(
             "Expected identifier or keyword in task_context_access, found {:?}",
             rule
-        ))),
+        ), span: Some(inner_pair_span) }),
     };
     
     Ok(TaskContextAccess { context_key })

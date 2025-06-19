@@ -77,7 +77,12 @@
                 :failed-batches (count failed-batches)
                 :successful-results successful-batches
                 :errors failed-batches
-              })))))
-  
+              }
+            )
+          )
+        )
+      )
+    )
+  )
   :execution-trace []
 )
