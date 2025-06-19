@@ -114,12 +114,10 @@ map_key ::= keyword | string | integer (* Allow other hashable literals? TBD *)
 (* --- Core Forms (Expressions within :plan or function bodies) --- *)
 expression ::= literal
              | variable
-             | task_context_access
              | list
              | vector
              | map
              | function_call
-             | invoke_capability_expr (* Added for invoking external/agent capabilities *)
              | special_form
 
 invoke_capability_expr ::= "(" "invoke" capability_target capability_args_map [invoke_options_map]? ")"
@@ -262,7 +260,7 @@ type_variable ::= symbol (* Placeholder for potential future generics *)
 (* --- Comments --- *)
 comment ::= ";" /* any character until end of line */
 
-(* Base definitions like letter, digit assumed *) 
+(* Base definitions like letter, digit assumed *)
 letter ::= "a".."z" | "A".."Z"
 digit ::= "0".."9"
 ```
@@ -273,12 +271,12 @@ digit ::= "0".."9"
 *   **Keywords:** Clarified that keywords can be formed from identifiers or quoted strings (`:"string key"`). Added `string_inner` definition.
 *   **Strings:** Added basic `escape_sequence` definition including `\uXXXX`.
 *   **Map Keys:** Explicitly allowed `keyword`, `string`, `integer` as map keys, marked as TBD for other literals.
-*   **Variable:** Updated `variable` rule to include `task_context_access` and `namespaced_symbol`.
+*   **Variable:** Updated `variable` rule to include `namespaced_symbol`.
 *   **Namespaced Symbols:** Refined `namespaced_symbol` rule to better reflect `ns.part.part/symbol` structure. Adjusted `identifier_chars` slightly.
 *   **Function Definitions (`fn`, `defn`):** Added optional `& rest` parameter for variadic functions. Added `defn` form.
 *   **`try/catch`:** Added optional `finally` clause.
 *   **`match`:** Added optional `when` guard expression to clauses. Added wildcard `_` and `:as` binding patterns.
-*   **Task Context:** Added `task_context_access` rule for `@intent` etc.
+*   **Task Context:** Removed the special `task_context_access` rule. Access will be through a standard library function.
 *   **Types:** Refactored `type_expr` slightly for clarity. Defined `fn_param_list` for function types. Added `[:* Type]` for open map schemas. Added `array_type` and `shape`.
 *   **Modules:** Added `module_definition`, `module_name`, `module_option`, `exports_option`, `module_form`, `import_form`, `import_option`, `as_option`, `only_option`. Updated `program` entry point. Updated `variable` and `expression` to include module-related forms. Changed `def` and `defn` to use `symbol` instead of `variable` as the thing being defined.
 *   **Comments:** Added basic single-line comment rule.

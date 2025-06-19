@@ -7,10 +7,12 @@ use crate::parser::parse_expression;
 use crate::runtime::{Runtime, RuntimeStrategy};
 use crate::ir_converter::IrConverter;
 use crate::enhanced_ir_optimizer::EnhancedOptimizationPipeline;
+use crate::runtime::module_runtime::ModuleRegistry;
 
 /// RTFS Read-Eval-Print Loop (REPL) interface
-pub struct RtfsRepl {
-    runtime: Runtime,
+pub struct RtfsRepl<'a> {
+    runtime: Runtime<'a>,
+    module_registry: &'a ModuleRegistry,
     context: ReplContext,
     history: Vec<String>,
     optimizer: Option<EnhancedOptimizationPipeline>,
@@ -39,17 +41,19 @@ impl Default for ReplContext {
     }
 }
 
-impl RtfsRepl {
-    pub fn new() -> Self {
+impl<'a> RtfsRepl<'a> {
+    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
         Self {
-            runtime: Runtime::with_strategy(RuntimeStrategy::Ast),
+            runtime: Runtime::with_strategy(RuntimeStrategy::Ast, module_registry),
+            module_registry,
             context: ReplContext::default(),
             history: Vec::new(),
             optimizer: Some(EnhancedOptimizationPipeline::new()),
         }
-    }    pub fn with_runtime_strategy(strategy: RuntimeStrategy) -> Self {
+    }    pub fn with_runtime_strategy(strategy: RuntimeStrategy, module_registry: &'a ModuleRegistry) -> Self {
         Self {
-            runtime: Runtime::with_strategy(strategy.clone()),
+            runtime: Runtime::with_strategy(strategy.clone(), module_registry),
+            module_registry,
             context: ReplContext {
                 runtime_strategy: strategy,
                 ..Default::default()
@@ -134,17 +138,17 @@ impl RtfsRepl {
             }
             ":runtime-ast" => {
                 self.context.runtime_strategy = RuntimeStrategy::Ast;
-                self.runtime = Runtime::with_strategy(RuntimeStrategy::Ast);
+                self.runtime = Runtime::with_strategy(RuntimeStrategy::Ast, self.module_registry);
                 println!("🔄 Switched to AST runtime");
             }
             ":runtime-ir" => {
                 self.context.runtime_strategy = RuntimeStrategy::Ir;
-                self.runtime = Runtime::with_strategy(RuntimeStrategy::Ir);
+                self.runtime = Runtime::with_strategy(RuntimeStrategy::Ir, self.module_registry);
                 println!("🔄 Switched to IR runtime");
             }
             ":runtime-fallback" => {
                 self.context.runtime_strategy = RuntimeStrategy::IrWithFallback;
-                self.runtime = Runtime::with_strategy(RuntimeStrategy::IrWithFallback);
+                self.runtime = Runtime::with_strategy(RuntimeStrategy::IrWithFallback, self.module_registry);
                 println!("🔄 Switched to IR with AST fallback runtime");
             }
             ":test" => {
@@ -221,7 +225,7 @@ impl RtfsRepl {
 
                 // Convert to IR if needed
                 if self.context.show_ir || self.context.show_optimizations {
-                    let mut converter = IrConverter::new();
+                    let mut converter = IrConverter::with_module_registry(self.module_registry);
                     match converter.convert(&ast) {
                         Ok(ir) => {
                             if self.context.show_ir {
@@ -376,9 +380,10 @@ impl RtfsRepl {
 }
 
 /// Built-in testing framework for RTFS
-pub struct RtfsTestFramework {
+pub struct RtfsTestFramework<'a> {
     tests: Vec<TestCase>,
-    runtime: Runtime,
+    runtime: Runtime<'a>,
+    module_registry: &'a ModuleRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -399,11 +404,12 @@ pub enum TestExpectation {
     Custom(fn(&str) -> bool), // Custom validation function (not serializable)
 }
 
-impl RtfsTestFramework {
-    pub fn new() -> Self {
+impl<'a> RtfsTestFramework<'a> {
+    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
         Self {
             tests: Vec::new(),
-            runtime: Runtime::with_strategy(RuntimeStrategy::Ast),
+            runtime: Runtime::with_strategy(RuntimeStrategy::Ast, module_registry),
+            module_registry,
         }
     }
 
@@ -534,7 +540,7 @@ impl RtfsTestFramework {
         println!("🧪 Running {} tests with tag '{}'...", filtered_tests.len(), tag);
         
         // Create temporary test framework with filtered tests
-        let mut temp_framework = RtfsTestFramework::new();
+        let mut temp_framework = RtfsTestFramework::new(self.module_registry);
         for test in filtered_tests {
             temp_framework.add_test(test.clone());
         }
@@ -614,7 +620,8 @@ pub fn run_development_tooling_demo() {
 }
 
 fn demo_testing_framework() {
-    let mut framework = RtfsTestFramework::new();
+    let module_registry = ModuleRegistry::new();
+    let mut framework = RtfsTestFramework::new(&module_registry);
     
     // Add comprehensive test suite
     framework.add_basic_test("arithmetic_add", "(+ 1 2 3)", "6");
@@ -665,5 +672,30 @@ fn demo_repl_interface() {
     println!("   ✅ Integer(5)");
     
     println!("\n   To start interactive REPL, use:");
-    println!("   RtfsRepl::new().run()");
+    println!("   let module_registry = ModuleRegistry::new();");
+    println!("   RtfsRepl::new(&module_registry).run()");
+}
+
+pub fn run_all_tests_with_framework() {
+    let module_registry = ModuleRegistry::new();
+    let mut framework = RtfsTestFramework::new(&module_registry);
+
+    // Add tests
+    framework.add_basic_test("Addition", "(+ 1 2)", "3");
+    framework.add_basic_test("Subtraction", "(- 5 3)", "2");
+    framework.add_basic_test("Multiplication", "(* 4 2)", "8");
+    framework.add_basic_test("Division", "(/ 10 2)", "5");
+    
+    // Add error test cases
+    framework.add_test(TestCase {
+        name: "division_by_zero".to_string(),
+        description: "Test division by zero error handling".to_string(),
+        code: "(/ 1 0)".to_string(),
+        expected: TestExpectation::RuntimeError,
+        tags: vec!["error".to_string(), "arithmetic".to_string()],
+    });
+    
+    // Run all tests
+    let results = framework.run_all_tests();
+    results.print_summary();
 }

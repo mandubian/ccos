@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::*;
 use crate::ir::*;
+use crate::runtime::module_runtime::{ModuleRegistry, self};
+use crate::runtime::RuntimeError;
 
 /// Error types for IR conversion
 #[derive(Debug, Clone, PartialEq)]
@@ -98,16 +100,16 @@ pub struct TypeConstraint {
 }
 
 /// Main AST to IR converter with complete implementation
-pub struct IrConverter {
+pub struct IrConverter<'a> {
     next_node_id: NodeId,
     scope_stack: Vec<HashMap<String, BindingInfo>>,
     type_context: TypeContext,
     capture_analysis: HashMap<NodeId, Vec<IrCapture>>,
     /// Optional module registry for resolving qualified symbols during conversion
-    module_registry: Option<*const crate::runtime::module_runtime::ModuleRegistry>,
+    module_registry: Option<&'a ModuleRegistry>,
 }
 
-impl IrConverter {
+impl<'a> IrConverter<'a> {
     pub fn new() -> Self {
         let mut converter = IrConverter {
             next_node_id: 1,
@@ -123,6 +125,19 @@ impl IrConverter {
         // Add built-in functions to global scope
         converter.add_builtin_functions();
         converter
+    }
+    
+    pub fn with_module_registry(registry: &'a ModuleRegistry) -> Self {
+        IrConverter {
+            next_node_id: 1,
+            scope_stack: vec![HashMap::new()],
+            type_context: TypeContext {
+                type_aliases: HashMap::new(),
+                constraints: Vec::new(),
+            },
+            capture_analysis: HashMap::new(),
+            module_registry: Some(registry),
+        }
     }
     
     fn next_id(&mut self) -> NodeId {
@@ -515,17 +530,16 @@ impl IrConverter {
             Expression::Let(let_expr) => self.convert_let(let_expr),
             Expression::Do(do_expr) => self.convert_do(do_expr),
             Expression::Fn(fn_expr) => self.convert_fn(fn_expr),
-            Expression::Match(match_expr) => self.convert_match(*match_expr),
+            Expression::Match(match_expr) => self.convert_match(match_expr.clone()),
             Expression::Vector(exprs) => self.convert_vector(exprs),
             Expression::Map(map) => self.convert_map(map),
             Expression::List(exprs) => self.convert_list_as_application(exprs),
             Expression::TryCatch(try_expr) => self.convert_try_catch(try_expr),
             Expression::Parallel(parallel_expr) => self.convert_parallel(parallel_expr),
-            Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),
-            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),            Expression::Def(def_expr) => self.convert_def(*def_expr),
-            Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
+            Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),            
             Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(&discover_expr),
-            Expression::TaskContext(task_context) => self.convert_task_context(&task_context),
+            Expression::Def(def_expr) => self.convert_def(*def_expr),
+            Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
         }
     }
     
@@ -558,27 +572,30 @@ impl IrConverter {
         let id = self.next_id();
         let name = sym.0.clone();
         
-        // Check for task context access (symbols starting with @)
-        if name.starts_with('@') {
-            let field_name = name[1..].to_string();
-            return Ok(IrNode::TaskContextAccess {
-                id,
-                field_name: Keyword(field_name),
-                ir_type: IrType::Any,
-                source_location: None,
-            });
-        }
-        
-        // Check if it's a qualified symbol (e.g., "module/symbol")
-        if crate::runtime::module_runtime::ModuleRegistry::is_qualified_symbol(&name) {
-            // For qualified symbols, create a special VariableRef that will be resolved at runtime
-            // The IR runtime knows how to handle qualified symbols
-            return Ok(IrNode::VariableRef {
-                id,
-                name,
-                binding_id: 0, // Use 0 to indicate this is a qualified symbol reference
-                ir_type: IrType::Any, // Type will be determined at runtime
-                source_location: None,
+        // Handle qualified symbols
+        if let Some(index) = name.find('/') {
+            let module_name = &name[..index];
+            let symbol_name = &name[index+1..];
+
+            if let Some(registry) = self.module_registry {
+                if let Some(module) = registry.get_module(module_name) {
+                    // Check exported functions/values
+                    if let Some(export) = module.exports.get(symbol_name) {
+                        return Ok(IrNode::QualifiedSymbolRef {
+                            id,
+                            module: module_name.to_string(),
+                            symbol: symbol_name.to_string(),
+                            ir_type: export.ir_type.clone(),
+                            source_location: None, // TODO: Add source location
+                        });
+                    }
+                }
+            }
+            
+            // If not found in module registry, it's an error
+            return Err(IrConversionError::UndefinedSymbol {
+                symbol: name,
+                location: None, // TODO: Add source location
             });
         }
         
@@ -1515,21 +1532,17 @@ impl IrConverter {
         })
     }
     
-    /// Set the module registry for qualified symbol resolution
-    pub fn set_module_registry(&mut self, registry: &crate::runtime::module_runtime::ModuleRegistry) {
-        self.module_registry = Some(registry as *const _);
-    }
-    
     /// Check if module registry is available
     fn has_module_registry(&self) -> bool {
         self.module_registry.is_some()
     }
     
-    /// Get module registry reference (unsafe but controlled)
-    fn get_module_registry(&self) -> Option<&crate::runtime::module_runtime::ModuleRegistry> {
-        self.module_registry.map(|ptr| unsafe { &*ptr })
+    /// Get module registry reference
+    fn get_module_registry(&self) -> Option<&'a crate::runtime::module_runtime::ModuleRegistry> {
+        self.module_registry
     }
-      /// Convert a discover-agents expression to IR
+
+    /// Convert a discover-agents expression to IR
     fn convert_discover_agents(&mut self, discover_expr: &crate::ast::DiscoverAgentsExpr) -> IrConversionResult<IrNode> {
         // For now, convert as a placeholder function call
         // This will be properly implemented once the agent system is integrated
@@ -1560,23 +1573,10 @@ impl IrConverter {
             arguments: args,
             ir_type: IrType::Vector(Box::new(IrType::Any)),
             source_location: None,        })
-    }      fn convert_task_context(&mut self, task_context: &crate::ast::TaskContextAccess) -> IrConversionResult<IrNode> {
-        // Convert TaskContext access to proper IR for context access
-        let field_name = match &task_context.context_key {
-            crate::ast::ContextKey::Symbol(symbol) => crate::ast::Keyword(symbol.0.clone()),
-            crate::ast::ContextKey::Keyword(keyword) => keyword.clone(),
-        };
-        
-        Ok(IrNode::TaskContextAccess {
-            id: self.next_id(),
-            field_name,
-            ir_type: IrType::String,
-            source_location: None,
-        })
     }
 }
 
 /// Factory function for creating an IR converter
-pub fn create_ir_converter() -> IrConverter {
+pub fn create_ir_converter() -> IrConverter<'static> {
     IrConverter::new()
 }

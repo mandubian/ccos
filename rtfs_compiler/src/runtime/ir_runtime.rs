@@ -184,6 +184,11 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
                 }
             }
             
+            IrNode::QualifiedSymbolRef { module, symbol, .. } => {
+                let qualified_name = format!("{}/{}", module, symbol);
+                self.module_registry.resolve_qualified_symbol(&qualified_name)
+            }
+            
             IrNode::Apply { function, arguments, .. } => {
                 self.execute_apply(function, arguments, env, is_tail)
             }
@@ -224,10 +229,6 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
                 self.execute_log_step(level, values, location.as_deref(), env)
             }
             
-            IrNode::TaskContextAccess { field_name, .. } => {
-                self.execute_task_context_access(field_name)
-            }
-            
             IrNode::FunctionDef { name: _name, lambda, .. } => {
                 let function_value = self.execute_node(lambda, env, false)?;
                 env.define(node.id(), function_value.clone());
@@ -246,6 +247,11 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
                 self.execute_import(module_name, alias.as_deref(), imports.as_ref(), env)
             }
             
+            IrNode::VariableBinding { name, .. } => Err(RuntimeError::InternalError(format!(
+                "Attempted to execute a VariableBinding node for '{}'. These are for binding patterns and should not be executed directly.",
+                name
+            ))),
+
             _ => {
                 Err(RuntimeError::NotImplemented(format!("IR node type not implemented: {:?}", node)))
             }
@@ -756,21 +762,6 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
         println!("[{}] {}{}", level.0.to_uppercase(), message, location_info);
         
         Ok(Value::Nil)
-    }
-    
-    fn execute_task_context_access(&mut self, field_name: &Keyword) -> RuntimeResult<Value> {
-        match &self.task_context {
-            Some(Value::Map(context_map)) => {
-                let key = MapKey::Keyword(field_name.clone());
-                Ok(context_map.get(&key).cloned().unwrap_or(Value::Nil))
-            }
-            Some(_) => Err(RuntimeError::TypeError {
-                expected: "map".to_string(),
-                actual: self.task_context.as_ref().unwrap().type_name().to_string(),
-                operation: "task context access".to_string(),
-            }),
-            None => Ok(Value::Nil), // Return Nil if no context is set
-        }
     }
     
     /// Check if an expression is pure (has no side effects)

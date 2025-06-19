@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::module_runtime::ModuleRegistry;
+
     use super::*;    #[test]
     fn test_cross_module_ir_execution() {
         println!("🧪 Starting cross-module IR execution test...");
@@ -74,7 +76,7 @@ mod tests {
         
         // Convert to IR
         println!("🔄 Converting to IR...");
-        let mut ir_converter = IrConverter::new();
+        let mut ir_converter = IrConverter::with_module_registry(&runtime.module_registry);
         let ir_result = ir_converter.convert_expression(ast);
         match &ir_result {
             Ok(ir_node) => {
@@ -133,7 +135,7 @@ mod tests {
         // Test 1: Unqualified symbol should fall back to global environment
         let unqualified_program = r#"add"#;
         let ast = parse_expression(unqualified_program).unwrap();
-        let mut ir_converter = IrConverter::new();
+        let mut ir_converter = IrConverter::with_module_registry(&runtime.module_registry);
         let ir_node_result = ir_converter.convert_expression(ast);
         assert!(ir_node_result.is_err(), "Unqualified symbol 'add' should not convert, but got: {:?}", ir_node_result);
 
@@ -161,7 +163,9 @@ mod tests {
     fn test_ir_runtime_with_full_runtime_integration() {
         // Test that the cross-module IR integration works through the full Runtime API
         // Note: This test focuses on parsing and conversion, not actual module loading
-        let mut runtime = Runtime::with_strategy(RuntimeStrategy::Ir);
+        let module_registry = ModuleRegistry::new();
+
+        let mut runtime = Runtime::with_strategy(RuntimeStrategy::Ir, &module_registry);
         
         // Test a simple qualified symbol reference without import first
         let simple_program = r#"math.utils/add"#;
@@ -198,7 +202,7 @@ mod tests {
         // Try to execute an exported function from app.main
         let program = r#"app.main/entry"#;
         let ast = parse_expression(program).unwrap();
-        let mut ir_converter = IrConverter::new();
+        let mut ir_converter = IrConverter::with_module_registry(&runtime.module_registry);
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
         let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
@@ -225,7 +229,7 @@ mod tests {
         // Try to execute a function that depends on the chain
         let program = r#"app.main/chain_entry"#;
         let ast = parse_expression(program).unwrap();
-        let mut ir_converter = IrConverter::new();
+        let mut ir_converter = IrConverter::with_module_registry(&runtime.module_registry);
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
         let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
@@ -252,7 +256,7 @@ mod tests {
         // Try to execute a function that triggers the circular import
         let program = r#"circular.a/entry"#;
         let ast = parse_expression(program).unwrap();
-        let mut ir_converter = IrConverter::new();
+        let mut ir_converter = IrConverter::with_module_registry(&runtime.module_registry);
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
         let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);
@@ -277,7 +281,7 @@ mod tests {
         // Try to execute a function from the error module
         let program = r#"error.mod/trigger_error"#;
         let ast = parse_expression(program).unwrap();
-        let mut ir_converter = IrConverter::new();
+        let mut ir_converter = IrConverter::with_module_registry(&runtime.module_registry);
         let ir_node = ir_converter.convert_expression(ast).unwrap();
         let mut ir_env = crate::runtime::ir_runtime::IrEnvironment::new();
         let result = runtime.ir_runtime.execute_node(&ir_node, &mut ir_env, false);

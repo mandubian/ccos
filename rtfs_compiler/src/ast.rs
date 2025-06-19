@@ -159,15 +159,15 @@ pub enum Expression {
     If(IfExpr),
     Let(LetExpr),
     Do(DoExpr),
-    Match(Box<MatchExpr>),     // Changed to Box<MatchExpr>
-    LogStep(Box<LogStepExpr>), // Changed to Box<LogStepExpr>
-    TryCatch(TryCatchExpr),    Fn(FnExpr),
-    WithResource(WithResourceExpr),
-    Parallel(ParallelExpr),
+    Fn(FnExpr),
     Def(Box<DefExpr>),   // Added for def as an expression
     Defn(Box<DefnExpr>), // Added for defn as an expression
-    DiscoverAgents(DiscoverAgentsExpr), // Added for agent discovery
-    TaskContext(TaskContextAccess), // Added for @symbol and @keyword access
+    DiscoverAgents(DiscoverAgentsExpr),
+    LogStep(Box<LogStepExpr>),
+    TryCatch(TryCatchExpr),
+    Parallel(ParallelExpr),
+    WithResource(WithResourceExpr),
+    Match(MatchExpr),
 }
 
 // Struct for Match Expression
@@ -294,18 +294,6 @@ pub enum TopLevel {
     Module(ModuleDefinition),
     Expression(Expression), // Allow standalone expressions at top level?
                             // TODO: Add Import definition if needed at top level outside modules
-}
-
-// Struct for Task Context Access (@symbol or @keyword)
-#[derive(Debug, PartialEq, Clone)]
-pub struct TaskContextAccess {
-    pub context_key: ContextKey,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum ContextKey {
-    Symbol(Symbol),
-    Keyword(Keyword),
 }
 
 // Placeholder structs for top-level items

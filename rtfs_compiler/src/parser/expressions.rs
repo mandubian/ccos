@@ -1,11 +1,11 @@
-use super::common::{build_literal, build_map_key, build_symbol, build_keyword}; // Added build_keyword back
+use super::common::{build_literal, build_map_key, build_symbol};
 use super::special_forms::{
     build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
     build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
     build_with_resource_expr,
 };
 use super::{PestParseError, Rule, pair_to_source_span}; // Added PestParseError and pair_to_source_span
-use crate::ast::{Expression, MapKey, TaskContextAccess, ContextKey, Symbol};
+use crate::ast::{Expression, MapKey};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -32,7 +32,6 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
     match pair.as_rule() {
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
-        Rule::task_context_access => Ok(Expression::TaskContext(build_task_context_access(pair)?)),
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
                 .map(build_expression)
@@ -48,9 +47,10 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::parallel_expr => Ok(Expression::Parallel(build_parallel_expr(pair)?)),
         Rule::with_resource_expr => Ok(Expression::WithResource(build_with_resource_expr(pair)?)),
         Rule::try_catch_expr => Ok(Expression::TryCatch(build_try_catch_expr(pair)?)),
-        Rule::match_expr => Ok(Expression::Match(Box::new(build_match_expr(pair)?))),
+        Rule::match_expr => Ok(Expression::Match(build_match_expr(pair)?)),
         Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(pair)?))),
-        Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(pair)?)),        Rule::list => {
+        Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(pair)?)),
+        Rule::list => {
             let _list_pair_span = pair_to_source_span(&pair);
             let mut inner_pairs = pair.into_inner().peekable();
 
@@ -147,37 +147,4 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
         map_data.insert(key, value);
     }
     Ok(map_data)
-}
-
-pub(super) fn build_task_context_access(pair: Pair<Rule>) -> Result<TaskContextAccess, PestParseError> {
-    if pair.as_rule() != Rule::task_context_access {
-        return Err(PestParseError::InvalidInput {
-            message: format!(
-                "Expected Rule::task_context_access, found {:?}",
-                pair.as_rule()
-            ),
-            span: Some(pair_to_source_span(&pair))
-        });
-    }
-    
-    let pair_span = pair_to_source_span(&pair); // For the case where inner_pair is None
-    let inner_pair = pair
-        .into_inner()
-        .next()
-        .ok_or_else(|| PestParseError::MissingToken { token: "task_context_access inner".to_string(), span: Some(pair_span) })?;
-    
-    let inner_pair_span = pair_to_source_span(&inner_pair);
-    let context_key = match inner_pair.as_rule() {
-        Rule::identifier => {
-            // Create a Symbol directly from the identifier string
-            ContextKey::Symbol(Symbol(inner_pair.as_str().to_string()))
-        },
-        Rule::keyword => ContextKey::Keyword(build_keyword(inner_pair)?),
-        rule => return Err(PestParseError::InvalidInput { message: format!(
-            "Expected identifier or keyword in task_context_access, found {:?}",
-            rule
-        ), span: Some(inner_pair_span) }),
-    };
-    
-    Ok(TaskContextAccess { context_key })
 }

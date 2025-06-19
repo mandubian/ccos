@@ -19,7 +19,7 @@ This document describes the intended runtime behavior and evaluation rules for t
 *   **`def`:** Inside a module, defines a variable within the module's namespace. Inside a task plan or function body, defines a variable within the current lexical scope. Re-definition is allowed and shadows.
 *   **`import`:** Makes symbols from another module's namespace accessible in the current scope (either directly or via an alias). See Section 7 for details.
 *   **Resolution Order:** When resolving a symbol, the runtime typically checks: 1) Local bindings (innermost `let`/`fn` scope first), 2) Imported symbols (potentially qualified), 3) Module-level definitions (if within a module), 4) Built-in/standard library symbols. (Exact order needs careful definition, especially regarding qualified vs unqualified imports).
-*   **Task Context (`@`):** A special mechanism (e.g., `@intent`, `@id`) provides read-only access to the fields of the containing `task` artifact from within the `:plan`.
+*   **Task Context (Standard Library):** A built-in module (e.g., `rtfs.task`) provides functions to access read-only information about the containing `task` artifact from within the `:plan` (e.g., `(task/current)`).
 
 ## 3. Concurrency (`parallel`)
 

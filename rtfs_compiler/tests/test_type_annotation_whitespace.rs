@@ -1,4 +1,5 @@
-use rtfs_compiler::*;
+use rtfs_compiler::{*,
+    runtime::module_runtime::ModuleRegistry};
 
 fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {    // Parse the code
     let parsed = match parser::parse_expression(code) {
@@ -22,9 +23,11 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {    //
     let ir_result = match converter.convert_expression(parsed) {
         Ok(ir_node) => {
             let agent_discovery = Box::new(agent::discovery_traits::NoOpAgentDiscovery);
+            let module_registry = ModuleRegistry::new();
             let mut runtime = runtime::Runtime::with_strategy_and_agent_discovery(
                 runtime::RuntimeStrategy::Ir,
-                agent_discovery
+                agent_discovery,
+                &module_registry
             );
             match runtime.evaluate_ir(&ir_node) {
                 Ok(value) => {

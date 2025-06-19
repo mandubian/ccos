@@ -1,0 +1,2 @@
+; Test string operations
+(str "hello" ", " "world!")

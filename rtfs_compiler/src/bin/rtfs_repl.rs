@@ -5,7 +5,7 @@ use std::env;
 use std::process;
 
 // Import from the rtfs_compiler crate
-use rtfs_compiler::{RtfsRepl, RuntimeStrategy};
+use rtfs_compiler::{RtfsRepl, RuntimeStrategy, runtime::module_runtime::ModuleRegistry};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -47,7 +47,8 @@ fn main() {
     }
     
     // Create and run REPL
-    let mut repl = RtfsRepl::with_runtime_strategy(runtime_strategy);
+    let module_registry = ModuleRegistry::new();
+    let mut repl = RtfsRepl::with_runtime_strategy(runtime_strategy, &module_registry);
     
     match repl.run() {
         Ok(_) => {},
