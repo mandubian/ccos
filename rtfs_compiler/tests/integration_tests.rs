@@ -242,7 +242,7 @@ fn test_error_handling() {
     run_all_tests_for_file(&TestConfig {
         name: "test_error_handling".to_string(),
         should_execute: false,
-        expected_error: Some("Division by zero"),
+        expected_error: Some("DivisionByZero"),
         ..TestConfig::new("test_error_handling")
     });
 }

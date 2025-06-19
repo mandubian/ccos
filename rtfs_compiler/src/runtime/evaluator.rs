@@ -64,13 +64,10 @@ impl Evaluator {
     /// Set the task context for the evaluator
     pub fn set_task_context(&mut self, context: Value) {
         self.task_context = Some(context);
-    }
-
-    /// Evaluate an expression in a given environment
+    }    /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
-            Expression::Literal(lit) => self.eval_literal(lit),            Expression::Symbol(sym) => env.lookup(sym),
-            Expression::List(exprs) => {
+            Expression::Literal(lit) => self.eval_literal(lit),            Expression::Symbol(sym) => env.lookup(sym),            Expression::List(exprs) => {
                 // Empty list evaluates to empty list
                 if exprs.is_empty() {
                     return Ok(Value::Vector(vec![]));
@@ -103,16 +100,35 @@ impl Evaluator {
                     result.insert(key.clone(), value);
                 }
                 Ok(Value::Map(result))
-            },
-            Expression::FunctionCall { callee, arguments } => {
+            },              Expression::FunctionCall { callee, arguments } => {
                 let func_value = self.eval_expr(callee, env)?;
-                let args: Result<Vec<Value>, RuntimeError> = arguments
-                    .iter()
-                    .map(|e| self.eval_expr(e, env))
-                    .collect();
-                let args = args?;
                 
-                self.call_function(func_value, &args, env)
+                // Check if this is a builtin that needs unevaluated arguments
+                match &func_value {
+                    Value::Function(Function::BuiltinWithEvaluator { name, arity, func }) => {
+                        // Check arity
+                        if !self.check_arity(&arity, arguments.len()) {
+                            return Err(RuntimeError::ArityMismatch {
+                                function: name.clone(),
+                                expected: self.arity_to_string(&arity),
+                                actual: arguments.len(),
+                            });
+                        }
+                        
+                        // Call with unevaluated arguments
+                        func(arguments, self, env)
+                    },
+                    _ => {
+                        // Evaluate arguments and call normally
+                        let args: Result<Vec<Value>, RuntimeError> = arguments
+                            .iter()
+                            .map(|e| self.eval_expr(e, env))
+                            .collect();
+                        let args = args?;
+                        
+                        self.call_function(func_value, &args, env)
+                    }
+                }
             },
             Expression::If(if_expr) => self.eval_if(if_expr, env),
             Expression::Let(let_expr) => self.eval_let(let_expr, env),
@@ -150,7 +166,7 @@ impl Evaluator {
             Literal::Nil => Ok(Value::Nil),
         }
     }
-      fn call_function(&self, func_value: Value, args: &[Value], env: &mut Environment) -> RuntimeResult<Value> {
+      pub fn call_function(&self, func_value: Value, args: &[Value], env: &mut Environment) -> RuntimeResult<Value> {
         match func_value {
             Value::FunctionPlaceholder(cell) => {
                 let actual_function = cell.borrow().clone();
@@ -169,9 +185,7 @@ impl Evaluator {
                     _ => {} // Proceed if it's a real function or other callable value
                 }
                 // Call the resolved function. The 'env' here is the caller's environment for argument evaluation.
-                self.call_function(actual_function, args, env)
-            },
-            Value::Function(Function::Builtin { name, arity, func }) => {
+                self.call_function(actual_function, args, env)            },            Value::Function(Function::Builtin { name, arity, func }) => {
                 // Check arity
                 if !self.check_arity(&arity, args.len()) {
                     return Err(RuntimeError::ArityMismatch {
@@ -182,7 +196,12 @@ impl Evaluator {
                 }
                 
                 func(args)
-            },            Value::Function(Function::UserDefined { params, variadic_param, body, closure }) => {
+            },            Value::Function(Function::BuiltinWithEvaluator { name, arity: _, func: _ }) => {
+                return Err(RuntimeError::InternalError(
+                    format!("BuiltinWithEvaluator function '{}' called through call_function instead of direct function call evaluation", name)
+                ));
+            },
+            Value::Function(Function::UserDefined { params, variadic_param, body, closure }) => {
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(Rc::new(closure.clone()));
                 
@@ -952,20 +971,39 @@ impl Evaluator {
             },
             _ => Err(RuntimeError::NotImplemented(format!("Complex pattern binding not yet implemented for pattern: {:?}", pattern))),
         }
-    }
-    
-    /// Match a pattern against a value (placeholder implementation)
-    fn match_pattern(&self, pattern: &crate::ast::Pattern, value: &Value, env: &mut Environment) -> RuntimeResult<bool> {
+    }      /// Match a pattern against a value (placeholder implementation)
+    fn match_pattern(&self, pattern: &crate::ast::Pattern, _value: &Value, _env: &mut Environment) -> RuntimeResult<bool> {
         // For now, only handle simple symbol patterns
         match pattern {
             crate::ast::Pattern::Symbol(_symbol) => {
                 // Symbols always match, binding happens elsewhere
                 Ok(true)
-            },
-            _ => Err(RuntimeError::NotImplemented("Complex pattern matching not yet implemented".to_string())),
+            },            _ => Err(RuntimeError::NotImplemented("Complex pattern matching not yet implemented".to_string())),
         }
     }
     
+    /// Evaluate map function with evaluator access      
+    fn eval_map(&self, func_expr: &Expression, collection_expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
+        let func_value = self.eval_expr(func_expr, env)?;
+        let collection_value = self.eval_expr(collection_expr, env)?;
+        
+        match collection_value {
+            Value::Vector(vec) => {
+                let mut results = Vec::new();
+                for item in vec {
+                    // Call the function with the item as argument
+                    let result = self.call_function(func_value.clone(), &[item], env)?;
+                    results.push(result);
+                }
+                Ok(Value::Vector(results))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: collection_value.type_name().to_string(),
+                operation: "map".to_string(),
+            }),
+        }
+    }
     /// Match a match pattern against a value (placeholder implementation)
     fn match_match_pattern(&self, pattern: &crate::ast::MatchPattern, value: &Value, env: &mut Environment) -> RuntimeResult<bool> {
         match pattern {
@@ -1058,8 +1096,7 @@ impl Evaluator {
     }
 }
 
-impl Default for Evaluator {
-    fn default() -> Self {
+impl Default for Evaluator {    fn default() -> Self {
         Self::new()
     }
 }
