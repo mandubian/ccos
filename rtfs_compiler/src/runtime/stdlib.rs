@@ -192,17 +192,15 @@ impl StandardLibrary {
             name: "hash-map".to_string(),
             arity: Arity::Any,
             func: Self::hash_map,
-        }));
-          env.define(&Symbol("map".to_string()), Value::Function(Function::Builtin {
+        }));          env.define(&Symbol("map".to_string()), Value::Function(Function::BuiltinWithEvaluator {
             name: "map".to_string(),
             arity: Arity::AtLeast(2),
-            func: Self::map_function,
+            func: Self::map_with_evaluator,
         }));
-        
-        env.define(&Symbol("filter".to_string()), Value::Function(Function::Builtin {
+          env.define(&Symbol("filter".to_string()), Value::Function(Function::BuiltinWithEvaluator {
             name: "filter".to_string(),
             arity: Arity::Exact(2),
-            func: Self::filter,
+            func: Self::filter_with_evaluator,
         }));
           env.define(&Symbol("reduce".to_string()), Value::Function(Function::Builtin {
             name: "reduce".to_string(),
@@ -1662,6 +1660,151 @@ impl StandardLibrary {
                 expected: "vector".to_string(),
                 actual: collections[0].type_name().to_string(),
                 operation: "map-fn".to_string(),            }),
+        }
+    }
+      /// Map function with evaluator access (for higher-order functions)
+    fn map_with_evaluator(
+        args: &[crate::ast::Expression], 
+        evaluator: &crate::runtime::evaluator::Evaluator, 
+        env: &mut crate::runtime::environment::Environment
+    ) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map".to_string(),
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        let func_value = evaluator.eval_expr(&args[0], env)?;
+        
+        // Evaluate all collection arguments
+        let mut collections = Vec::new();
+        for collection_expr in &args[1..] {
+            let collection_value = evaluator.eval_expr(collection_expr, env)?;
+            collections.push(collection_value);
+        }
+        
+        // Handle the case of a single collection
+        if collections.len() == 1 {
+            return Self::map_single_collection(func_value, &collections[0], evaluator, env);
+        }
+        
+        // Handle multiple collections (apply function to corresponding elements)
+        Self::map_multiple_collections(func_value, &collections, evaluator, env)
+    }
+    
+    /// Map over a single collection (vector, map, etc.)
+    fn map_single_collection(
+        func_value: Value,
+        collection: &Value,
+        evaluator: &crate::runtime::evaluator::Evaluator,
+        env: &mut crate::runtime::environment::Environment
+    ) -> RuntimeResult<Value> {
+        match collection {
+            Value::Vector(vec) => {
+                let mut results = Vec::new();
+                for item in vec {
+                    let result = evaluator.call_function(func_value.clone(), &[item.clone()], env)?;
+                    results.push(result);
+                }
+                Ok(Value::Vector(results))
+            },
+            Value::Map(map) => {
+                let mut result_map = std::collections::HashMap::new();
+                for (key, value) in map {
+                    // Apply function to the value, keep the key
+                    let new_value = evaluator.call_function(func_value.clone(), &[value.clone()], env)?;
+                    result_map.insert(key.clone(), new_value);
+                }
+                Ok(Value::Map(result_map))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or map".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "map".to_string(),
+            }),
+        }
+    }
+    
+    /// Map over multiple collections (like Clojure's map with multiple sequences)
+    fn map_multiple_collections(
+        func_value: Value,
+        collections: &[Value],
+        evaluator: &crate::runtime::evaluator::Evaluator,
+        env: &mut crate::runtime::environment::Environment
+    ) -> RuntimeResult<Value> {
+        // All collections must be vectors for multi-collection map
+        let mut vectors = Vec::new();
+        for (i, collection) in collections.iter().enumerate() {
+            match collection {
+                Value::Vector(vec) => vectors.push(vec),
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "all arguments to be vectors when using map with multiple collections".to_string(),
+                    actual: format!("argument {} is {}", i + 2, collection.type_name()),
+                    operation: "map".to_string(),
+                }),
+            }
+        }
+        
+        // Find the minimum length to avoid index out of bounds
+        let min_length = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
+        
+        let mut results = Vec::new();
+        for i in 0..min_length {
+            // Collect the i-th element from each vector
+            let args: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
+            
+            // Apply the function to all corresponding elements
+            let result = evaluator.call_function(func_value.clone(), &args, env)?;
+            results.push(result);
+        }
+        
+        Ok(Value::Vector(results))
+    }
+    
+    /// Filter function with evaluator access (for higher-order functions)
+    fn filter_with_evaluator(
+        args: &[crate::ast::Expression], 
+        evaluator: &crate::runtime::evaluator::Evaluator, 
+        env: &mut crate::runtime::environment::Environment
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "filter".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        let predicate_value = evaluator.eval_expr(&args[0], env)?;
+        let collection_value = evaluator.eval_expr(&args[1], env)?;
+        
+        match collection_value {
+            Value::Vector(vec) => {
+                let mut results = Vec::new();
+                for item in vec {
+                    // Call the predicate with the item as argument
+                    let predicate_result = evaluator.call_function(predicate_value.clone(), &[item.clone()], env)?;
+                    
+                    // Check if the result is truthy
+                    let is_truthy = match predicate_result {
+                        Value::Boolean(b) => b,
+                        Value::Nil => false,
+                        _ => true, // All non-nil, non-false values are truthy
+                    };
+                    
+                    if is_truthy {
+                        results.push(item);
+                    }
+                }
+                Ok(Value::Vector(results))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: collection_value.type_name().to_string(),
+                operation: "filter".to_string(),
+            }),
         }
     }
     

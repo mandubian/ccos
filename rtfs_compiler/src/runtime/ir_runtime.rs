@@ -327,8 +327,7 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
 
     /// Call a function value (similar to AST runtime but with IR context)
     fn call_function(&mut self, func: Value, args: &[Value], env: &mut IrEnvironment) -> RuntimeResult<Value> {
-        match func {
-            Value::Function(Function::Builtin { name, func, arity, .. }) => {
+        match func {            Value::Function(Function::Builtin { name, func, arity, .. }) => {
                 self.check_arity(&arity, args.len())?;
                 
                 // Special handling for higher-order functions that need runtime context
@@ -338,6 +337,18 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
                     "filter" => self.builtin_filter(args, env),
                     "reduce" => self.builtin_reduce(args, env),
                     _ => func(args)  // Regular built-in functions
+                }
+            }
+            Value::Function(Function::BuiltinWithEvaluator { name, arity: _, func: _ }) => {
+                // BuiltinWithEvaluator functions need access to unevaluated expressions,
+                // but in IR runtime we only have evaluated values.
+                // Special handling for functions that were converted to BuiltinWithEvaluator
+                match name.as_str() {
+                    "map" => self.builtin_map(args, env),
+                    "filter" => self.builtin_filter(args, env),
+                    _ => Err(RuntimeError::InternalError(
+                        format!("BuiltinWithEvaluator function '{}' not supported in IR runtime", name)
+                    ))
                 }
             }
             Value::Function(Function::UserDefined { params, body, closure, .. }) => {
@@ -800,33 +811,72 @@ impl IrRuntime {    /// Create a new IR runtime with standard library
             Arity::Any => {}
         }
         Ok(())
-    }
-
-    fn builtin_map(&mut self, args: &[Value], env: &mut IrEnvironment) -> RuntimeResult<Value> {
-        if args.len() != 2 {
+    }    fn builtin_map(&mut self, args: &[Value], env: &mut IrEnvironment) -> RuntimeResult<Value> {
+        if args.len() < 2 {
             return Err(RuntimeError::ArityMismatch { 
                 function: "map".to_string(), 
-                expected: "2".to_string(), 
+                expected: "at least 2".to_string(), 
                 actual: args.len() 
             });
         }
 
         let func = &args[0];
-        let list = &args[1];
-
-        if let Value::Vector(vec) = list {
-            let mut result_vec = Vec::new();
-            for item in vec {
-                let result = self.call_function(func.clone(), &[item.clone()], env)?;
-                result_vec.push(result);
+        
+        if args.len() == 2 {
+            // Single collection
+            let collection = &args[1];
+            match collection {
+                Value::Vector(vec) => {
+                    let mut result_vec = Vec::new();
+                    for item in vec {
+                        let result = self.call_function(func.clone(), &[item.clone()], env)?;
+                        result_vec.push(result);
+                    }
+                    Ok(Value::Vector(result_vec))
+                },
+                Value::Map(map) => {
+                    let mut result_map = std::collections::HashMap::new();
+                    for (key, value) in map {
+                        // Apply function to the value, keep the key
+                        let new_value = self.call_function(func.clone(), &[value.clone()], env)?;
+                        result_map.insert(key.clone(), new_value);
+                    }
+                    Ok(Value::Map(result_map))
+                },
+                _ => Err(RuntimeError::TypeError { 
+                    expected: "vector or map".to_string(), 
+                    actual: collection.type_name().to_string(), 
+                    operation: "map".to_string() 
+                })
             }
-            Ok(Value::Vector(result_vec))
         } else {
-            Err(RuntimeError::TypeError { 
-                expected: "vector".to_string(), 
-                actual: list.type_name().to_string(), 
-                operation: "map".to_string() 
-            })
+            // Multiple collections (only vectors supported)
+            let mut vectors = Vec::new();
+            for (i, collection) in args[1..].iter().enumerate() {
+                match collection {
+                    Value::Vector(vec) => vectors.push(vec),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "all arguments to be vectors when using map with multiple collections".to_string(),
+                        actual: format!("argument {} is {}", i + 2, collection.type_name()),
+                        operation: "map".to_string(),
+                    }),
+                }
+            }
+            
+            // Find the minimum length to avoid index out of bounds
+            let min_length = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
+            
+            let mut results = Vec::new();
+            for i in 0..min_length {
+                // Collect the i-th element from each vector
+                let args_for_func: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
+                
+                // Apply the function to all corresponding elements
+                let result = self.call_function(func.clone(), &args_for_func, env)?;
+                results.push(result);
+            }
+            
+            Ok(Value::Vector(results))
         }
     }
 

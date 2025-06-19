@@ -1,0 +1,16 @@
+(do
+  (def inc (fn [x] (+ x 1)))
+  (def vec-result (map inc [1 2 3]))
+  
+  (def square (fn [x] (* x x)))
+  (def my-map {:a 2 :b 3 :c 4})
+  (def map-result (map square my-map))
+  
+  (def add (fn [x y] (+ x y)))
+  (def multi-vec-result (map add [1 2 3] [4 5 6]))
+  
+  (def add-suffix (fn [s] (str s "-modified")))
+  (def string-map {:name "alice" :city "paris"})
+  (def modified-map (map add-suffix string-map))
+  
+  [vec-result map-result multi-vec-result modified-map])

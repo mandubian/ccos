@@ -36,12 +36,18 @@ pub enum Value {
 
 /// Function representation at runtime
 #[derive(Debug, Clone)]
-pub enum Function {
-    /// Built-in functions (implemented in Rust)
+pub enum Function {    /// Built-in functions (implemented in Rust)
     Builtin {
         name: String,
         arity: Arity,
         func: fn(&[Value]) -> crate::runtime::RuntimeResult<Value>,
+    },
+    
+    /// Built-in functions that need evaluator access (for higher-order functions)
+    BuiltinWithEvaluator {
+        name: String,
+        arity: Arity,
+        func: fn(&[crate::ast::Expression], &crate::runtime::evaluator::Evaluator, &mut crate::runtime::environment::Environment) -> crate::runtime::RuntimeResult<Value>,
     },
     
     /// User-defined functions (defined in RTFS)
