@@ -23,10 +23,13 @@ pub enum IrConversionError {
     InvalidPattern {
         message: String,
         location: Option<SourceLocation>,
-    },
-    InvalidTypeAnnotation {
+    },    InvalidTypeAnnotation {
         message: String,
         location: Option<SourceLocation>,
+    },
+    InvalidSpecialForm {
+        form: String,
+        message: String,
     },
     InternalError {
         message: String,
@@ -126,9 +129,8 @@ impl<'a> IrConverter<'a> {
         converter.add_builtin_functions();
         converter
     }
-    
-    pub fn with_module_registry(registry: &'a ModuleRegistry) -> Self {
-        IrConverter {
+      pub fn with_module_registry(registry: &'a ModuleRegistry) -> Self {
+        let mut converter = IrConverter {
             next_node_id: 1,
             scope_stack: vec![HashMap::new()],
             type_context: TypeContext {
@@ -137,7 +139,11 @@ impl<'a> IrConverter<'a> {
             },
             capture_analysis: HashMap::new(),
             module_registry: Some(registry),
-        }
+        };
+        
+        // Add built-in functions to global scope
+        converter.add_builtin_functions();
+        converter
     }
     
     fn next_id(&mut self) -> NodeId {
@@ -473,11 +479,56 @@ impl<'a> IrConverter<'a> {
                 param_types: vec![],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Int),
-            }),
-            ("tool:log", IrType::Function {
+            }),            ("tool:log", IrType::Function {
                 param_types: vec![IrType::Any],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Nil),
+            }),
+            
+            // Special forms
+            ("lambda", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Function {
+                    param_types: vec![],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Any),
+                }),
+            }),
+            ("quote", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("letrec", IrType::Function {
+                param_types: vec![IrType::Vector(Box::new(IrType::Any)), IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("if", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("let", IrType::Function {
+                param_types: vec![IrType::Vector(Box::new(IrType::Any)), IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("do", IrType::Function {
+                param_types: vec![IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
+            }),
+            ("def", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Any],
+                variadic_param_type: None,
+                return_type: Box::new(IrType::Any),
+            }),
+            ("defn", IrType::Function {
+                param_types: vec![IrType::Any, IrType::Vector(Box::new(IrType::Any)), IrType::Any],
+                variadic_param_type: Some(Box::new(IrType::Any)),
+                return_type: Box::new(IrType::Any),
             }),
         ];
         
@@ -566,37 +617,39 @@ impl<'a> IrConverter<'a> {
             ir_type,
             source_location: None,
         })
-    }
-      /// Convert symbol reference (variable lookup)
+    }    /// Convert symbol reference (variable lookup)
     fn convert_symbol_ref(&mut self, sym: Symbol) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let name = sym.0.clone();
         
-        // Handle qualified symbols
+        // Handle qualified symbols (module/symbol syntax)
+        // Only treat as qualified if '/' is not at the beginning or end and there's actual content on both sides
         if let Some(index) = name.find('/') {
-            let module_name = &name[..index];
-            let symbol_name = &name[index+1..];
+            if index > 0 && index < name.len() - 1 {
+                let module_name = &name[..index];
+                let symbol_name = &name[index+1..];
 
-            if let Some(registry) = self.module_registry {
-                if let Some(module) = registry.get_module(module_name) {
-                    // Check exported functions/values
-                    if let Some(export) = module.exports.get(symbol_name) {
-                        return Ok(IrNode::QualifiedSymbolRef {
-                            id,
-                            module: module_name.to_string(),
-                            symbol: symbol_name.to_string(),
-                            ir_type: export.ir_type.clone(),
-                            source_location: None, // TODO: Add source location
-                        });
+                if let Some(registry) = self.module_registry {
+                    if let Some(module) = registry.get_module(module_name) {
+                        // Check exported functions/values
+                        if let Some(export) = module.exports.get(symbol_name) {
+                            return Ok(IrNode::QualifiedSymbolRef {
+                                id,
+                                module: module_name.to_string(),
+                                symbol: symbol_name.to_string(),
+                                ir_type: export.ir_type.clone(),
+                                source_location: None, // TODO: Add source location
+                            });
+                        }
                     }
                 }
+                
+                // If not found in module registry, it's an error
+                return Err(IrConversionError::UndefinedSymbol {
+                    symbol: name,
+                    location: None, // TODO: Add source location
+                });
             }
-            
-            // If not found in module registry, it's an error
-            return Err(IrConversionError::UndefinedSymbol {
-                symbol: name,
-                location: None, // TODO: Add source location
-            });
         }
         
         // Look up the symbol in current scope
@@ -618,9 +671,18 @@ impl<'a> IrConverter<'a> {
             }
         }
     }
-    
-    /// Convert function call
+      /// Convert function call
     fn convert_function_call(&mut self, callee: Expression, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+        // Check for special forms first
+        if let Expression::Symbol(Symbol(ref name)) = callee {
+            match name.as_str() {
+                "lambda" => {
+                    return self.convert_lambda_special_form(arguments);
+                }
+                _ => {}
+            }
+        }
+        
         let id = self.next_id();
         let function = Box::new(self.convert_expression(callee)?);
         let mut ir_arguments = Vec::new();
@@ -634,12 +696,108 @@ impl<'a> IrConverter<'a> {
             Some(IrType::Function { return_type, .. }) => (**return_type).clone(),
             _ => IrType::Any,
         };
-        
-        Ok(IrNode::Apply {
+          Ok(IrNode::Apply {
             id,
             function,
             arguments: ir_arguments,
             ir_type: return_type,
+            source_location: None,
+        })
+    }
+
+    /// Convert lambda special form: (lambda [params] body...)
+    fn convert_lambda_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+        if arguments.len() < 2 {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "lambda".to_string(),
+                message: "lambda requires at least 2 arguments: parameter list and body".to_string(),
+            });
+        }
+        
+        let id = self.next_id();
+        
+        // Enter new scope for lambda body
+        self.enter_scope();
+        
+        // Parse parameter list (first argument)
+        let param_list = &arguments[0];
+        let mut params = Vec::new();
+        
+        if let Expression::Vector(elements) = param_list {
+            for element in elements {
+                if let Expression::Symbol(Symbol(param_name)) = element {
+                    let param_id = self.next_id();
+                    let param_type = IrType::Any; // Lambda parameters are untyped
+                    
+                    // Add parameter to scope
+                    let binding_info = BindingInfo {
+                        name: param_name.clone(),
+                        binding_id: param_id,
+                        ir_type: param_type.clone(),
+                        kind: BindingKind::Parameter,
+                    };
+                    self.define_binding(param_name.clone(), binding_info);
+                    
+                    // Create parameter node
+                    params.push(IrNode::Param {
+                        id: param_id,
+                        binding: Box::new(IrNode::VariableBinding {
+                            id: param_id,
+                            name: param_name.clone(),
+                            ir_type: param_type.clone(),
+                            source_location: None,
+                        }),
+                        type_annotation: Some(param_type.clone()),
+                        ir_type: param_type,
+                        source_location: None,
+                    });
+                } else {
+                    return Err(IrConversionError::InvalidSpecialForm {
+                        form: "lambda".to_string(),
+                        message: "lambda parameters must be symbols".to_string(),
+                    });
+                }
+            }
+        } else {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "lambda".to_string(),
+                message: "lambda first argument must be a vector of parameters".to_string(),
+            });
+        }
+        
+        // Convert body expressions (remaining arguments)
+        let mut body_exprs = Vec::new();
+        for body_expr in &arguments[1..] {
+            body_exprs.push(self.convert_expression(body_expr.clone())?);
+        }
+        
+        // Exit lambda scope
+        self.exit_scope();
+        
+        // Determine return type from last body expression
+        let return_type = body_exprs.last()
+            .and_then(|expr| expr.ir_type())
+            .cloned()
+            .unwrap_or(IrType::Any);
+        
+        // Build function type
+        let param_types: Vec<IrType> = params.iter()
+            .filter_map(|p| p.ir_type())
+            .cloned()
+            .collect();
+        
+        let function_type = IrType::Function {
+            param_types,
+            variadic_param_type: None,
+            return_type: Box::new(return_type),
+        };
+          Ok(IrNode::Lambda {
+            id,
+            params,
+            variadic_param: None,
+            body: body_exprs,
+            captures: Vec::new(), // TODO: Implement capture analysis
+            ir_type: function_type,
             source_location: None,
         })
     }
@@ -933,8 +1091,7 @@ impl<'a> IrConverter<'a> {
         } else {
             None
         };
-        
-        // Convert body expressions
+          // Convert body expressions
         let mut body_exprs = Vec::new();
         for body_expr in fn_expr.body {
             body_exprs.push(self.convert_expression(body_expr)?);

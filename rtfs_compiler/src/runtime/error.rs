@@ -208,9 +208,11 @@ impl From<crate::ir_converter::IrConversionError> for RuntimeError {
             }
             IrConversionError::InvalidPattern { message, .. } => {
                 RuntimeError::InvalidProgram(format!("Invalid pattern during IR conversion: {}", message))
-            }
-            IrConversionError::InvalidTypeAnnotation { message, .. } => {
+            }            IrConversionError::InvalidTypeAnnotation { message, .. } => {
                 RuntimeError::InvalidProgram(format!("Invalid type annotation during IR conversion: {}", message))
+            }
+            IrConversionError::InvalidSpecialForm { form, message } => {
+                RuntimeError::InvalidProgram(format!("Invalid special form '{}' during IR conversion: {}", form, message))
             }
             IrConversionError::InternalError { message } => {
                 RuntimeError::InternalError(format!("IR converter internal error: {}", message))
