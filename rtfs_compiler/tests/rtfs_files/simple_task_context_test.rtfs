@@ -1,4 +1,5 @@
 ; Simple TaskContext test
-(let [batch-size (:batch-size @intent)
-      output-format (:output-format @intent)]
+(let [task-context (rtfs.task/current)
+      batch-size (get task-context :batch-size)
+      output-format (get task-context :output-format)]
   (+ batch-size 100))

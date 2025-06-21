@@ -34,13 +34,13 @@
   :plan
   (do
     (tool:log "Initializing distributed agent coordination system")
-    
-    ;; Initialize coordination context
+      ;; Initialize coordination context
     (let [coordination-start (tool:current-timestamp-ms)
-          problem-spec (:problem-type @intent)
-          complexity (:complexity-level @intent)
-          resource-limits (:resource-constraints @intent)
-          quality-reqs (:quality-requirements @intent)]
+          task-context (rtfs.task/current)
+          problem-spec (get task-context :problem-type)
+          complexity (get task-context :complexity-level)
+          resource-limits (get task-context :resource-constraints)
+          quality-reqs (get task-context :quality-requirements)]
       
       (try
         ;; Phase 1: Agent Discovery and Capability Assessment

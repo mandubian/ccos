@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::ir_runtime::IrRuntime;
+use crate::runtime::module_runtime::ModuleRegistry;
+use std::path::PathBuf;
 
 #[cfg(test)]
 mod tests {
@@ -21,7 +21,7 @@ mod tests {
         match result {
             Ok(module) => {
                 println!("✅ Successfully loaded module: {}", module.metadata.name);
-                println!("   Exports: {:?}", module.exports.keys().collect::<Vec<_>>());
+                println!("   Exports: {:?}", module.exports.borrow().keys().collect::<Vec<_>>());
                 assert_eq!(module.metadata.name, "math.utils");
             }
             Err(e) => {
@@ -35,7 +35,7 @@ mod tests {
         match result {
             Ok(module) => {
                 println!("✅ Successfully loaded module: {}", module.metadata.name);
-                println!("   Exports: {:?}", module.exports.keys().collect::<Vec<_>>());
+                println!("   Exports: {:?}", module.exports.borrow().keys().collect::<Vec<_>>());
                 assert_eq!(module.metadata.name, "string.helpers");
             }
             Err(e) => {

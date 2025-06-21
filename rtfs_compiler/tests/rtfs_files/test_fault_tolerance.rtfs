@@ -52,12 +52,12 @@
   :plan
   (do
     (tool:log "Initializing intelligent fault tolerance system")
-    
-    ;; Initialize system resilience context
+      ;; Initialize system resilience context
     (let [system-start (tool:current-timestamp-ms)
-          components (:system-components @intent)
-          recovery-policies (:recovery-policies @intent)
-          monitoring-config (:monitoring-config @intent)]
+          task-context (rtfs.task/current)
+          components (get task-context :system-components)
+          recovery-policies (get task-context :recovery-policies)
+          monitoring-config (get task-context :monitoring-config)]
       
       (try
         ;; Phase 1: System Health Assessment and Baseline Establishment

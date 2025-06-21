@@ -8,7 +8,7 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {    //
     };
 
     println!("   Parsed {} successfully", test_name);    // Test AST runtime
-    let mut evaluator = runtime::evaluator::Evaluator::new();
+    let evaluator = runtime::evaluator::Evaluator::new();
     let ast_result = match evaluator.evaluate(&parsed) {
         Ok(value) => {
             println!("   ✓ AST runtime executed: {:?}", value);

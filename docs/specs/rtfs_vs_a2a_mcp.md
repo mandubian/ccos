@@ -93,7 +93,54 @@ A2A is designed for interoperability between disparate AI agent systems, using J
 
 MCP is a JSON-RPC based protocol for client-server communication, often where the "server" provides resources, tools, or prompts to a "client" (which might be an LLM-based application).
 
-### 3.1. Agent/Service and Capability Discovery
+**Note:** The following analysis has been updated on **June 20, 2025**, to reflect the `mcp_schema_202506.ts` schema. The core findings remain consistent with the previous analysis, but are now updated with the specific terminology and structures of the new schema. The original analysis is preserved below for historical context.
+
+### 3.1. MCP Compatibility (June 2025 Schema)
+
+#### 3.1.1. Agent/Service and Capability Discovery
+
+*   **MCP:**
+    *   A client initiates a connection with an `initialize` request, and the server responds with `InitializeResult`, which contains its `ServerCapabilities`.
+    *   Specific, invokable capabilities are exposed as **Tools**. A client discovers them by calling the `tools/list` method, which returns a `ListToolsResult` containing an array of `Tool` objects.
+    *   Crucially, each `Tool` object has a `name` (the identifier), a `description`, and `inputSchema` and `outputSchema` fields. These schemas are JSON Schema objects that rigorously define the structure of the tool's inputs and outputs.
+*   **RTFS:**
+    *   An `agent-profile-id` in RTFS maps directly to an MCP server's address.
+    *   An RTFS `:requires [:profile-alias/capability-name]` maps to an MCP `Tool.name`.
+    *   The RTFS runtime is responsible for connecting, calling `tools/list`, finding the required tool by `name`, and potentially validating against the provided `inputSchema`.
+*   **Gap/Considerations:**
+    *   The mapping is very direct. The use of JSON Schema in MCP provides a clear contract for validation, which is a strong point for compatibility. The RTFS runtime would need a JSON Schema validator to fully leverage this.
+
+#### 3.1.2. Invocation Mechanisms
+
+*   **MCP:**
+    *   Tools are invoked with the `tools/call` method. The `CallToolRequest` contains the tool `name` and `arguments` as a JSON object.
+    *   The server replies with `CallToolResult`, which contains a `content` block for unstructured results and an optional `structuredContent` field for JSON objects that conform to the tool's `outputSchema`.
+*   **RTFS:**
+    *   `(invoke :profile-alias/capability-name {...params})` maps perfectly to `tools/call`. The RTFS runtime would serialize the params to a JSON object for the `arguments` field.
+*   **Gap/Considerations:**
+    *   **`consume-stream`:** This remains a significant gap. The June 2025 MCP schema supports server-to-client streaming for notifications (`notifications/progress`, `notifications/resources/updated`) but does **not** support a tool call returning a continuous stream of data chunks. A tool returns a single `CallToolResult`.
+    *   **`produce-to-stream`:** This also remains a gap. An RTFS task cannot stream data *to* an MCP tool via a single `tools/call`. This would require a custom tool implementation on the MCP side that accepts data incrementally through multiple calls.
+
+#### 3.1.3. Data Exchange Formats
+
+*   **MCP:** All data is exchanged as JSON. The `inputSchema` and `outputSchema` for each tool provide explicit contracts. The schema also defines `TextResourceContents` and `BlobResourceContents` for passing file-like data.
+*   **RTFS:** Has its own rich type system.
+*   **Gap/Considerations:**
+    *   This reinforces the need for a robust **data mapping and serialization layer** in the RTFS runtime. The detailed considerations in section 4.5 of this document remain the definitive guide for this task. The presence of explicit schemas in MCP makes this mapping more reliable, as the target format is not ambiguous.
+
+#### 3.1.4. Error Handling
+
+*   **MCP:** The new schema clarifies a critical point:
+    *   Protocol-level errors (e.g., `METHOD_NOT_FOUND`) are sent as standard JSON-RPC error responses.
+    *   However, errors that happen *during tool execution* are reported inside the `CallToolResult` by setting `isError: true`. This design ensures the calling agent/LLM is aware of the tool's failure and can reason about it, which is a major advantage for building robust agents.
+*   **RTFS:**
+    *   This is highly compatible. The RTFS runtime must inspect the `CallToolResult` for the `isError` flag and map it to `:error/agent.invocation-failed`, including the error details provided in the result.
+
+### 3.2. MCP Compatibility (Older Schema Analysis)
+
+*Note: This section reflects the analysis based on older versions of the MCP specification.*
+
+#### 3.2.1. Agent/Service and Capability Discovery
 
 *   **MCP:**
     *   Servers advertise capabilities through `InitializeResult.capabilities`.
@@ -112,7 +159,7 @@ MCP is a JSON-RPC based protocol for client-server communication, often where th
     *   The "capability-name" in RTFS needs a convention to distinguish between MCP tools, resources, or prompts if they share a similar naming space or if an agent profile exposes multiple types. E.g., `tool:myTool`, `resource:/path/to/data`.
     *   MCP `Tool.parameters` are defined by JSON Schema. RTFS type system and constraints need to be compatible or mappable to JSON Schema for validation before calling.
 
-### 3.2. Invocation Mechanisms
+#### 3.2.2. Invocation Mechanisms
 
 *   **MCP:**
     *   Tool invocation: `tools/call` method. Params: `CallToolRequest` (includes `toolID`, `arguments`). Result: `CallToolResult`.
@@ -135,7 +182,7 @@ MCP is a JSON-RPC based protocol for client-server communication, often where th
     *   **`produce-to-stream`:** Similar to A2A, this is challenging. MCP is generally client-pull or server-push for notifications, not client-push for streaming data *into* a standard tool call.
     *   **Data Mapping:** RTFS types to JSON arguments for `tools/call` (respecting the tool's JSON Schema for parameters) and RTFS types from `CallToolResult` or `ResourceContents`.
 
-### 3.3. Data Exchange Formats
+#### 3.2.3. Data Exchange Formats
 
 *   **MCP:** JSON. `Tool` parameters are defined by JSON Schema. `ResourceContents` can be `TextResourceContents` or `BlobResourceContents`. `CallToolResult` contains `result` (any JSON).
 *   **RTFS:** Own type system.
@@ -143,7 +190,7 @@ MCP is a JSON-RPC based protocol for client-server communication, often where th
     *   Robust mapping between RTFS types and JSON, respecting JSON Schemas provided by MCP tools.
     *   Handling of binary data (RTFS blob vs. `BlobResourceContents` or base64 encoding within JSON).
 
-### 3.4. Security and Authentication
+#### 3.2.4. Security and Authentication
 
 *   **MCP:** The provided schema is less explicit on application-level authentication beyond the `initialize` handshake. It relies on the underlying transport (e.g., HTTPS) for secure communication. `ClientCapabilities` and `ServerCapabilities` might play a role, but specific auth mechanisms (like API keys, tokens in headers) are not detailed in the core JSON-RPC message structures for every call.
 *   **RTFS:** Runtime manages credentials.
@@ -152,7 +199,7 @@ MCP is a JSON-RPC based protocol for client-server communication, often where th
 *   **Gap/Considerations:**
     *   MCP's flexibility means authentication methods can vary. The RTFS runtime needs to be adaptable or assume common patterns (e.g., bearer tokens in HTTP headers). The `agent-profile-id` configuration in RTFS would need to store or reference these credentials.
 
-### 3.5. Error Handling
+#### 3.2.5. Error Handling
 
 *   **MCP:** Uses standard JSON-RPC error codes. For `tools/call`, it specifies that errors *originating from the tool itself* SHOULD be reported inside the `CallToolResult` object (e.g., `isError: true`), not as protocol-level errors, so the LLM can see them. Protocol-level errors are for issues like `METHOD_NOT_FOUND`.
 *   **RTFS:** Standardized agent-related errors.
@@ -163,6 +210,8 @@ MCP is a JSON-RPC based protocol for client-server communication, often where th
     *   Distinguishing between MCP protocol errors and tool-execution errors within `CallToolResult` is important for correct mapping to RTFS error semantics.
 
 ## 4. Summary of Gaps and Potential RTFS Refinements
+
+**Update (2025-06-20):** The analysis of the June 2025 MCP schema confirms that the core gaps and considerations remain the same. The primary challenges are the **mismatch in streaming models** (RTFS's first-class stream types vs. MCP's notification-based streaming) and the need for a **robust data serialization layer** to map between the RTFS type system and MCP's JSON Schema-defined tool interfaces.
 
 **Update (2025-06-09):** Many of the discovery-related gaps identified below (particularly in 4.1.1, 4.2, and 4.3 regarding agent/capability discovery and resolution) have been substantially addressed by the introduction of the `(discover-agents ...)` special form, the `agent_card` data structure, the agent discovery protocol detailed in `agent_discovery.md`, and refinements to the `(invoke ...)` special form (e.g., `:agent-id-override`). These additions provide a formal mechanism for dynamic agent discovery and invocation within RTFS.
 
@@ -184,7 +233,7 @@ MCP is a JSON-RPC based protocol for client-server communication, often where th
 ### 4.3. MCP-Specific Considerations
 
 *   **`consume-stream` Mapping:** This is less direct for MCP. It fits best for `ResourceUpdatedNotification` or `ProgressNotification`. For general data streaming from a "tool", MCP seems to favor a single large response or writing to a resource. RTFS might need to clarify expectations for `consume-stream` with MCP-like agents.
-*   **Tool Error Reporting:** RTFS runtime must correctly handle MCP's dual error reporting (protocol errors vs. in-result errors for tools).
+*   **Tool Error Reporting:** RTFS runtime must correctly handle MCP's dual error reporting (protocol errors vs. in-result errors for tools). This is now explicitly clarified in the June 2025 schema with the `isError` flag in `CallToolResult`.
 *   **Authentication:** MCP is less prescriptive on application-level auth in its core schema. RTFS runtime will need to be flexible.
 
 ### 4.4. Potential RTFS Refinements/Clarifications

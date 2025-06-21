@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::*;
 use crate::ir::*;
-use crate::runtime::module_runtime::{ModuleRegistry, self};
-use crate::runtime::RuntimeError;
+use crate::runtime::module_runtime::ModuleRegistry;
 
 /// Error types for IR conversion
 #[derive(Debug, Clone, PartialEq)]
@@ -129,7 +128,7 @@ impl<'a> IrConverter<'a> {
         converter.add_builtin_functions();
         converter
     }
-      pub fn with_module_registry(registry: &'a ModuleRegistry) -> Self {
+    pub fn with_module_registry(registry: &'a ModuleRegistry) -> Self {
         let mut converter = IrConverter {
             next_node_id: 1,
             scope_stack: vec![HashMap::new()],
@@ -146,7 +145,7 @@ impl<'a> IrConverter<'a> {
         converter
     }
     
-    fn next_id(&mut self) -> NodeId {
+    pub fn next_id(&mut self) -> NodeId {
         let id = self.next_node_id;
         self.next_node_id += 1;
         id
@@ -554,14 +553,14 @@ impl<'a> IrConverter<'a> {
     }
     
     /// Define a binding in the current scope
-    fn define_binding(&mut self, name: String, info: BindingInfo) {
+    pub fn define_binding(&mut self, name: String, info: BindingInfo) {
         if let Some(current_scope) = self.scope_stack.last_mut() {
             current_scope.insert(name, info);
         }
     }
     
     /// Look up a symbol in the scope stack
-    fn lookup_symbol(&self, name: &str) -> Option<&BindingInfo> {
+    pub fn lookup_symbol(&self, name: &str) -> Option<&BindingInfo> {
         for scope in self.scope_stack.iter().rev() {
             if let Some(binding) = scope.get(name) {
                 return Some(binding);
@@ -577,18 +576,20 @@ impl<'a> IrConverter<'a> {
             Expression::Symbol(sym) => self.convert_symbol_ref(sym),
             Expression::FunctionCall { callee, arguments } => {
                 self.convert_function_call(*callee, arguments)
-            }            Expression::If(if_expr) => self.convert_if(if_expr),
+            }
+            Expression::If(if_expr) => self.convert_if(if_expr),
             Expression::Let(let_expr) => self.convert_let(let_expr),
             Expression::Do(do_expr) => self.convert_do(do_expr),
             Expression::Fn(fn_expr) => self.convert_fn(fn_expr),
-            Expression::Match(match_expr) => self.convert_match(match_expr.clone()),
+            Expression::Match(match_expr) => self.convert_match(match_expr),
             Expression::Vector(exprs) => self.convert_vector(exprs),
             Expression::Map(map) => self.convert_map(map),
             Expression::List(exprs) => self.convert_list_as_application(exprs),
             Expression::TryCatch(try_expr) => self.convert_try_catch(try_expr),
             Expression::Parallel(parallel_expr) => self.convert_parallel(parallel_expr),
-            Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),            
-            Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(&discover_expr),
+            Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),
+            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),
+            Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(discover_expr),
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
         }
@@ -617,7 +618,9 @@ impl<'a> IrConverter<'a> {
             ir_type,
             source_location: None,
         })
-    }    /// Convert symbol reference (variable lookup)
+    }
+    
+    /// Convert symbol reference (variable lookup)
     fn convert_symbol_ref(&mut self, sym: Symbol) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let name = sym.0.clone();
@@ -632,7 +635,7 @@ impl<'a> IrConverter<'a> {
                 if let Some(registry) = self.module_registry {
                     if let Some(module) = registry.get_module(module_name) {
                         // Check exported functions/values
-                        if let Some(export) = module.exports.get(symbol_name) {
+                        if let Some(export) = module.exports.borrow().get(symbol_name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: module_name.to_string(),
@@ -671,7 +674,8 @@ impl<'a> IrConverter<'a> {
             }
         }
     }
-      /// Convert function call
+
+    /// Convert function call
     fn convert_function_call(&mut self, callee: Expression, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
         // Check for special forms first
         if let Expression::Symbol(Symbol(ref name)) = callee {
@@ -696,7 +700,8 @@ impl<'a> IrConverter<'a> {
             Some(IrType::Function { return_type, .. }) => (**return_type).clone(),
             _ => IrType::Any,
         };
-          Ok(IrNode::Apply {
+
+        Ok(IrNode::Apply {
             id,
             function,
             arguments: ir_arguments,
@@ -791,7 +796,8 @@ impl<'a> IrConverter<'a> {
             variadic_param_type: None,
             return_type: Box::new(return_type),
         };
-          Ok(IrNode::Lambda {
+
+        Ok(IrNode::Lambda {
             id,
             params,
             variadic_param: None,
@@ -828,7 +834,8 @@ impl<'a> IrConverter<'a> {
             else_branch,
             ir_type: result_type,
             source_location: None,
-        })    }
+        })
+    }
     
     /// Convert let expression with proper scope management
     fn convert_let(&mut self, let_expr: LetExpr) -> IrConversionResult<IrNode> {
@@ -845,7 +852,7 @@ impl<'a> IrConverter<'a> {
         // Pass 1: Identify function bindings and create placeholders
         for binding in let_expr.bindings {
             if let Pattern::Symbol(symbol) = &binding.pattern {
-                if matches!(binding.value.as_ref(), Expression::Fn(_)) {
+                if matches!(*binding.value, Expression::Fn(_)) {
                     let binding_id = self.next_id();
                     
                     // Create placeholder binding info for the function
@@ -933,7 +940,330 @@ impl<'a> IrConverter<'a> {
             source_location: None,
         })
     }
-      /// Convert pattern to IR node
+
+    fn convert_do(&mut self, do_expr: DoExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let mut expressions = Vec::new();
+        for expr in do_expr.expressions {
+            expressions.push(self.convert_expression(expr)?);
+        }
+        let ir_type = expressions.last().and_then(|n| n.ir_type()).cloned().unwrap_or(IrType::Nil);
+        Ok(IrNode::Do { id, expressions, ir_type, source_location: None })
+    }
+
+    fn convert_fn(&mut self, fn_expr: FnExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        self.enter_scope();
+        let mut params = Vec::new();
+        for p_def in fn_expr.params {
+            if let Pattern::Symbol(s) = p_def.pattern {
+                let param_id = self.next_id();
+                let param_type = self.convert_type_annotation_option(p_def.type_annotation)?;
+
+                let binding_info = BindingInfo {
+                    name: s.0.clone(),
+                    binding_id: param_id,
+                    ir_type: param_type.clone(),
+                    kind: BindingKind::Parameter,
+                };
+                self.define_binding(s.0.clone(), binding_info);
+
+                params.push(IrNode::Param {
+                    id: param_id,
+                    binding: Box::new(IrNode::VariableBinding {
+                        id: param_id,
+                        name: s.0,
+                        ir_type: param_type.clone(),
+                        source_location: None,
+                    }),
+                    type_annotation: Some(param_type.clone()),
+                    ir_type: param_type,
+                    source_location: None,
+                });
+            }
+            // TODO: Handle other patterns in params
+        }
+
+        let mut body = Vec::new();
+        for expr in fn_expr.body {
+            body.push(self.convert_expression(expr)?);
+        }
+        self.exit_scope();
+
+        let return_type = if let Some(ret_type_expr) = fn_expr.return_type {
+            self.convert_type_annotation(ret_type_expr)?
+        } else {
+            body.last().and_then(|n| n.ir_type()).cloned().unwrap_or(IrType::Any)
+        };
+
+        let param_types = params.iter().map(|p| p.ir_type().cloned().unwrap_or(IrType::Any)).collect();
+
+        Ok(IrNode::Lambda {
+            id,
+            params,
+            variadic_param: None, // TODO
+            body,
+            captures: vec![], // TODO
+            ir_type: IrType::Function {
+                param_types,
+                variadic_param_type: None, // TODO
+                return_type: Box::new(return_type),
+            },
+            source_location: None,
+        })
+    }
+
+    fn convert_match(&mut self, match_expr: MatchExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let expression = Box::new(self.convert_expression(*match_expr.expression)?);
+        let mut clauses = Vec::new();
+        for clause in match_expr.clauses {
+            let pattern = self.convert_match_pattern(clause.pattern)?;
+            let guard = match clause.guard {
+                Some(g) => Some(self.convert_expression(*g)?),
+                None => None,
+            };
+            let body = self.convert_expression(*clause.body)?;
+            clauses.push(IrMatchClause { pattern, guard, body });
+        }
+        let ir_type = clauses.first().map(|c| c.body.ir_type().cloned().unwrap_or(IrType::Any)).unwrap_or(IrType::Any); // Simplified
+        Ok(IrNode::Match { id, expression, clauses, ir_type, source_location: None })
+    }
+
+    fn convert_vector(&mut self, exprs: Vec<Expression>) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let mut elements = Vec::new();
+        for expr in exprs {
+            elements.push(self.convert_expression(expr)?);
+        }
+        Ok(IrNode::Vector { id, elements, ir_type: IrType::Vector(Box::new(IrType::Any)), source_location: None })
+    }
+
+    fn convert_map(&mut self, map: HashMap<MapKey, Expression>) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let mut entries = Vec::new();
+        let mut map_type_entries = Vec::new();
+
+        for (key, value) in map {
+            let ir_key = self.convert_map_key(key.clone())?;
+            let ir_value = self.convert_expression(value)?;
+            
+            if let (Some(key_type), Some(value_type)) = (ir_key.ir_type(), ir_value.ir_type()) {
+                 if let IrNode::Literal { value: Literal::Keyword(kw), .. } = &ir_key {
+                    map_type_entries.push(IrMapTypeEntry {
+                        key: kw.clone(),
+                        value_type: value_type.clone(),
+                        optional: false,
+                    });
+                 }
+            }
+
+            entries.push(IrMapEntry { key: ir_key, value: ir_value });
+        }
+
+        let ir_type = IrType::Map {
+            entries: map_type_entries,
+            wildcard: None,
+        };
+
+        Ok(IrNode::Map { id, entries, ir_type, source_location: None })
+    }
+
+    fn convert_map_key(&mut self, key: MapKey) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        match key {
+            MapKey::Keyword(k) => Ok(IrNode::Literal { id, value: Literal::Keyword(k), ir_type: IrType::Keyword, source_location: None }),
+            MapKey::String(s) => Ok(IrNode::Literal { id, value: Literal::String(s), ir_type: IrType::String, source_location: None }),
+            MapKey::Integer(i) => Ok(IrNode::Literal { id, value: Literal::Integer(i), ir_type: IrType::Int, source_location: None }),
+        }
+    }
+
+    fn convert_list_as_application(&mut self, exprs: Vec<Expression>) -> IrConversionResult<IrNode> {
+        if exprs.is_empty() {
+            return Err(IrConversionError::InvalidSpecialForm { form: "()".to_string(), message: "Empty list cannot be called".to_string() });
+        }
+        let callee = exprs[0].clone();
+        let arguments = exprs[1..].to_vec();
+        self.convert_function_call(callee, arguments)
+    }
+
+    fn convert_try_catch(&mut self, try_expr: TryCatchExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        
+        let try_body_expressions = try_expr.try_body.into_iter()
+            .map(|e| self.convert_expression(e))
+            .collect::<Result<_,_>>()?;
+
+        let mut catch_clauses = Vec::new();
+        for clause in try_expr.catch_clauses {
+            let pattern = match clause.pattern {
+                CatchPattern::Keyword(k) => IrPattern::Literal(Literal::Keyword(k)),
+                CatchPattern::Type(t) => IrPattern::Type(self.convert_type_annotation(t)?),
+                CatchPattern::Symbol(s) => IrPattern::Variable(s.0),
+            };
+            let body = clause.body.into_iter()
+                .map(|e| self.convert_expression(e))
+                .collect::<Result<_,_>>()?;
+            catch_clauses.push(IrCatchClause {
+                error_pattern: pattern,
+                binding: Some(clause.binding.0),
+                body,
+            });
+        }
+        
+        let finally_body = if let Some(fb) = try_expr.finally_body {
+            Some(fb.into_iter().map(|e| self.convert_expression(e)).collect::<Result<_,_>>()?)
+        } else {
+            None
+        };
+
+        Ok(IrNode::TryCatch {
+            id,
+            try_body: try_body_expressions,
+            catch_clauses,
+            finally_body,
+            ir_type: IrType::Any,
+            source_location: None,
+        })
+    }
+
+    fn convert_parallel(&mut self, parallel_expr: ParallelExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let mut bindings = Vec::new();
+        for binding in parallel_expr.bindings {
+            let init_expr = self.convert_expression(*binding.expression)?;
+            let binding_node = IrNode::VariableBinding {
+                id: self.next_id(),
+                name: binding.symbol.0,
+                ir_type: init_expr.ir_type().cloned().unwrap_or(IrType::Any),
+                source_location: None,
+            };
+            bindings.push(IrParallelBinding {
+                binding: binding_node,
+                init_expr,
+            });
+        }
+        Ok(IrNode::Parallel { id, bindings, ir_type: IrType::Vector(Box::new(IrType::Any)), source_location: None })
+    }
+
+    fn convert_with_resource(&mut self, with_expr: WithResourceExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let resource_id = self.next_id();
+        let resource_name = with_expr.resource_symbol.0;
+        let init_expr = Box::new(self.convert_expression(*with_expr.resource_init)?);
+        
+        self.enter_scope();
+        let binding_info = BindingInfo {
+            name: resource_name.clone(),
+            binding_id: resource_id,
+            ir_type: IrType::Any, // Type of resource is not known at this stage
+            kind: BindingKind::Resource,
+        };
+        self.define_binding(resource_name.clone(), binding_info);
+        
+        let body_expressions = with_expr.body.into_iter()
+            .map(|e| self.convert_expression(e))
+            .collect::<Result<_,_>>()?;
+        
+        self.exit_scope();
+
+        let binding_node = IrNode::VariableBinding {
+            id: resource_id,
+            name: resource_name,
+            ir_type: self.convert_type_annotation(with_expr.resource_type)?,
+            source_location: None,
+        };
+
+        Ok(IrNode::WithResource {
+            id,
+            binding: Box::new(binding_node),
+            init_expr,
+            body: body_expressions,
+            ir_type: IrType::Any,
+            source_location: None,
+        })
+    }
+
+    fn convert_log_step(&mut self, log_expr: LogStepExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let values = log_expr.values.into_iter().map(|e| self.convert_expression(e)).collect::<Result<_,_>>()?;
+        Ok(IrNode::LogStep {
+            id,
+            values,
+            level: log_expr.level.unwrap_or(Keyword("info".to_string())),
+            location: log_expr.location,
+            ir_type: IrType::Nil,
+            source_location: None,
+        })
+    }
+
+    fn convert_discover_agents(&mut self, discover_expr: DiscoverAgentsExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let criteria = Box::new(self.convert_expression(*discover_expr.criteria)?);
+        // TODO: Handle options
+        Ok(IrNode::DiscoverAgents { id, criteria, ir_type: IrType::Vector(Box::new(IrType::Any)), source_location: None })
+    }
+
+    fn convert_def(&mut self, def_expr: DefExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let name = def_expr.symbol.0;
+        let init_expr = Box::new(self.convert_expression(*def_expr.value)?);
+        let type_annotation = if let Some(ta) = def_expr.type_annotation {
+            Some(self.convert_type_annotation(ta)?)
+        } else {
+            None
+        };
+        let ir_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
+
+        let binding_info = BindingInfo {
+            name: name.clone(),
+            binding_id: id, // Use def's ID as binding ID
+            ir_type: ir_type.clone(),
+            kind: BindingKind::Variable,
+        };
+        self.define_binding(name.clone(), binding_info);
+
+        Ok(IrNode::VariableDef {
+            id,
+            name,
+            type_annotation,
+            init_expr,
+            ir_type,
+            source_location: None,
+        })
+    }
+
+    fn convert_defn(&mut self, defn_expr: DefnExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let name = defn_expr.name.0;
+
+        let fn_expr = FnExpr {
+            params: defn_expr.params,
+            variadic_param: defn_expr.variadic_param,
+            return_type: defn_expr.return_type,
+            body: defn_expr.body,
+        };
+        let lambda = self.convert_fn(fn_expr)?;
+        let ir_type = lambda.ir_type().cloned().unwrap_or(IrType::Any);
+
+        let binding_info = BindingInfo {
+            name: name.clone(),
+            binding_id: id,
+            ir_type: ir_type.clone(),
+            kind: BindingKind::Function,
+        };
+        self.define_binding(name.clone(), binding_info);
+
+        Ok(IrNode::FunctionDef {
+            id,
+            name,
+            lambda: Box::new(lambda),
+            ir_type,
+            source_location: None,
+        })
+    }
+
+    /// Convert pattern to IR node
     fn convert_pattern(&mut self, pattern: Pattern, binding_id: NodeId, ir_type: IrType) -> IrConversionResult<IrNode> {
         match pattern {
             Pattern::Symbol(sym) => {
@@ -952,7 +1282,7 @@ impl<'a> IrConverter<'a> {
                     source_location: None,
                 })
             }
-            Pattern::VectorDestructuring { elements: _, rest: _, as_symbol: _ } => {
+            Pattern::VectorDestructuring { .. } => {
                 // Create a destructuring pattern (simplified)
                 Ok(IrNode::VariableBinding {
                     id: binding_id,
@@ -961,7 +1291,7 @@ impl<'a> IrConverter<'a> {
                     source_location: None,
                 })
             }
-            Pattern::MapDestructuring { entries: _, rest: _, as_symbol: _ } => {
+            Pattern::MapDestructuring { .. } => {
                 // Similar to vector - simplified destructuring
                 Ok(IrNode::VariableBinding {
                     id: binding_id,
@@ -1000,740 +1330,61 @@ impl<'a> IrConverter<'a> {
             _ => Ok(IrType::Any), // TODO: Implement remaining type conversions
         }
     }
-    
-    // Placeholder implementations for other expression types
-    fn convert_do(&mut self, do_expr: DoExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let mut expressions = Vec::new();
-          for expr in do_expr.expressions {
-            expressions.push(self.convert_expression(expr)?);
+
+    fn convert_type_annotation_option(&mut self, type_expr: Option<TypeExpr>) -> IrConversionResult<IrType> {
+        match type_expr {
+            Some(t) => self.convert_type_annotation(t),
+            None => Ok(IrType::Any),
         }
-        
-        let result_type = expressions.last()
-            .and_then(|expr| expr.ir_type())
-            .cloned()
-            .unwrap_or(IrType::Nil);
-        
-        Ok(IrNode::Do {
-            id,
-            expressions,
-            ir_type: result_type,
-            source_location: None,
-        })
     }
-      fn convert_fn(&mut self, fn_expr: FnExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Enter new scope for function body
-        self.enter_scope();
-        
-        // Convert parameters
-        let mut params = Vec::new();
-        for param_def in fn_expr.params {
-            let param_id = self.next_id();
-            let param_type = if let Some(type_ann) = param_def.type_annotation {
-                self.convert_type_annotation(type_ann)?
-            } else {
-                IrType::Any
-            };
-            
-            // Convert pattern to binding
-            let binding_node = self.convert_pattern(param_def.pattern.clone(), param_id, param_type.clone())?;
-            
-            // Add parameter to scope
-            if let Pattern::Symbol(sym) = &param_def.pattern {
-                let binding_info = BindingInfo {
-                    name: sym.0.clone(),
-                    binding_id: param_id,
-                    ir_type: param_type.clone(),
-                    kind: BindingKind::Parameter,
-                };
-                self.define_binding(sym.0.clone(), binding_info);
-            }
-            
-            params.push(IrNode::Param {
-                id: param_id,
-                binding: Box::new(binding_node),
-                type_annotation: Some(param_type.clone()),
-                ir_type: param_type,
-                source_location: None,
-            });
-        }
-        
-        // Convert variadic parameter if present
-        let variadic_param = if let Some(variadic_def) = fn_expr.variadic_param {
-            let param_id = self.next_id();
-            let param_type = if let Some(type_ann) = variadic_def.type_annotation {
-                self.convert_type_annotation(type_ann)?
-            } else {
-                IrType::Vector(Box::new(IrType::Any))
-            };
-            
-            let binding_node = self.convert_pattern(variadic_def.pattern.clone(), param_id, param_type.clone())?;
-            
-            if let Pattern::Symbol(sym) = &variadic_def.pattern {
-                let binding_info = BindingInfo {
-                    name: sym.0.clone(),
-                    binding_id: param_id,
-                    ir_type: param_type.clone(),
-                    kind: BindingKind::Parameter,
-                };
-                self.define_binding(sym.0.clone(), binding_info);
-            }
-            
-            Some(Box::new(IrNode::Param {
-                id: param_id,
-                binding: Box::new(binding_node),
-                type_annotation: Some(param_type.clone()),
-                ir_type: param_type,
-                source_location: None,
-            }))
-        } else {
-            None
-        };
-          // Convert body expressions
-        let mut body_exprs = Vec::new();
-        for body_expr in fn_expr.body {
-            body_exprs.push(self.convert_expression(body_expr)?);
-        }
-        
-        // Exit function scope
-        self.exit_scope();
-        
-        // Determine return type
-        let return_type = if let Some(ret_type) = fn_expr.return_type {
-            self.convert_type_annotation(ret_type)?
-        } else {
-            body_exprs.last()
-                .and_then(|expr| expr.ir_type())
-                .cloned()
-                .unwrap_or(IrType::Any)
-        };
-        
-        // Build function type
-        let param_types: Vec<IrType> = params.iter()
-            .filter_map(|p| p.ir_type())
-            .cloned()
-            .collect();
-        
-        let variadic_param_type = variadic_param.as_ref()
-            .and_then(|p| p.ir_type())
-            .map(|t| Box::new(t.clone()));
-        
-        let function_type = IrType::Function {
-            param_types,
-            variadic_param_type,
-            return_type: Box::new(return_type),
-        };
-        
-        // TODO: Implement capture analysis for closures
-        let captures = Vec::new();
-        
-        Ok(IrNode::Lambda {
-            id,
-            params,
-            variadic_param,
-            body: body_exprs,
-            captures,
-            ir_type: function_type,
-            source_location: None,
-        })
-    }
-      fn convert_match(&mut self, match_expr: MatchExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Convert the expression being matched
-        let match_expr_ir = Box::new(self.convert_expression(*match_expr.expression)?);
-        
-        // Convert match clauses
-        let mut ir_clauses = Vec::new();
-        let mut result_types = Vec::new();
-        
-        for clause in match_expr.clauses {
-            // Enter new scope for pattern bindings
-            self.enter_scope();
-            
-            // Convert pattern
-            let ir_pattern = self.convert_pattern_to_ir_pattern(clause.pattern)?;
-            
-            // Convert guard if present
-            let guard = if let Some(guard_expr) = clause.guard {
-                Some(self.convert_expression(*guard_expr)?)
-            } else {
-                None
-            };
-            
-            // Convert body
-            let body = self.convert_expression(*clause.body)?;
-            
-            // Track result type for union computation
-            if let Some(body_type) = body.ir_type() {
-                result_types.push(body_type.clone());
-            }
-            
-            // Exit pattern scope
-            self.exit_scope();
-            
-            ir_clauses.push(IrMatchClause {
-                pattern: ir_pattern,
-                guard,
-                body,
-            });
-        }
-        
-        // Compute result type as union of all clause result types
-        let result_type = if result_types.is_empty() {
-            IrType::Never
-        } else if result_types.len() == 1 {
-            result_types.into_iter().next().unwrap()
-        } else {
-            // Check if all types are the same
-            let first_type = &result_types[0];
-            if result_types.iter().all(|t| t == first_type) {
-                first_type.clone()
-            } else {
-                IrType::Union(result_types)
-            }
-        };
-        
-        Ok(IrNode::Match {
-            id,
-            expression: match_expr_ir,
-            clauses: ir_clauses,
-            ir_type: result_type,
-            source_location: None,
-        })
-    }
-    
-    /// Convert AST pattern to IR pattern
-    fn convert_pattern_to_ir_pattern(&mut self, pattern: MatchPattern) -> IrConversionResult<IrPattern> {        match pattern {
-            MatchPattern::Symbol(sym) => {
-                // Add to current scope for pattern binding
-                let binding_info = BindingInfo {
-                    name: sym.0.clone(),
-                    binding_id: self.next_id(),
-                    ir_type: IrType::Any, // Will be refined during type inference
-                    kind: BindingKind::Variable,
-                };
-                self.define_binding(sym.0.clone(), binding_info);
-                Ok(IrPattern::Variable(sym.0))
-            }
+
+    fn convert_match_pattern(&mut self, pattern: MatchPattern) -> IrConversionResult<IrPattern> {
+        match pattern {
+            MatchPattern::Literal(l) => Ok(IrPattern::Literal(l)),
+            MatchPattern::Symbol(s) => Ok(IrPattern::Variable(s.0)),
+            MatchPattern::Keyword(k) => Ok(IrPattern::Literal(Literal::Keyword(k))),
             MatchPattern::Wildcard => Ok(IrPattern::Wildcard),
-            MatchPattern::Literal(lit) => Ok(IrPattern::Literal(lit)),            MatchPattern::Vector { elements, rest } => {
-                let mut ir_patterns = Vec::new();
-                
-                for pat in elements {
-                    ir_patterns.push(self.convert_pattern_to_ir_pattern(pat)?);
+            MatchPattern::Vector { elements, rest } => {
+                let mut ir_elements = Vec::new();
+                for el in elements {
+                    ir_elements.push(self.convert_match_pattern(el)?);
                 }
-                  Ok(IrPattern::Vector {
-                    elements: ir_patterns,
+                Ok(IrPattern::Vector {
+                    elements: ir_elements,
                     rest: rest.map(|s| s.0),
                 })
-            }            MatchPattern::Map { entries, rest } => {
+            }
+            MatchPattern::Map { entries, rest } => {
                 let mut ir_entries = Vec::new();
-                
                 for entry in entries {
-                    let value_pattern = self.convert_pattern_to_ir_pattern(*entry.pattern)?;
                     ir_entries.push(IrMapPatternEntry {
                         key: entry.key,
-                        pattern: value_pattern,
+                        pattern: self.convert_match_pattern(*entry.pattern)?,
                     });
                 }
-                
                 Ok(IrPattern::Map {
                     entries: ir_entries,
                     rest: rest.map(|s| s.0),
                 })
             }
-            MatchPattern::Keyword(kw) => {
-                Ok(IrPattern::Literal(Literal::Keyword(kw)))
-            }            MatchPattern::Type(_type_expr, binding) => {
-                // For now, treat type patterns as wildcards with optional binding
-                // TODO: Use _type_expr for proper type checking
-                if let Some(sym) = binding {
-                    let binding_info = BindingInfo {
-                        name: sym.0.clone(),
-                        binding_id: self.next_id(),
-                        ir_type: IrType::Any, // Would need type resolution here
-                        kind: BindingKind::Variable,
-                    };
-                    self.define_binding(sym.0.clone(), binding_info);
-                    Ok(IrPattern::Variable(sym.0))
-                } else {
-                    Ok(IrPattern::Wildcard)
-                }
-            }            MatchPattern::As(symbol, inner_pattern) => {
-                // Convert inner pattern and bind the result to symbol
-                let _inner_ir_pattern = self.convert_pattern_to_ir_pattern(*inner_pattern)?;
-                // TODO: Properly handle the inner pattern structure
-                let binding_info = BindingInfo {
-                    name: symbol.0.clone(),
-                    binding_id: self.next_id(),
-                    ir_type: IrType::Any,
-                    kind: BindingKind::Variable,
-                };
-                self.define_binding(symbol.0.clone(), binding_info);
-                // For simplicity, return the variable pattern (more complex logic would wrap both)
-                Ok(IrPattern::Variable(symbol.0))
+            MatchPattern::Type(type_expr, _) => {
+                let ir_type = self.convert_type_annotation(type_expr)?;
+                Ok(IrPattern::Type(ir_type))
+            }
+            MatchPattern::As(_, pattern) => {
+                // This is tricky. The `as` pattern binds the whole value.
+                // For now, we ignore the `as` binding and just convert the inner pattern.
+                // A more complete implementation would handle this binding.
+                self.convert_match_pattern(*pattern)
             }
         }
-    }
-      fn convert_vector(&mut self, exprs: Vec<Expression>) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let mut elements = Vec::new();
-        let mut element_types = Vec::new();
-        
-        for expr in exprs {
-            let element = self.convert_expression(expr)?;
-            if let Some(elem_type) = element.ir_type() {
-                element_types.push(elem_type.clone());
-            }
-            elements.push(element);
-        }
-        
-        // Determine the vector's element type
-        let element_type = if element_types.is_empty() {
-            IrType::Never
-        } else if element_types.len() == 1 {
-            element_types.into_iter().next().unwrap()
-        } else {
-            // Check if all types are the same
-            let first_type = &element_types[0];
-            if element_types.iter().all(|t| t == first_type) {
-                first_type.clone()
-            } else {
-                IrType::Union(element_types)
-            }
-        };
-          // Create a vector IR node
-        Ok(IrNode::Vector {
-            id,
-            elements,
-            ir_type: IrType::Vector(Box::new(element_type)),
-            source_location: None,
-        })
-    }
-      fn convert_map(&mut self, map: HashMap<MapKey, Expression>) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let mut ir_map_entries = Vec::new();
-        let mut type_entries = Vec::new();
-        
-        for (key, value_expr) in map {
-            let value = self.convert_expression(value_expr)?;              // Track type information for the map type before consuming the key
-            if let MapKey::Keyword(ref keyword) = key {
-                if let Some(value_type) = value.ir_type() {
-                    type_entries.push(IrMapTypeEntry {
-                        key: keyword.clone(),
-                        value_type: value_type.clone(),
-                        optional: false,
-                    });
-                }
-            }
-
-            // Convert the key to an IR node (literal)
-            let key_node = match key {
-                MapKey::String(s) => IrNode::Literal {
-                    id: self.next_id(),
-                    value: Literal::String(s),
-                    ir_type: IrType::String,
-                    source_location: None,
-                },
-                MapKey::Keyword(k) => IrNode::Literal {
-                    id: self.next_id(),
-                    value: Literal::Keyword(k.clone()),
-                    ir_type: IrType::Keyword,
-                    source_location: None,
-                },                MapKey::Integer(i) => IrNode::Literal {
-                    id: self.next_id(),
-                    value: Literal::Integer(i),
-                    ir_type: IrType::Int,
-                    source_location: None,
-                },
-            };
-            
-            ir_map_entries.push(IrMapEntry {
-                key: key_node,
-                value,
-            });
-        }
-        
-        let map_type = IrType::Map {
-            entries: type_entries,
-            wildcard: None,
-        };
-        
-        // Create a map IR node
-        Ok(IrNode::Map {
-            id,
-            entries: ir_map_entries,
-            ir_type: map_type,
-            source_location: None,
-        })
-    }
-    
-    fn convert_list_as_application(&mut self, exprs: Vec<Expression>) -> IrConversionResult<IrNode> {
-        if exprs.is_empty() {
-            return Ok(IrNode::Literal {
-                id: self.next_id(),
-                value: Literal::Nil,
-                ir_type: IrType::Vector(Box::new(IrType::Never)),
-                source_location: None,
-            });
-        }
-        
-        let function = self.convert_expression(exprs[0].clone())?;
-        let mut arguments = Vec::new();
-        
-        for arg_expr in exprs.into_iter().skip(1) {
-            arguments.push(self.convert_expression(arg_expr)?);
-        }
-        
-        self.convert_function_call_ir(function, arguments)
-    }
-    
-    fn convert_function_call_ir(&mut self, function: IrNode, arguments: Vec<IrNode>) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        let return_type = match function.ir_type() {
-            Some(IrType::Function { return_type, .. }) => (**return_type).clone(),
-            _ => IrType::Any,
-        };
-        
-        Ok(IrNode::Apply {
-            id,
-            function: Box::new(function),
-            arguments,
-            ir_type: return_type,
-            source_location: None,
-        })    }
-    
-    // Additional placeholder implementations
-    fn convert_try_catch(&mut self, try_expr: TryCatchExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Convert try body
-        let mut try_body = Vec::new();
-        for expr in try_expr.try_body {
-            try_body.push(self.convert_expression(expr)?);
-        }
-        
-        // Convert catch clauses
-        let mut catch_clauses = Vec::new();
-        for catch_clause in try_expr.catch_clauses {
-            self.enter_scope(); // New scope for error binding
-              // Convert error pattern
-            let error_pattern = match catch_clause.pattern {
-                CatchPattern::Keyword(kw) => IrPattern::Literal(Literal::Keyword(kw)),
-                CatchPattern::Type(type_expr) => {
-                    let ir_type = self.convert_type_annotation(type_expr)?;
-                    IrPattern::Type(ir_type)
-                }
-                CatchPattern::Symbol(_) => IrPattern::Wildcard, // Symbol acts as catch-all
-            };
-            
-            // Handle error binding (use the binding field from CatchClause)
-            let binding_info = BindingInfo {
-                name: catch_clause.binding.0.clone(),
-                binding_id: self.next_id(),
-                ir_type: IrType::Any, // Error type
-                kind: BindingKind::Variable,
-            };
-            self.define_binding(catch_clause.binding.0.clone(), binding_info);
-            let binding = Some(catch_clause.binding.0);
-            
-            // Convert catch body
-            let mut catch_body = Vec::new();
-            for expr in catch_clause.body {
-                catch_body.push(self.convert_expression(expr)?);
-            }
-            
-            self.exit_scope();
-            
-            catch_clauses.push(IrCatchClause {
-                error_pattern,
-                binding,
-                body: catch_body,
-            });
-        }
-        
-        // Convert finally body if present
-        let finally_body = if let Some(finally_exprs) = try_expr.finally_body {
-            let mut finally_ir = Vec::new();
-            for expr in finally_exprs {
-                finally_ir.push(self.convert_expression(expr)?);
-            }
-            Some(finally_ir)
-        } else {
-            None
-        };
-        
-        // Determine result type (try body type or union with catch types)
-        let result_type = try_body.last()
-            .and_then(|expr| expr.ir_type())
-            .cloned()
-            .unwrap_or(IrType::Any);
-        
-        Ok(IrNode::TryCatch {
-            id,
-            try_body,
-            catch_clauses,
-            finally_body,
-            ir_type: result_type,
-            source_location: None,
-        })
-    }
-      fn convert_parallel(&mut self, parallel_expr: ParallelExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let mut bindings = Vec::new();
-        
-        for parallel_binding in parallel_expr.bindings {
-            // Convert the initialization expression
-            let init_expr = self.convert_expression(*parallel_binding.expression)?;
-            
-            // Create binding for the symbol
-            let binding_id = self.next_id();
-            let binding_type = if let Some(type_ann) = parallel_binding.type_annotation {
-                self.convert_type_annotation(type_ann)?
-            } else {
-                init_expr.ir_type().cloned().unwrap_or(IrType::Any)
-            };
-            
-            let binding_node = IrNode::VariableBinding {
-                id: binding_id,
-                name: parallel_binding.symbol.0.clone(),
-                ir_type: binding_type.clone(),
-                source_location: None,
-            };
-            
-            bindings.push(IrParallelBinding {
-                binding: binding_node,
-                init_expr,
-            });
-        }
-        
-        // Parallel expressions don't have a specific return type - they're about concurrency
-        Ok(IrNode::Parallel {
-            id,
-            bindings,
-            ir_type: IrType::Nil,
-            source_location: None,
-        })
-    }
-    
-    fn convert_with_resource(&mut self, with_expr: WithResourceExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Convert the resource initialization
-        let init_expr = Box::new(self.convert_expression(*with_expr.resource_init)?);
-          // Create binding for the resource
-        let binding_id = self.next_id();
-        let resource_type = self.convert_type_annotation(with_expr.resource_type)?;
-          let binding_node = Box::new(IrNode::VariableBinding {
-            id: binding_id,
-            name: with_expr.resource_symbol.0.clone(),
-            ir_type: resource_type.clone(),
-            source_location: None,
-        });
-        
-        // Enter scope for resource binding
-        self.enter_scope();
-        let binding_info = BindingInfo {
-            name: with_expr.resource_symbol.0.clone(),
-            binding_id,
-            ir_type: resource_type.clone(),
-            kind: BindingKind::Resource,
-        };
-        self.define_binding(with_expr.resource_symbol.0, binding_info);
-        
-        // Convert body with resource in scope
-        let mut body_exprs = Vec::new();
-        for body_expr in with_expr.body {
-            body_exprs.push(self.convert_expression(body_expr)?);
-        }
-        
-        self.exit_scope();
-        
-        // Result type is the type of the last body expression
-        let result_type = body_exprs.last()
-            .and_then(|expr| expr.ir_type())
-            .cloned()
-            .unwrap_or(IrType::Nil);
-        
-        Ok(IrNode::WithResource {
-            id,
-            binding: binding_node,
-            init_expr,
-            body: body_exprs,
-            ir_type: result_type,
-            source_location: None,
-        })
-    }
-    
-    fn convert_log_step(&mut self, log_expr: LogStepExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Convert the values to log
-        let mut values = Vec::new();
-        for value_expr in log_expr.values {
-            values.push(self.convert_expression(value_expr)?);
-        }
-          Ok(IrNode::LogStep {
-            id,
-            level: log_expr.level.unwrap_or(Keyword("info".to_string())),
-            values,
-            location: log_expr.location,
-            ir_type: IrType::Nil, // Log steps don't return values
-            source_location: None,
-        })
-    }    fn convert_def(&mut self, def_expr: DefExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Check if the value is a function expression - if so, we need to handle recursion
-        let is_function = matches!(&*def_expr.value, Expression::Fn(_));
-        
-        let init_expr = if is_function {
-            // Pre-register the function name to enable recursion
-            let placeholder_function_type = IrType::Function {
-                param_types: vec![IrType::Any; 1], // We'll update this later
-                variadic_param_type: None,
-                return_type: Box::new(IrType::Any),
-            };
-            
-            let binding_info = BindingInfo {
-                name: def_expr.symbol.0.clone(),
-                binding_id: id,
-                ir_type: placeholder_function_type,
-                kind: BindingKind::Function,
-            };
-            self.define_binding(def_expr.symbol.0.clone(), binding_info);
-            
-            // Now convert the function expression with the name available
-            Box::new(self.convert_expression(*def_expr.value)?)
-        } else {
-            // Regular variable definition - convert normally
-            Box::new(self.convert_expression(*def_expr.value)?)
-        };
-        
-        // Convert type annotation if present
-        let type_annotation = if let Some(type_ann) = def_expr.type_annotation {
-            Some(self.convert_type_annotation(type_ann)?)
-        } else {
-            None
-        };
-        
-        // Determine the type (annotation takes precedence, otherwise infer from init_expr)
-        let var_type = type_annotation
-            .clone()
-            .or_else(|| init_expr.ir_type().cloned())
-            .unwrap_or(IrType::Any);
-        
-        // For non-function expressions, add to global scope now
-        if !is_function {
-            let binding_info = BindingInfo {
-                name: def_expr.symbol.0.clone(),
-                binding_id: id,
-                ir_type: var_type.clone(),
-                kind: BindingKind::Variable,
-            };
-            self.define_binding(def_expr.symbol.0.clone(), binding_info);
-        } else {
-            // Update the function binding with the correct type
-            let binding_info = BindingInfo {
-                name: def_expr.symbol.0.clone(),
-                binding_id: id,
-                ir_type: var_type.clone(),
-                kind: BindingKind::Function,
-            };
-            self.define_binding(def_expr.symbol.0.clone(), binding_info);
-        }
-        
-        Ok(IrNode::VariableDef {
-            id,
-            name: def_expr.symbol.0,
-            type_annotation,
-            init_expr,
-            ir_type: var_type,
-            source_location: None,
-        })
-    }
-    
-    fn convert_defn(&mut self, defn_expr: DefnExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        
-        // Convert the function parameters and body using the existing fn converter
-        let fn_expr = FnExpr {
-            params: defn_expr.params,
-            variadic_param: defn_expr.variadic_param,
-            return_type: defn_expr.return_type,
-            body: defn_expr.body,
-        };
-        
-        let lambda_node = Box::new(self.convert_fn(fn_expr)?);
-        let function_type = lambda_node.ir_type().cloned().unwrap_or(IrType::Any);
-        
-        // Add to global scope (defn is module-level)
-        let binding_info = BindingInfo {
-            name: defn_expr.name.0.clone(),
-            binding_id: id,
-            ir_type: function_type.clone(),
-            kind: BindingKind::Function,
-        };
-        self.define_binding(defn_expr.name.0.clone(), binding_info);
-        
-        Ok(IrNode::FunctionDef {
-            id,
-            name: defn_expr.name.0,
-            lambda: lambda_node,
-            ir_type: function_type,
-            source_location: None,
-        })
-    }
-    
-    /// Check if module registry is available
-    fn has_module_registry(&self) -> bool {
-        self.module_registry.is_some()
-    }
-    
-    /// Get module registry reference
-    fn get_module_registry(&self) -> Option<&'a crate::runtime::module_runtime::ModuleRegistry> {
-        self.module_registry
     }
 
-    /// Convert a discover-agents expression to IR
-    fn convert_discover_agents(&mut self, discover_expr: &crate::ast::DiscoverAgentsExpr) -> IrConversionResult<IrNode> {
-        // For now, convert as a placeholder function call
-        // This will be properly implemented once the agent system is integrated
-        
-        let criteria_ir = self.convert_expression(*discover_expr.criteria.clone())?;
-        
-        let mut args = vec![criteria_ir];
-        
-        if let Some(options) = &discover_expr.options {
-            let options_ir = self.convert_expression(*options.clone())?;
-            args.push(options_ir);
-        }        Ok(IrNode::Apply {
-            id: self.next_id(),
-            function: Box::new(IrNode::VariableRef {
-                id: self.next_id(),
-                name: "discover-agents".to_string(),
-                binding_id: 0, // Placeholder for now
-                ir_type: IrType::Function {
-                    param_types: vec![IrType::Map {
-                        entries: vec![],
-                        wildcard: Some(Box::new(IrType::Any)),
-                    }],
-                    variadic_param_type: None,
-                    return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
-                },
-                source_location: None,
-            }),
-            arguments: args,
-            ir_type: IrType::Vector(Box::new(IrType::Any)),
-            source_location: None,        })
+    pub fn into_bindings(mut self) -> HashMap<String, BindingInfo> {
+        if self.scope_stack.is_empty() {
+            HashMap::new()
+        } else {
+            self.scope_stack.remove(0)
+        }
     }
-}
-
-/// Factory function for creating an IR converter
-pub fn create_ir_converter() -> IrConverter<'static> {
-    IrConverter::new()
 }

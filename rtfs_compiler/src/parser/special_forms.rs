@@ -31,7 +31,7 @@ use super::expressions::build_expression;
 use super::types::build_type_expr; // For type annotations
 
 // Utility imports (if any) - e.g., for skipping whitespace/comments if not handled by Pest rules
-use super::utils::unescape; // For log_step_expr
+// use super::utils::unescape; // For log_step_expr
 
 pub(super) fn build_let_expr(pair: Pair<Rule>) -> Result<LetExpr, PestParseError> {
     let span = pair_to_source_span(&pair);
