@@ -127,9 +127,12 @@ impl IrRuntime {
             IrNode::If { condition, then_branch, else_branch, .. } => {
                 self.execute_if(condition, then_branch, else_branch.as_deref(), env, is_tail, module_registry)
             }
-            
-            IrNode::Let { bindings, body, .. } => {
+              IrNode::Let { bindings, body, .. } => {
                 self.execute_let(bindings, body, env, is_tail, module_registry)
+            }
+            
+            IrNode::Letrec { bindings, body, .. } => {
+                self.execute_letrec(bindings, body, env, is_tail, module_registry)
             }
             
             IrNode::Do { expressions, .. } => {
@@ -533,6 +536,62 @@ impl IrRuntime {
         }
 
         // Execute the body in the fully populated local environment.
+        let mut result = Value::Nil;
+        let body_len = body.len();
+        for (i, expr) in body.iter().enumerate() {
+            let is_last = i == body_len - 1;
+            result = self.execute_node(expr, &mut local_env, is_last && is_tail, module_registry)?;
+        }
+
+        Ok(result)
+    }
+
+    fn execute_letrec(
+        &mut self,
+        bindings: &[IrLetBinding],
+        body: &[IrNode],
+        env: &mut IrEnvironment,
+        is_tail: bool,
+        module_registry: &ModuleRegistry,
+    ) -> RuntimeResult<Value> {
+        // Letrec allows all bindings to be mutually recursive
+        let mut local_env = IrEnvironment::with_parent(Rc::new(env.clone()));
+        let mut placeholders = HashMap::new();
+
+        // Pass 1: Create placeholders for ALL bindings (not just functions)
+        // This enables any binding to refer to any other binding in the same letrec
+        for binding in bindings {
+            if let IrNode::VariableBinding { id, .. } = &binding.pattern {
+                let placeholder = Rc::new(RefCell::new(Value::Nil));
+                local_env.define(*id, Value::FunctionPlaceholder(placeholder.clone()));
+                placeholders.insert(*id, placeholder);
+            }
+        }
+
+        // Pass 2: Evaluate all bindings in the environment with all placeholders
+        for binding in bindings {
+            if let IrNode::VariableBinding { id, .. } = &binding.pattern {
+                // Evaluate the binding's value in the environment that includes all placeholders
+                let value = self.execute_node(&binding.init_expr, &mut local_env, false, module_registry)?;
+                
+                // Update the placeholder with the actual value
+                if let Some(placeholder) = placeholders.get(id) {
+                    *placeholder.borrow_mut() = value;
+                } else {
+                    return Err(RuntimeError::InternalError(format!(
+                        "Placeholder not found for binding ID: {}",
+                        id
+                    )));
+                }
+            } else {
+                return Err(RuntimeError::InternalError(format!(
+                    "Unsupported pattern in letrec binding: {:?}",
+                    binding.pattern
+                )));
+            }
+        }
+
+        // Execute the body in the fully populated local environment
         let mut result = Value::Nil;
         let body_len = body.len();
         for (i, expr) in body.iter().enumerate() {

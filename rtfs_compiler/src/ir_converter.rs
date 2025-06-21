@@ -559,6 +559,13 @@ impl<'a> IrConverter<'a> {
         }
     }
     
+    /// Update an existing binding in the current scope
+    pub fn update_binding(&mut self, name: String, info: BindingInfo) {
+        if let Some(current_scope) = self.scope_stack.last_mut() {
+            current_scope.insert(name, info);
+        }
+    }
+    
     /// Look up a symbol in the scope stack
     pub fn lookup_symbol(&self, name: &str) -> Option<&BindingInfo> {
         for scope in self.scope_stack.iter().rev() {
@@ -577,8 +584,8 @@ impl<'a> IrConverter<'a> {
             Expression::FunctionCall { callee, arguments } => {
                 self.convert_function_call(*callee, arguments)
             }
-            Expression::If(if_expr) => self.convert_if(if_expr),
-            Expression::Let(let_expr) => self.convert_let(let_expr),
+            Expression::If(if_expr) => self.convert_if(if_expr),            Expression::Let(let_expr) => self.convert_let(let_expr),
+            Expression::Letrec(let_expr) => self.convert_letrec(let_expr),
             Expression::Do(do_expr) => self.convert_do(do_expr),
             Expression::Fn(fn_expr) => self.convert_fn(fn_expr),
             Expression::Match(match_expr) => self.convert_match(match_expr),
@@ -933,6 +940,88 @@ impl<'a> IrConverter<'a> {
             .unwrap_or(IrType::Nil);
         
         Ok(IrNode::Let {
+            id,
+            bindings,
+            body: body_exprs,
+            ir_type: result_type,
+            source_location: None,
+        })
+    }
+
+    /// Convert letrec expression with proper recursive binding support
+    fn convert_letrec(&mut self, let_expr: LetExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let mut bindings = Vec::new();
+        
+        // Enter new scope for letrec bindings
+        self.enter_scope();
+        
+        // For letrec, all bindings are available during the evaluation of all init expressions
+        // First pass: Create placeholder bindings for all symbols
+        let mut binding_infos = Vec::new();
+        for binding in &let_expr.bindings {
+            if let Pattern::Symbol(symbol) = &binding.pattern {
+                let binding_id = self.next_id();                let binding_info = BindingInfo {
+                    name: symbol.0.clone(),
+                    binding_id,
+                    ir_type: IrType::Any, // Will be refined after processing init expressions
+                    kind: if matches!(*binding.value, Expression::Fn(_)) {
+                        BindingKind::Function
+                    } else {
+                        BindingKind::Variable
+                    },
+                };
+                
+                // Add placeholder to scope immediately so it's available during init conversion
+                self.define_binding(symbol.0.clone(), binding_info.clone());
+                binding_infos.push((binding, binding_info));
+            } else {                return Err(IrConversionError::InvalidPattern {
+                    message: "letrec currently only supports simple symbol bindings".to_string(),
+                    location: None,
+                });
+            }
+        }
+        
+        // Second pass: Convert all init expressions with all placeholders in scope
+        for (binding, binding_info) in binding_infos {
+            let init_expr = self.convert_expression(*binding.value.clone())?;
+            let binding_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
+            let pattern_node = self.convert_pattern(binding.pattern.clone(), binding_info.binding_id, binding_type.clone())?;
+            
+            // Update the binding info with the refined type
+            if let Pattern::Symbol(sym) = &binding.pattern {
+                let updated_binding_info = BindingInfo {
+                    name: sym.0.clone(),
+                    binding_id: binding_info.binding_id,
+                    ir_type: binding_type.clone(),
+                    kind: binding_info.kind,
+                };
+                self.update_binding(sym.0.clone(), updated_binding_info);
+            }
+            
+            bindings.push(IrLetBinding {
+                pattern: pattern_node,
+                type_annotation: binding.type_annotation.clone().map(|t| self.convert_type_annotation(t)).transpose()?,
+                init_expr,
+            });
+        }
+        
+        // Convert body expressions in the scope with all bindings available
+        let mut body_exprs = Vec::new();
+        for body_expr in let_expr.body {
+            body_exprs.push(self.convert_expression(body_expr)?);
+        }
+        
+        // Exit scope
+        self.exit_scope();
+        
+        // Infer result type from last body expression
+        let result_type = body_exprs.last()
+            .and_then(|expr| expr.ir_type())
+            .cloned()
+            .unwrap_or(IrType::Nil);
+        
+        Ok(IrNode::Letrec {
             id,
             bindings,
             body: body_exprs,

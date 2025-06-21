@@ -1,7 +1,7 @@
 use super::common::{build_literal, build_map_key, build_symbol};
 use super::special_forms::{
     build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
-    build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
+    build_letrec_expr, build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
     build_with_resource_expr,
 };
 use super::{PestParseError, Rule, pair_to_source_span}; // Added PestParseError and pair_to_source_span
@@ -36,9 +36,9 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
             pair.into_inner()
                 .map(build_expression)
                 .collect::<Result<Vec<_>, _>>()?,
-        )),
-        Rule::map => Ok(Expression::Map(build_map(pair)?)),
+        )),        Rule::map => Ok(Expression::Map(build_map(pair)?)),
         Rule::let_expr => Ok(Expression::Let(build_let_expr(pair)?)),
+        Rule::letrec_expr => Ok(Expression::Letrec(build_letrec_expr(pair)?)),
         Rule::if_expr => Ok(Expression::If(build_if_expr(pair)?)),
         Rule::do_expr => Ok(Expression::Do(build_do_expr(pair.into_inner())?)),
         Rule::fn_expr => Ok(Expression::Fn(build_fn_expr(pair)?)),

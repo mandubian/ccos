@@ -158,6 +158,7 @@ pub enum Expression {
     },
     If(IfExpr),
     Let(LetExpr),
+    Letrec(LetExpr), // Letrec uses the same structure as Let
     Do(DoExpr),
     Fn(FnExpr),
     Def(Box<DefExpr>),   // Added for def as an expression

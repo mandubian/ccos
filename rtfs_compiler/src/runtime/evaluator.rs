@@ -128,9 +128,9 @@ impl Evaluator {
                         self.call_function(func_value, &args, env)
                     }
                 }
-            },
-            Expression::If(if_expr) => self.eval_if(if_expr, env),
+            },            Expression::If(if_expr) => self.eval_if(if_expr, env),
             Expression::Let(let_expr) => self.eval_let(let_expr, env),
+            Expression::Letrec(let_expr) => self.eval_letrec(let_expr, env),
             Expression::Do(do_expr) => self.eval_do(do_expr, env),
             Expression::Match(match_expr) => self.eval_match(match_expr, env),
             Expression::LogStep(log_expr) => self.eval_log_step(log_expr, env),
@@ -375,6 +375,67 @@ impl Evaluator {
         // This environment now has non-function bindings resolved, and function symbols
         // pointing to FunctionPlaceholders which in turn point to the fully resolved functions.
         self.eval_do_body(&let_expr.body, &mut let_env)
+    }
+    
+    fn eval_letrec(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Letrec allows recursive definitions - all bindings can refer to each other
+        // Create new scope for letrec bindings, parented by the current environment
+        let mut letrec_env = Environment::with_parent(Rc::new(env.clone()));
+        
+        let mut function_bindings_to_resolve = Vec::new();
+        let mut other_bindings = Vec::new();
+
+        // Pass 1: Create placeholders for ALL bindings first (not just functions)
+        // This allows any binding to refer to any other binding in the same letrec
+        for binding in &let_expr.bindings {
+            if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
+                // Create a placeholder cell for this binding
+                let placeholder_cell = Rc::new(RefCell::new(Value::Nil)); 
+                
+                // Define the placeholder in letrec_env immediately
+                letrec_env.define(symbol, Value::FunctionPlaceholder(placeholder_cell.clone()));
+                
+                // Store for resolution in Pass 2
+                if matches!(binding.value.as_ref(), Expression::Fn(_)) {
+                    function_bindings_to_resolve.push((symbol.clone(), binding.value.clone(), placeholder_cell));
+                } else {
+                    other_bindings.push((symbol.clone(), binding.value.clone(), placeholder_cell));
+                }
+            } else {
+                // Non-symbol patterns not supported in letrec for now
+                return Err(RuntimeError::NotImplemented("Complex patterns not yet supported in letrec".to_string()));
+            }
+        }
+        
+        // Pass 2: Resolve function bindings first (they're most likely to be recursive)
+        for (symbol, fn_expr_ast, placeholder_cell) in function_bindings_to_resolve {
+            if let Expression::Fn(fn_expr_params_body) = fn_expr_ast.as_ref() {
+                let user_defined_function = Function::UserDefined {
+                    params: fn_expr_params_body.params.clone(),
+                    variadic_param: fn_expr_params_body.variadic_param.clone(),
+                    body: fn_expr_params_body.body.clone(),
+                    closure: letrec_env.clone(), 
+                };
+                let function_value = Value::Function(user_defined_function);
+                
+                // Update the placeholder cell to point to the actual function value
+                *placeholder_cell.borrow_mut() = function_value;
+            } else {
+                return Err(RuntimeError::InternalError(format!(
+                    "Expected Expression::Fn for symbol '{}' in letrec resolution pass.",
+                    symbol.0
+                )));
+            }
+        }
+        
+        // Pass 3: Resolve non-function bindings
+        for (symbol, value_expr, placeholder_cell) in other_bindings {
+            let value = self.eval_expr(&value_expr, &mut letrec_env)?;
+            *placeholder_cell.borrow_mut() = value;
+        }
+        
+        // Evaluate the body of the letrec expression
+        self.eval_do_body(&let_expr.body, &mut letrec_env)
     }
     
     fn eval_do(&self, do_expr: &DoExpr, env: &mut Environment) -> RuntimeResult<Value> {

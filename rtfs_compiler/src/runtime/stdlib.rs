@@ -189,11 +189,12 @@ impl StandardLibrary {
             arity: Arity::Any,
             func: Self::vector,
         }));
-          env.define(&Symbol("hash-map".to_string()), Value::Function(Function::Builtin {
+        env.define(&Symbol("hash-map".to_string()), Value::Function(Function::Builtin {
             name: "hash-map".to_string(),
             arity: Arity::Any,
             func: Self::hash_map,
-        }));          env.define(&Symbol("map".to_string()), Value::Function(Function::BuiltinWithEvaluator {
+        }));          
+        env.define(&Symbol("map".to_string()), Value::Function(Function::BuiltinWithEvaluator {
             name: "map".to_string(),
             arity: Arity::AtLeast(2),
             func: Self::map_with_evaluator,
@@ -232,6 +233,19 @@ impl StandardLibrary {
             name: "rest".to_string(),
             arity: Arity::Exact(1),
             func: Self::rest,
+        }));
+        
+        // Additional collection functions
+        env.define(&Symbol("get-in".to_string()), Value::Function(Function::Builtin {
+            name: "get-in".to_string(),
+            arity: Arity::Range(2, 3),
+            func: Self::get_in,
+        }));
+        
+        env.define(&Symbol("partition".to_string()), Value::Function(Function::Builtin {
+            name: "partition".to_string(),
+            arity: Arity::Exact(2),
+            func: Self::partition,
         }));
     }
       /// Load type predicate functions (int?, float?, string?, etc.)
@@ -489,11 +503,11 @@ impl StandardLibrary {
     }
 
     /// Load task-related functions
-    fn load_task_functions(env: &mut Environment) {
+    fn load_task_functions(env: &mut Environment) {        
         env.define(&Symbol("rtfs.task/current".to_string()), Value::Function(Function::BuiltinWithEvaluator {
             name: "rtfs.task/current".to_string(),
             arity: Arity::Exact(0),
-            func: Self::task_current,
+            func: Self::task_current_with_evaluator,
         }));
     }
 
@@ -602,32 +616,46 @@ impl StandardLibrary {
             }),
         }
     }    fn map_with_evaluator(args: &[Expression], evaluator: &crate::runtime::evaluator::Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
-        if args.len() != 2 {
+        if args.len() < 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "map".to_string(),
-                expected: "2".to_string(),
+                expected: "at least 2".to_string(),
                 actual: args.len(),
             });
         }
         
         let func = evaluator.eval_expr(&args[0], env)?;
-        let collection = evaluator.eval_expr(&args[1], env)?;
         
-        match collection {
-            Value::Vector(vec) => {
-                let mut results = Vec::new();
-                for item in vec {
-                    let result = evaluator.call_function(func.clone(), &[item], env)?;
-                    results.push(result);
-                }
-                Ok(Value::Vector(results))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collection.type_name().to_string(),
-                operation: "map".to_string(),
-            }),
+        // Evaluate all collections
+        let mut collections = Vec::new();
+        for i in 1..args.len() {
+            let collection = evaluator.eval_expr(&args[i], env)?;
+            match collection {
+                Value::Vector(vec) => collections.push(vec),
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map".to_string(),
+                }),
+            }
         }
+        
+        // Find the shortest collection length to determine how many iterations
+        let min_length = collections.iter().map(|v| v.len()).min().unwrap_or(0);
+        
+        let mut results = Vec::new();
+        for i in 0..min_length {
+            // Collect arguments for this iteration from all collections
+            let mut args_for_call = Vec::new();
+            for collection in &collections {
+                args_for_call.push(collection[i].clone());
+            }
+            
+            let result = evaluator.call_function(func.clone(), &args_for_call, env)?;
+            results.push(result);
+        }
+        
+        Ok(Value::Vector(results))
     }
 
     fn filter_with_evaluator(args: &[Expression], evaluator: &crate::runtime::evaluator::Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
@@ -787,377 +815,93 @@ impl StandardLibrary {
         }
     }
 
-    fn int_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Integer(_)))) }
-    fn float_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Float(_)))) }
-    fn number_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Integer(_) | Value::Float(_)))) }
-    fn string_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::String(_)))) }
-    fn bool_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Boolean(_)))) }
-    fn nil_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Nil))) }
-    fn map_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Map(_)))) }
-    fn vector_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Vector(_)))) }
-    fn keyword_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Keyword(_)))) }
-    fn symbol_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Symbol(_)))) }
-    fn fn_p(args: &[Value]) -> RuntimeResult<Value> { Ok(Value::Boolean(matches!(args[0], Value::Function(_)))) }
+    fn get_in(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() < 2 || args.len() > 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "get-in".to_string(),
+                expected: "2-3".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        let collection = &args[0];
+        let path = &args[1];
+        let default = if args.len() == 3 { args[2].clone() } else { Value::Nil };
+        
+        let path_vec = match path {
+            Value::Vector(v) => v,
+            _ => return Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: path.type_name().to_string(),
+                operation: "get-in".to_string(),
+            }),
+        };
+        
+        let mut current = collection.clone();
+        for key in path_vec {
+            match (&current, key) {
+                (Value::Map(map), key) => {
+                    let map_key = Self::value_to_map_key(key)?;
+                    current = map.get(&map_key).cloned().unwrap_or(Value::Nil);
+                    if matches!(current, Value::Nil) {
+                        return Ok(default);
+                    }
+                },
+                (Value::Vector(vec), Value::Integer(index)) => {
+                    let idx = *index as usize;
+                    current = vec.get(idx).cloned().unwrap_or(Value::Nil);
+                    if matches!(current, Value::Nil) {
+                        return Ok(default);
+                    }
+                },
+                _ => return Ok(default),
+            }
+        }
+        
+        Ok(current)
+    }
 
-    fn tool_log(args: &[Value]) -> RuntimeResult<Value> {
-        let message = args.iter()
-            .map(|a| a.to_string())
-            .collect::<Vec<String>>()
-            .join(" ");
-        
-        // Use eprintln! to log to stderr
-        eprintln!("[LOG] {}", message);
-        Ok(Value::Nil)
-    }
-    fn tool_print(args: &[Value]) -> RuntimeResult<Value> {
-        let s = args.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(" ");
-        println!("{}", s);
-        Ok(Value::Nil)
-    }
-    fn tool_current_time(args: &[Value]) -> RuntimeResult<Value> {
-        if !args.is_empty() {
+    fn partition(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
-                function: "current-time".to_string(),
-                expected: "0".to_string(),
+                function: "partition".to_string(),
+                expected: "2".to_string(),
                 actual: args.len(),
             });
         }
         
-        let now = chrono::Utc::now();
-        Ok(Value::String(now.to_rfc3339()))
-    }    fn tool_parse_json(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "parse-json".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::String(json_str) => {
-                match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(json_value) => Self::json_to_value(json_value),
-                    Err(e) => Err(RuntimeError::JsonError(format!("Failed to parse JSON: {}", e))),
-                }
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "parse-json".to_string(),
-            }),
-        }
-    }
-    
-    fn tool_serialize_json(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "serialize-json".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let json_value = Self::value_to_json(&args[0])?;
-        match serde_json::to_string(&json_value) {
-            Ok(json_str) => Ok(Value::String(json_str)),
-            Err(e) => Err(RuntimeError::JsonError(format!("Failed to serialize JSON: {}", e))),
-        }
-    }
-    
-    // Helper function to convert serde_json::Value to RTFS Value
-    fn json_to_value(json: serde_json::Value) -> RuntimeResult<Value> {
-        match json {
-            serde_json::Value::Null => Ok(Value::Nil),
-            serde_json::Value::Bool(b) => Ok(Value::Boolean(b)),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(Value::Integer(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Value::Float(f))
-                } else {
-                    Err(RuntimeError::JsonError("Invalid number in JSON".to_string()))
-                }
-            },
-            serde_json::Value::String(s) => Ok(Value::String(s)),
-            serde_json::Value::Array(arr) => {
-                let mut values = Vec::new();
-                for item in arr {
-                    values.push(Self::json_to_value(item)?);
-                }
-                Ok(Value::Vector(values))
-            },
-            serde_json::Value::Object(obj) => {
-                let mut map = std::collections::HashMap::new();
-                for (key, value) in obj {
-                    let map_key = crate::ast::MapKey::String(key);
-                    map.insert(map_key, Self::json_to_value(value)?);
-                }
-                Ok(Value::Map(map))
-            },
-        }
-    }
-    
-    // Helper function to convert RTFS Value to serde_json::Value
-    fn value_to_json(value: &Value) -> RuntimeResult<serde_json::Value> {
-        match value {
-            Value::Nil => Ok(serde_json::Value::Null),
-            Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
-            Value::Integer(i) => Ok(serde_json::Value::Number((*i).into())),
-            Value::Float(f) => {
-                match serde_json::Number::from_f64(*f) {
-                    Some(n) => Ok(serde_json::Value::Number(n)),
-                    None => Err(RuntimeError::JsonError("Invalid float value for JSON".to_string())),
-                }
-            },
-            Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-            Value::Vector(v) => {
-                let mut arr = Vec::new();
-                for item in v {
-                    arr.push(Self::value_to_json(item)?);
-                }
-                Ok(serde_json::Value::Array(arr))
-            },
-            Value::Map(m) => {
-                let mut obj = serde_json::Map::new();
-                for (key, value) in m {
-                    let key_str = match key {
-                        crate::ast::MapKey::String(s) => s.clone(),
-                        crate::ast::MapKey::Keyword(k) => k.0.clone(),
-                        crate::ast::MapKey::Integer(i) => i.to_string(),
-                    };
-                    obj.insert(key_str, Self::value_to_json(value)?);
-                }
-                Ok(serde_json::Value::Object(obj))
-            },
-            _ => Err(RuntimeError::JsonError(format!("Cannot serialize {} to JSON", value.type_name()))),
-        }
-    }
-    fn tool_open_file(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
-    fn tool_read_line(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
-    fn tool_write_line(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
-    fn tool_close_file(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }    fn tool_get_env(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "get-env".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::String(env_var) => {
-                match std::env::var(env_var) {
-                    Ok(value) => Ok(Value::String(value)),
-                    Err(_) => Ok(Value::Nil),
-                }
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "get-env".to_string(),
-            }),
-        }
-    }
-    fn tool_http_fetch(_args: &[Value]) -> RuntimeResult<Value> { unimplemented!() }
-    fn tool_file_exists_p(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "file-exists?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::String(path) => {
-                Ok(Value::Boolean(std::path::Path::new(path).exists()))
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "file-exists?".to_string(),
-            }),
-        }
-    }    fn discover_agents(args: &[Value]) -> RuntimeResult<Value> {
-        // Basic stub implementation - returns empty vector for now
-        // In a real implementation, this would connect to agent discovery services
-        if !args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "discover-agents".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        // Return empty list for now
-        Ok(Value::Vector(vec![]))
-    }
-    fn task_coordination(args: &[Value]) -> RuntimeResult<Value> {
-        // Basic stub implementation for task coordination
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "task-coordination".to_string(),
-                expected: "at least 1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        // For now, just return a simple acknowledgment
-        Ok(Value::Map({
-            let mut map = std::collections::HashMap::new();
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("status".to_string())),
-                Value::String("acknowledged".to_string())
-            );
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("task-count".to_string())),
-                Value::Integer(args.len() as i64)
-            );
-            map
-        }))
-    }fn factorial(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "factorial".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        match &args[0] {
-            Value::Integer(n) => {
-                if *n < 0 {
-                    return Err(RuntimeError::InvalidArgument(
-                        "Factorial is not defined for negative numbers".to_string()
-                    ));
-                }
-                
-                let mut result = 1i64;
-                for i in 1..=*n {
-                    result = result.checked_mul(i).ok_or_else(|| {
-                        RuntimeError::InvalidArgument("Factorial result too large".to_string())
-                    })?;
-                }
-                Ok(Value::Integer(result))
-            },
-            _ => Err(RuntimeError::TypeError {
+        let size = match &args[0] {
+            Value::Integer(n) => *n as usize,
+            _ => return Err(RuntimeError::TypeError {
                 expected: "integer".to_string(),
                 actual: args[0].type_name().to_string(),
-                operation: "factorial".to_string(),
+                operation: "partition".to_string(),
             }),
-        }
-    }
-    
-    fn length_value(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "length".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
+        };
+        
+        if size == 0 {
+            return Err(RuntimeError::InvalidArgument(
+                "Partition size must be greater than 0".to_string()
+            ));
         }
         
-        match &args[0] {
-            Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
-            Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
-            Value::String(s) => Ok(Value::Integer(s.chars().count() as i64)),
-            Value::Nil => Ok(Value::Integer(0)),
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector, map, or string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "length".to_string(),
+        let collection = match &args[1] {
+            Value::Vector(v) => v,
+            _ => return Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: args[1].type_name().to_string(),
+                operation: "partition".to_string(),
             }),
-        }
-    }    fn discover_and_assess_agents(args: &[Value]) -> RuntimeResult<Value> {
-        // Basic stub - returns assessment of discovered agents
-        if !args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "discover-and-assess-agents".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
+        };
+        
+        let mut partitions = Vec::new();
+        for chunk in collection.chunks(size) {
+            if chunk.len() == size {
+                partitions.push(Value::Vector(chunk.to_vec()));
+            }
         }
         
-        Ok(Value::Map({
-            let mut map = std::collections::HashMap::new();
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("discovered".to_string())),
-                Value::Integer(0)
-            );
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("assessed".to_string())),
-                Value::Integer(0)
-            );
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("timestamp".to_string())),
-                Value::Integer(chrono::Utc::now().timestamp_millis())
-            );
-            map
-        }))
-    }
-    fn establish_system_baseline(args: &[Value]) -> RuntimeResult<Value> {
-        // Basic stub for system baseline establishment
-        if !args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "establish-system-baseline".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        Ok(Value::Map({
-            let mut map = std::collections::HashMap::new();
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("baseline-established".to_string())),
-                Value::Boolean(true)
-            );
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("timestamp".to_string())),
-                Value::Integer(chrono::Utc::now().timestamp_millis())
-            );
-            map.insert(
-                crate::ast::MapKey::Keyword(crate::ast::Keyword("system-info".to_string())),
-                Value::Map({
-                    let mut inner = std::collections::HashMap::new();
-                    inner.insert(
-                        crate::ast::MapKey::Keyword(crate::ast::Keyword("os".to_string())),
-                        Value::String(std::env::consts::OS.to_string())
-                    );
-                    inner.insert(
-                        crate::ast::MapKey::Keyword(crate::ast::Keyword("arch".to_string())),
-                        Value::String(std::env::consts::ARCH.to_string())
-                    );
-                    inner
-                })
-            );
-            map
-        }))
-    }
-    fn current_timestamp_ms(args: &[Value]) -> RuntimeResult<Value> {
-        if !args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "current-timestamp-ms".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
-        }
-        
-        let now = chrono::Utc::now();
-        Ok(Value::Integer(now.timestamp_millis()))
-    }
-
-    // Task functions
-    fn task_current(args: &[Expression], evaluator: &crate::runtime::evaluator::Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
-        if !args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "rtfs.task/current".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        Ok(evaluator.task_context.clone().unwrap_or(Value::Nil))
+        Ok(Value::Vector(partitions))
     }
 }
 
@@ -1721,4 +1465,333 @@ impl StandardLibrary {
         }
     }
     
+    // Type predicate functions
+    fn int_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "int?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Integer(_))))
+    }
+    
+    fn float_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "float?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Float(_))))
+    }
+    
+    fn number_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "number?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Integer(_) | Value::Float(_))))
+    }
+    
+    fn string_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "string?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::String(_))))
+    }
+    
+    fn bool_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "bool?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Boolean(_))))
+    }
+    
+    fn nil_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "nil?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Nil)))
+    }
+    
+    fn map_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Map(_))))
+    }
+    
+    fn vector_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "vector?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Vector(_))))
+    }
+    
+    fn keyword_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "keyword?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Keyword(_))))
+    }
+    
+    fn symbol_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "symbol?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
+    }
+    
+    fn fn_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "fn?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Function(_))))
+    }
+
+    // Tool functions
+    fn tool_log(args: &[Value]) -> RuntimeResult<Value> {
+        let message = args.iter()
+            .map(|v| format!("{:?}", v))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("[LOG] {}", message);
+        Ok(Value::Nil)
+    }
+
+    fn tool_print(args: &[Value]) -> RuntimeResult<Value> {
+        let message = args.iter()
+            .map(|v| format!("{:?}", v))
+            .collect::<Vec<_>>()
+            .join(" ");
+        print!("{}", message);
+        Ok(Value::Nil)
+    }
+
+    fn tool_current_time(args: &[Value]) -> RuntimeResult<Value> {
+        if !args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:current-time".to_string(),
+                expected: "0".to_string(),
+                actual: args.len(),
+            });
+        }
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        Ok(Value::Integer(timestamp as i64))
+    }
+
+    fn tool_parse_json(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - JSON parsing not implemented
+        Err(RuntimeError::NotImplemented("JSON parsing not implemented".to_string()))
+    }
+
+    fn tool_serialize_json(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - JSON serialization not implemented
+        Err(RuntimeError::NotImplemented("JSON serialization not implemented".to_string()))
+    }
+
+    fn tool_open_file(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - File operations not implemented
+        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+    }
+
+    fn tool_read_line(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - File operations not implemented
+        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+    }
+
+    fn tool_write_line(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - File operations not implemented
+        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+    }
+
+    fn tool_close_file(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - File operations not implemented
+        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+    }
+
+    fn tool_get_env(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:get-env".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        match &args[0] {
+            Value::String(key) => {
+                match std::env::var(key) {
+                    Ok(value) => Ok(Value::String(value)),
+                    Err(_) => Ok(Value::Nil),
+                }
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "tool:get-env".to_string(),
+            }),
+        }
+    }
+
+    fn tool_http_fetch(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - HTTP operations not implemented
+        Err(RuntimeError::NotImplemented("HTTP operations not implemented".to_string()))
+    }
+
+    fn tool_file_exists_p(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:file-exists?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        match &args[0] {
+            Value::String(path) => {
+                Ok(Value::Boolean(std::path::Path::new(path).exists()))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "tool:file-exists?".to_string(),
+            }),
+        }
+    }
+
+    // Agent functions
+    fn discover_agents(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - Agent discovery not implemented
+        Ok(Value::Vector(vec![]))
+    }
+
+    fn task_coordination(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - Task coordination not implemented
+        Ok(Value::Map(HashMap::new()))
+    }
+
+    fn factorial(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "factorial".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        match &args[0] {
+            Value::Integer(n) => {
+                if *n < 0 {
+                    return Err(RuntimeError::InvalidArgument(
+                        "Factorial is not defined for negative numbers".to_string()
+                    ));
+                }
+                let mut result = 1i64;
+                for i in 1..=*n {
+                    result *= i;
+                }
+                Ok(Value::Integer(result))
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "integer".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "factorial".to_string(),
+            }),
+        }
+    }
+
+    fn length_value(args: &[Value]) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "length".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        match &args[0] {
+            Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
+            Value::String(s) => Ok(Value::Integer(s.len() as i64)),
+            Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector, string, or map".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "length".to_string(),
+            }),
+        }
+    }
+
+    fn discover_and_assess_agents(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - Agent discovery and assessment not implemented
+        Ok(Value::Vector(vec![]))
+    }
+
+    fn establish_system_baseline(_args: &[Value]) -> RuntimeResult<Value> {
+        // Placeholder - System baseline establishment not implemented
+        Ok(Value::Map(HashMap::new()))
+    }
+
+    fn current_timestamp_ms(_args: &[Value]) -> RuntimeResult<Value> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        Ok(Value::Integer(timestamp as i64))
+    }    fn task_current_with_evaluator(_args: &[Expression], _evaluator: &crate::runtime::evaluator::Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
+        // Return a placeholder task context
+        let mut task_context = HashMap::new();
+        task_context.insert(
+            MapKey::Keyword(crate::ast::Keyword("id".to_string())),
+            Value::String("current-task".to_string())
+        );
+        task_context.insert(
+            MapKey::Keyword(crate::ast::Keyword("status".to_string())),
+            Value::Keyword(crate::ast::Keyword("active".to_string()))
+        );        Ok(Value::Map(task_context))
+    }
+
 }
