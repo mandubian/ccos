@@ -1,7 +1,6 @@
 // RTFS Agent Discovery Client - Handles communication with agent discovery registries
 // Implements the client side of the JSON-RPC protocol defined in agent_discovery.md
 
-use std::collections::HashMap;
 use std::time::Duration;
 use reqwest::Client;
 use serde_json::{json, Value as JsonValue};

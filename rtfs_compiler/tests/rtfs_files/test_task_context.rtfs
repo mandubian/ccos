@@ -1,4 +1,4 @@
 ; Simple test for TaskContext parsing
-(let [batch-size (:batch-size @intent)
-      output-format (:output-format @intent)]
-  (+ batch-size 100))
+(let [task-context (rtfs.task/current)
+      value (get task-context "key")]
+  value)

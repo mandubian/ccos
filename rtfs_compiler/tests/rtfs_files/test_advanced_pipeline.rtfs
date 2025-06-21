@@ -35,12 +35,12 @@
           start-time (tool:current-timestamp-ms)]
       
       (tool:log "Starting data processing pipeline at:" start-time)
-      
-      ;; Validate input parameters from task intent
-      (let [sources (:data-sources @intent)
-            output-format (:output-format @intent)
-            batch-size (:batch-size @intent)
-            max-parallel (:max-parallel @intent)]
+        ;; Validate input parameters from task intent
+      (let [task-context (rtfs.task/current)
+            sources (get task-context :data-sources)
+            output-format (get task-context :output-format)
+            batch-size (get task-context :batch-size)
+            max-parallel (get task-context :max-parallel)]
         
         (match (validate-pipeline-inputs sources output-format batch-size max-parallel)
           [:ok validated-params]
@@ -86,11 +86,10 @@
                 [:error {:type :error/data-validation
                          :message "Input data failed validation"
                          :data validation-err}]))
-            
-            (catch :error/network network-err
+              (catch :error/network network-err
               (do
                 (tool:log "Network error during processing:" (:message network-err))
-                (schedule-pipeline-retry (:data-sources @intent))
+                (schedule-pipeline-retry (get (rtfs.task/current) :data-sources))
                 [:error {:type :error/network-failure
                          :message "Pipeline will be retried due to network issues"
                          :data {:retry-scheduled true :error network-err}}]))

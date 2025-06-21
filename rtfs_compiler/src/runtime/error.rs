@@ -18,7 +18,10 @@ pub enum RuntimeError {
     
     /// Undefined symbol/variable
     UndefinedSymbol(Symbol),
-    
+
+    SymbolNotFound(String),
+    ModuleNotFound(String),
+
     /// Arity mismatch (wrong number of arguments)
     ArityMismatch {
         function: String,
@@ -119,6 +122,12 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::UndefinedSymbol(symbol) => {
                 write!(f, "Undefined symbol: {}", symbol.0)
+            },
+            RuntimeError::SymbolNotFound(symbol) => {
+                write!(f, "Symbol not found: {}", symbol)
+            },
+            RuntimeError::ModuleNotFound(module) => {
+                write!(f, "Module not found: {}", module)
             },
             RuntimeError::ArityMismatch { function, expected, actual } => {
                 write!(f, "Arity mismatch in {}: expected {}, got {}", function, expected, actual)
@@ -244,6 +253,24 @@ impl RuntimeError {
                 Some({
                     let mut map = HashMap::new();
                     map.insert("symbol".to_string(), Value::String(symbol.0.clone()));
+                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
+                })
+            ),
+            RuntimeError::SymbolNotFound(symbol) => (
+                Keyword("error/symbol-not-found".to_string()),
+                format!("Symbol not found: {}", symbol),
+                Some({
+                    let mut map = HashMap::new();
+                    map.insert("symbol".to_string(), Value::String(symbol.clone()));
+                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
+                })
+            ),
+            RuntimeError::ModuleNotFound(module) => (
+                Keyword("error/module-not-found".to_string()),
+                format!("Module not found: {}", module),
+                Some({
+                    let mut map = HashMap::new();
+                    map.insert("module".to_string(), Value::String(module.clone()));
                     Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
                 })
             ),

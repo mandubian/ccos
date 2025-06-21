@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::*;
 use crate::runtime::{Value, RuntimeError, RuntimeResult, Environment};
-use crate::runtime::environment::SharedEnvironment;
 use crate::runtime::values::{Function, Arity};
 use crate::runtime::stdlib::StandardLibrary;
 use crate::agent::{AgentDiscovery, NoOpAgentDiscovery, SimpleDiscoveryQuery, SimpleDiscoveryOptions, SimpleAgentCard};

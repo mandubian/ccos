@@ -2,8 +2,7 @@
 // Typed, canonical representation of RTFS programs
 
 use std::collections::HashMap;
-use std::rc::Rc;
-use crate::ast::{Symbol, Keyword, MapKey, Literal};
+use crate::ast::{Keyword, MapKey, Literal};
 
 /// Unique identifier for IR nodes (for scope resolution and linking)
 pub type NodeId = u64;
@@ -259,6 +258,13 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
+
+    DiscoverAgents {
+        id: NodeId,
+        criteria: Box<IrNode>,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
     
     // Collection literals
     Vector {
@@ -366,6 +372,7 @@ impl IrNode {
             IrNode::Import { id, .. } => *id,
             IrNode::Task { id, .. } => *id,
             IrNode::TaskContextAccess { id, .. } => *id,
+            IrNode::DiscoverAgents { id, .. } => *id,
         }
     }
     
@@ -393,6 +400,7 @@ impl IrNode {
             IrNode::Map { ir_type, .. } => Some(ir_type),
             IrNode::Task { ir_type, .. } => Some(ir_type),
             IrNode::TaskContextAccess { ir_type, .. } => Some(ir_type),
+            IrNode::DiscoverAgents { ir_type, .. } => Some(ir_type),
             _ => None,
         }
     }
@@ -422,6 +430,7 @@ impl IrNode {
             IrNode::Import { source_location, .. } => source_location.as_ref(),
             IrNode::Task { source_location, .. } => source_location.as_ref(),
             IrNode::TaskContextAccess { source_location, .. } => source_location.as_ref(),
+            IrNode::DiscoverAgents { source_location, .. } => source_location.as_ref(),
             IrNode::Vector { source_location, .. } => source_location.as_ref(),
             IrNode::Map { source_location, .. } => source_location.as_ref(),
         }

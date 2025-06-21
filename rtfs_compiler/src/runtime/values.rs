@@ -63,7 +63,7 @@ pub enum Function {    /// Built-in functions (implemented in Rust)
         params: Vec<crate::ir::IrNode>,
         variadic_param: Option<Box<crate::ir::IrNode>>,
         body: Vec<crate::ir::IrNode>,
-        closure_env: Box<crate::runtime::ir_runtime::IrEnvironment>,
+        closure_env: Box<crate::runtime::environment::IrEnvironment>,
     },
 }
 
@@ -160,6 +160,10 @@ impl Value {
             Value::Ok(_) => "ok",
             Value::Error(_) => "error",
         }
+    }
+
+    pub fn is_function(&self) -> bool {
+        matches!(self, Value::Function(_))
     }
 }
 

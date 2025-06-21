@@ -2,10 +2,7 @@
 // Provides source location information, code snippets, and helpful hints
 
 use std::fmt;
-use std::collections::HashMap;
-use crate::ast::{Symbol, Keyword};
-use crate::runtime::Value;
-use crate::ir::SourceLocation;
+use crate::ast::Symbol;
 
 /// Source span representing a range in the source code
 #[derive(Debug, Clone, PartialEq)]

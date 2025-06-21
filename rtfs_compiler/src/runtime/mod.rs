@@ -80,7 +80,7 @@ impl<'a> Runtime<'a> {
     pub fn set_task_context(&mut self, context: Value) {
         self.ast_evaluator.set_task_context(context.clone());
         if let Some(ir_runtime) = &mut self.ir_runtime {
-            ir_runtime.set_task_context(context);
+            // ir_runtime.set_task_context(context); // TODO: Implement in IrRuntime
         }
     }
 
@@ -109,8 +109,8 @@ impl<'a> Runtime<'a> {
             RuntimeStrategy::Ir => {
                 let ir_node = self.converter.convert_expression(expr.clone())?;
                 if let Some(ir_runtime) = &mut self.ir_runtime {
-                    let mut env = ir_runtime::IrEnvironment::new();
-                    ir_runtime.execute_node(&ir_node, &mut env, false)
+                    let mut env = environment::IrEnvironment::new();
+                    ir_runtime.execute_node(&ir_node, &mut env, false, self.module_registry)
                 } else {
                     Err(RuntimeError::InternalError("IR runtime not available".to_string()))
                 }
@@ -119,8 +119,8 @@ impl<'a> Runtime<'a> {
                 match self.converter.convert_expression(expr.clone()) {
                     Ok(ir_node) => {
                         if let Some(ir_runtime) = &mut self.ir_runtime {
-                            let mut env = ir_runtime::IrEnvironment::new();
-                            match ir_runtime.execute_node(&ir_node, &mut env, false) {
+                            let mut env = environment::IrEnvironment::new();
+                            match ir_runtime.execute_node(&ir_node, &mut env, false, self.module_registry) {
                                 Ok(value) => Ok(value),
                                 Err(_) => self.ast_evaluator.evaluate_with_env(expr, &mut self.persistent_env.clone()), // Fallback
                             }
@@ -137,8 +137,8 @@ impl<'a> Runtime<'a> {
     /// Evaluate an IR node directly (for production compiler)
     pub fn evaluate_ir(&mut self, ir_node: &crate::ir::IrNode) -> RuntimeResult<Value> {
         if let Some(ir_runtime) = &mut self.ir_runtime {
-            let mut env = ir_runtime::IrEnvironment::new();
-            ir_runtime.execute_node(ir_node, &mut env, false)
+            let mut env = environment::IrEnvironment::new();
+            ir_runtime.execute_node(ir_node, &mut env, false, self.module_registry)
         } else {
             Err(RuntimeError::InternalError("IR runtime not available".to_string()))
         }

@@ -34,10 +34,10 @@
             [:error {:type :processing-failed :batch batch :error err}]))
         (finally
           (tool:log "Batch processing completed"))))
-    
-    ; Main processing logic
-    (let [input-data (:input-data @intent)
-          batch-size (:batch-size @intent)
+      ; Main processing logic
+    (let [task-context (rtfs.task/current)
+          input-data (get task-context :input-data)
+          batch-size (get task-context :batch-size)
           batches (partition batch-size input-data)]
       
       (tool:log "Processing" (count batches) "batches of size" batch-size)
