@@ -295,9 +295,9 @@ fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         | Rule::symbol
         | Rule::keyword
         | Rule::list
-        | Rule::vector
-        | Rule::map
+        | Rule::vector        | Rule::map
         | Rule::let_expr
+        | Rule::letrec_expr
         | Rule::if_expr
         | Rule::do_expr
         | Rule::fn_expr

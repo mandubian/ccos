@@ -1,2 +1,2 @@
 ; Test get-in function
-(get {:a {:b {:c 3}}} :a)
+(get-in {:a {:b {:c 3}}} [:a :b :c])
