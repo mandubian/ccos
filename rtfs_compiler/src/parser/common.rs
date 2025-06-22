@@ -27,7 +27,7 @@ pub(super) fn build_literal(pair: Pair<Rule>) -> Result<Literal, PestParseError>
         Rule::string => {
             let raw_str = inner_pair.as_str();
             let content = &raw_str[1..raw_str.len() - 1];
-            Ok(Literal::String(unescape(content).map_err(|e| PestParseError::InvalidEscapeSequence {
+            Ok(Literal::String(unescape(content).map_err(|_| PestParseError::InvalidEscapeSequence {
                 sequence: content.to_string(), // Use the content that failed to unescape
                 span: Some(inner_span.clone())
             })?))
@@ -96,7 +96,7 @@ pub(super) fn build_map_key(pair: Pair<Rule>) -> Result<MapKey, PestParseError> 
         Rule::string => {
             let raw_str = inner_pair.as_str();
             let content = &raw_str[1..raw_str.len() - 1];
-            Ok(MapKey::String(unescape(content).map_err(|e| PestParseError::InvalidEscapeSequence {
+            Ok(MapKey::String(unescape(content).map_err(|_| PestParseError::InvalidEscapeSequence {
                 sequence: content.to_string(), // Use the content that failed to unescape
                 span: Some(inner_span.clone())
             })?))
@@ -141,7 +141,6 @@ fn build_map_destructuring_parts(
                 let first_token_in_entry = entry_inner.peek().ok_or_else(|| {
                     PestParseError::MissingToken { token: "first token in map_destructuring_entry".to_string(), span: Some(current_entry_span.clone()) }
                 })?;
-                let first_token_span = pair_to_source_span(&first_token_in_entry);
                 
                 if first_token_in_entry.as_rule() == Rule::keys_entry {
                     let keys_entry_pair = entry_inner.next().unwrap(); 
@@ -328,7 +327,7 @@ pub(super) fn build_pattern(pair: Pair<Rule>) -> Result<Pattern, PestParseError>
         }
         // Literals can also be patterns
         Rule::literal => {
-            let literal_val = build_literal(pair.clone())?;
+            let _ = build_literal(pair.clone())?;
             // Literals are not valid patterns - use MatchPattern for matching literals
             Err(PestParseError::InvalidInput {
                 message: "Literals cannot be used as binding patterns".to_string(),

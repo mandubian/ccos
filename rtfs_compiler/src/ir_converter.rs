@@ -418,7 +418,8 @@ impl<'a> IrConverter<'a> {
                 param_types: vec![IrType::Any, IrType::Any],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Any),
-            }),            ("reduce", IrType::Function {
+            }),            
+            ("reduce", IrType::Function {
                 param_types: vec![IrType::Any, IrType::Any],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Any),
@@ -432,7 +433,8 @@ impl<'a> IrConverter<'a> {
                 }],
                 variadic_param_type: None,
                 return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
-            }),            ("task", IrType::Function {
+            }),            
+            ("task", IrType::Function {
                 param_types: vec![IrType::Any],
                 variadic_param_type: Some(Box::new(IrType::Any)),
                 return_type: Box::new(IrType::Any),
@@ -1071,7 +1073,38 @@ impl<'a> IrConverter<'a> {
                 });
             }
             // TODO: Handle other patterns in params
-        }
+        }        // Handle variadic parameter
+        let variadic_param = if let Some(variadic_param_def) = fn_expr.variadic_param {
+            if let Pattern::Symbol(s) = variadic_param_def.pattern {
+                let param_id = self.next_id();
+                let param_type = self.convert_type_annotation_option(variadic_param_def.type_annotation)?;
+
+                let binding_info = BindingInfo {
+                    name: s.0.clone(),
+                    binding_id: param_id,
+                    ir_type: param_type.clone(),
+                    kind: BindingKind::Parameter,
+                };
+                self.define_binding(s.0.clone(), binding_info);
+
+                Some(Box::new(IrNode::Param {
+                    id: param_id,
+                    binding: Box::new(IrNode::VariableBinding {
+                        id: param_id,
+                        name: s.0,
+                        ir_type: param_type.clone(),
+                        source_location: None,
+                    }),
+                    type_annotation: Some(param_type.clone()),
+                    ir_type: param_type.clone(),
+                    source_location: None,
+                }))
+            } else {
+                None // TODO: Handle other patterns in variadic params
+            }
+        } else {
+            None
+        };
 
         let mut body = Vec::new();
         for expr in fn_expr.body {
@@ -1086,16 +1119,19 @@ impl<'a> IrConverter<'a> {
         };
 
         let param_types = params.iter().map(|p| p.ir_type().cloned().unwrap_or(IrType::Any)).collect();
+        let variadic_param_type = variadic_param.as_ref()
+            .and_then(|p| p.ir_type().cloned())
+            .map(|t| Box::new(t));
 
         Ok(IrNode::Lambda {
             id,
             params,
-            variadic_param: None, // TODO
+            variadic_param,
             body,
             captures: vec![], // TODO
             ir_type: IrType::Function {
                 param_types,
-                variadic_param_type: None, // TODO
+                variadic_param_type,
                 return_type: Box::new(return_type),
             },
             source_location: None,
@@ -1137,7 +1173,7 @@ impl<'a> IrConverter<'a> {
             let ir_key = self.convert_map_key(key.clone())?;
             let ir_value = self.convert_expression(value)?;
             
-            if let (Some(key_type), Some(value_type)) = (ir_key.ir_type(), ir_value.ir_type()) {
+            if let (Some(_key_type), Some(value_type)) = (ir_key.ir_type(), ir_value.ir_type()) {
                  if let IrNode::Literal { value: Literal::Keyword(kw), .. } = &ir_key {
                     map_type_entries.push(IrMapTypeEntry {
                         key: kw.clone(),

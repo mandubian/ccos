@@ -194,6 +194,19 @@ impl PartialEq for Value {
     }
 }
 
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Value::Integer(a), Value::Integer(b)) => a.partial_cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+            (Value::Integer(a), Value::Float(b)) => (*a as f64).partial_cmp(b),
+            (Value::Float(a), Value::Integer(b)) => a.partial_cmp(&(*b as f64)),
+            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+            _ => None,
+        }
+    }
+}
+
 // Implement PartialEq for Function manually since function pointers don't implement it
 impl PartialEq for Function {
     fn eq(&self, other: &Self) -> bool {

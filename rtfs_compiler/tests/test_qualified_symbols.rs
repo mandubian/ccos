@@ -1,3 +1,4 @@
+use std::rc::Rc;
 #[test]
 fn test_qualified_symbol_check() {
     use rtfs_compiler::runtime::module_runtime::ModuleRegistry;

@@ -1,5 +1,5 @@
 ; Test variadic function
-(defn sum [& args]
-  (reduce + 0 args))
+(defn sum [& numbers]
+  (reduce + 0 numbers))
 
 (sum 1 2 3 4)

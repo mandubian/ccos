@@ -536,10 +536,13 @@ impl ModuleRegistry {
 
     pub fn loaded_modules(&self) -> std::cell::Ref<HashMap<String, Rc<CompiledModule>>> {
         self.modules.borrow()
-    }
-
-    pub fn is_qualified_symbol(name: &str) -> bool {
-        name.contains('/')
+    }    pub fn is_qualified_symbol(name: &str) -> bool {
+        if let Some(slash_pos) = name.find('/') {
+            // Must have non-empty module name and non-empty symbol name
+            slash_pos > 0 && slash_pos < name.len() - 1
+        } else {
+            false
+        }
     }
 
     pub fn resolve_qualified_symbol(&self, qualified_name: &str) -> RuntimeResult<Value> {

@@ -1,10 +1,8 @@
-use crate::runtime::ir_runtime::IrRuntime;
-use crate::runtime::module_runtime::ModuleRegistry;
-use std::path::PathBuf;
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::runtime::module_runtime::ModuleRegistry;
+    use crate::runtime::ir_runtime::IrRuntime;
+    use std::path::PathBuf;
 
     #[test]
     fn test_file_based_module_loading() {
@@ -73,7 +71,7 @@ mod tests {
         
         // The actual path resolution is internal, so we test indirectly
         // by trying to load a non-existent module and checking the error message
-        let mut test_registry = ModuleRegistry::new();
+        let test_registry = ModuleRegistry::new();
         let mut ir_runtime = IrRuntime::new();
         
         let result = test_registry.load_module("non.existent.module", &mut ir_runtime);
@@ -89,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_circular_dependency_detection() {
-        let mut registry = ModuleRegistry::new();
+        let registry = ModuleRegistry::new();
         let mut ir_runtime = IrRuntime::new();
         
         // Since loading_stack is private, we can't directly test circular dependency detection.
