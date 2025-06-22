@@ -277,7 +277,7 @@ impl StandardLibrary {
         env.define(&Symbol("bool?".to_string()), Value::Function(Function::Builtin {
             name: "bool?".to_string(),
             arity: Arity::Exact(1),
-            func: Self::bool_p,
+            func: Self::nil_p,
         }));
         
         env.define(&Symbol("nil?".to_string()), Value::Function(Function::Builtin {
@@ -527,58 +527,42 @@ impl StandardLibrary {
     // All other function implementations that were missing
     fn max_value(args: &[Value]) -> RuntimeResult<Value> {
         if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "max".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
+            return Err(RuntimeError::new("max requires at least one argument"));
         }
-        let mut max = &args[0];
-        for item in args.iter().skip(1) {
-            let is_greater = match (max, item) {
-                (Value::Integer(a), Value::Integer(b)) => b > a,
-                (Value::Float(a), Value::Float(b)) => b > a,
-                (Value::Integer(a), Value::Float(b)) => *b > (*a as f64),
-                (Value::Float(a), Value::Integer(b)) => (*b as f64) > *a,
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: item.type_name().to_string(),
-                    operation: "max".to_string(),
-                })
+        let mut max_val = args[0].clone();
+        for val in &args[1..] {
+            let is_greater = match (val, &max_val) {
+                (Value::Integer(a), Value::Integer(b)) => a > b,
+                (Value::Float(a), Value::Float(b)) => a > b,
+                (Value::Integer(a), Value::Float(b)) => *a as f64 > *b,
+                (Value::Float(a), Value::Integer(b)) => *a > *b as f64,
+                _ => return Err(RuntimeError::new("max can only compare numbers")),
             };
             if is_greater {
-                max = item;
+                max_val = val.clone();
             }
         }
-        Ok(max.clone())
+        Ok(max_val)
     }
 
     fn min_value(args: &[Value]) -> RuntimeResult<Value> {
         if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "min".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
+            return Err(RuntimeError::new("min requires at least one argument"));
         }
-        let mut min = &args[0];
-        for item in args.iter().skip(1) {
-            let is_less = match (min, item) {
-                (Value::Integer(a), Value::Integer(b)) => b < a,
-                (Value::Float(a), Value::Float(b)) => b < a,
-                (Value::Integer(a), Value::Float(b)) => *b < (*a as f64),
-                (Value::Float(a), Value::Integer(b)) => (*b as f64) < *a,
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: item.type_name().to_string(),
-                    operation: "min".to_string(),
-                })
+        let mut min_val = args[0].clone();
+        for val in &args[1..] {
+            let is_less = match (val, &min_val) {
+                (Value::Integer(a), Value::Integer(b)) => a < b,
+                (Value::Float(a), Value::Float(b)) => a < b,
+                (Value::Integer(a), Value::Float(b)) => (*a as f64) < *b,
+                (Value::Float(a), Value::Integer(b)) => *a < (*b as f64),
+                _ => return Err(RuntimeError::new("min can only compare numbers")),
             };
             if is_less {
-                min = item;
+                min_val = val.clone();
             }
         }
-        Ok(min.clone())
+        Ok(min_val)
     }
 
     fn conj(args: &[Value]) -> RuntimeResult<Value> {
@@ -689,49 +673,44 @@ impl StandardLibrary {
                 operation: "filter".to_string(),
             }),
         }
-    }
-
-    fn reduce(args: &[Value]) -> RuntimeResult<Value> {
+    }    fn reduce(args: &[Value]) -> RuntimeResult<Value> {
         if args.len() < 2 || args.len() > 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "reduce".to_string(),
-                expected: "2-3".to_string(),
-                actual: args.len(),
-            });
+            return Err(RuntimeError::new("reduce requires 2 or 3 arguments"));
         }
-        
-        let _func = &args[0];
-        let collection = &args[1];
-        let initial = if args.len() == 3 { Some(&args[2]) } else { None };
-        
-        match collection {
-            Value::Vector(vec) => {
-                if vec.is_empty() {
-                    return match initial {
-                        Some(init) => Ok(init.clone()),
-                        None => Err(RuntimeError::InvalidArgument(
-                            "Cannot reduce empty collection without initial value".to_string()
-                        )),
-                    };
-                }
-                
-                let accumulator = if let Some(init) = initial {
-                    init.clone()
-                } else {
-                    vec[0].clone()
-                };
-                
-                // For now, we can't call functions in reduce without evaluator access
-                // This is a limitation that would need evaluator access to fix properly
-                // Return the accumulator as a placeholder implementation
-                Ok(accumulator)
-            },
-            _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: collection.type_name().to_string(),
-                operation: "reduce".to_string(),
-            }),
+
+        let function = &args[0];
+
+        let collection_arg_index = args.len() - 1;
+        let collection_val = &args[collection_arg_index];
+
+        let collection = match collection_val {
+            Value::Vector(v) => v.clone(),
+            _ => return Err(RuntimeError::new("reduce expects a vector as its last argument")),
+        };
+
+        if collection.is_empty() {
+            return if args.len() == 3 {
+                Ok(args[1].clone()) // initial value
+            } else {
+                Err(RuntimeError::new("reduce on empty collection with no initial value"))
+            };
         }
+
+        let (mut accumulator, rest) = if args.len() == 3 {
+            (args[1].clone(), collection.as_slice())
+        } else {
+            (collection[0].clone(), &collection[1..])
+        };        let func_ptr = match function {
+            Value::Function(Function::Builtin { func, .. }) => func.clone(),
+            _ => return Err(RuntimeError::new("reduce requires a builtin function")),
+        };
+
+        for value in rest {
+            let func_args = vec![accumulator.clone(), value.clone()];
+            accumulator = func_ptr(&func_args)?;
+        }
+
+        Ok(accumulator)
     }
 
     fn empty_p(args: &[Value]) -> RuntimeResult<Value> {
@@ -1781,17 +1760,11 @@ impl StandardLibrary {
             .unwrap()
             .as_millis();
         Ok(Value::Integer(timestamp as i64))
-    }    fn task_current_with_evaluator(_args: &[Expression], _evaluator: &crate::runtime::evaluator::Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
-        // Return a placeholder task context
-        let mut task_context = HashMap::new();
-        task_context.insert(
-            MapKey::Keyword(crate::ast::Keyword("id".to_string())),
-            Value::String("current-task".to_string())
-        );
-        task_context.insert(
-            MapKey::Keyword(crate::ast::Keyword("status".to_string())),
-            Value::Keyword(crate::ast::Keyword("active".to_string()))
-        );        Ok(Value::Map(task_context))
+    }    fn task_current_with_evaluator(
+        _args: &[Expression], 
+        evaluator: &crate::runtime::evaluator::Evaluator,
+        _env: &mut Environment
+    ) -> RuntimeResult<Value> {
+        Ok(evaluator.get_task_context().unwrap_or(Value::Nil))
     }
-
 }

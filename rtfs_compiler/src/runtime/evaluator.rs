@@ -1,21 +1,22 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
+use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, TryCatchExpr, WithResourceExpr, Keyword};
+use crate::runtime::environment::Environment;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::module_runtime::ModuleRegistry;
+use crate::runtime::stdlib::StandardLibrary;
+use crate::runtime::values::{Arity, Function, Value};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use crate::ast::*;
-use crate::runtime::{Value, RuntimeError, RuntimeResult, Environment};
-use crate::runtime::values::{Function, Arity};
-use crate::runtime::stdlib::StandardLibrary;
-use crate::agent::{AgentDiscovery, NoOpAgentDiscovery, SimpleDiscoveryQuery, SimpleDiscoveryOptions, SimpleAgentCard};
-// Add RefCell for the placeholder strategy
-use std::cell::RefCell;
 
 pub struct Evaluator {
-    global_env: Rc<Environment>,
-    agent_discovery: Box<dyn AgentDiscovery>,
+    module_registry: Rc<ModuleRegistry>,
+    pub env: Environment,
     recursion_depth: usize,
     max_recursion_depth: usize,
-    pub task_context: Option<Value>,
+    task_context: Option<Value>,
 }
 
 // Helper function to check if two values are equivalent
@@ -35,35 +36,38 @@ fn values_equivalent(a: &Value, b: &Value) -> bool {
     }
 }
 
-impl Evaluator {
-    /// Create a new evaluator with standard library loaded and default agent discovery
-    pub fn new() -> Self {
-        let global_env = StandardLibrary::create_global_environment();
+impl Evaluator {    /// Create a new evaluator with standard library loaded and default agent discovery
+    pub fn new(module_registry: Rc<ModuleRegistry>) -> Self {
+        let env = StandardLibrary::create_global_environment();
+
         Evaluator {
-            global_env: Rc::new(global_env),
-            agent_discovery: Box::new(NoOpAgentDiscovery),
+            module_registry,
+            env,
             recursion_depth: 0,
-            max_recursion_depth: 1000,
+            max_recursion_depth: 1000, // Default max recursion depth
             task_context: None,
         }
-    }
+    }    pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value) -> Self {
+        let env = StandardLibrary::create_global_environment();
 
-    /// Create a new evaluator with custom agent discovery service
-    pub fn with_agent_discovery(agent_discovery: Box<dyn AgentDiscovery>) -> Self {
-        let global_env = StandardLibrary::create_global_environment();
         Evaluator {
-            global_env: Rc::new(global_env),
-            agent_discovery,
+            module_registry,
+            env,
             recursion_depth: 0,
-            max_recursion_depth: 1000,
-            task_context: None,
+            max_recursion_depth: 1000, // Default max recursion depth
+            task_context: Some(task_context),
         }
     }
 
     /// Set the task context for the evaluator
     pub fn set_task_context(&mut self, context: Value) {
         self.task_context = Some(context);
-    }    /// Evaluate an expression in a given environment
+    }    /// Get the current task context
+    pub fn get_task_context(&self) -> Option<Value> {
+        self.task_context.clone()
+    }
+
+    /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
             Expression::Literal(lit) => self.eval_literal(lit),            Expression::Symbol(sym) => env.lookup(sym),            Expression::List(exprs) => {
@@ -143,10 +147,9 @@ impl Evaluator {
             Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
             // Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
         }
-    }
-      /// Evaluate an expression in the global environment
+    }      /// Evaluate an expression in the global environment
     pub fn evaluate(&self, expr: &Expression) -> RuntimeResult<Value> {
-        let mut env = Environment::with_parent(self.global_env.clone());
+        let mut env = self.env.clone();
         self.eval_expr(expr, &mut env)
     }
     
@@ -168,23 +171,15 @@ impl Evaluator {
       pub fn call_function(&self, func_value: Value, args: &[Value], env: &mut Environment) -> RuntimeResult<Value> {
         match func_value {
             Value::FunctionPlaceholder(cell) => {
-                let actual_function = cell.borrow().clone();
-                // Safeguard against unresolved or circular placeholders
-                match actual_function {
-                    Value::Nil => { // Assuming Nil is the initial placeholder state
-                        return Err(RuntimeError::InternalError(
-                            "Recursive function placeholder is not resolved (points to Nil)".to_string()
-                        ));
-                    }
-                    Value::FunctionPlaceholder(_) => {
-                         return Err(RuntimeError::InternalError(
-                            "Recursive function placeholder points to another placeholder. This indicates a bug in resolution.".to_string()
-                        ));
-                    }
-                    _ => {} // Proceed if it's a real function or other callable value
+                let f = cell.borrow().clone();
+                if let Value::Nil = f {
+                    return Err(RuntimeError::InternalError(
+                        "Recursive function placeholder is not resolved (points to Nil)".to_string()
+                    ));
                 }
-                // Call the resolved function. The 'env' here is the caller's environment for argument evaluation.
-                self.call_function(actual_function, args, env)            },            Value::Function(Function::Builtin { name, arity, func }) => {
+                self.call_function(f, args, env)
+            },
+            Value::Function(Function::Builtin { name, arity, func }) => {
                 // Check arity
                 if !self.check_arity(&arity, args.len()) {
                     return Err(RuntimeError::ArityMismatch {
@@ -206,7 +201,7 @@ impl Evaluator {
                 
                 let required_params = params.len();
                 let has_variadic = variadic_param.is_some();
-                
+
                 if !has_variadic && args.len() != required_params {
                     return Err(RuntimeError::ArityMismatch {
                         function: "#<user-function>".to_string(),
@@ -220,12 +215,12 @@ impl Evaluator {
                         actual: args.len(),
                     });
                 }
-                
+
                 // Bind required parameters
                 for (i, param) in params.iter().enumerate() {
                     self.bind_pattern(&param.pattern, &args[i], &mut func_env)?;
                 }
-                
+
                 // Bind variadic parameter if present
                 if let Some(variadic) = &variadic_param {
                     let variadic_args = args[required_params..].to_vec();
@@ -378,63 +373,27 @@ impl Evaluator {
     }
     
     fn eval_letrec(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Letrec allows recursive definitions - all bindings can refer to each other
-        // Create new scope for letrec bindings, parented by the current environment
         let mut letrec_env = Environment::with_parent(Rc::new(env.clone()));
-        
-        let mut function_bindings_to_resolve = Vec::new();
-        let mut other_bindings = Vec::new();
+        let mut placeholders = Vec::new();
 
-        // Pass 1: Create placeholders for ALL bindings first (not just functions)
-        // This allows any binding to refer to any other binding in the same letrec
         for binding in &let_expr.bindings {
             if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
-                // Create a placeholder cell for this binding
-                let placeholder_cell = Rc::new(RefCell::new(Value::Nil)); 
-                
-                // Define the placeholder in letrec_env immediately
+                let placeholder_cell = Rc::new(RefCell::new(Value::Nil));
                 letrec_env.define(symbol, Value::FunctionPlaceholder(placeholder_cell.clone()));
-                
-                // Store for resolution in Pass 2
-                if matches!(binding.value.as_ref(), Expression::Fn(_)) {
-                    function_bindings_to_resolve.push((symbol.clone(), binding.value.clone(), placeholder_cell));
-                } else {
-                    other_bindings.push((symbol.clone(), binding.value.clone(), placeholder_cell));
-                }
+                placeholders.push((symbol.clone(), binding.value.clone(), placeholder_cell));
             } else {
-                // Non-symbol patterns not supported in letrec for now
-                return Err(RuntimeError::NotImplemented("Complex patterns not yet supported in letrec".to_string()));
+                return Err(RuntimeError::NotImplemented(
+                    "Complex patterns not yet supported in letrec".to_string(),
+                ));
             }
         }
-        
-        // Pass 2: Resolve function bindings first (they're most likely to be recursive)
-        for (symbol, fn_expr_ast, placeholder_cell) in function_bindings_to_resolve {
-            if let Expression::Fn(fn_expr_params_body) = fn_expr_ast.as_ref() {
-                let user_defined_function = Function::UserDefined {
-                    params: fn_expr_params_body.params.clone(),
-                    variadic_param: fn_expr_params_body.variadic_param.clone(),
-                    body: fn_expr_params_body.body.clone(),
-                    closure: letrec_env.clone(), 
-                };
-                let function_value = Value::Function(user_defined_function);
-                
-                // Update the placeholder cell to point to the actual function value
-                *placeholder_cell.borrow_mut() = function_value;
-            } else {
-                return Err(RuntimeError::InternalError(format!(
-                    "Expected Expression::Fn for symbol '{}' in letrec resolution pass.",
-                    symbol.0
-                )));
-            }
-        }
-        
-        // Pass 3: Resolve non-function bindings
-        for (symbol, value_expr, placeholder_cell) in other_bindings {
+
+        for (symbol, value_expr, placeholder_cell) in placeholders {
             let value = self.eval_expr(&value_expr, &mut letrec_env)?;
-            *placeholder_cell.borrow_mut() = value;
+            *placeholder_cell.borrow_mut() = value.clone();
+            letrec_env.define(&symbol, value);
         }
-        
-        // Evaluate the body of the letrec expression
+
         self.eval_do_body(&let_expr.body, &mut letrec_env)
     }
     
@@ -455,97 +414,49 @@ impl Evaluator {
     }
     
     fn eval_match(&self, match_expr: &MatchExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        let value = self.eval_expr(&match_expr.expression, env)?;
-        
+        let value_to_match = self.eval_expr(&match_expr.expression, env)?;
+
         for clause in &match_expr.clauses {
-            let mut match_env = Environment::with_parent(Rc::new(env.clone()));
-            
-            if self.match_match_pattern(&clause.pattern, &value, &mut match_env)? {
-                // Check guard if present
+            let mut clause_env = Environment::with_parent(Rc::new(env.clone()));
+            if self.match_match_pattern(&clause.pattern, &value_to_match, &mut clause_env)? {
                 if let Some(guard) = &clause.guard {
-                    let guard_result = self.eval_expr(guard, &mut match_env)?;
+                    let guard_result = self.eval_expr(guard, &mut clause_env)?;
                     if !guard_result.is_truthy() {
                         continue;
                     }
                 }
-                
-                // Execute clause body
-                return self.eval_expr(&clause.body, &mut match_env);
+                return self.eval_expr(&clause.body, &mut clause_env);
             }
         }
-        
-        Err(RuntimeError::MatchError(format!("No matching clause for value: {}", value.to_string())))
+
+        Err(RuntimeError::MatchError("No matching clause".to_string()))
     }
-    
+
     fn eval_log_step(&self, log_expr: &LogStepExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        let level = log_expr.level.as_ref()
-            .map(|k| k.0.clone())
-            .unwrap_or_else(|| "info".to_string());
-        
-        let values: Result<Vec<Value>, RuntimeError> = log_expr.values
-            .iter()
-            .map(|e| self.eval_expr(e, env))
-            .collect();
-        let values = values?;
-        
-        let message = values.iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<String>>()
-            .join(" ");
-        
-        let location = log_expr.location.as_ref()
-            .map(|s| format!(" [{}]", s))
-            .unwrap_or_default();
-        
-        println!("[{}]{}: {}", level.to_uppercase(), location, message);
-        
-        // Return the last value or nil
-        Ok(values.last().cloned().unwrap_or(Value::Nil))
+        let level = log_expr.level.as_ref().map(|k| k.0.as_str()).unwrap_or("info");
+        let mut messages = Vec::new();
+        for expr in &log_expr.values {
+            messages.push(self.eval_expr(expr, env)?.to_string());
+        }
+        println!("[{}] {}", level, messages.join(" "));
+        Ok(Value::Nil)
     }
-    
+
     fn eval_try_catch(&self, try_expr: &TryCatchExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Execute try body
-        let try_result = self.eval_do_body(&try_expr.try_body, env);
-        
-        match try_result {
-            Ok(value) => {
-                // If we have a finally block, execute it
-                if let Some(finally_body) = &try_expr.finally_body {
-                    self.eval_do_body(finally_body, env)?;
-                }
-                Ok(value)
-            },
-            Err(error) => {
-                // Try to match error against catch clauses
-                let error_value = error.to_value();
-                
+        match self.eval_do_body(&try_expr.try_body, env) {
+            Ok(value) => Ok(value),
+            Err(e) => {
                 for catch_clause in &try_expr.catch_clauses {
-                    if self.match_catch_pattern_actual(&catch_clause.pattern, &error_value)? {
-                        let mut catch_env = Environment::with_parent(Rc::new(env.clone()));
-                        catch_env.define(&catch_clause.binding, error_value);
-                        
-                        let result = self.eval_do_body(&catch_clause.body, &mut catch_env);
-                        
-                        // Execute finally block
-                        if let Some(finally_body) = &try_expr.finally_body {
-                            self.eval_do_body(finally_body, env)?;
-                        }
-                        
-                        return result;
+                    let mut catch_env = Environment::with_parent(Rc::new(env.clone()));
+                    if self.match_catch_pattern(&catch_clause.pattern, &e.to_value(), &mut catch_env)? {
+                        return self.eval_do_body(&catch_clause.body, &mut catch_env);
                     }
                 }
-                
-                // Execute finally block even if no catch matched
-                if let Some(finally_body) = &try_expr.finally_body {
-                    self.eval_do_body(finally_body, env)?;
-                }
-                
-                // Re-throw the error
-                Err(error)
+                Err(e)
             }
         }
     }
-    
+
     fn eval_fn(&self, fn_expr: &FnExpr, env: &mut Environment) -> RuntimeResult<Value> {
         Ok(Value::Function(Function::UserDefined {
             params: fn_expr.params.clone(),
@@ -554,76 +465,77 @@ impl Evaluator {
             closure: env.clone(),
         }))
     }
-      fn eval_with_resource(&self, with_expr: &WithResourceExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Evaluate the resource initialization expression
-        let resource_value = self.eval_expr(&with_expr.resource_init, env)?;
-        
-        // Ensure the resource is a Resource handle
-        if let Value::Resource(mut handle) = resource_value {
-            // Mark resource as active
-            handle.state = crate::runtime::values::ResourceState::Active;
-            
-            // Create new environment with resource binding
-            let mut resource_env = Environment::with_parent(Rc::new(env.clone()));
-            resource_env.define(&with_expr.resource_symbol, Value::Resource(handle.clone()));
-            
-            // Execute body and handle cleanup
-            let body_result = self.eval_do_body(&with_expr.body, &mut resource_env);
-            
-            // Always attempt cleanup, regardless of body success/failure
-            self.cleanup_resource(&mut handle)?;
-            
-            // Return original result or error
-            body_result
-        } else {
-            Err(RuntimeError::TypeError {
-                expected: "resource handle".to_string(),
-                actual: resource_value.type_name().to_string(),
-                operation: "with-resource".to_string(),
-            })
-        }
+
+    fn eval_with_resource(
+        &self,
+        with_expr: &WithResourceExpr,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        let resource = self.eval_expr(&with_expr.resource_init, env)?;
+        let mut resource_env = Environment::with_parent(Rc::new(env.clone()));
+        resource_env.define(&with_expr.resource_symbol, resource);
+        self.eval_do_body(&with_expr.body, &mut resource_env)
     }    fn eval_parallel(&self, parallel_expr: &ParallelExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // For true parallel execution, we'd need to make the evaluator thread-safe
-        // For now, implement structured concurrency simulation
-        
-        let mut result_map = std::collections::HashMap::new();
-        
-        // Execute each binding and collect results in a map
+        let mut results = HashMap::new();
         for binding in &parallel_expr.bindings {
             let value = self.eval_expr(&binding.expression, env)?;
-            
-            // Use the binding symbol as the map key (as a keyword)
-            let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(binding.symbol.0.clone()));
-            result_map.insert(key, value);
+            results.insert(
+                MapKey::Keyword(Keyword(binding.symbol.0.clone())),
+                value,
+            );
         }
-        
-        Ok(Value::Map(result_map))
+        Ok(Value::Map(results))
     }
-    
+
     fn eval_def(&self, def_expr: &DefExpr, env: &mut Environment) -> RuntimeResult<Value> {
         let mut value = self.eval_expr(&def_expr.value, env)?;
-        
-        // Apply type checking and coercion if type annotation is present
         if let Some(type_annotation) = &def_expr.type_annotation {
             value = self.coerce_value_to_type(value, type_annotation)?;
         }
-        
         env.define(&def_expr.symbol, value.clone());
         Ok(value)
-    }
-    
-    fn eval_defn(&self, defn_expr: &DefnExpr, env: &mut Environment) -> RuntimeResult<Value> {
+    }    fn eval_defn(&self, defn_expr: &DefnExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Use the same two-pass placeholder strategy as let expressions for recursive functions
+        
+        // Pass 1: Create a placeholder for the function name
+        let placeholder_cell = Rc::new(RefCell::new(Value::Nil));
+        env.define(&defn_expr.name, Value::FunctionPlaceholder(placeholder_cell.clone()));
+        
+        // Pass 2: Create the actual function with the environment that contains the placeholder
+        // This allows the function to be recursive (call itself)
         let function = Value::Function(Function::UserDefined {
             params: defn_expr.params.clone(),
             variadic_param: defn_expr.variadic_param.clone(),
             body: defn_expr.body.clone(),
-            closure: env.clone(),
+            closure: env.clone(), // The closure captures the environment with the placeholder
         });
         
-        env.define(&defn_expr.name, function.clone());
+        // Pass 3: Update the placeholder to point to the actual function
+        *placeholder_cell.borrow_mut() = function.clone();
+        
         Ok(function)
     }
-    
+
+    fn match_catch_pattern(
+        &self,
+        pattern: &CatchPattern,
+        value: &Value,
+        env: &mut Environment,
+    ) -> RuntimeResult<bool> {
+        match pattern {
+            CatchPattern::Symbol(s) => {
+                env.define(s, value.clone());
+                Ok(true)
+            }
+            CatchPattern::Keyword(k) => Ok(Value::Keyword(k.clone()) == *value),
+            CatchPattern::Type(_t) => {
+                // This is a placeholder implementation. A real implementation would need to
+                // check the type of the value against the type expression t.
+                Ok(true)
+            }
+        }
+    }
+
     /// Clean up a resource handle by calling its appropriate cleanup function
     fn cleanup_resource(&self, handle: &mut crate::runtime::values::ResourceHandle) -> RuntimeResult<()> {
         // Check if already released
@@ -699,22 +611,18 @@ impl Evaluator {
             }
         } else {
             None
-        };
+        };        // Use a stub agent discovery service for now
+        // TODO: Implement proper agent discovery integration
+        let _query = query; // Store for future use
+        let _options = options; // Store for future use
+        let discovered_agents: Vec<SimpleAgentCard> = vec![]; // Stub implementation
         
-        // Use the injected agent discovery service
-        match self.agent_discovery.discover_agents(&query, options.as_ref()) {
-            Ok(discovered_agents) => {
-                // Convert to RTFS Vector value
-                let agent_values: Vec<Value> = discovered_agents.into_iter().map(|agent| {
-                    self.simple_agent_card_to_value(agent)
-                }).collect();
-                
-                Ok(Value::Vector(agent_values))
-            },
-            Err(agent_error) => {
-                Err(agent_error.into())
-            }
-        }
+        // Convert to RTFS Vector value
+        let agent_values: Vec<Value> = discovered_agents.into_iter().map(|agent| {
+            self.simple_agent_card_to_value(agent)
+        }).collect();
+        
+        Ok(Value::Vector(agent_values))
     }
       /// Parse a map of criteria into SimpleDiscoveryQuery
     fn parse_criteria_to_query(&self, criteria_map: &std::collections::HashMap<crate::ast::MapKey, Value>) -> RuntimeResult<SimpleDiscoveryQuery> {
@@ -1018,6 +926,47 @@ impl Evaluator {
                     Ok(false) // Pattern is a vector, but value is not
                 }
             },
+            crate::ast::MatchPattern::Map { entries, rest } => {
+                if let Value::Map(value_map) = value {
+                    let mut temp_env = env.clone();
+                    let mut matched_keys = std::collections::HashSet::new();
+
+                    // Match fixed elements
+                    for entry in entries {
+                        let map_key = entry.key.clone();
+
+                        if let Some(v) = value_map.get(&map_key) {
+                            if self.match_match_pattern(&entry.pattern, v, &mut temp_env)? {
+                                matched_keys.insert(map_key);
+                            } else {
+                                return Ok(false); // Value pattern didn't match
+                            }
+                        } else {
+                            return Ok(false); // Key not found in value map
+                        }
+                    }
+
+                    // If we are here, all pattern elements matched.
+                    // Now handle the rest, if any.
+                    if let Some(rest_symbol) = rest {
+                        let mut rest_map = value_map.clone();
+                        for key in &matched_keys {
+                            rest_map.remove(key);
+                        }
+                        temp_env.define(rest_symbol, Value::Map(rest_map));
+                    } else {
+                        // If no rest pattern, require an exact match (no extra keys in value)
+                        if value_map.len() != entries.len() {
+                            return Ok(false);
+                        }
+                    }
+
+                    *env = temp_env;
+                    Ok(true)
+                } else {
+                    Ok(false) // Pattern is a map, but value is not
+                }
+            },
             _ => Err(RuntimeError::NotImplemented(format!("Complex match pattern matching not yet implemented for: {:?}", pattern))),
         }
     }
@@ -1038,9 +987,7 @@ impl Evaluator {
         // For now, just return the value as-is
         // TODO: Implement actual type coercion logic
         Ok(value)
-    }
-
-    /// Bind a pattern to a value in an environment (placeholder implementation)
+    }    /// Bind a pattern to a value in an environment
     fn bind_pattern(&self, pattern: &crate::ast::Pattern, value: &Value, env: &mut Environment) -> RuntimeResult<()> {
         match pattern {
             crate::ast::Pattern::Symbol(symbol) => {
@@ -1051,12 +998,118 @@ impl Evaluator {
                 // Wildcard does nothing, successfully "matches" any value.
                 Ok(())
             },
-            _ => Err(RuntimeError::NotImplemented("Complex patterns not yet supported".to_string()))
+            crate::ast::Pattern::VectorDestructuring { elements, rest, as_symbol } => {
+                // First, bind the whole value to as_symbol if provided
+                if let Some(as_sym) = as_symbol {
+                    env.define(as_sym, value.clone());
+                }
+
+                // Pattern must match against a vector value
+                if let Value::Vector(vector_values) = value {
+                    // Check if we have enough elements to bind (considering rest parameter)
+                    let required_elements = elements.len();
+                    if rest.is_none() && vector_values.len() != required_elements {
+                        return Err(RuntimeError::TypeError {
+                            expected: format!("vector with exactly {} elements", required_elements),
+                            actual: format!("vector with {} elements", vector_values.len()),
+                            operation: "vector destructuring".to_string(),
+                        });
+                    }
+                    
+                    if vector_values.len() < required_elements {
+                        return Err(RuntimeError::TypeError {
+                            expected: format!("vector with at least {} elements", required_elements),
+                            actual: format!("vector with {} elements", vector_values.len()),
+                            operation: "vector destructuring".to_string(),
+                        });
+                    }
+
+                    // Bind each pattern element to the corresponding vector element
+                    for (i, element_pattern) in elements.iter().enumerate() {
+                        self.bind_pattern(element_pattern, &vector_values[i], env)?;
+                    }
+
+                    // Handle rest parameter if present
+                    if let Some(rest_symbol) = rest {
+                        let rest_values: Vec<Value> = vector_values[required_elements..].to_vec();
+                        env.define(rest_symbol, Value::Vector(rest_values));
+                    }
+
+                    Ok(())
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "vector".to_string(),
+                        actual: format!("{:?}", value),
+                        operation: "vector destructuring".to_string(),
+                    })
+                }
+            },
+            crate::ast::Pattern::MapDestructuring { entries, rest, as_symbol } => {
+                // First, bind the whole value to as_symbol if provided
+                if let Some(as_sym) = as_symbol {
+                    env.define(as_sym, value.clone());
+                }
+
+                // Pattern must match against a map value
+                if let Value::Map(map_values) = value {
+                    let mut bound_keys = std::collections::HashSet::new();
+
+                    // Process each destructuring entry
+                    for entry in entries {
+                        match entry {
+                            crate::ast::MapDestructuringEntry::KeyBinding { key, pattern } => {
+                                bound_keys.insert(key.clone());
+                                // Look up the key in the map
+                                if let Some(map_value) = map_values.get(key) {
+                                    // Recursively bind the pattern to the value
+                                    self.bind_pattern(pattern, map_value, env)?;
+                                } else {
+                                    // Key not found in map - bind to Nil for optional patterns
+                                    // or return error for required patterns
+                                    self.bind_pattern(pattern, &Value::Nil, env)?;
+                                }
+                            },
+                            crate::ast::MapDestructuringEntry::Keys(symbols) => {
+                                // Handle :keys [key1 key2] syntax
+                                for symbol in symbols {
+                                    // Convert symbol to keyword for map lookup
+                                    let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(symbol.0.clone()));
+                                    bound_keys.insert(key.clone());
+                                    if let Some(map_value) = map_values.get(&key) {
+                                        env.define(symbol, map_value.clone());
+                                    } else {
+                                        // Key not found - bind to Nil
+                                        env.define(symbol, Value::Nil);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Handle rest parameter if present
+                    if let Some(rest_symbol) = rest {
+                        let mut rest_map = map_values.clone();
+                        for key in bound_keys {
+                            rest_map.remove(&key);
+                        }
+                        env.define(rest_symbol, Value::Map(rest_map));
+                    }
+
+                    Ok(())
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "map".to_string(),
+                        actual: format!("{:?}", value),
+                        operation: "map destructuring".to_string(),
+                    })
+                }
+            }
         }
     }
 }
 
-impl Default for Evaluator {    fn default() -> Self {
-        Self::new()
+impl Default for Evaluator {
+    fn default() -> Self {
+        Self::new(Rc::new(ModuleRegistry::new()))
     }
 }

@@ -691,12 +691,12 @@ fn build_import_definition(parent_pair: &Pair<Rule>, mut pairs: Pairs<Rule>) -> 
                 ":only" => {
                     // Expect the next token to be the opening bracket or symbols
                     let mut only_symbols = Vec::new();
-                    let mut found_opening_bracket = false;
+                    let mut _found_opening_bracket = false;
                     
                     // Look for symbols until we find the closing bracket or end of input
                     while let Some(next_pair) = pairs.peek() {
                         if next_pair.as_str() == "[" {
-                            found_opening_bracket = true;
+                            _found_opening_bracket = true;
                             pairs.next(); // consume the opening bracket
                             continue;
                         } else if next_pair.as_str() == "]" {

@@ -1,5 +1,6 @@
-use rtfs_compiler::{*,
-    runtime::module_runtime::ModuleRegistry};
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+use std::rc::Rc;
+use rtfs_compiler::*;
 
 fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {    // Parse the code
     let parsed = match parser::parse_expression(code) {
@@ -8,7 +9,8 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {    //
     };
 
     println!("   Parsed {} successfully", test_name);    // Test AST runtime
-    let evaluator = runtime::evaluator::Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = runtime::evaluator::Evaluator::new(module_registry);
     let ast_result = match evaluator.evaluate(&parsed) {
         Ok(value) => {
             println!("   ✓ AST runtime executed: {:?}", value);

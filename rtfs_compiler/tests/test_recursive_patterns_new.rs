@@ -1,3 +1,5 @@
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+use std::rc::Rc;
 // Test for recursive function patterns
 use rtfs_compiler::*;
 use rtfs_compiler::runtime::evaluator::Evaluator;
@@ -7,7 +9,8 @@ fn test_mutual_recursion_pattern() {
     let code = include_str!("rtfs_files/test_mutual_recursion.rtfs");
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let evaluator = Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
@@ -27,7 +30,8 @@ fn test_nested_recursion_pattern() {
     let code = include_str!("rtfs_files/test_nested_recursion.rtfs");
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let evaluator = Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Should return a countdown vector [5, 4, 3, 2, 1]
@@ -39,7 +43,8 @@ fn test_higher_order_recursion_pattern() {
     let code = include_str!("rtfs_files/test_higher_order_recursion.rtfs");
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let evaluator = Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Should return squares: [1, 4, 9, 16, 25]
@@ -51,7 +56,8 @@ fn test_three_way_recursion_pattern() {
     let code = include_str!("rtfs_files/test_three_way_recursion.rtfs");
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let evaluator = Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Should return cycle results

@@ -1,19 +1,17 @@
 // Cross-Module IR Integration Tests
 // Tests that verify cross-module function calls work through the IR optimization pipeline
 
-use crate::runtime::{Runtime, RuntimeStrategy};
-use crate::runtime::module_runtime::ModuleAwareRuntime;
-use crate::runtime::ir_runtime::IrRuntime;
-use crate::parser::parse_expression;
-use crate::ir_converter::IrConverter;
-use std::path::PathBuf;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use crate::runtime::module_runtime::ModuleRegistry;
     use crate::runtime::values::Value;
     use crate::runtime::environment::IrEnvironment;
+    use crate::runtime::ir_runtime::IrRuntime;
+    use crate::parser::parse;
+    use crate::ir_converter::IrConverter;
 
     #[test]
     fn test_cross_module_ir_execution() {
@@ -55,18 +53,22 @@ mod tests {
         // 4. Create an expression that uses the loaded module
         println!("📝 Parsing expression with qualified symbol...");
         let program_to_run = r#"(math.utils/add 10 5)"#;
-        let parse_result = parse_expression(program_to_run);
+        let parse_result = parse(program_to_run);
 
         match &parse_result {
             Ok(ast) => println!("✅ Parsing successful: {:?}", ast),
             Err(e) => assert!(false, "Parsing qualified symbol failed: {:?}", e),
         }
         let ast = parse_result.unwrap();
+        let expr = match ast.first().unwrap() {
+            crate::ast::TopLevel::Expression(expr) => expr.clone(),
+            _ => panic!("Expected expression"),
+        };
 
         // 5. Convert the expression to IR using the module registry
         println!("🔄 Converting to IR...");
         let mut ir_converter = IrConverter::with_module_registry(&module_registry);
-        let ir_result = ir_converter.convert_expression(ast);
+        let ir_result = ir_converter.convert_expression(expr);
         match &ir_result {
             Ok(ir_node) => println!("✅ IR conversion successful: {:?}", ir_node),
             Err(e) => println!("❌ IR conversion failed: {:?}", e),

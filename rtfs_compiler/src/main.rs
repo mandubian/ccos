@@ -13,6 +13,8 @@ mod ir_demo_complete; // Complete IR pipeline demonstration
 mod optimization_demo; // Advanced optimization demonstration
 mod integration_tests; // Integration tests for complete RTFS pipeline
 mod tests; // Module loading and other unit tests
+
+use std::rc::Rc;
 mod error_reporting; // Error reporting module
 
 use parser::parse_expression;
@@ -58,7 +60,8 @@ fn main() {
 fn demonstrate_ast_runtime() {
     println!("=== AST Runtime Demonstration ===");
     
-    let evaluator = Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry);
     
     // Test various expressions including new features
     let test_cases = vec![

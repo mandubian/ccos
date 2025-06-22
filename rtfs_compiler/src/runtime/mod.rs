@@ -9,6 +9,8 @@ pub mod error;
 pub mod ir_runtime;
 pub mod module_runtime;
 
+use std::rc::Rc;
+
 pub use evaluator::Evaluator;
 pub use values::Value;
 pub use environment::Environment;
@@ -19,7 +21,7 @@ use crate::parser::parse;
 use crate::runtime::module_runtime::ModuleRegistry;
 
 /// Runtime execution strategy
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeStrategy {
     /// Use AST-based evaluator (stable, compatible)
     Ast,
@@ -46,9 +48,9 @@ pub struct Runtime<'a> {
     module_registry: &'a ModuleRegistry,
 }
 
-impl<'a> Runtime<'a> {
-    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
-        let ast_evaluator = evaluator::Evaluator::new();
+impl<'a> Runtime<'a> {    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
+        let module_registry_rc = Rc::new(ModuleRegistry::new());
+        let ast_evaluator = evaluator::Evaluator::new(module_registry_rc);
         let persistent_env = stdlib::StandardLibrary::create_global_environment();
         Self {
             strategy: RuntimeStrategy::default(),
@@ -59,9 +61,9 @@ impl<'a> Runtime<'a> {
             module_registry,
         }
     }
-    
-    pub fn with_strategy(strategy: RuntimeStrategy, module_registry: &'a ModuleRegistry) -> Self {
-        let ast_evaluator = evaluator::Evaluator::new();
+      pub fn with_strategy(strategy: RuntimeStrategy, module_registry: &'a ModuleRegistry) -> Self {
+        let module_registry_rc = Rc::new(ModuleRegistry::new());
+        let ast_evaluator = evaluator::Evaluator::new(module_registry_rc);
         let persistent_env = stdlib::StandardLibrary::create_global_environment();
         Self {
             strategy,
@@ -73,23 +75,26 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    pub fn strategy(&self) -> RuntimeStrategy {
+        self.strategy
+    }
+
     pub fn get_module_registry(&self) -> &'a ModuleRegistry {
         self.module_registry
     }
 
     pub fn set_task_context(&mut self, context: Value) {
         self.ast_evaluator.set_task_context(context.clone());
-        if let Some(ir_runtime) = &mut self.ir_runtime {
+        if let Some(_ir_runtime) = &mut self.ir_runtime {
             // ir_runtime.set_task_context(context); // TODO: Implement in IrRuntime
         }
-    }
-
-    pub fn with_strategy_and_agent_discovery(
+    }    pub fn with_strategy_and_agent_discovery(
         strategy: RuntimeStrategy,
-        agent_discovery: Box<dyn crate::agent::AgentDiscovery>,
+        _agent_discovery: Box<dyn crate::agent::AgentDiscovery>, // unused for now
         module_registry: &'a ModuleRegistry,
     ) -> Self {
-        let ast_evaluator = evaluator::Evaluator::with_agent_discovery(agent_discovery);
+        let module_registry_rc = Rc::new(ModuleRegistry::new());
+        let ast_evaluator = evaluator::Evaluator::new(module_registry_rc);
         let persistent_env = stdlib::StandardLibrary::create_global_environment();
         Self {
             strategy,
@@ -133,11 +138,10 @@ impl<'a> Runtime<'a> {
             }
         }
     }
-    
-    /// Evaluate an IR node directly (for production compiler)
+      /// Evaluate an IR node directly (for production compiler)
     pub fn evaluate_ir(&mut self, ir_node: &crate::ir::IrNode) -> RuntimeResult<Value> {
         if let Some(ir_runtime) = &mut self.ir_runtime {
-            let mut env = environment::IrEnvironment::new();
+            let mut env = environment::IrEnvironment::with_stdlib();
             ir_runtime.execute_node(ir_node, &mut env, false, self.module_registry)
         } else {
             Err(RuntimeError::InternalError("IR runtime not available".to_string()))
@@ -157,8 +161,9 @@ impl<'a> Runtime<'a> {
 
         let mut task_plan: Option<Expression> = None;
         let mut definitions: Vec<Expression> = Vec::new();
+        let mut expressions_to_evaluate: Vec<Expression> = Vec::new();
 
-        // 1. Separate task plan from definitions
+        // 1. Separate task plan, definitions, and expressions
         for top_level in top_levels {
             match top_level {
                 TopLevel::Task(td) => {
@@ -170,6 +175,8 @@ impl<'a> Runtime<'a> {
                     task_plan = td.plan;
                 }
                 TopLevel::Expression(expr) => {
+                    let is_def = matches!(expr, Expression::Def(_) | Expression::Defn(_));
+
                     let is_task = if let Expression::List(nodes) = &expr {
                         if let Some(Expression::Symbol(s)) = nodes.first() {
                             s.0 == "task"
@@ -180,7 +187,9 @@ impl<'a> Runtime<'a> {
                         false
                     };
 
-                    if is_task {
+                    if is_def {
+                        definitions.push(expr);
+                    } else if is_task {
                         if task_plan.is_some() {
                             return Err(RuntimeError::InvalidProgram(
                                 "Multiple task definitions found.".to_string(),
@@ -204,7 +213,7 @@ impl<'a> Runtime<'a> {
                             }
                         }
                     } else {
-                        definitions.push(expr);
+                        expressions_to_evaluate.push(expr);
                     }
                 }
                 TopLevel::Module(module_def) => {
@@ -254,7 +263,6 @@ impl<'a> Runtime<'a> {
         for expr in &other_defs {
             self.ast_evaluator.evaluate_with_env(expr, &mut file_env)?;
         }
-
         // Pass 2: Evaluate and resolve functions
         for (fn_def, placeholder_cell) in placeholders {
             let function_value = match fn_def {
@@ -276,14 +284,21 @@ impl<'a> Runtime<'a> {
             *placeholder_cell.borrow_mut() = function_value;
         }
 
-        // 3. Execute task plan
+        // 3. Execute task plan or evaluate expressions
         if let Some(plan) = task_plan {
+            for expr in &expressions_to_evaluate {
+                self.ast_evaluator.evaluate_with_env(expr, &mut file_env)?;
+            }
             self.ast_evaluator.evaluate_with_env(&plan, &mut file_env)
-        } else if let Some(last_def) = other_defs.last() {
-            // If no task, result of file is result of last expression
-            self.ast_evaluator.evaluate_with_env(last_def, &mut file_env)
+        } else if !expressions_to_evaluate.is_empty() {
+            let mut result = Value::Nil;
+            for expr in expressions_to_evaluate {
+                result = self.ast_evaluator.evaluate_with_env(&expr, &mut file_env)?;
+            }
+            Ok(result)
         } else {
             Ok(Value::Nil)
         }
     }
+
 }

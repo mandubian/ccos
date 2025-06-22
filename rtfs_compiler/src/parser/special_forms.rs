@@ -594,7 +594,7 @@ pub(super) fn build_parallel_expr(parallel_expr_pair: Pair<Rule>) -> Result<Para
                 let symbol = build_symbol(symbol_pair.clone())?;
                 
                 let mut type_annotation: Option<TypeExpr> = None;
-                let mut expr_pair_opt = None; 
+                let expr_pair_opt; 
                 
                 // Peek at the next significant token to decide if it's a type_annotation or expression
                 let mut temp_binding_inner_peekable = binding_inner.clone().peekable();
@@ -1103,7 +1103,7 @@ pub(super) fn build_discover_agents_expr(discover_agents_expr_pair: Pair<Rule>) 
         message: "discover-agents requires criteria expression".to_string(), 
         span: Some(discover_agents_span.clone()) 
     })?;
-    let criteria_span = pair_to_source_span(&criteria_pair);
+    let _criteria_span = pair_to_source_span(&criteria_pair);
     let criteria = Box::new(build_expression(criteria_pair)?);
     
     while let Some(p) = pairs.peek() {
@@ -1114,7 +1114,7 @@ pub(super) fn build_discover_agents_expr(discover_agents_expr_pair: Pair<Rule>) 
         }
     }
     
-    let options = if let Some(options_pair_peeked) = pairs.peek() {
+    let options = if let Some(_options_pair_peeked) = pairs.peek() {
         // Ensure it's not just leftover from a previous rule or something unexpected
         // A more robust check might involve checking if options_pair_peeked.as_rule() is an expression type
         let options_pair = pairs.next().unwrap(); // consume the peeked pair

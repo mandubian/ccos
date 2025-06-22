@@ -43,6 +43,8 @@ pub enum RuntimeError {
         key: String,
     },
     
+    Generic(String),
+
     /// Resource errors
     ResourceError {
         resource_type: String,
@@ -112,6 +114,16 @@ pub enum RuntimeError {
     
     /// Stack overflow error
     StackOverflow(String),
+
+    InvalidTaskDefinition(String),
+
+    InvalidParallelExpression,
+}
+
+impl RuntimeError {
+    pub fn new(message: &str) -> RuntimeError {
+        RuntimeError::Generic(message.to_string())
+    }
 }
 
 impl fmt::Display for RuntimeError {
@@ -136,14 +148,20 @@ impl fmt::Display for RuntimeError {
                 write!(f, "Division by zero")
             },
             RuntimeError::IndexOutOfBounds { index, length } => {
-                write!(f, "Index {} out of bounds for collection of length {}", index, length)
+                write!(f, "Index out of bounds: index {} is not in range [0, {})", index, length)
             },
-            RuntimeError::KeyNotFound { key } => {
-                write!(f, "Key not found: {}", key)
-            },
+            RuntimeError::KeyNotFound { key } => write!(f, "Key not found: {}", key),
+            RuntimeError::Generic(message) => write!(f, "Runtime error: {}", message),
             RuntimeError::ResourceError { resource_type, message } => {
                 write!(f, "Resource error ({}): {}", resource_type, message)
-            },            RuntimeError::IoError(msg) => {
+            }
+            RuntimeError::InvalidTaskDefinition(message) => {
+                write!(f, "Invalid task definition: {}", message)
+            },
+            RuntimeError::InvalidParallelExpression => {
+                write!(f, "Invalid parallel expression")
+            },
+            RuntimeError::IoError(msg) => {
                 write!(f, "I/O error: {}", msg)
             },
             RuntimeError::ModuleError(msg) => {

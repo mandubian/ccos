@@ -1024,6 +1024,18 @@ impl IrRuntime {
                 map.insert(type_keyword("type"), Value::Keyword(Keyword("stack-overflow".to_string())));
                 map.insert(type_keyword("message"), Value::String(msg.clone()));
             }
+            RuntimeError::Generic(msg) => {
+                map.insert(type_keyword("type"), Value::Keyword(Keyword("generic-error".to_string())));
+                map.insert(type_keyword("message"), Value::String(msg.clone()));
+            }
+            RuntimeError::InvalidTaskDefinition(msg) => {
+                map.insert(type_keyword("type"), Value::Keyword(Keyword("invalid-task-definition".to_string())));
+                map.insert(type_keyword("message"), Value::String(msg.clone()));
+            }
+            RuntimeError::InvalidParallelExpression => {
+                map.insert(type_keyword("type"), Value::Keyword(Keyword("invalid-parallel-expression".to_string())));
+                map.insert(type_keyword("message"), Value::String("Invalid parallel expression".to_string()));
+            }
         }
         Value::Map(map)
     }

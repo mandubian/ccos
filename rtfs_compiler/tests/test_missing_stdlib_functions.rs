@@ -1,3 +1,5 @@
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+use std::rc::Rc;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::parser::parse_expression;
@@ -6,7 +8,8 @@ use rtfs_compiler::runtime::values::Value;
 #[test]
 fn test_missing_stdlib_functions() {
     let mut env = StandardLibrary::create_global_environment();
-    let evaluator = Evaluator::new();
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry);
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");

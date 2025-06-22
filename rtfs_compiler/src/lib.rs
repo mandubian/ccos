@@ -18,3 +18,4 @@ pub use runtime::{Runtime, RuntimeStrategy, Evaluator};
 pub use development_tooling::{RtfsRepl, RtfsTestFramework};
 pub use parser::parse_expression;
 pub use agent::{AgentDiscoveryClient, AgentCommunicationClient, AgentRegistry, AgentProfileManager};
+
