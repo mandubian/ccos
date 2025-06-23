@@ -1,67 +1,68 @@
 # Documentation Organization Summary
 
-## Changes Made
+**Status:** Updated as of June 23, 2025
 
-I've reorganized the RTFS project documentation to improve structure and discoverability:
+## Overview
 
-### New Directory Structure
+This document summarizes the current, reorganized structure of the project documentation. The reorganization is a key part of **Phase 1** of the [RTFS 1.0 to CCOS Migration Plan](./migration/RTFS_MIGRATION_PLAN.md) and is designed to create a clean, scalable, and intuitive layout that separates the legacy RTFS 1.0 materials from the forward-looking CCOS/RTFS 2.0 vision.
+
+---
+
+## New Directory Structure
 
 ```
 docs/
-├── README.md                           # Documentation overview and navigation
-├── NEXT_STEPS_UPDATED.md              # Development roadmap (moved from root)
-├── implementation/                     # Technical implementation documentation
-│   ├── README.md                      # Implementation docs overview
-│   └── RUNTIME_IMPLEMENTATION_SUMMARY.md  # Comprehensive runtime system documentation
-└── [future implementation docs]       # Space for additional implementation guides
+├── CCOS_ROADMAP.md
+├── DOCUMENTATION_ORGANIZATION_SUMMARY.md
+├── README.md
+├── migration/
+│   └── RTFS_MIGRATION_PLAN.md
+├── rtfs-1.0/
+│   ├── implementation/
+│   └── specs/
+├── rtfs-2.0/         # (Forthcoming)
+└── vision/
+    └── SENTIENT_RUNTIME_VISION.md
 ```
 
-### Key Improvements
+---
 
-1. **Centralized Documentation**: Created `docs/` directory as the main hub for all non-specification documentation
-2. **Implementation Focus**: Created `docs/implementation/` specifically for technical implementation details
-3. **Clear Navigation**: Added README files with proper cross-references and organization guidelines
-4. **Updated Main README**: Enhanced project README with comprehensive documentation links
+## Directory Guide
 
-### File Movements
+### Root (`/`)
 
-- `RUNTIME_IMPLEMENTATION_SUMMARY.md` → `docs/implementation/RUNTIME_IMPLEMENTATION_SUMMARY.md`
-- `NEXT_STEPS_UPDATED.md` → `docs/NEXT_STEPS_UPDATED.md`
+- **`README.md`**: The main project README. It serves as the primary entry point, outlining the CCOS vision and linking to key documentation like the roadmap and migration plan.
 
-### Documentation Types by Location
+### `/docs`
 
-#### `/docs/implementation/` - Technical Implementation
-- Runtime system architecture and features
-- Component implementation summaries
-- Performance analysis and optimization guides
-- Testing documentation and validation approaches
+- **`CCOS_ROADMAP.md`**: The high-level, strategic roadmap for the evolution of RTFS into the Cognitive Computing Operating System.
+- **`DOCUMENTATION_ORGANIZATION_SUMMARY.md`**: This file.
+- **`README.md`**: An overview of the documentation structure.
 
-#### `/docs/specs/` - Language Specifications (unchanged)
-- Core language specifications and grammar
-- Type system and semantics documentation
-- Standard library specifications
-- Security and resource management models
+### `/docs/vision/`
 
-#### Root Level - Project Overview
-- Main project README with getting started information
-- License and contribution guidelines
-- High-level project status and roadmap
+- **Purpose**: To house the foundational, long-term vision for the project.
+- **`SENTIENT_RUNTIME_VISION.md`**: The core document describing the CCOS, its architecture (Arbiter, Intent Graph, etc.), and its philosophical underpinnings.
 
-### Benefits
+### `/docs/migration/`
 
-- **Better Organization**: Related documents are grouped logically
-- **Easier Navigation**: Clear directory structure with helpful README files
-- **Scalability**: Room for future documentation without cluttering the root
-- **Developer-Friendly**: Implementation details are separate from user-facing specs
-- **Maintenance**: Clear ownership and update guidelines for each documentation type
+- **Purpose**: To manage and track the migration process.
+- **`RTFS_MIGRATION_PLAN.md`**: The detailed, step-by-step plan for migrating from RTFS 1.0 to CCOS, including tasks, status, and timelines.
 
-### Future Additions
+### `/docs/rtfs-1.0/`
 
-The new structure accommodates future documentation such as:
-- `docs/implementation/PARSER_ARCHITECTURE.md`
-- `docs/implementation/STDLIB_PERFORMANCE_ANALYSIS.md`
-- `docs/implementation/TESTING_GUIDE.md`
-- `docs/user-guides/` for user-facing documentation
-- `docs/tutorials/` for learning materials
+- **Purpose**: To archive the legacy documentation for the original RTFS 1.0.
+- **/specs/**: The original language specifications, grammar, and data model for RTFS 1.0.
+- **/implementation/**: Technical documentation related to the implementation of the RTFS 1.0 compiler and runtime.
 
-This organization provides a solid foundation for the project's growing documentation needs while maintaining clarity and accessibility.
+### `/docs/rtfs-2.0/`
+
+- **Purpose**: A forward-looking directory that will contain all new specifications for the CCOS and RTFS 2.0.
+- **Content (Forthcoming)**: This will include detailed specs for the new core objects (`Intent`, `Plan`, `Action`), namespacing, the Arbiter, the Intent Graph, and all other components of the new architecture.
+
+## Benefits of this Structure
+
+- **Clarity**: A clean separation between past, present, and future.
+- **Focus**: Developers and contributors can easily find the documentation relevant to their area of interest.
+- **Scalability**: The structure can easily accommodate new documents as the project grows.
+- **Historical Context**: Preserves the original RTFS 1.0 documentation for reference and backward-compatibility analysis.
