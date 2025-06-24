@@ -1,25 +1,35 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use validator::Validate;
 
 // --- Literal, Symbol, Keyword ---
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum Literal {
     Integer(i64),
     Float(f64),
     String(String),
     Boolean(bool),
-    Keyword(Keyword), // Added Keyword variant
+    Keyword(Keyword),
+    Timestamp(String),      // Added
+    Uuid(String),           // Added
+    ResourceHandle(String), // Added
     Nil,
 }
 
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[schemars(transparent)]
 pub struct Symbol(pub String);
 
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[schemars(transparent)]
 pub struct Keyword(pub String);
 
 // --- Map Key ---
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum MapKey {
     Keyword(Keyword),
     String(String),
@@ -27,7 +37,8 @@ pub enum MapKey {
 }
 
 // --- Patterns for Destructuring (let, fn params) ---
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum Pattern {
     Symbol(Symbol),
     Wildcard, // _
@@ -46,7 +57,8 @@ pub enum Pattern {
     // Literal(Literal), // Literals are not typically part of binding patterns directly, but MatchPattern
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum MapDestructuringEntry {
     KeyBinding { key: MapKey, pattern: Box<Pattern> },
     Keys(Vec<Symbol>), // For :keys [s1 s2]
@@ -54,7 +66,8 @@ pub enum MapDestructuringEntry {
 }
 
 // --- Patterns for Matching (match clauses) ---
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum MatchPattern {
     Literal(Literal),
     Symbol(Symbol),                 // Binds the matched value to the symbol
@@ -74,7 +87,8 @@ pub enum MatchPattern {
     As(Symbol, Box<MatchPattern>), // :as pattern
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
 pub struct MapMatchEntry {
     pub key: MapKey,
     pub pattern: Box<MatchPattern>,
@@ -82,7 +96,8 @@ pub struct MapMatchEntry {
 
 // --- Type Expressions ---
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum PrimitiveType {
     Int,
     Float,
@@ -96,21 +111,24 @@ pub enum PrimitiveType {
     Custom(Keyword), // For other primitive-like types specified by a keyword e.g. :my-custom-primitive
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
 pub struct MapTypeEntry {
     pub key: Keyword, // Keys in map types are keywords
     pub value_type: Box<TypeExpr>,
     pub optional: bool,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum ParamType {
     Simple(Box<TypeExpr>),
     // Represents a standard parameter with a type
     // Variadic(Box<TypeExpr>), // Represented by FnExpr.variadic_param_type now
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum TypeExpr {
     Primitive(PrimitiveType),
     Alias(Symbol),         // Type alias like MyType or my.namespace/MyType
@@ -136,195 +154,346 @@ pub enum TypeExpr {
 // --- Core Expression Structure ---
 
 // Represents a single binding in a `let` expression
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct LetBinding {
     pub pattern: Pattern, // Changed from symbol: Symbol
     pub type_annotation: Option<TypeExpr>,
+    #[validate(nested)]
     pub value: Box<Expression>,
 }
 
 // Represents the main expression types
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum Expression {
     Literal(Literal),
     Symbol(Symbol),
     // Keyword(Keyword), // Keywords are literals: Literal::Keyword
-    List(Vec<Expression>), // Added for generic lists like (1 2 3) or ()
-    Vector(Vec<Expression>),
+    List(#[validate(nested)] Vec<Expression>),
+    Vector(#[validate(nested)] Vec<Expression>),
     Map(HashMap<MapKey, Expression>),
     FunctionCall {
+        #[validate(nested)]
         callee: Box<Expression>, // Added this field
+        #[validate(nested)]
         arguments: Vec<Expression>,
     },
-    If(IfExpr),
-    Let(LetExpr),
-    Letrec(LetExpr), // Letrec uses the same structure as Let
-    Do(DoExpr),
-    Fn(FnExpr),
-    Def(Box<DefExpr>),   // Added for def as an expression
-    Defn(Box<DefnExpr>), // Added for defn as an expression
-    DiscoverAgents(DiscoverAgentsExpr),
-    LogStep(Box<LogStepExpr>),
-    TryCatch(TryCatchExpr),
-    Parallel(ParallelExpr),
-    WithResource(WithResourceExpr),
-    Match(MatchExpr),
+    If(#[validate] IfExpr),
+    Let(#[validate] LetExpr),
+    Letrec(#[validate] LetExpr), // Letrec uses the same structure as Let
+    Do(#[validate] DoExpr),
+    Fn(#[validate] FnExpr),
+    Def(#[validate] Box<DefExpr>),   // Added for def as an expression
+    Defn(#[validate] Box<DefnExpr>), // Added for defn as an expression
+    DiscoverAgents(#[validate] DiscoverAgentsExpr),
+    LogStep(#[validate] Box<LogStepExpr>),
+    TryCatch(#[validate] TryCatchExpr),
+    Parallel(#[validate] ParallelExpr),
+    WithResource(#[validate] WithResourceExpr),
+    Match(#[validate] MatchExpr),
+    ResourceRef(String), // Added
+}
+
+impl Validate for Expression {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        match self {
+            Expression::List(items) | Expression::Vector(items) => {
+                for item in items {
+                    item.validate()?;
+                }
+                Ok(())
+            }
+            Expression::Map(map) => {
+                for value in map.values() {
+                    value.validate()?;
+                }
+                Ok(())
+            }
+            Expression::FunctionCall { callee, arguments } => {
+                callee.validate()?;
+                for arg in arguments {
+                    arg.validate()?;
+                }
+                Ok(())
+            }
+            Expression::If(expr) => expr.validate(),
+            Expression::Let(expr) => expr.validate(),
+            Expression::Letrec(expr) => expr.validate(),
+            Expression::Do(expr) => expr.validate(),
+            Expression::Fn(expr) => expr.validate(),
+            Expression::Def(expr) => expr.validate(),
+            Expression::Defn(expr) => expr.validate(),
+            Expression::DiscoverAgents(expr) => expr.validate(),
+            Expression::LogStep(expr) => expr.validate(),
+            Expression::TryCatch(expr) => expr.validate(),
+            Expression::Parallel(expr) => expr.validate(),
+            Expression::WithResource(expr) => expr.validate(),
+            Expression::Match(expr) => expr.validate(),
+            _ => Ok(()), // Literals, Symbols, etc. do not need validation
+        }
+    }
 }
 
 // Struct for Match Expression
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct MatchExpr {
+    #[validate(nested)]
     pub expression: Box<Expression>,
+    #[validate(nested)]
     pub clauses: Vec<MatchClause>,
 }
 
 // Struct for LogStep Expression
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct LogStepExpr {
     pub level: Option<Keyword>,   // e.g., :info, :debug, :error
+    #[validate(nested)]
     pub values: Vec<Expression>,  // The expressions to log
     pub location: Option<String>, // Optional string literal for source location hint
 }
 
 // Structs for Special Forms
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct LetExpr {
+    #[validate(nested)]
     pub bindings: Vec<LetBinding>,
+    #[validate(nested)]
     pub body: Vec<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct IfExpr {
+    #[validate(nested)]
     pub condition: Box<Expression>,
+    #[validate(nested)]
     pub then_branch: Box<Expression>,
+    #[validate(nested)]
     pub else_branch: Option<Box<Expression>>, // Else is optional in grammar
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct DoExpr {
+    #[validate(nested)]
     pub expressions: Vec<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct FnExpr {
     pub params: Vec<ParamDef>,
     pub variadic_param: Option<ParamDef>, // Changed from Option<Symbol>
     pub return_type: Option<TypeExpr>,
+    #[validate(nested)]
     pub body: Vec<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
 pub struct ParamDef {
     pub pattern: Pattern, // Changed from name: Symbol to allow destructuring
     pub type_annotation: Option<TypeExpr>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct DefExpr {
     pub symbol: Symbol,
     pub type_annotation: Option<TypeExpr>,
+    #[validate(nested)]
     pub value: Box<Expression>,
 }
 
 // Defn is essentially syntax sugar for (def name (fn ...))
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct DefnExpr {
     pub name: Symbol,
     pub params: Vec<ParamDef>,
     pub variadic_param: Option<ParamDef>, // Changed from Option<Symbol>
     pub return_type: Option<TypeExpr>,
+    #[validate(nested)]
     pub body: Vec<Expression>,
 }
 
 // --- New Special Form Structs ---
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct ParallelExpr {
     // parallel_binding = { "[" ~ symbol ~ (":" ~ type_expr)? ~ expression ~ "]" }
+    #[validate(nested)]
     pub bindings: Vec<ParallelBinding>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct ParallelBinding {
     pub symbol: Symbol,
     pub type_annotation: Option<TypeExpr>,
+    #[validate(nested)]
     pub expression: Box<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct WithResourceExpr {
     // "[" ~ symbol ~ type_expr ~ expression ~ "]"
     pub resource_symbol: Symbol,
     pub resource_type: TypeExpr, // Type is mandatory in grammar
+    #[validate(nested)]
     pub resource_init: Box<Expression>,
+    #[validate(nested)]
     pub body: Vec<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct TryCatchExpr {
+    #[validate(nested)]
     pub try_body: Vec<Expression>,
+    #[validate(nested)]
     pub catch_clauses: Vec<CatchClause>,
+    #[validate(nested)]
     pub finally_body: Option<Vec<Expression>>, // Optional in grammar
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct CatchClause {
     pub pattern: CatchPattern, // This seems to be a separate enum
     pub binding: Symbol,
+    #[validate(nested)]
     pub body: Vec<Expression>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum CatchPattern {
     Keyword(Keyword), // e.g. :Error
     Type(TypeExpr),   // e.g. :my.pkg/CustomErrorType
     Symbol(Symbol),   // e.g. AnyError - acts as a catch-all with binding
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct MatchClause {
     pub pattern: MatchPattern, // Changed from Pattern
+    #[validate(nested)]
     pub guard: Option<Box<Expression>>,
+    #[validate(nested)]
     pub body: Box<Expression>, // Changed from Vec<Expression>
 }
 
 // Represents top-level definitions in a file
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum TopLevel {
-    Task(TaskDefinition),
-    Module(ModuleDefinition),
-    Expression(Expression), // Allow standalone expressions at top level?
-                            // TODO: Add Import definition if needed at top level outside modules
+    Intent(#[validate] IntentDefinition),
+    Plan(#[validate] PlanDefinition),
+    Action(#[validate] ActionDefinition),
+    Capability(#[validate] CapabilityDefinition),
+    Resource(#[validate] ResourceDefinition),
+    Module(#[validate] ModuleDefinition),
+    Expression(#[validate] Expression),
 }
 
-// Placeholder structs for top-level items
-#[derive(Debug, Clone, PartialEq)]
-pub struct TaskDefinition {
-    pub id: Option<String>, // Assuming ID is string literal
-    pub source: Option<String>,
-    pub timestamp: Option<String>,
-    pub intent: Option<Expression>,
-    pub contracts: Option<Expression>, // Likely a Map expression
-    pub plan: Option<Expression>,
-    pub execution_trace: Option<Expression>, // Likely a Vector expression
-    pub metadata: Option<Expression>,        // Added metadata field
+impl Validate for TopLevel {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        match self {
+            TopLevel::Intent(def) => def.validate(),
+            TopLevel::Plan(def) => def.validate(),
+            TopLevel::Action(def) => def.validate(),
+            TopLevel::Capability(def) => def.validate(),
+            TopLevel::Resource(def) => def.validate(),
+            TopLevel::Module(def) => def.validate(),
+            TopLevel::Expression(expr) => expr.validate(),
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Validate, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+pub struct Property {
+    pub key: Keyword,
+    #[validate(nested)]
+    pub value: Expression,
+}
+
+#[derive(Debug, Clone, PartialEq, Validate, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+pub struct IntentDefinition {
+    pub name: Symbol, // Using Symbol to hold the versioned type identifier
+    #[validate(nested)]
+    pub properties: Vec<Property>,
+}
+
+#[derive(Debug, Clone, PartialEq, Validate, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+pub struct PlanDefinition {
+    pub name: Symbol,
+    #[validate(nested)]
+    pub properties: Vec<Property>,
+}
+
+#[derive(Debug, Clone, PartialEq, Validate, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+pub struct ActionDefinition {
+    pub name: Symbol,
+    #[validate(nested)]
+    pub properties: Vec<Property>,
+}
+
+#[derive(Debug, Clone, PartialEq, Validate, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+pub struct CapabilityDefinition {
+    pub name: Symbol,
+    #[validate(nested)]
+    pub properties: Vec<Property>,
+}
+
+#[derive(Debug, Clone, PartialEq, Validate, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+pub struct ResourceDefinition {
+    pub name: Symbol,
+    #[validate(nested)]
+    pub properties: Vec<Property>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct ModuleDefinition {
     pub name: Symbol, // Namespaced identifier
     pub exports: Option<Vec<Symbol>>,
+    #[validate(nested)]
     pub definitions: Vec<ModuleLevelDefinition>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum ModuleLevelDefinition {
-    Def(DefExpr),
-    Defn(DefnExpr),
+    Def(#[validate] DefExpr),
+    Defn(#[validate] DefnExpr),
     Import(ImportDefinition),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl Validate for ModuleLevelDefinition {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        match self {
+            ModuleLevelDefinition::Def(def) => def.validate(),
+            ModuleLevelDefinition::Defn(def) => def.validate(),
+            ModuleLevelDefinition::Import(_) => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "camelCase")]
 pub struct ImportDefinition {
     pub module_name: Symbol,       // Namespaced identifier
     pub alias: Option<Symbol>,     // :as alias
@@ -332,11 +501,14 @@ pub struct ImportDefinition {
 }
 
 /// Discover Agents Expression - for (discover-agents ...) special form
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
 pub struct DiscoverAgentsExpr {
     /// Discovery criteria map (required)
+    #[validate(nested)]
     pub criteria: Box<Expression>, // Must be a Map expression
-    
+
     /// Options map (optional)
+    #[validate(nested)]
     pub options: Option<Box<Expression>>, // Optional Map expression
 }

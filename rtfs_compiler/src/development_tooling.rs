@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use crate::parser::parse_expression;
 use crate::runtime::{Runtime, RuntimeStrategy};
-use crate::ir_converter::IrConverter;
-use crate::enhanced_ir_optimizer::EnhancedOptimizationPipeline;
+// use crate::ir_converter::IrConverter; // TODO: Re-enable when IR is integrated
+// use crate::enhanced_ir_optimizer::EnhancedOptimizationPipeline; // TODO: Re-enable when IR is integrated
 use crate::runtime::module_runtime::ModuleRegistry;
 
 /// RTFS Read-Eval-Print Loop (REPL) interface
@@ -15,7 +15,7 @@ pub struct RtfsRepl<'a> {
     module_registry: &'a ModuleRegistry,
     context: ReplContext,
     history: Vec<String>,
-    optimizer: Option<EnhancedOptimizationPipeline>,
+    // optimizer: Option<EnhancedOptimizationPipeline>,
 }
 
 #[derive(Debug)]
@@ -48,7 +48,7 @@ impl<'a> RtfsRepl<'a> {
             module_registry,
             context: ReplContext::default(),
             history: Vec::new(),
-            optimizer: Some(EnhancedOptimizationPipeline::new()),
+            // optimizer: Some(EnhancedOptimizationPipeline::new()),
         }
     }    pub fn with_runtime_strategy(strategy: RuntimeStrategy, module_registry: &'a ModuleRegistry) -> Self {
         Self {
@@ -59,7 +59,7 @@ impl<'a> RtfsRepl<'a> {
                 ..Default::default()
             },
             history: Vec::new(),
-            optimizer: Some(EnhancedOptimizationPipeline::new()),
+            // optimizer: Some(EnhancedOptimizationPipeline::new()),
         }
     }
 

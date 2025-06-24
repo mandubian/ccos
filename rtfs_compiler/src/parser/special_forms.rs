@@ -1,5 +1,8 @@
-use super::{PestParseError, Rule, pair_to_source_span};
+use super::errors::{pair_to_source_span, PestParseError};
+use super::Rule;
+use crate::ast::Expression;
 use pest::iterators::{Pair, Pairs};
+use super::expressions::build_expression;
 
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
@@ -8,8 +11,8 @@ use crate::ast::{
     DefExpr,
     DefnExpr,
     DoExpr,
-    Expression, // Ensure this is correctly in scope
-    FnExpr,    IfExpr,
+    FnExpr,    
+    IfExpr,
     LetBinding,
     LetExpr,
     LogStepExpr,
@@ -27,7 +30,6 @@ use crate::ast::{
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword
 use super::common::{build_keyword, build_pattern, build_symbol, build_match_pattern};
-use super::expressions::build_expression;
 use super::types::build_type_expr; // For type annotations
 
 // Utility imports (if any) - e.g., for skipping whitespace/comments if not handled by Pest rules
@@ -1171,3 +1173,5 @@ pub(super) fn build_letrec_expr(pair: Pair<Rule>) -> Result<LetExpr, PestParseEr
         body: body_expressions 
     })
 }
+
+

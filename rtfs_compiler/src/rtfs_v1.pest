@@ -1,34 +1,14 @@
-// --- Whitespace and Comments ---
-WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT    = _{ ";" ~ (!"\n" ~ ANY)* }
-
-// --- Terminal Characters ---
-COLON = @{ ":" }
-AMPERSAND = @{ "&" }
-
 // --- Grammar Entry Point ---
-// Note: task_definition is removed in favor of RTFS 2.0 objects.
-program = { SOI ~ (object_definition | module_definition | expression)* ~ EOI }
-
-// --- RTFS 2.0 Core Object Definitions ---
-object_definition = { intent_definition | plan_definition | action_definition | capability_definition | resource_definition }
-
-// A property is a keyword-value pair used inside object definitions.
-property = { keyword ~ expression }
+program = { SOI ~ (task_definition | module_definition | expression)* ~ EOI }
+// Allow multiple top-level forms for now
 
 // --- Core Recursive Rule ---
 // Order matters for precedence (e.g., special forms before general lists)
 // Removed function_call, relying on list + parser heuristic
-expression = _{ literal | keyword | symbol | task_context_access | resource_ref | special_form | list | vector | map }
+expression = _{ literal | keyword | symbol | task_context_access | special_form | list | vector | map }
 
 // --- Basic Values ---
-
-// Enhanced Literal Types for RTFS 2.0
-timestamp = @{ ASCII_DIGIT{4} ~ "-" ~ ASCII_DIGIT{2} ~ "-" ~ ASCII_DIGIT{2} ~ "T" ~ ASCII_DIGIT{2} ~ ":" ~ ASCII_DIGIT{2} ~ ":" ~ ASCII_DIGIT{2} ~ ("_" ~ ASCII_DIGIT{3})? ~ "Z" }
-uuid = @{ ASCII_HEX_DIGIT{8} ~ "-" ~ ASCII_HEX_DIGIT{4} ~ "-" ~ ASCII_HEX_DIGIT{4} ~ "-" ~ ASCII_HEX_DIGIT{4} ~ "-" ~ ASCII_HEX_DIGIT{12} }
-resource_handle = @{ "resource://" ~ (!WHITESPACE ~ ANY)+ }
-
-literal = { timestamp | uuid | resource_handle | float | integer | string | boolean | nil | keyword } // Added keyword and new RTFS 2.0 literals
+literal = { float | integer | string | boolean | nil | keyword } // Added keyword here
 
 integer = @{ ("-" | "+")? ~ ASCII_DIGIT+ }
 float   = @{ ("-" | "+")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
@@ -48,20 +28,16 @@ identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "="
 identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | ":" }
 identifier            = @{ identifier_start_char ~ identifier_chars* }
 
-// --- Versioned Namespacing Extension ---
-version = @{ "v" ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)* }
-versioned_namespace = @{ identifier ~ ("." ~ identifier)* ~ ":" ~ version ~ "/" ~ identifier }
-
 // Namespaced identifier like my.module/my-function or just my-function
 // Allowing multiple '.' for ns parts before the '/'
 namespaced_identifier = @{ identifier ~ ("." ~ identifier)* ~ "/" ~ identifier }
 
 // A symbol is typically represented by an identifier or namespaced identifier in code
-symbol = { versioned_namespace | namespaced_identifier | identifier }
+symbol = { namespaced_identifier | identifier }
 
 // --- Keywords ---
-// Simple keyword like :foo or qualified like :my.ns/foo or versioned like :com.acme:v1.0/foo
-keyword = @{ ":" ~ (versioned_namespace | namespaced_identifier | identifier) }
+// Simple keyword like :foo or qualified like :my.ns/foo
+keyword = @{ ":" ~ (namespaced_identifier | identifier) }
 
 // Add this after the existing symbol rule and before collections
 // Task context access using @ prefix
@@ -230,7 +206,8 @@ WHEN = @{ "when" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":
 // Agent discovery expression: (discover-agents criteria-map options-map?)
 discover_agents_expr = { "(" ~ discover_agents_keyword ~ expression ~ expression? ~ ")" }
 
-// --- Top-Level Definitions ---
+// --- Top-Level Definitions ---z
+task_keyword = @{ "task" }
 module_keyword = @{ "module" }
 import_keyword = @{ "import" }
 
@@ -250,6 +227,18 @@ log_step_keyword = @{ "log-step" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" 
 discover_agents_keyword = @{ "discover-agents" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Agent discovery keyword
 
 
+task_definition =  { "(" ~ task_keyword ~ task_property+ ~ ")" }
+task_property   = {
+    (":id" ~ string)
+  | (":source" ~ string) // Added from syntax_spec
+  | (":timestamp" ~ string) // Added from syntax_spec
+  | (":metadata" ~ map) // Assuming map literal
+  | (":intent" ~ expression)
+  | (":contracts" ~ map) // Assuming map literal
+  | (":plan" ~ expression)
+  | (":execution-trace" ~ vector) // Assuming vector literal
+}
+
 // module_definition =  { "(" ~ "module" ~ namespaced_identifier ~ export_option? ~ definition* ~ ")" }
 module_definition =  { "(" ~ module_keyword ~ (symbol | namespaced_identifier) ~ export_option? ~ definition* ~ ")" } // Changed namespaced_identifier to symbol and used module_keyword
 
@@ -262,29 +251,13 @@ definition        = _{ def_expr | defn_expr | import_definition }
 import_definition =  { "(" ~ import_keyword ~ (symbol | namespaced_identifier) ~ (import_option* ) ~ ")" } // Allow multiple flat import options
 import_option      = { ":as" ~ symbol | ":only" ~ "[" ~ symbol+ ~ "]" } // Normal rule, singular
 
-// --- RTFS 2.0 Core Object Definitions ---
+// --- Whitespace and Comments ---
+// Allow whitespace and comments between tokens
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" } // These are literal tab, CR, LF
+COMMENT    = _{ ";" ~ (!(NEWLINE) ~ ANY)* }   // Corrected COMMENT rule using built-in NEWLINE
 
-// Intent Object Definition
-intent_keyword = @{ "intent" }
-intent_definition = { "(" ~ intent_keyword ~ symbol ~ property* ~ ")" }
-
-// Plan Object Definition
-plan_keyword = @{ "plan" }
-plan_definition = { "(" ~ plan_keyword ~ symbol ~ property* ~ ")" }
-
-// Action Object Definition
-action_keyword = @{ "action" }
-action_definition = { "(" ~ action_keyword ~ symbol ~ property* ~ ")" }
-
-// Capability Object Definition
-capability_keyword = @{ "capability" }
-capability_definition = { "(" ~ capability_keyword ~ symbol ~ property* ~ ")" }
-
-// Resource Object Definition
-resource_keyword = @{ "resource" }
-resource_definition = { "(" ~ resource_keyword ~ symbol ~ property* ~ ")" }
-
-// --- Resource Reference Syntax ---
-resource_ref_keyword = @{ "resource:ref" }
-resource_ref = { "(" ~ resource_ref_keyword ~ string ~ ")" }
+// --- Punctuation Tokens ---
+COLON = { ":" }
+// COMMA = { "," }  // Unused for now
+AMPERSAND= { "&" }
 

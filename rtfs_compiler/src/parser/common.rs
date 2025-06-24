@@ -1,9 +1,11 @@
-use super::utils::unescape;
-use super::PestParseError; // Added for Result return types
+use super::errors::{PestParseError, pair_to_source_span};
 use super::Rule;
-use super::pair_to_source_span; // Added import
-use crate::ast::{Keyword, Literal, MapDestructuringEntry, MapKey, MapMatchEntry, MatchPattern, Pattern, Symbol}; // Added match-related types
-use pest::iterators::Pair;
+use super::utils::unescape;
+use crate::ast::{
+    Symbol, Keyword, Literal, MapKey, Pattern, MatchPattern, 
+    MapDestructuringEntry, MapMatchEntry
+};
+use pest::iterators::{Pair, Pairs};
 
 // --- Helper Builders ---
 
@@ -18,6 +20,9 @@ pub(super) fn build_literal(pair: Pair<Rule>) -> Result<Literal, PestParseError>
         })?;
     let inner_span = pair_to_source_span(&inner_pair);
     match inner_pair.as_rule() {
+        Rule::timestamp => Ok(Literal::Timestamp(inner_pair.as_str().to_string())),
+        Rule::uuid => Ok(Literal::Uuid(inner_pair.as_str().to_string())),
+        Rule::resource_handle => Ok(Literal::ResourceHandle(inner_pair.as_str().to_string())),
         Rule::integer => Ok(Literal::Integer(inner_pair.as_str().parse().map_err(
             |_| PestParseError::InvalidLiteral { message: format!("Invalid integer: {}", inner_pair.as_str()), span: Some(inner_span.clone()) },
         )?)),
@@ -475,4 +480,9 @@ pub(super) fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, Pest
             span: Some(match_pattern_span.clone()),
         }),
     }
+}
+
+// Helper function to skip whitespace and comments in a Pairs iterator
+pub fn next_significant<'a>(pairs: &mut Pairs<'a, super::Rule>) -> Option<Pair<'a, super::Rule>> {
+    pairs.find(|p| p.as_rule() != super::Rule::WHITESPACE && p.as_rule() != super::Rule::COMMENT)
 }

@@ -1,8 +1,9 @@
 // Enhanced error reporting system for the RTFS compiler
 // Provides source location information, code snippets, and helpful hints
 
-use std::fmt;
 use crate::ast::Symbol;
+use std::fmt;
+use validator::ValidationErrors;
 
 /// Source span representing a range in the source code
 #[derive(Debug, Clone, PartialEq)]
@@ -550,4 +551,13 @@ mod tests {
         assert!(output.contains("error: E001: Undefined symbol `y`"));
         assert!(output.contains("help: Did you mean `x`?"));
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidationError {
+    SchemaError {
+        type_name: String,
+        errors: ValidationErrors,
+    },
+    Custom(String),
 }

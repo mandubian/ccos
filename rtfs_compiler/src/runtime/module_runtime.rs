@@ -10,7 +10,7 @@ use crate::ir::*;
 use crate::runtime::environment::IrEnvironment;
 use crate::runtime::ir_runtime::IrRuntime;
 use crate::runtime::{RuntimeError, RuntimeResult, Value};
-use crate::ir_converter::{IrConverter, BindingInfo, BindingKind};
+// use crate::ir_converter::{IrConverter, BindingInfo, BindingKind}; // TODO: Re-enable when IR is integrated
 
 /// Module registry that manages all loaded modules
 #[derive(Debug)]
