@@ -1,7 +1,7 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
-use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, TryCatchExpr, WithResourceExpr, Keyword};
+// use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
+use crate::ast::{Expression, Literal, Symbol, TopLevel, ActionDefinition, PlanDefinition, IntentDefinition, CapabilityDefinition, ResourceDefinition};
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::module_runtime::ModuleRegistry;
@@ -70,7 +70,9 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
-            Expression::Literal(lit) => self.eval_literal(lit),            Expression::Symbol(sym) => env.lookup(sym),            Expression::List(exprs) => {
+            Expression::Literal(lit) => self.eval_literal(lit),            
+            Expression::Symbol(sym) => env.lookup(sym),            
+            Expression::List(exprs) => {
                 // Empty list evaluates to empty list
                 if exprs.is_empty() {
                     return Ok(Value::Vector(vec![]));
@@ -103,17 +105,18 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                     result.insert(key.clone(), value);
                 }
                 Ok(Value::Map(result))
-            },              Expression::FunctionCall { callee, arguments } => {
+            },
+            Expression::FunctionCall { callee, arguments } => {
                 let func_value = self.eval_expr(callee, env)?;
                 
                 // Check if this is a builtin that needs unevaluated arguments
                 match &func_value {
                     Value::Function(Function::BuiltinWithEvaluator { name, arity, func }) => {
                         // Check arity
-                        if !self.check_arity(&arity, arguments.len()) {
+                        if !self.check_arity(arity, arguments.len()) {
                             return Err(RuntimeError::ArityMismatch {
                                 function: name.clone(),
-                                expected: self.arity_to_string(&arity),
+                                expected: self.arity_to_string(arity),
                                 actual: arguments.len(),
                             });
                         }
@@ -132,7 +135,8 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         self.call_function(func_value, &args, env)
                     }
                 }
-            },            Expression::If(if_expr) => self.eval_if(if_expr, env),
+            },
+            Expression::If(if_expr) => self.eval_if(if_expr, env),
             Expression::Let(let_expr) => self.eval_let(let_expr, env),
             Expression::Letrec(let_expr) => self.eval_letrec(let_expr, env),
             Expression::Do(do_expr) => self.eval_do(do_expr, env),
@@ -144,10 +148,13 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
-            Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
+            // Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
+            Expression::ResourceRef(s) => Ok(Value::String(s.clone())),
             // Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
         }
-    }      /// Evaluate an expression in the global environment
+    }
+
+    /// Evaluate an expression in the global environment
     pub fn evaluate(&self, expr: &Expression) -> RuntimeResult<Value> {
         let mut env = self.env.clone();
         self.eval_expr(expr, &mut env)
@@ -166,9 +173,13 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Literal::Boolean(b) => Ok(Value::Boolean(*b)),
             Literal::Keyword(k) => Ok(Value::Keyword(k.clone())),
             Literal::Nil => Ok(Value::Nil),
+            Literal::Timestamp(ts) => Ok(Value::String(ts.clone())),
+            Literal::Uuid(uuid) => Ok(Value::String(uuid.clone())),
+            Literal::ResourceHandle(handle) => Ok(Value::String(handle.clone())),
         }
     }
-      pub fn call_function(&self, func_value: Value, args: &[Value], env: &mut Environment) -> RuntimeResult<Value> {
+
+    pub fn call_function(&self, func_value: Value, args: &[Value], env: &mut Environment) -> RuntimeResult<Value> {
         match func_value {
             Value::FunctionPlaceholder(cell) => {
                 let f = cell.borrow().clone();

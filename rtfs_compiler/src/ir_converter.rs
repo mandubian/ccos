@@ -601,6 +601,8 @@ impl<'a> IrConverter<'a> {
             Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(discover_expr),
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
+            Expression::Quote(quote_expr) => self.convert_quote(*quote_expr),
+            Expression::ResourceRef(resource_ref) => self.convert_resource_ref(resource_ref),
         }
     }
     
@@ -619,6 +621,12 @@ impl<'a> IrConverter<'a> {
             Literal::Boolean(_) => IrType::Bool,
             Literal::Keyword(_) => IrType::Keyword,
             Literal::Nil => IrType::Nil,
+            Literal::Symbol(_) => IrType::Symbol,
+            Literal::Vector(_) => IrType::Vector(Box::new(IrType::Any)),
+            Literal::Map(_) => IrType::Map {
+                entries: vec![],
+                wildcard: Some(Box::new(IrType::Any)),
+            },
         };
         
         Ok(IrNode::Literal {

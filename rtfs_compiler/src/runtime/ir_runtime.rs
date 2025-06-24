@@ -1,14 +1,12 @@
 // IR Runtime - Efficient execution engine for typed RTFS IR
 // This runtime leverages type information and pre-resolved bindings for performance
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::HashMap;
-use crate::ir::*;
-use crate::runtime::{Value, RuntimeError, RuntimeResult};
-use crate::runtime::environment::IrEnvironment;
+use crate::runtime::{RuntimeError, Environment, Evaluator, Arity};
 use crate::runtime::module_runtime::{ModuleRegistry};
-use crate::runtime::values::{Function, Arity};
+use crate::runtime::values::{Function};
 use crate::ast::{self, Keyword, MapKey};
 
 /// Represents a single frame in the call stack for debugging.

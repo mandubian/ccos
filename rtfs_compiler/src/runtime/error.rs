@@ -219,140 +219,69 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-impl From<crate::ir_converter::IrConversionError> for RuntimeError {
-    fn from(err: crate::ir_converter::IrConversionError) -> Self {
-        use crate::ir_converter::IrConversionError;
-        match err {
-            IrConversionError::UndefinedSymbol { symbol, .. } => {
-                RuntimeError::UndefinedSymbol(crate::ast::Symbol(symbol))
-            }
-            IrConversionError::TypeMismatch { expected, found, .. } => {
-                RuntimeError::TypeError {
-                    expected: format!("{:?}", expected),
-                    actual: format!("{:?}", found),
-                    operation: "IR conversion".to_string(),
-                }
-            }
-            IrConversionError::InvalidPattern { message, .. } => {
-                RuntimeError::InvalidProgram(format!("Invalid pattern during IR conversion: {}", message))
-            }            IrConversionError::InvalidTypeAnnotation { message, .. } => {
-                RuntimeError::InvalidProgram(format!("Invalid type annotation during IR conversion: {}", message))
-            }
-            IrConversionError::InvalidSpecialForm { form, message } => {
-                RuntimeError::InvalidProgram(format!("Invalid special form '{}' during IR conversion: {}", form, message))
-            }
-            IrConversionError::InternalError { message } => {
-                RuntimeError::InternalError(format!("IR converter internal error: {}", message))
-            }
-        }
-    }
-}
+// TODO: Re-enable IR converter integration when ir_converter module is available
+// impl From<crate::ir_converter::IrConversionError> for RuntimeError {
+//     fn from(err: crate::ir_converter::IrConversionError) -> Self {
+//         // Implementation will go here when ir_converter is available
+//     }
+// }
 
 /// Convert runtime errors to RTFS error values
-impl RuntimeError {
-    pub fn to_value(&self) -> Value {
-        use std::collections::HashMap;
-        
-        let (error_type, message, data) = match self {
-            RuntimeError::TypeError { expected, actual, operation } => (
-                Keyword("error/type".to_string()),
-                format!("Type error in {}: expected {}, got {}", operation, expected, actual),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("expected".to_string(), Value::String(expected.clone()));
-                    map.insert("actual".to_string(), Value::String(actual.clone()));
-                    map.insert("operation".to_string(), Value::String(operation.clone()));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::UndefinedSymbol(symbol) => (
-                Keyword("error/undefined-symbol".to_string()),
-                format!("Undefined symbol: {}", symbol.0),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("symbol".to_string(), Value::String(symbol.0.clone()));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::SymbolNotFound(symbol) => (
-                Keyword("error/symbol-not-found".to_string()),
-                format!("Symbol not found: {}", symbol),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("symbol".to_string(), Value::String(symbol.clone()));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::ModuleNotFound(module) => (
-                Keyword("error/module-not-found".to_string()),
-                format!("Module not found: {}", module),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("module".to_string(), Value::String(module.clone()));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::ArityMismatch { function, expected, actual } => (
-                Keyword("error/arity-mismatch".to_string()),
-                format!("Arity mismatch in {}: expected {}, got {}", function, expected, actual),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("function".to_string(), Value::String(function.clone()));
-                    map.insert("expected".to_string(), Value::String(expected.clone()));
-                    map.insert("actual".to_string(), Value::Integer(*actual as i64));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::DivisionByZero => (
-                Keyword("error/arithmetic".to_string()),
-                "Division by zero".to_string(),
-                None
-            ),
-            RuntimeError::IndexOutOfBounds { index, length } => (
-                Keyword("error/index-out-of-bounds".to_string()),
-                format!("Index {} out of bounds for collection of length {}", index, length),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("index".to_string(), Value::Integer(*index));
-                    map.insert("length".to_string(), Value::Integer(*length as i64));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::KeyNotFound { key } => (
-                Keyword("error/key-not-found".to_string()),
-                format!("Key not found: {}", key),
-                Some({
-                    let mut map = HashMap::new();
-                    map.insert("key".to_string(), Value::String(key.clone()));
-                    Value::Map(map.into_iter().map(|(k, v)| (crate::ast::MapKey::String(k), v)).collect())
-                })
-            ),
-            RuntimeError::ApplicationError { error_type, message, data } => (
-                error_type.clone(),
-                message.clone(),
-                data.clone()
-            ),
-            _ => (
-                Keyword("error/runtime".to_string()),
-                self.to_string(),
-                None
-            ),
+impl RuntimeError {    pub fn to_value(&self) -> Value {
+        let message = match self {
+            RuntimeError::TypeError { expected, actual, operation } => {
+                format!("Type error in {}: expected {}, got {}", operation, expected, actual)
+            },
+            RuntimeError::UndefinedSymbol(symbol) => {
+                format!("Undefined symbol: {}", symbol.0)
+            },
+            RuntimeError::SymbolNotFound(symbol) => {
+                format!("Symbol not found: {}", symbol)
+            },
+            RuntimeError::ModuleNotFound(module) => {
+                format!("Module not found: {}", module)
+            },
+            RuntimeError::ArityMismatch { function, expected, actual } => {
+                format!("Arity mismatch in {}: expected {}, got {}", function, expected, actual)
+            },
+            RuntimeError::DivisionByZero => {
+                "Division by zero".to_string()
+            },
+            RuntimeError::IndexOutOfBounds { index, length } => {
+                format!("Index {} out of bounds for collection of length {}", index, length)
+            },
+            RuntimeError::KeyNotFound { key } => {
+                format!("Key not found: {}", key)
+            },
+            _ => {
+                self.to_string()
+            },
         };
         
         Value::Error(crate::runtime::values::ErrorValue {
-            error_type,
             message,
-            data: data.map(|v| match v {
-                Value::Map(m) => m.into_iter().map(|(k, v)| {
-                    let key = match k {
-                        crate::ast::MapKey::String(s) => s,
-                        crate::ast::MapKey::Keyword(kw) => kw.0,
-                        crate::ast::MapKey::Integer(i) => i.to_string(),
-                    };
-                    (key, v)
-                }).collect(),
-                _ => HashMap::new(),
-            }),
+            stack_trace: None,
         })
+    }
+}
+
+// use crate::ir_converter::IrConversionError; // TODO: Re-enable when IR is integrated
+
+/// Represents a location in the source code, pointing to a specific node in the AST.
+/// This is crucial for providing meaningful error messages that can direct the user
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Location {
+    // pub node_id: NodeId, // TODO: Re-enable when IR is integrated
+    pub source_text: Option<String>,
+}
+
+impl Location {
+    // pub fn new(node_id: NodeId) -> Self {
+    //     Self { node_id, source_text: None }
+    // }
+
+    pub fn with_source_text(mut self, source_text: String) -> Self {
+        self.source_text = Some(source_text);
+        self
     }
 }
