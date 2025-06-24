@@ -37,31 +37,36 @@ This is RTFS, using its own code-as-data nature to ponder its existence.
           (str "The '" spec-name "' object is getting a bit chunky. Maybe a diet is in order?")
           (str "The '" spec-name "' object looks lean and mean. No notes. For now.")))))
 
-;; Step 3: The Intent for Introspection (The Arbiter awakens)
-;; Now, let's use the above to have a moment of pure, unadulterated navel-gazing.
+;; Step 3: The Intent for Introspection (The Arbiter's Goal)
+;; First, we declare the *what*. The goal is simply to think about our own complexity.
+;; Notice there's no "how" here. That comes next.
 (intent contemplate-own-complexity
-  :goal "To analyze my own 'intent' structure and decide if I'm overcomplicating things."
-  :program
-    (plan
-      :strategy :linear
-      :steps [
-        (action "fetch-own-spec"
-          :description "Grabs the data that defines what an 'intent' is. Very meta."
-          ;; In a real system, this would fetch the 'intent-spec' defined above.
-          :capability :ccos:v1/get-resource
-          :params {:resource-id "intent-spec"})
+  :goal "To analyze my own 'intent' structure and decide if I'm overcomplicating things.")
 
-        (action "critique-the-spec"
-          :description "Runs the self-critique capability on my own definition."
-          :capability :com.ccos:v1/critique-design
-          :params {:spec (result "fetch-own-spec")})
+;; Step 4: The Plan to Fulfill the Intent (The Arbiter's Method)
+;; Now, we define the *how*. This plan links to the intent above and lays out the
+;; concrete steps for our moment of pure, unadulterated navel-gazing.
+(plan plan-for-contemplation
+  :intent-id "contemplate-own-complexity" ;; This links the plan to the intent
+  :strategy :linear
+  :steps [
+    (action "fetch-own-spec"
+      :description "Grabs the data that defines what an 'intent' is. Very meta."
+      ;; In a real system, this would fetch the 'intent-spec' defined above.
+      :capability :ccos:v1/get-resource
+      :params {:resource-id "intent-spec"})
 
-        (action "log-the-verdict"
-          :description "The moment of truth. What does the Arbiter think of itself?"
-          :capability :ccos:v1/log-message
-          :params {:level :info
-                   :message (get-in (result "critique-the-spec") [:critique])})
-      ]))
+    (action "critique-the-spec"
+      :description "Runs the self-critique capability on my own definition."
+      :capability :com.ccos:v1/critique-design
+      :params {:spec (result "fetch-own-spec")})
+
+    (action "log-the-verdict"
+      :description "The moment of truth. What does the Arbiter think of itself?"
+      :capability :ccos:v1/log-message
+      :params {:level :info
+               :message (get-in (result "critique-the-spec") [:critique])})
+  ])
 
 ```
 
