@@ -4,7 +4,6 @@
 use std::rc::Rc;
 use crate::runtime::{
     evaluator::Evaluator,
-    environment::Environment,
     ir_runtime::IrRuntime,
     module_runtime::ModuleRegistry,
     values::Value,

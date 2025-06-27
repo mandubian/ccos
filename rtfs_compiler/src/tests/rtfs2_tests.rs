@@ -20,7 +20,7 @@ mod object_definitions {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::IntentDefinition(_)) = parsed.first() {
+                    if let Some(TopLevel::Intent(_)) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected intent definition for '{}', got: {:?}", input, parsed);
@@ -43,7 +43,7 @@ mod object_definitions {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::PlanDefinition(_)) = parsed.first() {
+                    if let Some(TopLevel::Plan(_)) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected plan definition for '{}', got: {:?}", input, parsed);
@@ -66,7 +66,7 @@ mod object_definitions {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::ActionDefinition(_)) = parsed.first() {
+                    if let Some(TopLevel::Action(_)) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected action definition for '{}', got: {:?}", input, parsed);
@@ -89,7 +89,7 @@ mod object_definitions {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::CapabilityDefinition(_)) = parsed.first() {
+                    if let Some(TopLevel::Capability(_)) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected capability definition for '{}', got: {:?}", input, parsed);
@@ -112,7 +112,7 @@ mod object_definitions {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::ResourceDefinition(_)) = parsed.first() {
+                    if let Some(TopLevel::Resource(_)) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected resource definition for '{}', got: {:?}", input, parsed);
@@ -240,7 +240,7 @@ mod module_system {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::ModuleDefinition(_)) = parsed.first() {
+                    if let Some(TopLevel::Module(_)) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected module definition for '{}', got: {:?}", input, parsed);
@@ -263,7 +263,7 @@ mod module_system {
         for input in test_cases {
             let result = parser::parse(input);
             match result {
-                Ok(parsed) => {
+                Ok(_parsed) => {
                     // Import definitions should parse successfully
                     // They might be parsed as expressions or top-level definitions
                     // depending on the AST structure

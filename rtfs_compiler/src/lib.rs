@@ -2,16 +2,22 @@
 // Exposes modules for binary targets and external use
 
 pub mod ast;
+// pub mod compiler; // TODO: Add compiler module
+pub mod error_reporting;
+pub mod parser;
+pub mod runtime;
+pub mod validator;
+pub mod development_tooling;
+pub mod agent;
+
+// For access to IR converter and optimizer
 pub mod ir;
 pub mod ir_converter;
 pub mod ir_optimizer;
-pub mod runtime;
-pub mod parser;
-pub mod validator;
-pub mod error_reporting;
-pub mod integration_tests;
-pub mod development_tooling;
-pub mod agent;
+
+// Test modules
+#[cfg(test)]
+mod tests;
 
 // In lib.rs, we re-export the key components from our submodules
 // to make them accessible to other parts of the crate or external users.
