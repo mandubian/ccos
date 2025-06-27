@@ -14,7 +14,7 @@ use rtfs_compiler::{
     runtime::{Runtime, RuntimeStrategy},
     runtime::module_runtime::ModuleRegistry,
     ir_converter::IrConverter,
-    enhanced_ir_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
+    ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     agent::discovery_traits::NoOpAgentDiscovery,
 };
 

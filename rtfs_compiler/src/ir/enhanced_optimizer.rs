@@ -2,7 +2,7 @@
 // Advanced optimization passes with control flow analysis, function inlining, and enhanced dead code elimination
 
 use std::collections::HashSet;
-use crate::ir::*;
+use crate::ir::core::*;
 use crate::ast::Literal;
 
 /// Enhanced IR Optimizer with advanced optimization strategies
@@ -111,8 +111,7 @@ impl EnhancedIrOptimizer {
                 }
                 
                 if optimized_exprs.len() == 1 {
-                    optimized_exprs.into_iter().next().unwrap()
-                } else {
+                    optimized_exprs.into_iter().next().unwrap()                } else {
                     IrNode::Do {
                         id,
                         expressions: optimized_exprs,

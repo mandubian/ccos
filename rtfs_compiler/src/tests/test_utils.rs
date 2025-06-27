@@ -9,7 +9,7 @@ use crate::runtime::{
     values::Value,
     stdlib,
 };
-use crate::ir_converter::IrConverter;
+use crate::ir::converter::IrConverter;
 use crate::parser;
 
 /// Creates a standard module registry for testing.

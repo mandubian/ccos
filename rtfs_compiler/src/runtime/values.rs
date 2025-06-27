@@ -2,7 +2,7 @@
 // Represents values during execution (different from AST which represents parsed code)
 
 use crate::ast::{Expression, Keyword, Literal, MapKey, Symbol};
-use crate::ir::IrNode;
+use crate::ir::core::IrNode;
 use crate::runtime::environment::Environment;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::{IrEnvironment, IrRuntime};

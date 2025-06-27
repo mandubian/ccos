@@ -2,8 +2,8 @@
 // Tests the complete compilation pipeline from RTFS source code to optimized IR
 
 use crate::parser::parse_expression;
-use crate::ir_converter::IrConverter;
-use crate::ir_optimizer::EnhancedOptimizationPipeline;
+use crate::ir::converter::IrConverter;
+use crate::ir::optimizer::EnhancedOptimizationPipeline;
 use crate::ir::*;
 use crate::ast::*;
 use crate::runtime::module_runtime::ModuleRegistry;

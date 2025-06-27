@@ -1,7 +1,7 @@
 // Environment for variable bindings and scope management
 
 use crate::ast::Symbol;
-use crate::ir::NodeId;
+use crate::ir::core::NodeId;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::Value;

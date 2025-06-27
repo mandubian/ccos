@@ -1,8 +1,8 @@
 // Enhanced IR Optimizer Demonstration - Step 2 Implementation
 // Demonstrates control flow analysis, function inlining, and enhanced dead code elimination
 
-use crate::enhanced_ir_optimizer::{EnhancedIrOptimizer, EnhancedOptimizationPipeline, OptimizationLevel};
-use crate::ir::*;
+use crate::ir::enhanced_optimizer::{EnhancedIrOptimizer, EnhancedOptimizationPipeline, OptimizationLevel};
+use crate::ir::core::*;
 use crate::ast::Literal;
 
 pub fn run_enhanced_ir_optimizer_demo() {

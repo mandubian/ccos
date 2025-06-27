@@ -11,7 +11,7 @@ use crate::runtime::values::{Arity, BuiltinFunction, Function};
 use crate::runtime::Value;
 use crate::runtime::environment::IrEnvironment;
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
-use crate::ir::{IrNode, IrType};
+use crate::ir::core::{IrNode, IrType};
 
 pub struct StandardLibrary;
 
@@ -285,7 +285,7 @@ impl StandardLibrary {
         env.define(&Symbol("bool?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
             name: "bool?".to_string(),
             arity: Arity::Fixed(1),
-            func: Rc::new(Self::bool_p),
+            func: Rc::new(Self::nil_p),
         })));
         
         env.define(&Symbol("nil?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {

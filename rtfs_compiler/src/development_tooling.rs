@@ -2,7 +2,7 @@
 // REPL interface, testing framework, and development utilities
 
 use std::collections::HashMap;
-use crate::ir_converter::IrConverter;
+use crate::ir::converter::IrConverter;
 use std::io::{self, Write};
 use crate::parser::parse_expression;
 use crate::runtime::{Runtime, RuntimeStrategy, TreeWalkingStrategy, RuntimeStrategyValue, IrRuntime};

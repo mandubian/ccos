@@ -6,8 +6,9 @@ use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
 use super::values::{Function, Value};
 use crate::ast::Expression;
-use crate::ir::IrNode;
-use crate::ir_converter::IrConverter;
+// use crate::ir::IrNode;
+use crate::ir::core::IrNode;
+use crate::ir::converter::IrConverter;
 use crate::runtime::RuntimeStrategy;
 
 /// A `RuntimeStrategy` that uses the `IrRuntime`.
