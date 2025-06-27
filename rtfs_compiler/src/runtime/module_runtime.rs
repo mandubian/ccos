@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::ir::*;
+use crate::ir::core::{IrNode, IrType};
+use crate::ir::converter::{IrConverter, BindingInfo, BindingKind};
 use crate::runtime::{IrRuntime, IrEnvironment, RuntimeError, Value};
 use crate::runtime::error::RuntimeResult;
-use crate::ir_converter::{IrConverter, BindingInfo, BindingKind};
 
 /// Module registry that manages all loaded modules
 #[derive(Debug, Clone)]

@@ -1,10 +1,10 @@
 // Complete IR Pipeline Demonstration
 // Shows AST→IR conversion with a real RTFS program
 
+use crate::ir::converter::IrConverter;
 use crate::ast::*;
-use crate::ir::*;
-use crate::ir_converter::IrConverter;
-use crate::ir_optimizer::EnhancedOptimizationPipeline;
+use crate::ir::enhanced_optimizer::EnhancedOptimizationPipeline;
+use crate::ir::core::{IrNode};
 use std::collections::HashMap;
 
 /// Demonstrate the complete IR conversion pipeline

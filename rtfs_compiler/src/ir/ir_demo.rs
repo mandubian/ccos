@@ -1,10 +1,10 @@
 // Example demonstrating AST to IR conversion and optimization
 // This shows the complete pipeline from source code to optimized IR
 
+use crate::ir::enhanced_optimizer::EnhancedOptimizationPipeline;
+use crate::ir::core::{IrNode, IrType, IrLetBinding, NodeId};
 use crate::ast::*;
-use crate::ir::*;
 // use crate::ir_converter::*; // Temporarily disabled
-use crate::ir_optimizer::EnhancedOptimizationPipeline;
 
 /// Stub implementation for demo purposes
 pub struct IrConverter {
@@ -19,7 +19,7 @@ impl IrConverter {
     fn next_id(&mut self) -> NodeId {
         let id = self.next_id;
         self.next_id += 1;
-        id
+        id as NodeId
     }    /// Create a demo IR node for demonstration
     pub fn create_demo_ir(&mut self) -> IrNode {
         IrNode::Let {

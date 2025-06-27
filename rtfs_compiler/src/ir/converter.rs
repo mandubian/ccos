@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::*;
-use crate::ir::*;
+use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
 
 /// Error types for IR conversion

@@ -1,26 +1,21 @@
-mod ast; // Declare the ast module
-pub mod parser; // Declare the parser module (now a directory)
-pub mod runtime; // Declare the runtime module
-pub mod agent; // Declare the agent module for agent discovery
-mod ir; // Declare the IR module
-mod ir_converter; // Declare the IR converter module
-mod ir_optimizer; // Declare the IR optimizer module
-mod enhanced_ir_optimizer; // Enhanced IR optimizer with advanced passes (Step 2)
-mod enhanced_ir_demo; // Enhanced IR optimizer demonstration (Step 2)
-mod development_tooling; // Development tooling: REPL, testing framework (Step 3)
-mod ir_demo; // Declare the IR demonstration module
-mod ir_demo_complete; // Complete IR pipeline demonstration
-mod optimization_demo; // Advanced optimization demonstration
-mod integration_tests; // Integration tests for complete RTFS pipeline
-mod tests; // Module loading and other unit tests
+mod ast;
+pub mod parser;
+pub mod runtime;
+pub mod agent;
+pub mod ir;
+mod development_tooling;
+mod integration_tests;
+mod tests;
+mod error_reporting;
 
 use std::rc::Rc;
-mod error_reporting; // Error reporting module
+
+use ir::converter::IrConverter;
 
 use parser::parse_expression;
 use runtime::{Evaluator, Runtime, RuntimeStrategy};
 use runtime::module_runtime::ModuleRegistry;
-use ir_converter::IrConverter;
+use crate::ir::demo::run_enhanced_ir_optimizer_demo;
 
 fn main() {
     println!("RTFS Compiler with AST and IR Runtime");
@@ -40,15 +35,15 @@ fn main() {
     println!();
     demonstrate_ast_to_ir_pipeline();
     println!();
-    ir_demo::demonstrate_ir_pipeline();
+    ir::ir_demo::demonstrate_ir_pipeline();
     println!();
-    ir_demo::run_benchmark_suite();
+    ir::ir_demo::run_benchmark_suite();
     println!();
-    ir_demo_complete::demonstrate_ir_pipeline();
+    ir::ir_demo_complete::demonstrate_ir_pipeline();
     println!();
-    ir_demo_complete::demonstrate_ir_optimization_pipeline();
+    ir::ir_demo_complete::demonstrate_ir_optimization_pipeline();
     println!();
-    optimization_demo::demonstrate_advanced_optimizations();
+    ir::optimization_demo::demonstrate_advanced_optimizations();
     println!();    // NEW: Run enhanced comprehensive integration tests
     integration_tests::run_all_enhanced_integration_tests();
     println!();
@@ -172,7 +167,8 @@ fn demonstrate_ast_to_ir_pipeline() {
     let ast_example = "(let [x 10] (+ x 5))";
     match parse_expression(ast_example) {
         Ok(ast) => {
-            println!("AST: {:?}", ast);            let mut converter = IrConverter::new();
+            println!("AST: {:?}", ast);            
+            let mut converter = IrConverter::new();
             match converter.convert(&ast) {
                 Ok(ir) => {
                     println!("IR: {:?}", ir);

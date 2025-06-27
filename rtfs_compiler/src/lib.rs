@@ -12,8 +12,6 @@ pub mod agent;
 
 // For access to IR converter and optimizer
 pub mod ir;
-pub mod ir_converter;
-pub mod ir_optimizer;
 
 // Test modules
 #[cfg(test)]
@@ -29,3 +27,10 @@ pub use runtime::{Runtime, RuntimeStrategy};
 pub use runtime::evaluator::Evaluator;
 pub use development_tooling::{RtfsRepl, RtfsTestFramework};
 pub use agent::{AgentDiscoveryClient, AgentCommunicationClient, AgentRegistry, AgentProfileManager};
+
+// Re-export IR modules for external use
+pub use ir::core::*;
+pub use ir::converter::*;
+pub use ir::optimizer::*;
+pub use ir::enhanced_optimizer::*;
+pub use ir::demo::*;
