@@ -32,7 +32,7 @@ impl RuntimeStrategy for IrStrategy {
         let mut converter = IrConverter::new();
         let ir_node = converter
             .convert_expression(program.clone())
-            .map_err(|e| RuntimeError::Generic(format!("IR conversion error: {}", e)))?;
+            .map_err(|e| RuntimeError::Generic(format!("IR conversion error: {:?}", e)))?;
         self.runtime
             .execute_program(&ir_node, &mut self.module_registry)
     }

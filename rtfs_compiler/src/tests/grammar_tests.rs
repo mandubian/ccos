@@ -11,25 +11,24 @@ mod basic_literals {
     #[test]
     fn test_integers() {
         let test_cases = vec![
-            ("42", Ok(42)),
-            ("-42", Ok(-42)),
-            ("+42", Ok(42)),
-            ("0", Ok(0)),
-            ("123456789", Ok(123456789)),
+            ("42", 42),
+            ("-42", -42),
+            ("+42", 42),
+            ("0", 0),
+            ("123456789", 123456789),
         ];
 
         for (input, expected) in test_cases {
             let result = parser::parse(input);
-            match (result, expected) {
-                (Ok(parsed), Ok(expected_val)) => {
+            match result {
+                Ok(parsed) => {
                     if let Some(TopLevel::Expression(Expression::Literal(Literal::Integer(val)))) = parsed.first() {
-                        assert_eq!(*val, expected_val, "Failed parsing integer: {}", input);
+                        assert_eq!(*val, expected, "Failed parsing integer: {}", input);
                     } else {
                         panic!("Expected integer literal, got: {:?}", parsed);
                     }
                 }
-                (Err(e), Ok(_)) => panic!("Failed to parse valid integer '{}': {:?}", input, e),
-                _ => panic!("Unexpected result for input: {}", input),
+                Err(e) => panic!("Failed to parse valid integer '{}': {:?}", input, e),
             }
         }
     }
@@ -330,7 +329,7 @@ mod special_forms {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::Expression(Expression::LetExpr(_))) = parsed.first() {
+                    if let Some(TopLevel::Expression(Expression::Let(_))) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected let expression for '{}', got: {:?}", input, parsed);
@@ -353,7 +352,7 @@ mod special_forms {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::Expression(Expression::IfExpr(_))) = parsed.first() {
+                    if let Some(TopLevel::Expression(Expression::If(_))) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected if expression for '{}', got: {:?}", input, parsed);
@@ -377,7 +376,7 @@ mod special_forms {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::Expression(Expression::DoExpr(_))) = parsed.first() {
+                    if let Some(TopLevel::Expression(Expression::Do(_))) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected do expression for '{}', got: {:?}", input, parsed);
@@ -402,7 +401,7 @@ mod special_forms {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::Expression(Expression::FnExpr(_))) = parsed.first() {
+                    if let Some(TopLevel::Expression(Expression::Fn(_))) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected fn expression for '{}', got: {:?}", input, parsed);
@@ -426,7 +425,7 @@ mod special_forms {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::Expression(Expression::DefExpr(_))) = parsed.first() {
+                    if let Some(TopLevel::Expression(Expression::Def(_))) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected def expression for '{}', got: {:?}", input, parsed);
@@ -451,7 +450,7 @@ mod special_forms {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
-                    if let Some(TopLevel::Expression(Expression::DefnExpr(_))) = parsed.first() {
+                    if let Some(TopLevel::Expression(Expression::Defn(_))) = parsed.first() {
                         // Success
                     } else {
                         panic!("Expected defn expression for '{}', got: {:?}", input, parsed);

@@ -219,8 +219,8 @@ impl ModuleRegistry {
                 if let Some(binding_info) = bindings.get(export_name) {
                     if let Some(value) = module_env_borrow.get(export_name) {
                         let export = ModuleExport {
-                            original_name: export_name.clone(),
-                            export_name: export_name.clone(),
+                            original_name: export_name.to_string(),
+                            export_name: export_name.to_string(),
                             value: value.clone(),
                             ir_type: binding_info.ir_type.clone(),
                             export_type: match value {
@@ -228,7 +228,7 @@ impl ModuleRegistry {
                                 _ => ExportType::Variable,
                             },
                         };
-                        exports_map.insert(export_name.clone(), export);
+                        exports_map.insert(export_name.to_string(), export);
                     } else {
                         self.loading_stack.borrow_mut().pop();
                         return Err(RuntimeError::ModuleError(format!(
