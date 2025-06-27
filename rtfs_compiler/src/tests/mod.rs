@@ -3,3 +3,4 @@
 
 pub mod module_loading_tests;
 pub mod cross_module_ir_tests;
+pub mod test_utils;

@@ -2,17 +2,45 @@
 // REPL interface, testing framework, and development utilities
 
 use std::collections::HashMap;
+use crate::ir_converter::IrConverter;
 use std::io::{self, Write};
 use crate::parser::parse_expression;
-use crate::runtime::{Runtime, RuntimeStrategy};
-// use crate::ir_converter::IrConverter; // TODO: Re-enable when IR is integrated
-// use crate::enhanced_ir_optimizer::EnhancedOptimizationPipeline; // TODO: Re-enable when IR is integrated
+use crate::runtime::{Runtime, RuntimeStrategy, TreeWalkingStrategy, RuntimeStrategyValue, IrRuntime};
+
+// Placeholder IrStrategy implementation until the actual one is available
+#[derive(Debug)]
+struct IrStrategy {
+    ir_runtime: IrRuntime,
+}
+
+impl IrStrategy {
+    fn new() -> Self {
+        Self {
+            ir_runtime: IrRuntime::new(),
+        }
+    }
+}
+impl RuntimeStrategy for IrStrategy {
+    
+    fn run(&mut self, program: &crate::ast::Expression) -> Result<crate::runtime::Value, crate::runtime::RuntimeError> {
+        // Delegate to execute method foErr(crate::runtime::RuntimeError::NotImplemented("IrStrategy execution not yet implemented".to_string()))self.execute(program)
+        Err(crate::runtime::RuntimeError::NotImplemented("IrStrategy execution not yet implemented".to_string()))
+    }
+    
+    fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
+        Box::new(IrStrategy::new())
+    }
+}
+
 use crate::runtime::module_runtime::ModuleRegistry;
+use crate::ast::Expression;
+use crate::runtime::evaluator::Evaluator;
+use std::rc::Rc;
 
 /// RTFS Read-Eval-Print Loop (REPL) interface
-pub struct RtfsRepl<'a> {
-    runtime: Runtime<'a>,
-    module_registry: &'a ModuleRegistry,
+pub struct RtfsRepl {
+    runtime: Runtime,
+    module_registry: ModuleRegistry,
     context: ReplContext,
     history: Vec<String>,
     // optimizer: Option<EnhancedOptimizationPipeline>,
@@ -25,7 +53,7 @@ pub struct ReplContext {
     pub show_ast: bool,
     pub show_ir: bool,
     pub show_optimizations: bool,
-    pub runtime_strategy: RuntimeStrategy,
+    pub runtime_strategy: RuntimeStrategyValue,
 }
 
 impl Default for ReplContext {
@@ -36,23 +64,31 @@ impl Default for ReplContext {
             show_ast: false,
             show_ir: false,
             show_optimizations: false,
-            runtime_strategy: RuntimeStrategy::Ast,
+            runtime_strategy: RuntimeStrategyValue::Ast,
         }
     }
 }
 
-impl<'a> RtfsRepl<'a> {
-    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
+impl RtfsRepl {
+    pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
-            runtime: Runtime::with_strategy(RuntimeStrategy::Ast, module_registry),
+            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(
+                Evaluator::new(Rc::new(module_registry.clone()))
+            ))),
             module_registry,
             context: ReplContext::default(),
             history: Vec::new(),
             // optimizer: Some(EnhancedOptimizationPipeline::new()),
         }
-    }    pub fn with_runtime_strategy(strategy: RuntimeStrategy, module_registry: &'a ModuleRegistry) -> Self {
+    }
+    pub fn with_runtime_strategy(strategy: RuntimeStrategyValue, module_registry: ModuleRegistry) -> Self {
+        let runtime_strategy: Box<dyn RuntimeStrategy> = match strategy {
+            RuntimeStrategyValue::Ast => Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(module_registry.clone())))),
+            RuntimeStrategyValue::Ir => Box::new(IrStrategy::new()),
+            RuntimeStrategyValue::IrWithFallback => Box::new(IrStrategy::new()), // Placeholder
+        };
         Self {
-            runtime: Runtime::with_strategy(strategy.clone(), module_registry),
+            runtime: Runtime::new(runtime_strategy),
             module_registry,
             context: ReplContext {
                 runtime_strategy: strategy,
@@ -137,18 +173,18 @@ impl<'a> RtfsRepl<'a> {
                 println!("🚀 Optimization display: {}", if self.context.show_optimizations { "ON" } else { "OFF" });
             }
             ":runtime-ast" => {
-                self.context.runtime_strategy = RuntimeStrategy::Ast;
-                self.runtime = Runtime::with_strategy(RuntimeStrategy::Ast, self.module_registry);
+                self.context.runtime_strategy = RuntimeStrategyValue::Ast;
+                self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(self.module_registry.clone())))));
                 println!("🔄 Switched to AST runtime");
             }
             ":runtime-ir" => {
-                self.context.runtime_strategy = RuntimeStrategy::Ir;
-                self.runtime = Runtime::with_strategy(RuntimeStrategy::Ir, self.module_registry);
+                self.context.runtime_strategy = RuntimeStrategyValue::Ir;
+                self.runtime = Runtime::new(Box::new(IrStrategy::new()));
                 println!("🔄 Switched to IR runtime");
             }
             ":runtime-fallback" => {
-                self.context.runtime_strategy = RuntimeStrategy::IrWithFallback;
-                self.runtime = Runtime::with_strategy(RuntimeStrategy::IrWithFallback, self.module_registry);
+                self.context.runtime_strategy = RuntimeStrategyValue::IrWithFallback;
+                self.runtime = Runtime::new(Box::new(IrStrategy::new())); // Placeholder
                 println!("🔄 Switched to IR with AST fallback runtime");
             }
             ":test" => {
@@ -225,7 +261,7 @@ impl<'a> RtfsRepl<'a> {
 
                 // Convert to IR if needed
                 if self.context.show_ir || self.context.show_optimizations {
-                    let mut converter = IrConverter::with_module_registry(self.module_registry);
+                    let mut converter = IrConverter::with_module_registry(&self.module_registry);
                     match converter.convert(&ast) {
                         Ok(ir) => {
                             if self.context.show_ir {
@@ -234,11 +270,11 @@ impl<'a> RtfsRepl<'a> {
 
                             // Apply optimizations if enabled
                             if self.context.show_optimizations {
-                                if let Some(optimizer) = &mut self.optimizer {
-                                    let optimized = optimizer.optimize(ir.clone());
-                                    println!("🚀 Optimized: {:?}", optimized);
-                                    println!("📊 Stats: {:?}", optimizer.stats());
-                                }
+                                // if let Some(optimizer) = &mut self.optimizer {
+                                //     let optimized = optimizer.optimize(ir.clone());
+                                //     println!("🚀 Optimized: {:?}", optimized);
+                                //     println!("📊 Stats: {:?}", optimizer.stats());
+                                // }
                             }
                         }
                         Err(e) => println!("❌ IR conversion error: {:?}", e),
@@ -246,7 +282,7 @@ impl<'a> RtfsRepl<'a> {
                 }
 
                 // Evaluate with runtime
-                match self.runtime.evaluate_expression(&ast) {
+                match self.runtime.run(&Expression::from(ast)) {
                     Ok(result) => {
                         println!("✅ {:#?}", result);
                     }
@@ -298,7 +334,7 @@ impl<'a> RtfsRepl<'a> {
             
             match parse_expression(expr) {
                 Ok(ast) => {
-                    match self.runtime.evaluate_expression(&ast) {
+                    match self.runtime.run(&Expression::from(ast)) {
                         Ok(result) => {
                             let result_str = format!("{:#?}", result);
                             if result_str.contains(expected) {
@@ -346,7 +382,7 @@ impl<'a> RtfsRepl<'a> {
                 Ok(ast) => {
                     // Warm up
                     for _ in 0..10 {
-                        let _ = self.runtime.evaluate_expression(&ast);
+                        let _ = self.runtime.run(&Expression::from(ast.clone()));
                     }
                     
                     // Benchmark
@@ -354,7 +390,7 @@ impl<'a> RtfsRepl<'a> {
                     let start = std::time::Instant::now();
                     
                     for _ in 0..iterations {
-                        match self.runtime.evaluate_expression(&ast) {
+                        match self.runtime.run(&Expression::from(ast.clone())) {
                             Ok(_) => {},
                             Err(e) => {
                                 println!("    ❌ Error during benchmark: {:?}", e);
@@ -380,10 +416,10 @@ impl<'a> RtfsRepl<'a> {
 }
 
 /// Built-in testing framework for RTFS
-pub struct RtfsTestFramework<'a> {
+pub struct RtfsTestFramework {
     tests: Vec<TestCase>,
-    runtime: Runtime<'a>,
-    module_registry: &'a ModuleRegistry,
+    runtime: Runtime,
+    module_registry: ModuleRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -404,11 +440,11 @@ pub enum TestExpectation {
     Custom(fn(&str) -> bool), // Custom validation function (not serializable)
 }
 
-impl<'a> RtfsTestFramework<'a> {
-    pub fn new(module_registry: &'a ModuleRegistry) -> Self {
+impl RtfsTestFramework {
+    pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
             tests: Vec::new(),
-            runtime: Runtime::with_strategy(RuntimeStrategy::Ast, module_registry),
+            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(module_registry.clone()))))),
             module_registry,
         }
     }
@@ -474,7 +510,7 @@ impl<'a> RtfsTestFramework<'a> {
     fn run_single_test(&mut self, test: &TestCase) -> TestResult {
         match parse_expression(&test.code) {
             Ok(ast) => {
-                match self.runtime.evaluate_expression(&ast) {
+                match self.runtime.run(&Expression::from(ast)) {
                     Ok(result) => {
                         let result_str = format!("{:#?}", result);
                         match &test.expected {
@@ -540,7 +576,7 @@ impl<'a> RtfsTestFramework<'a> {
         println!("🧪 Running {} tests with tag '{}'...", filtered_tests.len(), tag);
         
         // Create temporary test framework with filtered tests
-        let mut temp_framework = RtfsTestFramework::new(self.module_registry);
+        let mut temp_framework = RtfsTestFramework::new(self.module_registry.clone());
         for test in filtered_tests {
             temp_framework.add_test(test.clone());
         }
@@ -621,7 +657,7 @@ pub fn run_development_tooling_demo() {
 
 fn demo_testing_framework() {
     let module_registry = ModuleRegistry::new();
-    let mut framework = RtfsTestFramework::new(&module_registry);
+    let mut framework = RtfsTestFramework::new(module_registry);
     
     // Add comprehensive test suite
     framework.add_basic_test("arithmetic_add", "(+ 1 2 3)", "6");
@@ -673,12 +709,12 @@ fn demo_repl_interface() {
     
     println!("\n   To start interactive REPL, use:");
     println!("   let module_registry = ModuleRegistry::new();");
-    println!("   RtfsRepl::new(&module_registry).run()");
+    println!("   RtfsRepl::new(module_registry).run()");
 }
 
 pub fn run_all_tests_with_framework() {
     let module_registry = ModuleRegistry::new();
-    let mut framework = RtfsTestFramework::new(&module_registry);
+    let mut framework = RtfsTestFramework::new(module_registry);
 
     // Add tests
     framework.add_basic_test("Addition", "(+ 1 2)", "3");

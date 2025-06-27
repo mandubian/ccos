@@ -7,7 +7,6 @@ use crate::parser::common::{build_keyword, build_symbol, next_significant};
 use crate::parser::expressions::build_expression;
 use crate::parser::errors::{invalid_input_error, PestParseError, pair_to_source_span};
 use crate::parser::Rule;
-use crate::validator::validate_toplevel;
 
 // --- AST Builder Functions ---
 
@@ -56,15 +55,8 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         }),
     };
 
-    match toplevel_result {
-        Ok(toplevel) => match validate_toplevel(&toplevel) {
-            Ok(_) => Ok(toplevel),
-            Err(validation_err) => Err(PestParseError::ValidationError(validation_err)),
-        },
-        Err(e) => Err(e),
-    }
+   return toplevel_result
 }
-
 // --- Top-Level Builders ---
 
 fn build_property(pair: Pair<Rule>) -> Result<Property, PestParseError> {

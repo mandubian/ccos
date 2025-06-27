@@ -71,7 +71,7 @@ mod tests {
         
         // The actual path resolution is internal, so we test indirectly
         // by trying to load a non-existent module and checking the error message
-        let test_registry = ModuleRegistry::new();
+        let mut test_registry = ModuleRegistry::new();
         let mut ir_runtime = IrRuntime::new();
         
         let result = test_registry.load_module("non.existent.module", &mut ir_runtime);
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_circular_dependency_detection() {
-        let registry = ModuleRegistry::new();
+        let mut registry = ModuleRegistry::new();
         let mut ir_runtime = IrRuntime::new();
         
         // Since loading_stack is private, we can't directly test circular dependency detection.
