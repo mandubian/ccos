@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
-use crate::runtime::{RuntimeResult, RuntimeError};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use super::types::*;
 
 /// Agent Registry - manages agent registration and discovery

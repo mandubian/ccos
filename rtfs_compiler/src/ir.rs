@@ -98,7 +98,14 @@ pub enum IrNode {
     VariableRef {
         id: NodeId,
         name: String,
-        binding_id: NodeId, // Points to the defining binding
+        binding_id: NodeId, // ID of the VariableBinding node
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
+    ResourceRef {
+        id: NodeId,
+        name: String,
+        binding_id: NodeId,
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
@@ -361,6 +368,7 @@ impl IrNode {
             IrNode::Map { id, .. } => *id,
             IrNode::VariableBinding { id, .. } => *id,
             IrNode::VariableRef { id, .. } => *id,
+            IrNode::ResourceRef { id, .. } => *id,
             IrNode::QualifiedSymbolRef { id, .. } => *id,
             IrNode::VariableDef { id, .. } => *id,
             IrNode::FunctionDef { id, .. } => *id,
@@ -389,6 +397,7 @@ impl IrNode {
             IrNode::Literal { ir_type, .. } => Some(ir_type),
             IrNode::VariableBinding { ir_type, .. } => Some(ir_type),
             IrNode::VariableRef { ir_type, .. } => Some(ir_type),
+            IrNode::ResourceRef { ir_type, .. } => Some(ir_type),
             IrNode::QualifiedSymbolRef { ir_type, .. } => Some(ir_type),
             IrNode::VariableDef { ir_type, .. } => Some(ir_type),
             IrNode::FunctionDef { ir_type, .. } => Some(ir_type),
@@ -419,6 +428,7 @@ impl IrNode {
             IrNode::Literal { source_location, .. } => source_location.as_ref(),
             IrNode::VariableBinding { source_location, .. } => source_location.as_ref(),
             IrNode::VariableRef { source_location, .. } => source_location.as_ref(),
+            IrNode::ResourceRef { source_location, .. } => source_location.as_ref(),
             IrNode::QualifiedSymbolRef { source_location, .. } => source_location.as_ref(),
             IrNode::VariableDef { source_location, .. } => source_location.as_ref(),
             IrNode::FunctionDef { source_location, .. } => source_location.as_ref(),

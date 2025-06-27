@@ -586,7 +586,8 @@ impl<'a> IrConverter<'a> {
             Expression::FunctionCall { callee, arguments } => {
                 self.convert_function_call(*callee, arguments)
             }
-            Expression::If(if_expr) => self.convert_if(if_expr),            Expression::Let(let_expr) => self.convert_let(let_expr),
+            Expression::If(if_expr) => self.convert_if(if_expr),            
+            Expression::Let(let_expr) => self.convert_let(let_expr),
             Expression::Letrec(let_expr) => self.convert_letrec(let_expr),
             Expression::Do(do_expr) => self.convert_do(do_expr),
             Expression::Fn(fn_expr) => self.convert_fn(fn_expr),
@@ -601,8 +602,26 @@ impl<'a> IrConverter<'a> {
             Expression::DiscoverAgents(discover_expr) => self.convert_discover_agents(discover_expr),
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
-            Expression::Quote(quote_expr) => self.convert_quote(*quote_expr),
-            Expression::ResourceRef(resource_ref) => self.convert_resource_ref(resource_ref),
+            Expression::ResourceRef(resource_ref) => {
+                let id = self.next_id();
+                let resource_name = resource_ref.clone();
+                
+                // Look up the resource in the current scope
+                if let Some(binding_info) = self.lookup_symbol(&resource_name) {
+                    Ok(IrNode::ResourceRef {
+                        id,
+                        name: resource_name,
+                        binding_id: binding_info.binding_id,
+                        ir_type: binding_info.ir_type.clone(),
+                        source_location: None, // TODO: Add source location
+                    })
+                } else {
+                    Err(IrConversionError::UndefinedSymbol {
+                        symbol: resource_name,
+                        location: None, // TODO: Add source location
+                    })
+                }
+            }
         }
     }
     
@@ -621,12 +640,9 @@ impl<'a> IrConverter<'a> {
             Literal::Boolean(_) => IrType::Bool,
             Literal::Keyword(_) => IrType::Keyword,
             Literal::Nil => IrType::Nil,
-            Literal::Symbol(_) => IrType::Symbol,
-            Literal::Vector(_) => IrType::Vector(Box::new(IrType::Any)),
-            Literal::Map(_) => IrType::Map {
-                entries: vec![],
-                wildcard: Some(Box::new(IrType::Any)),
-            },
+            Literal::Timestamp(_) => IrType::Any, // TODO: Add specific timestamp type
+            Literal::Uuid(_) => IrType::Any, // TODO: Add specific UUID type
+            Literal::ResourceHandle(_) => IrType::Any, // TODO: Add specific resource handle type
         };
         
         Ok(IrNode::Literal {

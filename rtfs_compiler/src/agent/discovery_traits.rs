@@ -3,7 +3,7 @@
 // without circular dependencies on agent implementation types.
 
 use serde_json::Value as JsonValue;
-use crate::runtime::RuntimeError;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 
 /// Query parameters for agent discovery (simplified version for trait interface)
 #[derive(Debug, Clone)]
@@ -90,7 +90,7 @@ pub trait AgentDiscovery: Send + Sync {
         &self,
         query: &SimpleDiscoveryQuery,
         options: Option<&SimpleDiscoveryOptions>,
-    ) -> Result<Vec<SimpleAgentCard>, AgentDiscoveryError>;
+    ) -> RuntimeResult<Vec<SimpleAgentCard>>;
 
     /// Check if the discovery service is available
     fn is_available(&self) -> bool;
@@ -102,7 +102,7 @@ pub trait AgentDiscovery: Send + Sync {
 /// Factory trait for creating agent discovery services
 pub trait AgentDiscoveryFactory {
     /// Create a new agent discovery service
-    fn create_discovery_service(&self) -> Result<Box<dyn AgentDiscovery>, AgentDiscoveryError>;
+    fn create_discovery_service(&self) -> RuntimeResult<Box<dyn AgentDiscovery>>;
 }
 
 /// Default implementation that returns no agents (for testing/fallback)
@@ -113,7 +113,7 @@ impl AgentDiscovery for NoOpAgentDiscovery {
         &self,
         _query: &SimpleDiscoveryQuery,
         _options: Option<&SimpleDiscoveryOptions>,
-    ) -> Result<Vec<SimpleAgentCard>, AgentDiscoveryError> {
+    ) -> RuntimeResult<Vec<SimpleAgentCard>> {
         Ok(vec![])
     }
 
@@ -127,7 +127,7 @@ impl AgentDiscovery for NoOpAgentDiscovery {
 }
 
 impl AgentDiscoveryFactory for NoOpAgentDiscovery {
-    fn create_discovery_service(&self) -> Result<Box<dyn AgentDiscovery>, AgentDiscoveryError> {
+    fn create_discovery_service(&self) -> RuntimeResult<Box<dyn AgentDiscovery>> {
         Ok(Box::new(NoOpAgentDiscovery))
     }
 }

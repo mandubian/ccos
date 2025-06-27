@@ -469,6 +469,7 @@ pub struct ResourceDefinition {
 #[schemars(rename_all = "camelCase")]
 pub struct ModuleDefinition {
     pub name: Symbol, // Namespaced identifier
+    pub docstring: Option<String>, // Optional documentation string
     pub exports: Option<Vec<Symbol>>,
     #[validate(nested)]
     pub definitions: Vec<ModuleLevelDefinition>,

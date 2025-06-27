@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::ast::*;
-use crate::runtime::{RuntimeResult, RuntimeError};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::parser::parse_expression;
 use super::types::*;
 

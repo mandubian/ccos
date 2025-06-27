@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde_json::{json, Value as JsonValue};
 use uuid::Uuid;
 
-use crate::runtime::{RuntimeResult, RuntimeError};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use super::types::*;
 
 /// Client for communicating with agent discovery registries

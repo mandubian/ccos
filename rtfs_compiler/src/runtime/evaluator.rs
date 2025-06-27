@@ -1,7 +1,10 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
-// use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{Expression, Literal, Symbol, TopLevel, ActionDefinition, PlanDefinition, IntentDefinition, CapabilityDefinition, ResourceDefinition};
+use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
+use crate::ast::{
+    self, CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
+    Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, TopLevel, TryCatchExpr, WithResourceExpr,
+};
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::module_runtime::ModuleRegistry;
@@ -11,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+#[derive(Clone, Debug)]
 pub struct Evaluator {
     module_registry: Rc<ModuleRegistry>,
     pub env: Environment,
@@ -19,18 +23,18 @@ pub struct Evaluator {
     task_context: Option<Value>,
 }
 
-// Helper function to check if two values are equivalent
+// Helper function to check if two values are in equivalent
 // This is a simplified version for the fixpoint algorithm
 fn values_equivalent(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Nil, Value::Nil) => true,
-        (Value::Function(Function::UserDefined { params: p1, body: b1, .. }), 
-         Value::Function(Function::UserDefined { params: p2, body: b2, .. })) => {
-            p1 == p2 && b1 == b2
+        (Value::Function(Function::Closure(c1)), 
+         Value::Function(Function::Closure(c2))) => {
+            c1.body == c2.body
         },
-        (Value::Function(Function::Builtin { name: n1, .. }), 
-         Value::Function(Function::Builtin { name: n2, .. })) => {
-            n1 == n2
+        (Value::Function(Function::Builtin(b1)), 
+         Value::Function(Function::Builtin(b2))) => {
+            b1.name == b2.name
         },
         _ => false, // Different types or can't compare
     }
@@ -67,11 +71,46 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         self.task_context.clone()
     }
 
+    pub fn eval_toplevel(&mut self, program: &[TopLevel]) -> RuntimeResult<Value> {
+        let mut env = self.env.clone();
+        let mut last_value = Value::Nil;
+        for toplevel in program {
+            match toplevel {
+                TopLevel::Expression(expr) => {
+                    last_value = self.eval_expr(expr, &mut env)?;
+                }
+                TopLevel::Intent(_intent) => {
+                    // TODO: Implement intent evaluation
+                    return Err(RuntimeError::NotImplemented("Intent evaluation not yet implemented".to_string()));
+                }
+                TopLevel::Plan(_plan) => {
+                    // TODO: Implement plan evaluation
+                    return Err(RuntimeError::NotImplemented("Plan evaluation not yet implemented".to_string()));
+                }
+                TopLevel::Action(_action) => {
+                    // TODO: Implement action evaluation
+                    return Err(RuntimeError::NotImplemented("Action evaluation not yet implemented".to_string()));
+                }
+                TopLevel::Capability(_capability) => {
+                    last_value = Value::Nil; // Capabilities don't return values in this context
+                }
+                TopLevel::Resource(_resource) => {
+                    last_value = Value::Nil; // Resources don't return values in this context
+                }
+                TopLevel::Module(_module) => {
+                    last_value = Value::Nil; // Modules don't return values in this context
+                }
+            }
+        }
+        self.env = env;
+        Ok(last_value)
+    }
+
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
             Expression::Literal(lit) => self.eval_literal(lit),            
-            Expression::Symbol(sym) => env.lookup(sym),            
+            Expression::Symbol(sym) => env.lookup(sym).ok_or_else(|| RuntimeError::UndefinedSymbol(sym.clone())),            
             Expression::List(exprs) => {
                 // Empty list evaluates to empty list
                 if exprs.is_empty() {
@@ -109,24 +148,22 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Expression::FunctionCall { callee, arguments } => {
                 let func_value = self.eval_expr(callee, env)?;
                 
-                // Check if this is a builtin that needs unevaluated arguments
                 match &func_value {
-                    Value::Function(Function::BuiltinWithEvaluator { name, arity, func }) => {
-                        // Check arity
-                        if !self.check_arity(arity, arguments.len()) {
+                    Value::Function(Function::Builtin(f)) if f.name == "quote" => {
+                        // Handle quote specially
+                        if arguments.len() != 1 {
                             return Err(RuntimeError::ArityMismatch {
-                                function: name.clone(),
-                                expected: self.arity_to_string(arity),
+                                function: "quote".to_string(),
+                                expected: "1".to_string(),
                                 actual: arguments.len(),
                             });
                         }
-                        
-                        // Call with unevaluated arguments
-                        func(arguments, self, env)
-                    },
+                        // Return the argument unevaluated
+                        return Ok(Value::from(arguments[0].clone()));
+                    }
                     _ => {
                         // Evaluate arguments and call normally
-                        let args: Result<Vec<Value>, RuntimeError> = arguments
+                        let args: RuntimeResult<Vec<Value>> = arguments
                             .iter()
                             .map(|e| self.eval_expr(e, env))
                             .collect();
@@ -148,7 +185,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
-            // Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
+            Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
             Expression::ResourceRef(s) => Ok(Value::String(s.clone())),
             // Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
         }
@@ -183,62 +220,35 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         match func_value {
             Value::FunctionPlaceholder(cell) => {
                 let f = cell.borrow().clone();
-                if let Value::Nil = f {
-                    return Err(RuntimeError::InternalError(
-                        "Recursive function placeholder is not resolved (points to Nil)".to_string()
-                    ));
+                if let Value::Function(f) = f {
+                    self.call_function(Value::Function(f), args, env)
+                } else {
+                    Err(RuntimeError::InternalError("Function placeholder not resolved".to_string()))
                 }
-                self.call_function(f, args, env)
             },
-            Value::Function(Function::Builtin { name, arity, func }) => {
+            Value::Function(Function::Builtin(func)) => {
                 // Check arity
-                if !self.check_arity(&arity, args.len()) {
+                if !self.check_arity(&func.arity, args.len()) {
                     return Err(RuntimeError::ArityMismatch {
-                        function: name,
-                        expected: self.arity_to_string(&arity),
+                        function: func.name,
+                        expected: self.arity_to_string(&func.arity),
                         actual: args.len(),
                     });
                 }
                 
-                func(args)
-            },            Value::Function(Function::BuiltinWithEvaluator { name, arity: _, func: _ }) => {
-                return Err(RuntimeError::InternalError(
-                    format!("BuiltinWithEvaluator function '{}' called through call_function instead of direct function call evaluation", name)
-                ));
+                (func.func)(args.to_vec())
             },
-            Value::Function(Function::UserDefined { params, variadic_param, body, closure }) => {
+            Value::Function(Function::Closure(closure)) => {
                 // Create new environment for function execution, parented by the captured closure
-                let mut func_env = Environment::with_parent(Rc::new(closure.clone()));
+                let mut func_env = Environment::with_parent(closure.env.clone());
                 
-                let required_params = params.len();
-                let has_variadic = variadic_param.is_some();
-
-                if !has_variadic && args.len() != required_params {
-                    return Err(RuntimeError::ArityMismatch {
-                        function: "#<user-function>".to_string(),
-                        expected: required_params.to_string(),
-                        actual: args.len(),
-                    });
-                } else if has_variadic && args.len() < required_params {
-                    return Err(RuntimeError::ArityMismatch {
-                        function: "#<user-function>".to_string(),
-                        expected: format!("at least {}", required_params),
-                        actual: args.len(),
-                    });
+                // Bind arguments to parameters
+                for (param, arg) in closure.params.iter().zip(args.iter()) {
+                    func_env.define(param, arg.clone());
                 }
 
-                // Bind required parameters
-                for (i, param) in params.iter().enumerate() {
-                    self.bind_pattern(&param.pattern, &args[i], &mut func_env)?;
-                }
-
-                // Bind variadic parameter if present
-                if let Some(variadic) = &variadic_param {
-                    let variadic_args = args[required_params..].to_vec();
-                    self.bind_pattern(&variadic.pattern, &Value::Vector(variadic_args), &mut func_env)?;
-                }
-                  // Execute function body with dynamic lookup support for recursive calls
-                self.eval_do_body(&body, &mut func_env)
+                // Execute function body
+                self.eval_expr(&closure.body, &mut func_env)
             },
             Value::Keyword(keyword) => {
                 // Keywords act as functions: (:key map) is equivalent to (get map :key)
@@ -250,7 +260,24 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         },
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
-                            actual: args[0].type_name().to_string(),
+                            actual: match &args[0] {
+                                Value::Nil => "Nil".to_string(),
+                                Value::Boolean(_) => "Boolean".to_string(),
+                                Value::Integer(_) => "Integer".to_string(),
+                                Value::Float(_) => "Float".to_string(),
+                                Value::String(_) => "String".to_string(),
+                                Value::Timestamp(_) => "Timestamp".to_string(),
+                                Value::Uuid(_) => "Uuid".to_string(),
+                                Value::ResourceHandle(_) => "ResourceHandle".to_string(),
+                                Value::Symbol(_) => "Symbol".to_string(),
+                                Value::Keyword(_) => "Keyword".to_string(),
+                                Value::Vector(_) => "Vector".to_string(),
+                                Value::List(_) => "List".to_string(),
+                                Value::Map(_) => "Map".to_string(),
+                                Value::Function(_) => "Function".to_string(),
+                                Value::FunctionPlaceholder(_) => "FunctionPlaceholder".to_string(),
+                                Value::Error(_) => "Error".to_string(),
+                            },
                             operation: "keyword lookup".to_string(),
                         }),
                     }
@@ -263,7 +290,24 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         },
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
-                            actual: args[0].type_name().to_string(),
+                            actual: match &args[0] {
+                                Value::Nil => "Nil".to_string(),
+                                Value::Boolean(_) => "Boolean".to_string(),
+                                Value::Integer(_) => "Integer".to_string(),
+                                Value::Float(_) => "Float".to_string(),
+                                Value::String(_) => "String".to_string(),
+                                Value::Timestamp(_) => "Timestamp".to_string(),
+                                Value::Uuid(_) => "Uuid".to_string(),
+                                Value::ResourceHandle(_) => "ResourceHandle".to_string(),
+                                Value::Symbol(_) => "Symbol".to_string(),
+                                Value::Keyword(_) => "Keyword".to_string(),
+                                Value::Vector(_) => "Vector".to_string(),
+                                Value::List(_) => "List".to_string(),
+                                Value::Map(_) => "Map".to_string(),
+                                Value::Function(_) => "Function".to_string(),
+                                Value::FunctionPlaceholder(_) => "FunctionPlaceholder".to_string(),
+                                Value::Error(_) => "Error".to_string(),
+                            },
                             operation: "keyword lookup".to_string(),
                         }),
                     }
@@ -276,7 +320,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 }
             },
             _ => Err(RuntimeError::TypeError {
-                expected: "function or function placeholder".to_string(), // Updated expected types
+                expected: "function".to_string(),
                 actual: func_value.type_name().to_string(),
                 operation: "function call".to_string(),
             }),
@@ -285,19 +329,17 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     
     fn check_arity(&self, arity: &Arity, arg_count: usize) -> bool {
         match arity {
-            Arity::Exact(n) => arg_count == *n,
-            Arity::AtLeast(n) => arg_count >= *n,
+            Arity::Fixed(n) => arg_count == *n,
+            Arity::Variadic(n) => arg_count >= *n,
             Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
-            Arity::Any => true,
         }
     }
     
     fn arity_to_string(&self, arity: &Arity) -> String {
         match arity {
-            Arity::Exact(n) => n.to_string(),
-            Arity::AtLeast(n) => format!("at least {}", n),
-            Arity::Range(min, max) => format!("{}-{}", min, max),
-            Arity::Any => "any number".to_string(),
+            Arity::Fixed(n) => n.to_string(),
+            Arity::Variadic(n) => format!("at least {}", n),
+            Arity::Range(min, max) => format!("between {} and {}", min, max),
         }
     }
     
@@ -312,74 +354,13 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Ok(Value::Nil)
         }
     }    fn eval_let(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Create new scope for let bindings, parented by the current environment
         let mut let_env = Environment::with_parent(Rc::new(env.clone()));
         
-        let mut function_bindings_to_resolve = Vec::new();
-        let mut other_bindings = Vec::new();
-
-        // Pass 1: Identify functions, create placeholders, and separate other bindings
         for binding in &let_expr.bindings {
-            // We currently only support Symbol patterns for let-bound functions for simplicity in letrec
-            if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
-                if matches!(binding.value.as_ref(), Expression::Fn(_)) {
-                    // Create a placeholder cell, initialized to Nil (or a dedicated Unresolved variant)
-                    // This assumes Value::Nil is a safe temporary placeholder.
-                    // A dedicated Value::UnresolvedPlaceholder would be more robust.
-                    let placeholder_cell = Rc::new(RefCell::new(Value::Nil)); 
-                    
-                    // Define the placeholder in let_env immediately.
-                    // This placeholder will be captured in the closures of functions defined in this block.
-                    let_env.define(symbol, Value::FunctionPlaceholder(placeholder_cell.clone()));
-                    
-                    // Store for resolution in Pass 2
-                    function_bindings_to_resolve.push((symbol.clone(), binding.value.clone(), placeholder_cell));
-                } else {
-                    other_bindings.push(binding);
-                }
-            } else {
-                // Non-symbol patterns are treated as other bindings
-                other_bindings.push(binding);
-            }
-        }
-        
-        // Evaluate and bind non-function bindings. These are evaluated in the let_env
-        // which already contains placeholders for any functions.
-        for binding in other_bindings {
             let value = self.eval_expr(&binding.value, &mut let_env)?;
             self.bind_pattern(&binding.pattern, &value, &mut let_env)?;
         }
         
-        // Pass 2: Resolve function placeholders.
-        // Create actual function values and update their corresponding placeholders.
-        for (symbol, fn_expr_ast, placeholder_cell) in function_bindings_to_resolve {
-            if let Expression::Fn(fn_expr_params_body) = fn_expr_ast.as_ref() {
-                // The closure for the function is a clone of the current let_env.
-                // This let_env contains all FunctionPlaceholders for sibling functions,
-                // allowing them to be mutually recursive.
-                let user_defined_function = Function::UserDefined {
-                    params: fn_expr_params_body.params.clone(),
-                    variadic_param: fn_expr_params_body.variadic_param.clone(),
-                    body: fn_expr_params_body.body.clone(),
-                    closure: let_env.clone(), 
-                };
-                let function_value = Value::Function(user_defined_function);
-                
-                // Update the placeholder cell to point to the actual function value.
-                *placeholder_cell.borrow_mut() = function_value;
-
-            } else {
-                // This case should not be reached if matches! above was correct
-                return Err(RuntimeError::InternalError(format!(
-                    "Expected Expression::Fn for symbol '{}' in letrec resolution pass.",
-                    symbol.0
-                )));
-            }
-        }
-        
-        // Evaluate the body of the let expression in the let_env.
-        // This environment now has non-function bindings resolved, and function symbols
-        // pointing to FunctionPlaceholders which in turn point to the fully resolved functions.
         self.eval_do_body(&let_expr.body, &mut let_env)
     }
     
@@ -401,8 +382,15 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
 
         for (symbol, value_expr, placeholder_cell) in placeholders {
             let value = self.eval_expr(&value_expr, &mut letrec_env)?;
-            *placeholder_cell.borrow_mut() = value.clone();
-            letrec_env.define(&symbol, value);
+            if matches!(value, Value::Function(_)) {
+                *placeholder_cell.borrow_mut() = value;
+            } else {
+                return Err(RuntimeError::TypeError {
+                    expected: "function".to_string(),
+                    actual: value.type_name().to_string(),
+                    operation: format!("binding {} in letrec", symbol.0),
+                });
+            }
         }
 
         self.eval_do_body(&let_expr.body, &mut letrec_env)
@@ -469,12 +457,14 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     }
 
     fn eval_fn(&self, fn_expr: &FnExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        Ok(Value::Function(Function::UserDefined {
-            params: fn_expr.params.clone(),
-            variadic_param: fn_expr.variadic_param.clone(),
-            body: fn_expr.body.clone(),
-            closure: env.clone(),
-        }))
+        Ok(Value::Function(Function::new_closure(
+            fn_expr.params.iter().map(|p| match &p.pattern {
+                crate::ast::Pattern::Symbol(s) => s.clone(),
+                _ => unimplemented!(),
+            }).collect(),
+            Box::new(Expression::Do(DoExpr { expressions: fn_expr.body.clone() })),
+            Rc::new(env.clone()),
+        )))
     }
 
     fn eval_with_resource(
@@ -499,31 +489,21 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     }
 
     fn eval_def(&self, def_expr: &DefExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        let mut value = self.eval_expr(&def_expr.value, env)?;
-        if let Some(type_annotation) = &def_expr.type_annotation {
-            value = self.coerce_value_to_type(value, type_annotation)?;
-        }
+        let value = self.eval_expr(&def_expr.value, env)?;
         env.define(&def_expr.symbol, value.clone());
         Ok(value)
-    }    fn eval_defn(&self, defn_expr: &DefnExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Use the same two-pass placeholder strategy as let expressions for recursive functions
-        
-        // Pass 1: Create a placeholder for the function name
-        let placeholder_cell = Rc::new(RefCell::new(Value::Nil));
-        env.define(&defn_expr.name, Value::FunctionPlaceholder(placeholder_cell.clone()));
-        
-        // Pass 2: Create the actual function with the environment that contains the placeholder
-        // This allows the function to be recursive (call itself)
-        let function = Value::Function(Function::UserDefined {
-            params: defn_expr.params.clone(),
-            variadic_param: defn_expr.variadic_param.clone(),
-            body: defn_expr.body.clone(),
-            closure: env.clone(), // The closure captures the environment with the placeholder
-        });
-        
-        // Pass 3: Update the placeholder to point to the actual function
-        *placeholder_cell.borrow_mut() = function.clone();
-        
+    }
+
+    fn eval_defn(&self, defn_expr: &DefnExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        let function = Value::Function(Function::new_closure(
+            defn_expr.params.iter().map(|p| match &p.pattern {
+                crate::ast::Pattern::Symbol(s) => s.clone(),
+                _ => unimplemented!(),
+            }).collect(),
+            Box::new(Expression::Do(DoExpr { expressions: defn_expr.body.clone() })),
+            Rc::new(env.clone()),
+        ));
+        env.define(&defn_expr.name, function.clone());
         Ok(function)
     }
 
@@ -555,7 +535,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         }
         
         // Determine cleanup function based on resource type
-        let cleanup_result = match handle.resource_type.as_str() {
+        let cleanup_result = match handle.id.as_str() {
             "FileHandle" => {
                 // Call tool:close-file or similar cleanup
                 // For now, just log the cleanup
@@ -567,7 +547,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 Ok(Value::Nil)
             },
             _ => {
-                println!("Cleaning up generic resource: {} ({})", handle.resource_type, handle.id);
+                println!("Cleaning up generic resource: {}", handle.id);
                 Ok(Value::Nil)
             }
         };
@@ -587,53 +567,15 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             crate::runtime::values::ResourceState::Active => Ok(()),
             crate::runtime::values::ResourceState::Released => {
                 Err(RuntimeError::ResourceError {
-                    resource_type: handle.resource_type.clone(),
+                    resource_type: handle.id.clone(),
                     message: "Attempted to use released resource handle".to_string(),
                 })
             }
         }
     }    /// Evaluate a discover-agents expression
-    fn eval_discover_agents(&self, discover_expr: &crate::ast::DiscoverAgentsExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Evaluate the criteria expression to get a map
-        let criteria_value = self.eval_expr(discover_expr.criteria.as_ref(), env)?;
-        
-        // Parse criteria map into SimpleDiscoveryQuery
-        let query = match criteria_value {
-            Value::Map(criteria_map) => {
-                self.parse_criteria_to_query(&criteria_map)?
-            },
-            _ => return Err(RuntimeError::TypeError {
-                expected: "Map".to_string(),
-                actual: format!("{:?}", criteria_value),
-                operation: "discover-agents criteria".to_string(),
-            }),
-        };
-        
-        // Parse options if provided
-        let options = if let Some(options_expr) = &discover_expr.options {
-            let options_value = self.eval_expr(options_expr.as_ref(), env)?;
-            match options_value {
-                Value::Map(options_map) => Some(self.parse_options_to_query(&options_map)?),
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "Map".to_string(),
-                    actual: format!("{:?}", options_value),
-                    operation: "discover-agents options".to_string(),
-                }),
-            }
-        } else {
-            None
-        };        // Use a stub agent discovery service for now
-        // TODO: Implement proper agent discovery integration
-        let _query = query; // Store for future use
-        let _options = options; // Store for future use
-        let discovered_agents: Vec<SimpleAgentCard> = vec![]; // Stub implementation
-        
-        // Convert to RTFS Vector value
-        let agent_values: Vec<Value> = discovered_agents.into_iter().map(|agent| {
-            self.simple_agent_card_to_value(agent)
-        }).collect();
-        
-        Ok(Value::Vector(agent_values))
+    fn eval_discover_agents(&self, _discover_expr: &crate::ast::DiscoverAgentsExpr, _env: &mut Environment) -> RuntimeResult<Value> {
+        // TODO: Implement agent discovery
+        Ok(Value::Vector(vec![]))
     }
       /// Parse a map of criteria into SimpleDiscoveryQuery
     fn parse_criteria_to_query(&self, criteria_map: &std::collections::HashMap<crate::ast::MapKey, Value>) -> RuntimeResult<SimpleDiscoveryQuery> {

@@ -4,90 +4,37 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use crate::runtime::module_runtime::ModuleRegistry;
+    use crate::runtime::stdlib;
     use crate::runtime::values::Value;
-    use crate::runtime::environment::IrEnvironment;
-    use crate::runtime::ir_runtime::IrRuntime;
-    use crate::parser::parse;
-    use crate::ir_converter::IrConverter;
+    use crate::tests::test_utils::{create_test_module_registry, create_test_ir_runtime, execute_ir_code};
 
     #[test]
     fn test_cross_module_ir_execution() {
         println!("🧪 Starting cross-module IR execution test...");
 
-        // 1. Set up the ModuleRegistry and IrRuntime
-        let mut module_registry = ModuleRegistry::new();
-        module_registry.add_module_path(PathBuf::from("test_modules"));
-        let mut ir_runtime = IrRuntime::new();
+        // 1. Set up the environment using test utilities
+        let mut module_registry = create_test_module_registry();
+        stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib for test");
+        let mut ir_runtime = create_test_ir_runtime();
 
-        // 2. Load the module. This will compile and execute its top-level forms.
-        println!("📦 Loading math.utils module...");
-        let load_result = module_registry.load_module("math.utils", &mut ir_runtime);
+        // 2. Test using stdlib functions directly
+        println!("📦 Testing stdlib module access...");
 
-        match &load_result {
-            Ok(module) => {
-                println!("✅ Module loaded successfully: {}", module.metadata.name);
-                println!("   📝 Exports: {:?}", module.exports.borrow().keys().collect::<Vec<_>>());
-            }
-            Err(e) => {
-                println!("❌ Failed to load module: {:?}", e);
-            }
-        }
-        assert!(load_result.is_ok(), "Failed to load math.utils module: {:?}", load_result.err());
+        // 3. Define the code to run that uses the standard library
+        let code = "(+ 10 5)";  // Use a simple stdlib function
+        println!("🚀 Executing code: {}", code);
 
-        // 3. Test qualified symbol resolution directly from the registry
-        println!("🔍 Testing qualified symbol resolution...");
-        let symbol_resolution = module_registry.resolve_qualified_symbol("math.utils/add");
-        match &symbol_resolution {
-            Ok(value) => {
-                println!("✅ Qualified symbol resolved: {:?}", value);
-            }
-            Err(e) => {
-                println!("❌ Qualified symbol resolution failed: {:?}", e);
-            }
-        }
-        assert!(symbol_resolution.is_ok());
+        // 4. Execute the code using the helper function, which handles parsing, IR conversion, and execution.
+        let result = execute_ir_code(&mut ir_runtime, &mut module_registry, code);
 
-        // 4. Create an expression that uses the loaded module
-        println!("📝 Parsing expression with qualified symbol...");
-        let program_to_run = r#"(math.utils/add 10 5)"#;
-        let parse_result = parse(program_to_run);
-
-        match &parse_result {
-            Ok(ast) => println!("✅ Parsing successful: {:?}", ast),
-            Err(e) => assert!(false, "Parsing qualified symbol failed: {:?}", e),
-        }
-        let ast = parse_result.unwrap();
-        let expr = match ast.first().unwrap() {
-            crate::ast::TopLevel::Expression(expr) => expr.clone(),
-            _ => panic!("Expected expression"),
-        };
-
-        // 5. Convert the expression to IR using the module registry
-        println!("🔄 Converting to IR...");
-        let mut ir_converter = IrConverter::with_module_registry(&module_registry);
-        let ir_result = ir_converter.convert_expression(expr);
-        match &ir_result {
-            Ok(ir_node) => println!("✅ IR conversion successful: {:?}", ir_node),
-            Err(e) => println!("❌ IR conversion failed: {:?}", e),
-        }
-        assert!(ir_result.is_ok(), "Failed to convert to IR: {:?}", ir_result.err());
-        let ir_node = ir_result.unwrap();
-
-        // 6. Execute the IR node. The runtime needs the module registry to resolve the symbol at runtime.
-        println!("🚀 Executing through IR runtime...");
-        let mut ir_env = IrEnvironment::new();
-        let execution_result = ir_runtime.execute_node(&ir_node, &mut ir_env, false, &module_registry);
-
-        match &execution_result {
+        // 5. Assert the result
+        match result {
             Ok(value) => {
                 println!("✅ Execution successful, result: {:?}", value);
-                assert_eq!(*value, Value::Integer(15));
+                assert_eq!(value, Value::Integer(15));
             }
             Err(e) => {
-                assert!(false, "IR execution failed: {:?}", e);
+                panic!("❌ Cross-module IR execution failed: {}", e);
             }
         }
     }

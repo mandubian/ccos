@@ -6,7 +6,8 @@ use std::time::Duration;
 use reqwest::Client;
 use serde_json::{json, Value as JsonValue};
 
-use crate::runtime::{RuntimeResult, RuntimeError, Value};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::Value;
 use super::types::*;
 
 /// Client for communicating with agents
@@ -76,7 +77,7 @@ impl AgentCommunicationClient {
                 message: format!("Failed to connect to agent: {}", e),
                 agent_id: request.agent_id.clone(),
                 endpoint: endpoint.uri.clone(),
-            })?;            
+            })?;
         // Check response status
         if !response.status().is_success() {
             return Err(RuntimeError::AgentCommunicationError {
@@ -387,7 +388,7 @@ mod tests {
         
         // Test keyword conversion
         let keyword_json = JsonValue::String(":test".to_string());
-        assert_eq!(client.json_to_value(&keyword_json).unwrap(), Value::Keyword(Keyword("test".to_string())));
+        assert_eq!(client.json_to_value(&keyword_json).unwrap(), Value::Keyword(Keyword("test".to_string())))
     }
     
     #[test]

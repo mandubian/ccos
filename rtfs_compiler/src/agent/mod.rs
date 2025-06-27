@@ -15,8 +15,11 @@ pub use communication::AgentCommunicationClient;
 pub use profile::AgentProfileManager;
 
 // Re-export discovery traits with specific names to avoid conflicts
-pub use discovery_traits::{
-    AgentDiscovery, AgentDiscoveryFactory, NoOpAgentDiscovery,
-    SimpleDiscoveryQuery, SimpleDiscoveryOptions, SimpleAgentCard,
-    SimpleCachePolicy, AgentDiscoveryError
-};
+pub use discovery_traits::AgentDiscovery;
+pub use discovery_traits::AgentDiscoveryFactory;
+pub use discovery_traits::NoOpAgentDiscovery;
+pub use types::SimpleDiscoveryQuery;
+pub use types::SimpleDiscoveryOptions;
+pub use types::SimpleAgentCard;
+pub use types::SimpleCachePolicy;
+pub use types::AgentDiscoveryError;
