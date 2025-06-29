@@ -23,9 +23,21 @@ pub enum Literal {
 #[schemars(transparent)]
 pub struct Symbol(pub String);
 
+impl Symbol {
+    pub fn new(s: &str) -> Self {
+        Symbol(s.to_string())
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[schemars(transparent)]
 pub struct Keyword(pub String);
+
+impl Keyword {
+    pub fn new(s: &str) -> Self {
+        Keyword(s.to_string())
+    }
+}
 
 // --- Map Key ---
 #[derive(Debug, PartialEq, Clone, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -249,9 +261,9 @@ pub struct MatchExpr {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(rename_all = "camelCase")]
 pub struct LogStepExpr {
-    pub level: Option<Keyword>,   // e.g., :info, :debug, :error
+    pub level: Option<Keyword>, // e.g., :info, :debug, :error
     #[validate(nested)]
-    pub values: Vec<Expression>,  // The expressions to log
+    pub values: Vec<Expression>, // The expressions to log
     pub location: Option<String>, // Optional string literal for source location hint
 }
 
@@ -468,7 +480,7 @@ pub struct ResourceDefinition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(rename_all = "camelCase")]
 pub struct ModuleDefinition {
-    pub name: Symbol, // Namespaced identifier
+    pub name: Symbol,              // Namespaced identifier
     pub docstring: Option<String>, // Optional documentation string
     pub exports: Option<Vec<Symbol>>,
     #[validate(nested)]

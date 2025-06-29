@@ -30,3 +30,9 @@ pub use runtime::{Runtime, RuntimeStrategy};
 
 // Re-export IR modules for external use
 pub use ir::core::*;
+
+// Re-export all RTFS 2.0 object builders
+pub mod builders;
+pub use builders::{
+    ActionBuilder, CapabilityBuilder, IntentBuilder, ModuleBuilder, PlanBuilder, ResourceBuilder,
+};
