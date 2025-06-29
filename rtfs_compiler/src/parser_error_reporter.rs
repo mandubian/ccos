@@ -422,7 +422,7 @@ mod tests {
         let source_code = "intent my-intent\n  name: test-intent\n}";
         let pest_error = PestError::new_from_pos(
             ErrorVariant::ParsingError {
-                positives: vec!["{".to_string()],
+                positives: vec![Rule::map],
                 negatives: vec![],
             },
             pest::Position::new(source_code, 0).unwrap(),
@@ -443,7 +443,7 @@ mod tests {
         let source_code = "// This is a comment\nlet x = 5";
         let pest_error = PestError::new_from_pos(
             ErrorVariant::ParsingError {
-                positives: vec!["expression".to_string()],
+                positives: vec![Rule::expression],
                 negatives: vec![],
             },
             pest::Position::new(source_code, 0).unwrap(),
