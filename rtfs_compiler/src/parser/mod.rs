@@ -1,15 +1,17 @@
-use pest::Parser;
 use crate::ast::{Expression, TopLevel};
 use crate::error_reporting::SourceSpan;
+use crate::parser_error_reporter::{ParserError, ParserErrorReporter};
+use pest::error::Error as PestError;
+use pest::Parser;
 
 // Declare submodules
 pub mod common;
+pub mod errors;
 pub mod expressions;
 pub mod special_forms;
+pub mod toplevel;
 pub mod types;
 pub mod utils;
-pub mod errors;
-pub mod toplevel;
 
 // Import items from submodules
 pub use errors::PestParseError;
@@ -26,20 +28,16 @@ fn span_from_input(input: &str) -> Option<SourceSpan> {
     if input.is_empty() {
         return None;
     }
-    
+
     let lines: Vec<&str> = input.lines().collect();
     let end_line = lines.len();
     let end_col = lines.last().map(|line| line.len()).unwrap_or(0);
-    
-    Some(SourceSpan::new(1, 1, end_line, end_col)
-        .with_source_text(input.to_string()))
+
+    Some(SourceSpan::new(1, 1, end_line, end_col).with_source_text(input.to_string()))
 }
 
-// --- Main Parsing Function ---
-
-// Parse a full RTFS program (potentially multiple top-level items)
-pub fn parse(input: &str) -> Result<Vec<TopLevel>, PestParseError> {
-    let pairs = RTFSParser::parse(Rule::program, input).map_err(PestParseError::from)?;
+// Helper function to build a program from pest pairs
+fn build_program(pairs: pest::iterators::Pairs<Rule>) -> Result<Vec<TopLevel>, PestError<Rule>> {
     let program_content = pairs
         .peek()
         .expect("Parse should have yielded one program rule");
@@ -50,16 +48,44 @@ pub fn parse(input: &str) -> Result<Vec<TopLevel>, PestParseError> {
     top_level_pairs
         .map(build_ast)
         .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            PestError::new_from_pos(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("{:?}", e),
+                },
+                pest::Position::new("", 0).unwrap(),
+            )
+        })
 }
 
-// Parse a single expression (useful for REPL or simple evaluation)
+// --- Main Parsing Functions ---
+
+/// Parse a full RTFS program (potentially multiple top-level items)
+pub fn parse(input: &str) -> Result<Vec<TopLevel>, PestError<Rule>> {
+    let pairs = RTFSParser::parse(Rule::program, input)?;
+    build_program(pairs)
+}
+
+/// Parse RTFS source code with enhanced error reporting
+pub fn parse_with_enhanced_errors(
+    source: &str,
+    file_path: Option<&str>,
+) -> Result<Vec<TopLevel>, ParserError> {
+    match parse(source) {
+        Ok(items) => Ok(items),
+        Err(pest_error) => {
+            let reporter = ParserErrorReporter::new();
+            Err(reporter.report_error(pest_error, source, file_path))
+        }
+    }
+}
+
+/// Parse a single expression (useful for REPL or simple evaluation)
 pub fn parse_expression(input: &str) -> Result<Expression, PestParseError> {
     let pairs = RTFSParser::parse(Rule::expression, input).map_err(PestParseError::from)?;
-    let expr_pair = pairs
-        .peek()
-        .ok_or_else(|| PestParseError::InvalidInput {
-            message: "No expression found".to_string(),
-            span: span_from_input(input),
-        })?;
+    let expr_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput {
+        message: "No expression found".to_string(),
+        span: span_from_input(input),
+    })?;
     build_expression(expr_pair)
 }

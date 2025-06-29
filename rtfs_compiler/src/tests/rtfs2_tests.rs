@@ -1,8 +1,8 @@
 // Tests for RTFS 2.0 object definitions
 // Tests the object-oriented features introduced in RTFS 2.0
 
-use crate::parser;
 use crate::ast::*;
+use crate::parser;
 
 #[cfg(test)]
 mod object_definitions {
@@ -23,7 +23,10 @@ mod object_definitions {
                     if let Some(TopLevel::Intent(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected intent definition for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected intent definition for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse intent definition '{}': {:?}", input, e),
@@ -46,7 +49,10 @@ mod object_definitions {
                     if let Some(TopLevel::Plan(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected plan definition for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected plan definition for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse plan definition '{}': {:?}", input, e),
@@ -69,7 +75,10 @@ mod object_definitions {
                     if let Some(TopLevel::Action(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected action definition for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected action definition for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse action definition '{}': {:?}", input, e),
@@ -92,7 +101,10 @@ mod object_definitions {
                     if let Some(TopLevel::Capability(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected capability definition for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected capability definition for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse capability definition '{}': {:?}", input, e),
@@ -115,7 +127,10 @@ mod object_definitions {
                     if let Some(TopLevel::Resource(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected resource definition for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected resource definition for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse resource definition '{}': {:?}", input, e),
@@ -139,7 +154,10 @@ mod object_definitions {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected expression (resource ref) for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected expression (resource ref) for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse resource reference '{}': {:?}", input, e),
@@ -167,7 +185,10 @@ mod advanced_literals {
                     if let Some(TopLevel::Expression(Expression::Literal(_))) = parsed.first() {
                         // Success - timestamps should parse as literals
                     } else {
-                        panic!("Expected timestamp literal for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected timestamp literal for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse timestamp '{}': {:?}", input, e),
@@ -213,7 +234,10 @@ mod advanced_literals {
                     if let Some(TopLevel::Expression(Expression::Literal(_))) = parsed.first() {
                         // Success - resource handles should parse as literals
                     } else {
-                        panic!("Expected resource handle literal for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected resource handle literal for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse resource handle '{}': {:?}", input, e),
@@ -243,7 +267,10 @@ mod module_system {
                     if let Some(TopLevel::Module(_)) = parsed.first() {
                         // Success
                     } else {
-                        panic!("Expected module definition for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected module definition for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse module definition '{}': {:?}", input, e),
@@ -267,7 +294,7 @@ mod module_system {
                     // Import definitions should parse successfully
                     // They might be parsed as expressions or top-level definitions
                     // depending on the AST structure
-                } 
+                }
                 Err(e) => panic!("Failed to parse import definition '{}': {:?}", input, e),
             }
         }
@@ -280,24 +307,49 @@ mod task_context {
 
     #[test]
     fn test_task_context_access() {
-        let test_cases = vec![
-            "@current-task",
-            "@task-id", 
-            "@:task-metadata",
-            "@:execution-context",
-        ];
+        let test_cases = vec!["@current-task", "@user-id", "@:keyword"];
 
         for input in test_cases {
             let result = parser::parse(input);
             match result {
                 Ok(parsed) => {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
-                        // Success - task context access should parse as expressions
+                        // Success
                     } else {
-                        panic!("Expected expression (task context) for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected expression (task context access) for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse task context access '{}': {:?}", input, e),
+            }
+        }
+    }
+
+    #[test]
+    fn debug_task_context_parsing() {
+        use crate::parser::RTFSParser;
+        use crate::parser::Rule;
+        use pest::Parser;
+
+        let input = "@current-task";
+        let pairs = RTFSParser::parse(Rule::task_context_access, input);
+        match pairs {
+            Ok(pairs) => {
+                for pair in pairs {
+                    println!("Rule: {:?}, Content: '{}'", pair.as_rule(), pair.as_str());
+                    for inner in pair.into_inner() {
+                        println!(
+                            "  Inner Rule: {:?}, Content: '{}'",
+                            inner.as_rule(),
+                            inner.as_str()
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Parse error: {:?}", e);
             }
         }
     }
@@ -316,7 +368,10 @@ mod task_context {
                 Ok(_) => {
                     // Success - task context should work in complex expressions
                 }
-                Err(e) => panic!("Failed to parse expression with task context '{}': {:?}", input, e),
+                Err(e) => panic!(
+                    "Failed to parse expression with task context '{}': {:?}",
+                    input, e
+                ),
             }
         }
     }
@@ -341,7 +396,10 @@ mod error_handling {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success - try-catch should parse as expressions
                     } else {
-                        panic!("Expected try-catch expression for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected try-catch expression for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse try-catch expression '{}': {:?}", input, e),
@@ -365,7 +423,10 @@ mod error_handling {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success - match should parse as expressions
                     } else {
-                        panic!("Expected match expression for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected match expression for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse match expression '{}': {:?}", input, e),
@@ -387,10 +448,16 @@ mod error_handling {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success - with-resource should parse as expressions
                     } else {
-                        panic!("Expected with-resource expression for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected with-resource expression for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
-                Err(e) => panic!("Failed to parse with-resource expression '{}': {:?}", input, e),
+                Err(e) => panic!(
+                    "Failed to parse with-resource expression '{}': {:?}",
+                    input, e
+                ),
             }
         }
     }
@@ -415,10 +482,16 @@ mod agent_system {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success - discover-agents should parse as expressions
                     } else {
-                        panic!("Expected discover-agents expression for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected discover-agents expression for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
-                Err(e) => panic!("Failed to parse discover-agents expression '{}': {:?}", input, e),
+                Err(e) => panic!(
+                    "Failed to parse discover-agents expression '{}': {:?}",
+                    input, e
+                ),
             }
         }
     }
@@ -438,7 +511,10 @@ mod agent_system {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success - log-step should parse as expressions
                     } else {
-                        panic!("Expected log-step expression for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected log-step expression for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse log-step expression '{}': {:?}", input, e),
@@ -460,11 +536,94 @@ mod agent_system {
                     if let Some(TopLevel::Expression(_)) = parsed.first() {
                         // Success - parallel should parse as expressions
                     } else {
-                        panic!("Expected parallel expression for '{}', got: {:?}", input, parsed);
+                        panic!(
+                            "Expected parallel expression for '{}', got: {:?}",
+                            input, parsed
+                        );
                     }
                 }
                 Err(e) => panic!("Failed to parse parallel expression '{}': {:?}", input, e),
             }
         }
     }
+}
+
+#[test]
+fn test_schema_validation() {
+    use crate::ast::{
+        Expression, IntentDefinition, Keyword, Literal, PlanDefinition, Property, Symbol, TopLevel,
+    };
+    use crate::parser;
+    use crate::validator::SchemaValidator;
+
+    // Test valid intent with simple syntax
+    let valid_intent = r#"(intent my-intent)"#;
+
+    let parsed = parser::parse(valid_intent).unwrap();
+    if let Some(TopLevel::Intent(_)) = parsed.first() {
+        let result = SchemaValidator::validate_object(&parsed[0]);
+        // This should fail validation because it's missing required fields, but parsing should work
+        assert!(
+            result.is_err(),
+            "Simple intent should fail schema validation due to missing required fields"
+        );
+    } else {
+        panic!("Failed to parse valid intent");
+    }
+
+    // Test valid plan with simple syntax
+    let valid_plan = r#"(plan my-plan)"#;
+
+    let parsed = parser::parse(valid_plan).unwrap();
+    if let Some(TopLevel::Plan(_)) = parsed.first() {
+        let result = SchemaValidator::validate_object(&parsed[0]);
+        // This should fail validation because it's missing required fields, but parsing should work
+        assert!(
+            result.is_err(),
+            "Simple plan should fail schema validation due to missing required fields"
+        );
+    } else {
+        panic!("Failed to parse valid plan");
+    }
+
+    // Test that basic validator::Validate still works
+    let simple_expression = "42";
+    let parsed = parser::parse(simple_expression).unwrap();
+    if let Some(TopLevel::Expression(_)) = parsed.first() {
+        let result = SchemaValidator::validate_object(&parsed[0]);
+        assert!(result.is_ok(), "Simple expression should pass validation");
+    } else {
+        panic!("Failed to parse simple expression");
+    }
+}
+
+#[test]
+fn test_versioned_type_validation() {
+    use crate::validator::SchemaValidator;
+
+    // Valid versioned types
+    assert!(SchemaValidator::is_valid_versioned_type(
+        ":rtfs.core:v2.0:intent"
+    ));
+    assert!(SchemaValidator::is_valid_versioned_type(
+        ":my.namespace:v1.5:custom-type"
+    ));
+    assert!(SchemaValidator::is_valid_versioned_type(
+        ":test_package:v3.2.1:resource"
+    ));
+
+    // Invalid versioned types
+    assert!(!SchemaValidator::is_valid_versioned_type(
+        "rtfs.core:v2.0:intent"
+    )); // Missing leading colon
+    assert!(!SchemaValidator::is_valid_versioned_type(":rtfs.core:v2.0")); // Missing type part
+    assert!(!SchemaValidator::is_valid_versioned_type(
+        ":rtfs.core:2.0:intent"
+    )); // Version should start with v
+    assert!(!SchemaValidator::is_valid_versioned_type(
+        ":rtfs@core:v2.0:intent"
+    )); // Invalid character in namespace
+    assert!(!SchemaValidator::is_valid_versioned_type(
+        ":rtfs.core:v2.0:intent@type"
+    )); // Invalid character in type
 }

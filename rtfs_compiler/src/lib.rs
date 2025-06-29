@@ -1,17 +1,15 @@
 // RTFS Compiler Library
-// Exposes modules for binary targets and external use
+// Main library crate for the RTFS compiler
 
+pub mod agent;
 pub mod ast;
-// pub mod compiler; // TODO: Add compiler module
+pub mod development_tooling;
 pub mod error_reporting;
+pub mod ir;
 pub mod parser;
+pub mod parser_error_reporter;
 pub mod runtime;
 pub mod validator;
-pub mod development_tooling;
-pub mod agent;
-
-// For access to IR converter and optimizer
-pub mod ir;
 
 // Test modules
 #[cfg(test)]
@@ -21,16 +19,14 @@ mod tests;
 // to make them accessible to other parts of the crate or external users.
 
 // Re-export the main parsing function and the AST.
+pub use agent::{
+    AgentCommunicationClient, AgentDiscoveryClient, AgentProfileManager, AgentRegistry,
+};
 pub use ast::*;
-pub use parser::{parse, parse_expression, errors::PestParseError};
-pub use runtime::{Runtime, RuntimeStrategy};
-pub use runtime::evaluator::Evaluator;
 pub use development_tooling::{RtfsRepl, RtfsTestFramework};
-pub use agent::{AgentDiscoveryClient, AgentCommunicationClient, AgentRegistry, AgentProfileManager};
+pub use parser::{errors::PestParseError, parse, parse_expression};
+pub use runtime::evaluator::Evaluator;
+pub use runtime::{Runtime, RuntimeStrategy};
 
 // Re-export IR modules for external use
 pub use ir::core::*;
-pub use ir::converter::*;
-pub use ir::optimizer::*;
-pub use ir::enhanced_optimizer::*;
-pub use ir::demo::*;

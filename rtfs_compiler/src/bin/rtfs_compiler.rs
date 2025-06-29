@@ -1,5 +1,5 @@
 // RTFS Production Compiler Binary
-// Command-line RTFS compiler with optimization levels and performance reporting
+// Command-line RTFS compiler with RTFS 2.0 support, optimization levels and performance reporting
 
 use clap::{Parser, ValueEnum};
 use std::fs;
@@ -10,17 +10,19 @@ use std::time::Instant;
 // Note: We need to reference the parent crate since this is a binary
 extern crate rtfs_compiler;
 use rtfs_compiler::{
-    parser::parse_expression,
-    runtime::{Runtime, RuntimeStrategy},
-    runtime::module_runtime::ModuleRegistry,
-    ir_converter::IrConverter,
-    ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     agent::discovery_traits::NoOpAgentDiscovery,
+    ast::TopLevel,
+    ir::converter::IrConverter,
+    ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
+    parser::parse_with_enhanced_errors,
+    runtime::module_runtime::ModuleRegistry,
+    runtime::{Runtime, RuntimeStrategy},
+    validator::SchemaValidator,
 };
 
 #[derive(Parser)]
 #[command(name = "rtfs-compiler")]
-#[command(about = "RTFS Production Compiler with Advanced Optimization")]
+#[command(about = "RTFS Production Compiler with RTFS 2.0 Support and Advanced Optimization")]
 #[command(version = "0.1.0")]
 struct Args {
     /// Input RTFS source file (can be provided as positional argument or with --input flag)
@@ -28,7 +30,12 @@ struct Args {
     input: Option<PathBuf>,
 
     /// Input RTFS source file (alternative to positional argument)
-    #[arg(short = 'i', long = "input", value_name = "FILE", conflicts_with = "input")]
+    #[arg(
+        short = 'i',
+        long = "input",
+        value_name = "FILE",
+        conflicts_with = "input"
+    )]
     input_flag: Option<PathBuf>,
 
     /// Output file (optional, defaults to stdout)
@@ -59,6 +66,14 @@ struct Args {
     #[arg(long)]
     execute: bool,
 
+    /// Validate RTFS 2.0 objects against schemas
+    #[arg(long, default_value = "true")]
+    validate: bool,
+
+    /// Skip validation (for debugging)
+    #[arg(long)]
+    skip_validation: bool,
+
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
@@ -71,6 +86,13 @@ enum OptLevel {
     Aggressive,
 }
 
+#[derive(Clone, ValueEnum)]
+enum RuntimeType {
+    Ast,
+    Ir,
+    Fallback,
+}
+
 impl From<OptLevel> for OptimizationLevel {
     fn from(level: OptLevel) -> Self {
         match level {
@@ -81,182 +103,249 @@ impl From<OptLevel> for OptimizationLevel {
     }
 }
 
-#[derive(Clone, ValueEnum, Debug)]
-enum RuntimeType {
-    Ast,
-    Ir,
-    Fallback,
-}
-
-impl From<RuntimeType> for RuntimeStrategy {
+impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
     fn from(runtime_type: RuntimeType) -> Self {
         match runtime_type {
-            RuntimeType::Ast => RuntimeStrategy::Ast,
-            RuntimeType::Ir => RuntimeStrategy::Ir,
-            RuntimeType::Fallback => RuntimeStrategy::IrWithFallback,
+            RuntimeType::Ast => {
+                let module_registry = ModuleRegistry::new();
+                let evaluator =
+                    rtfs_compiler::runtime::Evaluator::new(std::rc::Rc::new(module_registry));
+                Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
+            }
+            RuntimeType::Ir => {
+                let module_registry = ModuleRegistry::new();
+                Box::new(rtfs_compiler::runtime::ir_runtime::IrStrategy::new(
+                    module_registry,
+                ))
+            }
+            RuntimeType::Fallback => {
+                let module_registry = ModuleRegistry::new();
+                Box::new(rtfs_compiler::runtime::ir_runtime::IrStrategy::new(
+                    module_registry,
+                ))
+            }
         }
     }
 }
 
 fn main() {
     let args = Args::parse();
-    
-    // Determine the input file path (either from positional arg or --input flag)
-    let input_path = args.input.or(args.input_flag).unwrap_or_else(|| {
-        eprintln!("❌ Error: Input file is required. Provide it as a positional argument or use --input flag.");
-        eprintln!("Usage: rtfs-compiler <FILE> [OPTIONS]");
-        eprintln!("   or: rtfs-compiler --input <FILE> [OPTIONS]");
-        std::process::exit(1);
-    });
-    
-    if args.verbose {
-        println!("🚀 RTFS Production Compiler v0.1.0");
-        println!("📁 Input: {}", input_path.display());
-        println!("⚡ Optimization Level: {:?}", args.opt_level);
-        println!("🏃 Runtime Strategy: {:?}", args.runtime);
-        println!();
-    }
 
-    // Read input file
-    let source_code = match fs::read_to_string(&input_path) {
+    // Determine input file
+    let input_file = args
+        .input_flag
+        .or(args.input)
+        .expect("Input file is required");
+
+    // Read source code
+    let source_code = match fs::read_to_string(&input_file) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("❌ Error reading input file: {}", e);
+            eprintln!("❌ Error reading file: {}", e);
             std::process::exit(1);
         }
     };
 
-    // Track total compilation time
+    if args.verbose {
+        println!("📖 Reading source file: {}", input_file.display());
+        println!("📊 Source size: {} bytes", source_code.len());
+    }
+
     let total_start = Instant::now();
 
     // Phase 1: Parsing
     let parse_start = Instant::now();
-    let ast = match parse_expression(&source_code) {
-        Ok(ast) => ast,
-        Err(e) => {
-            eprintln!("❌ Parse error: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    let parsed_items =
+        match parse_with_enhanced_errors(&source_code, Some(input_file.to_str().unwrap())) {
+            Ok(items) => items,
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        };
     let parse_time = parse_start.elapsed();
 
     if args.verbose {
         println!("✅ Parsing completed in {:?}", parse_time);
+        println!("📊 Parsed {} top-level items", parsed_items.len());
     }
 
-    // Phase 2: IR Conversion
-    let ir_start = Instant::now();
-    let mut ir_converter = IrConverter::new();
-    let ir_node = match ir_converter.convert_expression(ast) {
-        Ok(ir) => ir,
-        Err(e) => {
-            eprintln!("❌ IR conversion error: {:?}", e);
+    // Phase 1.5: RTFS 2.0 Schema Validation
+    let validation_start = Instant::now();
+    let should_validate = args.validate && !args.skip_validation;
+
+    if should_validate {
+        let mut validation_errors = Vec::new();
+
+        for (i, item) in parsed_items.iter().enumerate() {
+            match SchemaValidator::validate_object(item) {
+                Ok(_) => {
+                    if args.verbose {
+                        println!(
+                            "✅ Validated item {}: {:?}",
+                            i + 1,
+                            std::mem::discriminant(item)
+                        );
+                    }
+                }
+                Err(e) => {
+                    validation_errors.push((i + 1, e));
+                }
+            }
+        }
+
+        if !validation_errors.is_empty() {
+            eprintln!("❌ RTFS 2.0 Schema Validation Errors:");
+            for (item_num, error) in validation_errors {
+                eprintln!("  Item {}: {:?}", item_num, error);
+            }
             std::process::exit(1);
         }
-    };
-    let ir_time = ir_start.elapsed();
 
-    if args.verbose {
-        println!("✅ IR conversion completed in {:?}", ir_time);
-    }    // Phase 3: Optimization
-    let opt_start = Instant::now();
-    let opt_level_for_optimizer = args.opt_level.clone();
-    let mut optimizer = EnhancedOptimizationPipeline::with_optimization_level(opt_level_for_optimizer.into());
-    let optimized_ir = optimizer.optimize(ir_node);
-    let opt_time = opt_start.elapsed();
+        let validation_time = validation_start.elapsed();
+        if args.verbose {
+            println!("✅ Schema validation completed in {:?}", validation_time);
+        }
+    } else if args.verbose {
+        println!("⚠️  Schema validation skipped");
+    }
 
-    if args.verbose {
-        println!("✅ Optimization completed in {:?}", opt_time);
+    // Phase 2: Process each top-level item
+    let mut all_results = Vec::new();
+    let mut total_ir_time = std::time::Duration::ZERO;
+    let mut total_opt_time = std::time::Duration::ZERO;
+
+    for (i, item) in parsed_items.iter().enumerate() {
+        if args.verbose {
+            println!(
+                "\n🔄 Processing item {}: {:?}",
+                i + 1,
+                std::mem::discriminant(item)
+            );
+        }
+
+        match item {
+            TopLevel::Expression(expr) => {
+                // Convert expression to IR
+                let ir_start = Instant::now();
+                let mut ir_converter = IrConverter::new();
+                let ir_node = match ir_converter.convert_expression(expr.clone()) {
+                    Ok(ir) => ir,
+                    Err(e) => {
+                        eprintln!("❌ IR conversion error for expression {}: {:?}", i + 1, e);
+                        std::process::exit(1);
+                    }
+                };
+                let ir_time = ir_start.elapsed();
+                total_ir_time += ir_time;
+
+                if args.verbose {
+                    println!("✅ IR conversion completed in {:?}", ir_time);
+                }
+
+                // Optimize IR
+                let opt_start = Instant::now();
+                let opt_level_for_optimizer = args.opt_level.clone();
+                let mut optimizer = EnhancedOptimizationPipeline::with_optimization_level(
+                    opt_level_for_optimizer.into(),
+                );
+                let optimized_ir = optimizer.optimize(ir_node);
+                let opt_time = opt_start.elapsed();
+                total_opt_time += opt_time;
+
+                if args.verbose {
+                    println!("✅ Optimization completed in {:?}", opt_time);
+                }
+
+                // Execute if requested
+                if args.execute {
+                    let exec_start = Instant::now();
+
+                    let runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
+                    let mut runtime = Runtime::new(runtime_strategy);
+
+                    match runtime.run(expr) {
+                        Ok(value) => {
+                            let exec_time = exec_start.elapsed();
+                            if args.verbose {
+                                println!("✅ Execution completed in {:?}", exec_time);
+                                println!("📊 Result: {:?}", value);
+                            }
+                            all_results.push(value);
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Runtime error for expression {}: {:?}", i + 1, e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            TopLevel::Intent(_)
+            | TopLevel::Plan(_)
+            | TopLevel::Action(_)
+            | TopLevel::Capability(_)
+            | TopLevel::Resource(_)
+            | TopLevel::Module(_) => {
+                if args.verbose {
+                    println!("📋 RTFS 2.0 object (no execution needed)");
+                }
+                // For now, we just validate and acknowledge RTFS 2.0 objects
+                // In the future, we might want to serialize them or process them differently
+            }
+        }
     }
 
     let total_time = total_start.elapsed();
-
-    // Phase 4: Execution (if requested)
-    let execution_result = if args.execute {
-        let exec_start = Instant::now();
-        
-        // Create runtime with agent discovery
-        let agent_discovery = Box::new(NoOpAgentDiscovery);
-        let module_registry = ModuleRegistry::new();
-        let mut runtime = Runtime::with_strategy_and_agent_discovery(
-            args.runtime.into(),
-            agent_discovery,
-            &module_registry
-        );
-        
-        let result = match runtime.evaluate_ir(&optimized_ir) {
-            Ok(value) => {
-                let exec_time = exec_start.elapsed();
-                if args.verbose {
-                    println!("✅ Execution completed in {:?}", exec_time);
-                }
-                Some((value, exec_time))
-            }
-            Err(e) => {
-                eprintln!("❌ Runtime error: {:?}", e);
-                std::process::exit(1);
-            }
-        };
-        
-        result
-    } else {
-        None
-    };
 
     // Output Results
     if args.show_timing {
         println!("📊 COMPILATION TIMING:");
         println!("  Parsing:      {:>8.2?}", parse_time);
-        println!("  IR Conversion: {:>8.2?}", ir_time);
-        println!("  Optimization:  {:>8.2?}", opt_time);
+        if should_validate {
+            let validation_time = validation_start.elapsed();
+            println!("  Validation:   {:>8.2?}", validation_time);
+        }
+        println!("  IR Conversion: {:>8.2?}", total_ir_time);
+        println!("  Optimization:  {:>8.2?}", total_opt_time);
         println!("  Total:         {:>8.2?}", total_time);
-        
-        if let Some((_, exec_time)) = &execution_result {
-            println!("  Execution:     {:>8.2?}", exec_time);
+
+        if !all_results.is_empty() {
+            println!("  Execution:     {:>8.2?}", total_time);
         }
         println!();
     }
 
-    if args.show_stats {
-        let stats = optimizer.stats();
+    if args.show_stats || args.optimization_report {
         println!("📈 OPTIMIZATION STATISTICS:");
-        println!("  Control Flow Optimizations: {}", stats.control_flow_optimizations);
-        println!("  Functions Inlined:          {}", stats.functions_inlined);
-        println!("  Dead Code Blocks Eliminated: {}", stats.dead_code_blocks_eliminated);
-        println!("  Optimization Time:          {}ms", stats.optimization_time_ms);
-        println!();
-    }    if args.optimization_report {
-        println!("📋 OPTIMIZATION REPORT:");
-        println!("  Input File: {}", input_path.display());
         println!("  Optimization Level: {:?}", args.opt_level);
-        println!("  Total Compilation Time: {:?}", total_time);
-        println!("  Optimization Impact: {:.1}% of total time", 
-                 (opt_time.as_nanos() as f64 / total_time.as_nanos() as f64) * 100.0);
-        
-        if let Some((_, exec_time)) = &execution_result {
-            println!("  Execution Performance: {:?}", exec_time);
-            println!("  Compile vs Execute Ratio: {:.2}:1", 
-                     total_time.as_nanos() as f64 / exec_time.as_nanos() as f64);
+
+        if !all_results.is_empty() {
+            println!("  Execution Performance: {:?}", total_time);
+            println!(
+                "  Compile vs Execute Ratio: {:.2}:1",
+                total_time.as_nanos() as f64 / total_time.as_nanos() as f64
+            );
         }
         println!();
     }
 
     // Show execution result if requested
-    if let Some((result, _)) = execution_result {
+    if !all_results.is_empty() {
         println!("🎯 EXECUTION RESULT:");
-        println!("{:?}", result);
+        for (i, result) in all_results.iter().enumerate() {
+            println!("📊 Result {}: {:?}", i + 1, result);
+        }
     } else if args.verbose {
         println!("✅ Compilation successful! Use --execute to run the compiled code.");
     }
 
     // Save output if specified
     if let Some(output_path) = args.output {
-        let output_content = format!("{:#?}", optimized_ir);
+        let output_content = format!("{:#?}", parsed_items);
         if let Err(e) = fs::write(&output_path, output_content) {
             eprintln!("❌ Error writing output file: {}", e);
             std::process::exit(1);
         }
-        
         if args.verbose {
             println!("💾 Output saved to: {}", output_path.display());
         }

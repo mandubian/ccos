@@ -1,0 +1,40 @@
+; Test RTFS 2.0 objects for binary verification
+
+intent test-intent {
+  name: "test-intent"
+  description: "A test intent for binary verification"
+  parameters: ["param1", "param2"]
+}
+
+plan test-plan {
+  name: "test-plan"
+  description: "A test plan for binary verification"
+  steps: ["step1", "step2", "step3"]
+}
+
+action test-action {
+  name: "test-action"
+  description: "A test action for binary verification"
+  parameters: ["input", "output"]
+}
+
+capability test-capability {
+  name: "test-capability"
+  description: "A test capability for binary verification"
+  interfaces: ["interface1", "interface2"]
+}
+
+resource test-resource {
+  name: "test-resource"
+  resource_type: "file"
+  properties: ["readable", "writable"]
+}
+
+module test-module {
+  name: "test-module"
+  version: "1.0.0"
+  exports: ["function1", "function2"]
+}
+
+; Test RTFS 1.0 expression for backward compatibility
+let x = 5 in x * x 
