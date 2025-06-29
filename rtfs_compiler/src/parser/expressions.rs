@@ -1,15 +1,15 @@
-use super::common::{build_literal, build_map_key, build_symbol};
-use super::special_forms::{
-    build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
-    build_letrec_expr, build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
-    build_with_resource_expr,
-};
+use super::common::{build_keyword, build_literal, build_map_key, build_symbol};
 use super::errors::{pair_to_source_span, PestParseError};
+use super::special_forms::{
+    build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr,
+    build_if_expr, build_let_expr, build_letrec_expr, build_log_step_expr, build_match_expr,
+    build_parallel_expr, build_try_catch_expr, build_with_resource_expr,
+};
+use super::utils::unescape;
 use super::Rule;
-use crate::ast::{Expression, MapKey};
+use crate::ast::{Expression, MapKey, Symbol};
 use pest::iterators::Pair;
 use std::collections::HashMap;
-use super::utils::unescape;
 
 pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestParseError> {
     // Drill down through silent rules like \\'expression\\' or \\'special_form\\'
@@ -23,7 +23,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
             } else {
                 return Err(PestParseError::InvalidInput {
                     message: "Expected inner rule for expression/special_form".to_string(),
-                    span: Some(pair_to_source_span(&original_pair_for_span))
+                    span: Some(pair_to_source_span(&original_pair_for_span)),
                 });
             }
         } else {
@@ -35,11 +35,13 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
         Rule::resource_ref => build_resource_ref(pair),
+        Rule::task_context_access => build_task_context_access(pair),
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
                 .map(build_expression)
                 .collect::<Result<Vec<_>, _>>()?,
-        )),        Rule::map => Ok(Expression::Map(build_map(pair)?)),
+        )),
+        Rule::map => Ok(Expression::Map(build_map(pair)?)),
         Rule::let_expr => Ok(Expression::Let(build_let_expr(pair)?)),
         Rule::letrec_expr => Ok(Expression::Letrec(build_letrec_expr(pair)?)),
         Rule::if_expr => Ok(Expression::If(build_if_expr(pair)?)),
@@ -114,20 +116,58 @@ fn build_resource_ref(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
     let pair_span = pair_to_source_span(&pair);
     let mut inner = pair.into_inner();
     let _keyword_pair = inner.next(); // Skip resource_ref_keyword
-    let string_pair = inner.next().ok_or_else(|| {
-        PestParseError::InvalidInput {
-            message: "Expected a string literal inside resource:ref".to_string(),
-            span: Some(pair_span),
-        }
-    })?;    // The string literal includes the quotes, so we need to strip them and unescape.
+    let string_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "Expected a string literal inside resource:ref".to_string(),
+        span: Some(pair_span),
+    })?; // The string literal includes the quotes, so we need to strip them and unescape.
     let raw_str = string_pair.as_str();
     let content = &raw_str[1..raw_str.len() - 1];
     let unescaped_content = unescape(content).map_err(|e| PestParseError::InvalidLiteral {
-        message: format!("Invalid escape sequence in resource reference string: {:?}", e),
+        message: format!(
+            "Invalid escape sequence in resource reference string: {:?}",
+            e
+        ),
         span: Some(pair_to_source_span(&string_pair)),
     })?;
 
     Ok(Expression::ResourceRef(unescaped_content))
+}
+
+fn build_task_context_access(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
+    let pair_span = pair_to_source_span(&pair);
+    let mut inner = pair.into_inner();
+
+    // The task_context_access rule contains the identifier directly
+    let identifier_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "Expected an identifier in task context access".to_string(),
+        span: Some(pair_span),
+    })?;
+
+    // Parse the identifier as either a symbol or keyword
+    let identifier = match identifier_pair.as_rule() {
+        Rule::symbol => build_symbol(identifier_pair)?,
+        Rule::keyword => {
+            let keyword = build_keyword(identifier_pair)?;
+            // Convert keyword to symbol for task context access
+            Symbol(keyword.0)
+        },
+        Rule::identifier => {
+            // Handle identifier as a symbol
+            Symbol(identifier_pair.as_str().to_string())
+        },
+        Rule::namespaced_identifier => {
+            // Handle namespaced identifier as a symbol
+            Symbol(identifier_pair.as_str().to_string())
+        },
+        _ => return Err(PestParseError::InvalidInput {
+            message: "Expected symbol, keyword, identifier, or namespaced_identifier in task context access".to_string(),
+            span: Some(pair_to_source_span(&identifier_pair)),
+        }),
+    };
+
+    // For now, we'll represent task context access as a special symbol
+    // In the future, this might be a dedicated AST node type
+    Ok(Expression::Symbol(identifier))
 }
 
 pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>, PestParseError> {
@@ -137,7 +177,7 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
                 "Expected Rule::map, found {:?} for build_map",
                 pair.as_rule()
             ),
-            span: Some(pair_to_source_span(&pair))
+            span: Some(pair_to_source_span(&pair)),
         });
     }
     // let map_span = pair_to_source_span(&pair); // This was unused
@@ -155,16 +195,22 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
                     "Expected map_entry inside map, found {:?}",
                     entry_pair.as_rule()
                 ),
-                span: Some(entry_span)
+                span: Some(entry_span),
             });
         }
         let mut entry_inner = entry_pair.into_inner();
         let key_pair = entry_inner
             .next()
-            .ok_or_else(|| PestParseError::InvalidInput { message: "Map entry missing key".to_string(), span: Some(entry_span.clone()) })?;
+            .ok_or_else(|| PestParseError::InvalidInput {
+                message: "Map entry missing key".to_string(),
+                span: Some(entry_span.clone()),
+            })?;
         let value_pair = entry_inner
             .find(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-            .ok_or_else(|| PestParseError::InvalidInput { message: "Map entry missing value".to_string(), span: Some(entry_span) })?;
+            .ok_or_else(|| PestParseError::InvalidInput {
+                message: "Map entry missing value".to_string(),
+                span: Some(entry_span),
+            })?;
         let key = build_map_key(key_pair)?;
         let value = build_expression(value_pair)?;
         map_data.insert(key, value);

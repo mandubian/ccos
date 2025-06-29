@@ -18,7 +18,7 @@ name = "rtfs-main"
 path = "src/main.rs"
 
 [[bin]]
-name = "rtfs-cli" 
+name = "rtfs_compiler"
 path = "src/bin/rtfs_compiler.rs"
 
 [[bin]]

@@ -1,108 +1,233 @@
-// RTFS REPL - Interactive Development Environment
-// Standalone REPL binary for RTFS development and exploration
+// RTFS Interactive REPL with RTFS 2.0 Support
+// Interactive read-eval-print loop with RTFS 2.0 object support and validation
 
-use std::env;
-use std::process;
+use std::io::{self, Write};
+use std::time::Instant;
 
-// Import from the rtfs_compiler crate
-use rtfs_compiler::{RtfsRepl, RuntimeStrategy, runtime::module_runtime::ModuleRegistry};
+// Import the RTFS compiler modules
+extern crate rtfs_compiler;
+use rtfs_compiler::{
+    agent::discovery_traits::NoOpAgentDiscovery,
+    ast::TopLevel,              // Add TopLevel for RTFS 2.0 objects
+    ir::converter::IrConverter, // Fix import path
+    ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
+    parser::parse_with_enhanced_errors, // Changed from parse_expression to parse for full programs
+    runtime::module_runtime::ModuleRegistry,
+    runtime::{Runtime, RuntimeStrategy},
+    validator::SchemaValidator, // Add schema validation
+};
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    
-    // Parse command line arguments
-    let mut runtime_strategy = RuntimeStrategy::Ast;
-    let mut show_help = false;
-    
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "--help" | "-h" => {
-                show_help = true;
+    println!("🚀 RTFS Interactive REPL with RTFS 2.0 Support");
+    println!("Type 'help' for commands, 'quit' to exit");
+    println!(
+        "Supports RTFS 2.0 objects: intents, plans, actions, capabilities, resources, modules"
+    );
+    println!();
+
+    // Initialize runtime components
+    let module_registry = ModuleRegistry::new();
+    let runtime_strategy: Box<dyn RuntimeStrategy> = Box::new(
+        rtfs_compiler::runtime::ir_runtime::IrStrategy::new(module_registry),
+    );
+    let mut runtime = Runtime::new(runtime_strategy);
+
+    let mut ir_converter = IrConverter::new();
+    let mut optimizer =
+        EnhancedOptimizationPipeline::with_optimization_level(OptimizationLevel::Basic);
+
+    loop {
+        print!("rtfs> ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            println!("Error reading input");
+            continue;
+        }
+
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+
+        // Handle special commands
+        match input {
+            "quit" | "exit" => {
+                println!("👋 Goodbye!");
                 break;
             }
-            "--runtime=ast" => runtime_strategy = RuntimeStrategy::Ast,
-            "--runtime=ir" => runtime_strategy = RuntimeStrategy::Ir,
-            "--runtime=fallback" => runtime_strategy = RuntimeStrategy::IrWithFallback,
-            "--version" | "-V" => {
-                println!("rtfs-repl 0.1.0");
-                println!("RTFS Interactive Development Environment");
-                return;
+            "help" => {
+                show_help();
+                continue;
             }
-            _ if arg.starts_with("--") => {
-                eprintln!("❌ Unknown option: {}", arg);
-                eprintln!("Use --help for usage information");
-                process::exit(1);
+            "clear" => {
+                print!("\x1B[2J\x1B[1;1H"); // Clear screen
+                continue;
             }
-            _ => {
-                eprintln!("❌ Unexpected argument: {}", arg);
-                eprintln!("Use --help for usage information");
-                process::exit(1);
-            }
+            _ => {}
         }
-    }
-    
-    if show_help {
-        print_help();
-        return;
-    }
-    
-    // Create and run REPL
-    let module_registry = ModuleRegistry::new();
-    let mut repl = RtfsRepl::with_runtime_strategy(runtime_strategy, &module_registry);
-    
-    match repl.run() {
-        Ok(_) => {},
-        Err(e) => {
-            eprintln!("❌ REPL error: {}", e);
-            process::exit(1);
+
+        // Process RTFS input
+        let start_time = Instant::now();
+
+        match parse_with_enhanced_errors(input, None) {
+            Ok(parsed_items) => {
+                if parsed_items.is_empty() {
+                    println!("⚠️  No content to process");
+                    continue;
+                }
+
+                println!("📊 Parsed {} top-level items", parsed_items.len());
+
+                // Process each top-level item
+                for (i, item) in parsed_items.iter().enumerate() {
+                    println!(
+                        "\n🔄 Processing item {}: {:?}",
+                        i + 1,
+                        std::mem::discriminant(item)
+                    );
+
+                    match item {
+                        TopLevel::Expression(expr) => {
+                            // Convert to IR
+                            match ir_converter.convert_expression(expr.clone()) {
+                                Ok(ir_node) => {
+                                    // Optimize
+                                    let optimized_ir = optimizer.optimize(ir_node);
+
+                                    // Execute
+                                    match runtime.run(expr) {
+                                        Ok(value) => {
+                                            let elapsed = start_time.elapsed();
+                                            println!("✅ Result: {:?} (took {:?})", value, elapsed);
+                                        }
+                                        Err(e) => {
+                                            println!("❌ Runtime error: {:?}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("❌ IR conversion error: {:?}", e);
+                                }
+                            }
+                        }
+                        TopLevel::Intent(intent) => {
+                            // Validate intent
+                            match SchemaValidator::validate_object(item) {
+                                Ok(_) => {
+                                    println!("✅ Valid intent: {:?}", intent.name);
+                                    println!("   Properties: {:?}", intent.properties);
+                                }
+                                Err(e) => {
+                                    println!("❌ Invalid intent: {:?}", e);
+                                }
+                            }
+                        }
+                        TopLevel::Plan(plan) => {
+                            // Validate plan
+                            match SchemaValidator::validate_object(item) {
+                                Ok(_) => {
+                                    println!("✅ Valid plan: {:?}", plan.name);
+                                    println!("   Properties: {:?}", plan.properties);
+                                }
+                                Err(e) => {
+                                    println!("❌ Invalid plan: {:?}", e);
+                                }
+                            }
+                        }
+                        TopLevel::Action(action) => {
+                            // Validate action
+                            match SchemaValidator::validate_object(item) {
+                                Ok(_) => {
+                                    println!("✅ Valid action: {:?}", action.name);
+                                    println!("   Properties: {:?}", action.properties);
+                                }
+                                Err(e) => {
+                                    println!("❌ Invalid action: {:?}", e);
+                                }
+                            }
+                        }
+                        TopLevel::Capability(capability) => {
+                            // Validate capability
+                            match SchemaValidator::validate_object(item) {
+                                Ok(_) => {
+                                    println!("✅ Valid capability: {:?}", capability.name);
+                                    println!("   Properties: {:?}", capability.properties);
+                                }
+                                Err(e) => {
+                                    println!("❌ Invalid capability: {:?}", e);
+                                }
+                            }
+                        }
+                        TopLevel::Resource(resource) => {
+                            // Validate resource
+                            match SchemaValidator::validate_object(item) {
+                                Ok(_) => {
+                                    println!("✅ Valid resource: {:?}", resource.name);
+                                    println!("   Properties: {:?}", resource.properties);
+                                }
+                                Err(e) => {
+                                    println!("❌ Invalid resource: {:?}", e);
+                                }
+                            }
+                        }
+                        TopLevel::Module(module) => {
+                            // Validate module
+                            match SchemaValidator::validate_object(item) {
+                                Ok(_) => {
+                                    println!("✅ Valid module: {:?}", module.name);
+                                    println!("   Exports: {:?}", module.exports);
+                                }
+                                Err(e) => {
+                                    println!("❌ Invalid module: {:?}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("{}", e);
+            }
         }
     }
 }
 
-fn print_help() {
-    println!("RTFS REPL - Interactive Development Environment");
+fn show_help() {
+    println!("\n📚 RTFS REPL Commands:");
+    println!("  help                    - Show this help");
+    println!("  quit, exit              - Exit the REPL");
+    println!("  clear                   - Clear the screen");
+    println!("\n📝 RTFS 2.0 Object Examples:");
+    println!("  intent my-intent {{");
+    println!("    name: \"my-intent\"");
+    println!("    description: \"My intent description\"");
+    println!("  }}");
+    println!("\n  plan my-plan {{");
+    println!("    name: \"my-plan\"");
+    println!("    description: \"My plan description\"");
+    println!("    steps: [\"step1\", \"step2\"]");
+    println!("  }}");
+    println!("\n  action my-action {{");
+    println!("    name: \"my-action\"");
+    println!("    description: \"My action description\"");
+    println!("  }}");
+    println!("\n  capability my-capability {{");
+    println!("    name: \"my-capability\"");
+    println!("    description: \"My capability description\"");
+    println!("  }}");
+    println!("\n  resource my-resource {{");
+    println!("    name: \"my-resource\"");
+    println!("    resource_type: \"file\"");
+    println!("  }}");
+    println!("\n  module my-module {{");
+    println!("    name: \"my-module\"");
+    println!("    version: \"1.0.0\"");
+    println!("  }}");
+    println!("\n🔢 Expression Examples:");
+    println!("  1 + 2 * 3");
+    println!("  let x = 5 in x * x");
+    println!("  map (fn x => x * 2) [1, 2, 3]");
     println!();
-    println!("USAGE:");
-    println!("    rtfs-repl [OPTIONS]");
-    println!();
-    println!("OPTIONS:");
-    println!("    -h, --help               Show this help message");
-    println!("    -V, --version            Show version information");
-    println!("    --runtime=<STRATEGY>     Set runtime strategy");
-    println!();
-    println!("RUNTIME STRATEGIES:");
-    println!("    ast                      Use AST-based runtime (default)");
-    println!("    ir                       Use IR-based runtime");
-    println!("    fallback                 Use IR with AST fallback");
-    println!();
-    println!("EXAMPLES:");
-    println!("    rtfs-repl                        # Start REPL with default settings");
-    println!("    rtfs-repl --runtime=ir           # Start REPL with IR runtime");
-    println!("    rtfs-repl --runtime=fallback     # Start REPL with IR+AST fallback");
-    println!();
-    println!("INTERACTIVE COMMANDS:");
-    println!("    :help                    Show interactive help");
-    println!("    :quit                    Exit REPL");
-    println!("    :history                 Show command history");
-    println!("    :context                 Show current context");
-    println!("    :ast                     Toggle AST display");
-    println!("    :ir                      Toggle IR display");
-    println!("    :opt                     Toggle optimization display");
-    println!("    :test                    Run built-in test suite");
-    println!("    :bench                   Run performance benchmarks");
-    println!();
-    println!("RUNTIME SWITCHING:");
-    println!("    :runtime-ast             Switch to AST runtime");
-    println!("    :runtime-ir              Switch to IR runtime");
-    println!("    :runtime-fallback        Switch to IR with AST fallback");
-    println!();
-    println!("EXAMPLE EXPRESSIONS:");
-    println!("    (+ 1 2 3)                       # Basic arithmetic");
-    println!("    (let [x 10] (+ x 5))            # Let binding");
-    println!("    (if true \"yes\" \"no\")             # Conditional");
-    println!("    (vector 1 2 3)                  # Vector creation");
-    println!("    (defn square [x] (* x x))       # Function definition");
-    println!("    (square 5)                      # Function call");
-    println!();
-    println!("For more information, visit: https://github.com/mandubian/rtfs-ai");
 }

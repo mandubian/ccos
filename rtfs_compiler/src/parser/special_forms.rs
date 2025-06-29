@@ -910,6 +910,7 @@ fn build_catch_pattern(pair: Pair<Rule>) -> Result<CatchPattern, PestParseError>
         Rule::type_expr => Ok(CatchPattern::Type(build_type_expr(pair.clone())?)),
         Rule::keyword => Ok(CatchPattern::Keyword(build_keyword(pair.clone())?)),
         Rule::symbol => Ok(CatchPattern::Symbol(build_symbol(pair.clone())?)),
+        Rule::primitive_type => Ok(CatchPattern::Symbol(build_symbol(pair.clone())?)),
         unknown_rule => Err(PestParseError::InvalidInput { 
             message: format!("Invalid rule for catch_pattern: {:?}, content: '{}'", unknown_rule, pair.as_str()), 
             span: Some(span) 
