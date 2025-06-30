@@ -4,7 +4,8 @@
 use crate::ast::{Expression, Keyword, Literal, MapKey, Symbol};
 use crate::ir::core::IrNode;
 use crate::runtime::environment::Environment;
-use crate::runtime::error::RuntimeError;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::Evaluator;
 use crate::runtime::{IrEnvironment, IrRuntime};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -59,10 +60,7 @@ impl fmt::Display for Value {
                 write!(f, "({})", items.join(" "))
             }
             Value::Map(m) => {
-                let items: Vec<String> = m
-                    .iter()
-                    .map(|(k, v)| format!("{:?} {}", k, v))
-                    .collect();
+                let items: Vec<String> = m.iter().map(|(k, v)| format!("{:?} {}", k, v)).collect();
                 write!(f, "{{{}}}", items.join(", "))
             }
             Value::Function(_) => write!(f, "#<function>"),
@@ -103,10 +101,43 @@ impl Value {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Arity {
+    Fixed(usize),
+    Variadic(usize),     // minimum number of arguments
+    Range(usize, usize), // min, max
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ResourceState {
+    Active,
+    Released,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResourceHandle {
+    pub id: String,
+    pub state: ResourceState,
+}
+
+#[derive(Clone)]
+pub struct BuiltinFunction {
+    pub name: String,
+    pub arity: Arity,
+    pub func: Rc<dyn Fn(Vec<Value>) -> RuntimeResult<Value>>,
+}
+
+#[derive(Clone)]
+pub struct BuiltinFunctionWithContext {
+    pub name: String,
+    pub arity: Arity,
+    pub func: Rc<dyn Fn(Vec<Value>, &Evaluator, &mut Environment) -> RuntimeResult<Value>>,
+}
+
 #[derive(Clone)]
 pub enum Function {
     Builtin(BuiltinFunction),
-    BuiltinWithEvaluator(BuiltinFunctionWithEvaluator),
+    BuiltinWithContext(BuiltinFunctionWithContext),
     Closure(Rc<Closure>),
     IrLambda(Rc<IrLambda>),
     Native(BuiltinFunction),
@@ -120,11 +151,7 @@ impl Function {
         body: Box<Expression>,
         env: Rc<Environment>,
     ) -> Function {
-        Function::Closure(Rc::new(Closure {
-            params,
-            body,
-            env,
-        }))
+        Function::Closure(Rc::new(Closure { params, body, env }))
     }
 
     pub fn new_ir_lambda(
@@ -146,7 +173,7 @@ impl fmt::Debug for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Function::Builtin(_) => write!(f, "BuiltinFunction"),
-            Function::BuiltinWithEvaluator(_) => write!(f, "BuiltinFunctionWithEvaluator"),
+            Function::BuiltinWithContext(_) => write!(f, "BuiltinFunctionWithContext"),
             Function::Closure(_) => write!(f, "Closure"),
             Function::IrLambda(_) => write!(f, "IrLambda"),
             Function::Native(_) => write!(f, "NativeFunction"),
@@ -159,9 +186,11 @@ impl fmt::Debug for Function {
 impl PartialEq for Function {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Function::Builtin(a), Function::Builtin(b)) => a == b,
-            (Function::Native(a), Function::Native(b)) => a == b,
-            (Function::BuiltinWithEvaluator(a), Function::BuiltinWithEvaluator(b)) => a == b,
+            (Function::Builtin(a), Function::Builtin(b)) => a.name == b.name && a.arity == b.arity,
+            (Function::Native(a), Function::Native(b)) => a.name == b.name && a.arity == b.arity,
+            (Function::BuiltinWithContext(a), Function::BuiltinWithContext(b)) => {
+                a.name == b.name && a.arity == b.arity
+            }
             (Function::Closure(a), Function::Closure(b)) => Rc::ptr_eq(a, b),
             (Function::Rtfs(a), Function::Rtfs(b)) => Rc::ptr_eq(a, b),
             (Function::IrLambda(a), Function::IrLambda(b)) => Rc::ptr_eq(a, b),
@@ -171,91 +200,19 @@ impl PartialEq for Function {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Closure {
     pub params: Vec<Symbol>,
     pub body: Box<Expression>,
     pub env: Rc<Environment>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IrLambda {
     pub params: Vec<IrNode>,
     pub variadic_param: Option<Box<IrNode>>,
     pub body: Vec<IrNode>,
     pub closure_env: Box<IrEnvironment>,
-}
-
-#[derive(Clone)]
-pub struct BuiltinFunction {
-    pub name: String,
-    pub arity: Arity,
-    pub func: Rc<dyn Fn(Vec<Value>) -> Result<Value, RuntimeError>>,
-}
-
-impl fmt::Debug for BuiltinFunction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BuiltinFunction")
-            .field("name", &self.name)
-            .field("arity", &self.arity)
-            .finish()
-    }
-}
-
-impl PartialEq for BuiltinFunction {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare builtin functions by name and arity, not by function pointer
-        self.name == other.name && self.arity == other.arity
-    }
-}
-
-#[derive(Clone)]
-pub struct BuiltinFunctionWithEvaluator {
-    pub name: String,
-    pub arity: Arity,
-    pub func: Rc<
-        dyn Fn(
-            &[Expression],
-            &mut IrRuntime,
-            &mut IrEnvironment,
-        ) -> Result<Value, RuntimeError>,
-    >,
-}
-
-impl fmt::Debug for BuiltinFunctionWithEvaluator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BuiltinFunctionWithEvaluator")
-            .field("name", &self.name)
-            .field("arity", &self.arity)
-            .finish()
-    }
-}
-
-impl PartialEq for BuiltinFunctionWithEvaluator {
-    fn eq(&self, other: &Self) -> bool {
-        // We can only compare the name and arity, not the function pointer itself.
-        self.name == other.name && self.arity == other.arity
-    }
-}
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Arity {
-    Fixed(usize),
-    Variadic(usize), // Minimum number of arguments
-    Range(usize, usize),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ResourceState {
-    Active,
-    Released,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ResourceHandle {
-    pub id: String,
-    pub state: ResourceState,
 }
 
 impl From<Expression> for Value {
@@ -272,10 +229,7 @@ impl From<Expression> for Value {
                 Value::Vector(values)
             }
             Expression::Map(map) => {
-                let values = map
-                    .into_iter()
-                    .map(|(k, v)| (k, Value::from(v)))
-                    .collect();
+                let values = map.into_iter().map(|(k, v)| (k, Value::from(v))).collect();
                 Value::Map(values)
             }
             _ => unimplemented!(),

@@ -88,6 +88,36 @@ mod function_tests {
         assert_eq!(builtin_result.unwrap(), user_result.unwrap());
     }
 
+    #[test]
+    fn test_user_defined_higher_order_function() {
+        let code = r#"
+        (defn my_map [f xs]
+          (map f xs))
+        (defn inc [x] (+ x 1))
+        (my_map inc [1 2 3 4 5])
+        "#;
+        let result = parse_and_evaluate(code);
+        println!("User-defined higher-order function result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "User-defined higher-order function test failed"
+        );
+        if let Ok(Value::Vector(values)) = result {
+            assert_eq!(
+                values,
+                vec![
+                    Value::Integer(2),
+                    Value::Integer(3),
+                    Value::Integer(4),
+                    Value::Integer(5),
+                    Value::Integer(6)
+                ]
+            );
+        } else {
+            panic!("Expected vector result");
+        }
+    }
+
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
         println!("Parsed top-level forms: {:#?}", parsed);
