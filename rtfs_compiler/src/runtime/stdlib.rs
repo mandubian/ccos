@@ -6,10 +6,11 @@ use crate::ir::core::{IrNode, IrType};
 use crate::runtime::environment::Environment;
 use crate::runtime::environment::IrEnvironment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::evaluator::Evaluator;
 use crate::runtime::module_runtime::{
     ExportType, Module, ModuleExport, ModuleMetadata, ModuleRegistry,
 };
-use crate::runtime::values::{Arity, BuiltinFunction, Function};
+use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function};
 use crate::runtime::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -215,90 +216,39 @@ impl StandardLibrary {
         );
     }
 
-    /// Load collection functions (get, assoc, dissoc, count, conj, vector, map)
+    /// Load collection functions (map, reduce, filter, etc.)
     fn load_collection_functions(env: &mut Environment) {
+        // Map function - now supports user-defined functions with evaluator context
         env.define(
-            &Symbol("get".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "get".to_string(),
-                arity: Arity::Variadic(2),
-                func: Rc::new(Self::get),
+            &Symbol("map".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "map".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::map_with_context),
             })),
         );
 
+        // Filter function - now supports user-defined functions with evaluator context
         env.define(
-            &Symbol("assoc".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "assoc".to_string(),
-                arity: Arity::Variadic(3),
-                func: Rc::new(Self::assoc),
+            &Symbol("filter".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "filter".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::filter_with_context),
             })),
         );
 
-        env.define(
-            &Symbol("dissoc".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "dissoc".to_string(),
-                arity: Arity::Variadic(2),
-                func: Rc::new(Self::dissoc),
-            })),
-        );
-
-        env.define(
-            &Symbol("count".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "count".to_string(),
-                arity: Arity::Fixed(1),
-                func: Rc::new(Self::count),
-            })),
-        );
-
-        env.define(
-            &Symbol("conj".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "conj".to_string(),
-                arity: Arity::Variadic(2),
-                func: Rc::new(Self::conj),
-            })),
-        );
-
-        env.define(
-            &Symbol("vector".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "vector".to_string(),
-                arity: Arity::Variadic(0),
-                func: Rc::new(Self::vector),
-            })),
-        );
-        env.define(
-            &Symbol("hash-map".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "hash-map".to_string(),
-                arity: Arity::Variadic(0),
-                func: Rc::new(Self::hash_map),
-            })),
-        );
-        // TODO: map and filter need special evaluator handling - disabled for now
-        // env.define(&Symbol("map".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-        //     name: "map".to_string(),
-        //     arity: Arity::Variadic(2),
-        //     func: Rc::new(Self::map_placeholder),
-        // })));
-        // env.define(&Symbol("filter".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-        //     name: "filter".to_string(),
-        //     arity: Arity::Fixed(2),
-        //     func: Rc::new(Self::filter_placeholder),
-        // })));
+        // Reduce function - now supports user-defined functions with evaluator context
         env.define(
             &Symbol("reduce".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "reduce".to_string(),
-                arity: Arity::Variadic(2),
-                func: Rc::new(Self::reduce),
+                arity: Arity::Range(2, 3),
+                func: Rc::new(Self::reduce_with_context),
             })),
         );
 
-        // List functions
+        // Empty predicate
         env.define(
             &Symbol("empty?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -308,6 +258,7 @@ impl StandardLibrary {
             })),
         );
 
+        // Cons function
         env.define(
             &Symbol("cons".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -317,6 +268,7 @@ impl StandardLibrary {
             })),
         );
 
+        // First function
         env.define(
             &Symbol("first".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -326,6 +278,7 @@ impl StandardLibrary {
             })),
         );
 
+        // Rest function
         env.define(
             &Symbol("rest".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -335,7 +288,7 @@ impl StandardLibrary {
             })),
         );
 
-        // Additional collection functions
+        // Get-in function
         env.define(
             &Symbol("get-in".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -345,6 +298,7 @@ impl StandardLibrary {
             })),
         );
 
+        // Partition function
         env.define(
             &Symbol("partition".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -354,12 +308,73 @@ impl StandardLibrary {
             })),
         );
 
+        // Conj function
         env.define(
-            &Symbol("map".to_string()),
+            &Symbol("conj".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
-                name: "map".to_string(),
-                arity: Arity::Fixed(2),
-                func: Rc::new(Self::map),
+                name: "conj".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::conj),
+            })),
+        );
+
+        // Get function
+        env.define(
+            &Symbol("get".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "get".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::get),
+            })),
+        );
+
+        // Assoc function
+        env.define(
+            &Symbol("assoc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "assoc".to_string(),
+                arity: Arity::Variadic(3),
+                func: Rc::new(Self::assoc),
+            })),
+        );
+
+        // Dissoc function
+        env.define(
+            &Symbol("dissoc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "dissoc".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::dissoc),
+            })),
+        );
+
+        // Count function
+        env.define(
+            &Symbol("count".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "count".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::count),
+            })),
+        );
+
+        // Vector function
+        env.define(
+            &Symbol("vector".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "vector".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::vector),
+            })),
+        );
+
+        // Hash-map function
+        env.define(
+            &Symbol("hash-map".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "hash-map".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::hash_map),
             })),
         );
     }
@@ -1079,6 +1094,64 @@ impl StandardLibrary {
         let mut result = Vec::new();
         for chunk in collection.chunks(size) {
             result.push(Value::Vector(chunk.to_vec()));
+        }
+        Ok(Value::Vector(result))
+    }
+
+    fn map_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection = &args[1];
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map".to_string(),
+                })
+            }
+        };
+        let mut result = Vec::new();
+        for item in collection_vec {
+            match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    // Fast path for builtin functions
+                    let func_args = vec![item];
+                    let mapped_value = (builtin_func.func)(func_args)?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    // Handle builtin functions with context
+                    let func_args = vec![item];
+                    let mapped_value = (builtin_func.func)(func_args, evaluator, env)?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    // Handle user-defined functions with full evaluator access
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], item);
+                    let mapped_value = evaluator.eval_expr(&closure.body, &mut func_env)?;
+                    result.push(mapped_value);
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "map".to_string(),
+                    });
+                }
+            }
         }
         Ok(Value::Vector(result))
     }
@@ -2089,6 +2162,122 @@ impl StandardLibrary {
     // ) -> RuntimeResult<Value> {
     //     Ok(ir_runtime.get_task_context().unwrap_or(Value::Nil))
     // }
+
+    fn filter_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "filter".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection = &args[1];
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "filter".to_string(),
+                })
+            }
+        };
+        let mut result = Vec::new();
+        for item in collection_vec {
+            let keep = match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args, evaluator, env)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], item.clone());
+                    let v = evaluator.eval_expr(&closure.body, &mut func_env)?;
+                    v.is_truthy()
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "filter".to_string(),
+                    });
+                }
+            };
+            if keep {
+                result.push(item);
+            }
+        }
+        Ok(Value::Vector(result))
+    }
+
+    fn reduce_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 2 || args.len() > 3 {
+            return Err(RuntimeError::new("reduce requires 2 or 3 arguments"));
+        }
+        let function = &args[0];
+        let collection_arg_index = args.len() - 1;
+        let collection_val = &args[collection_arg_index];
+        let collection = match collection_val {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::new(
+                    "reduce expects a vector as its last argument",
+                ))
+            }
+        };
+        if collection.is_empty() {
+            return if args.len() == 3 {
+                Ok(args[1].clone()) // initial value
+            } else {
+                Err(RuntimeError::new(
+                    "reduce on empty collection with no initial value",
+                ))
+            };
+        }
+        let (mut accumulator, rest) = if args.len() == 3 {
+            (args[1].clone(), collection.as_slice())
+        } else {
+            (collection[0].clone(), &collection[1..])
+        };
+        for value in rest {
+            let func_args = vec![accumulator.clone(), value.clone()];
+            accumulator = match function {
+                Value::Function(Function::Builtin(builtin_func)) => (builtin_func.func)(func_args)?,
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    (builtin_func.func)(func_args, evaluator, env)?
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], accumulator.clone());
+                    func_env.define(&closure.params[1], value.clone());
+                    evaluator.eval_expr(&closure.body, &mut func_env)?
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "reduce".to_string(),
+                    });
+                }
+            };
+        }
+        Ok(accumulator)
+    }
 }
 
 /// Load the standard library into a module registry

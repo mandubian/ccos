@@ -310,6 +310,18 @@ impl Evaluator {
 
                 (func.func)(args.to_vec())
             }
+            Value::Function(Function::BuiltinWithContext(func)) => {
+                // Check arity
+                if !self.check_arity(&func.arity, args.len()) {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: func.name,
+                        expected: self.arity_to_string(&func.arity),
+                        actual: args.len(),
+                    });
+                }
+
+                (func.func)(args.to_vec(), self, env)
+            }
             Value::Function(Function::Closure(closure)) => {
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
