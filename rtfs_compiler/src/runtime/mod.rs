@@ -17,9 +17,10 @@ pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
 pub use ir_runtime::IrRuntime;
 pub use module_runtime::{Module, ModuleRegistry};
-pub use values::{Value, Function};
+pub use values::{Function, Value};
 
 use crate::ast::Expression;
+use crate::runtime::ir_runtime::IrStrategy;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, Copy)]
@@ -74,6 +75,49 @@ impl TreeWalkingStrategy {
 impl RuntimeStrategy for TreeWalkingStrategy {
     fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
         self.evaluator.evaluate(program)
+    }
+
+    fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
+        Box::new(self.clone())
+    }
+}
+
+/// Strategy that tries IR execution first, falls back to AST if IR fails
+#[derive(Clone, Debug)]
+pub struct IrWithFallbackStrategy {
+    ir_strategy: IrStrategy,
+    ast_strategy: TreeWalkingStrategy,
+}
+
+impl IrWithFallbackStrategy {
+    pub fn new(module_registry: ModuleRegistry) -> Self {
+        let ir_strategy = IrStrategy::new(module_registry.clone());
+        let evaluator = Evaluator::new(Rc::new(module_registry));
+        let ast_strategy = TreeWalkingStrategy::new(evaluator);
+
+        Self {
+            ir_strategy,
+            ast_strategy,
+        }
+    }
+}
+
+impl RuntimeStrategy for IrWithFallbackStrategy {
+    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
+        // Try IR execution first
+        match self.ir_strategy.run(program) {
+            Ok(result) => Ok(result),
+            Err(ir_error) => {
+                // If IR fails, fall back to AST execution
+                match self.ast_strategy.run(program) {
+                    Ok(result) => Ok(result),
+                    Err(ast_error) => {
+                        // If both fail, return the IR error (more specific)
+                        Err(ir_error)
+                    }
+                }
+            }
+        }
     }
 
     fn clone_box(&self) -> Box<dyn RuntimeStrategy> {

@@ -176,17 +176,15 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // --- Special Forms ---
 log_step_expr = { "(" ~ log_step_keyword ~ keyword? ~ expression* ~ ")" }
 
-special_form = _{ let_expr | letrec_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
 do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
 // Added for clarity and robustness - must be followed by whitespace or delimiter to avoid matching "do-something"
 
 let_keyword = @{ "let" }
-letrec_keyword = @{ "letrec" }
 let_binding = { binding_pattern ~ type_annotation? ~ expression }
 let_expr = { "(" ~ let_keyword ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ let_binding)* ~ WHITESPACE* ~ "]" ~ (WHITESPACE* ~ expression)+ ~ ")" }
-letrec_expr = { "(" ~ letrec_keyword ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ let_binding)* ~ WHITESPACE* ~ "]" ~ (WHITESPACE* ~ expression)+ ~ ")" }
 
 if_expr = { "(" ~ "if" ~ expression ~ expression ~ expression? ~ ")" }
 // Made else optional for now

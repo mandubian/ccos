@@ -4,7 +4,7 @@ use std::collections::HashMap;
 // Import the main parser function
 use rtfs_compiler::parser::parse;
 // Import the AST nodes we need to check against
-use rtfs_compiler::ast::{TopLevel, Resource, Expression, Literal, MapKey};
+use rtfs_compiler::ast::{Expression, Literal, MapKey, ResourceDefinition, Symbol, TopLevel};
 use rtfs_compiler::error_reporting::SourceSpan;
 
 // A helper to create a dummy span for tests where we don't care about the exact location.
@@ -24,18 +24,14 @@ fn test_parse_simple_resource() {
     let mut map_literal = HashMap::new();
     map_literal.insert(
         MapKey::String("key".to_string()),
-        Expression::Literal(Literal::String("value".to_string()))
+        Expression::Literal(Literal::String("value".to_string())),
     );
     properties.insert("config".to_string(), Expression::Map(map_literal));
 
-    let expected_ast = vec![
-        TopLevel::Resource(Resource {
-            name: "my-simple-resource".to_string(),
-            version: Some("1.0.0".to_string()),
-            properties: properties,
-            span: dummy_span(),
-        })
-    ];
+    let expected_ast = vec![TopLevel::Resource(ResourceDefinition {
+        name: Symbol("my-simple-resource".to_string()),
+        properties: vec![], // Will be populated by parser
+    })];
 
     let result = parse(input);
 
@@ -44,23 +40,14 @@ fn test_parse_simple_resource() {
     // For now, we'll just compare the important parts.
 
     match result {
-        Ok(mut ast) => {
-            // Clear spans for comparison
-            if let Some(TopLevel::Resource(r)) = ast.get_mut(0) {
-                r.span = dummy_span();
-                // This is getting complicated. Let's just check the name and version for now.
-                // for (_, expr) in r.properties.iter_mut() {
-                // }
-            }
-
+        Ok(ast) => {
             if let Some(TopLevel::Resource(res)) = ast.get(0) {
-                assert_eq!(res.name, "my-simple-resource");
-                assert_eq!(res.version, Some("1.0.0".to_string()));
+                assert_eq!(res.name, Symbol("my-simple-resource".to_string()));
                 assert_eq!(res.properties.len(), 1);
             } else {
                 panic!("Expected a Resource to be parsed");
             }
-        },
+        }
         Err(e) => {
             panic!("Parsing failed: {:?}", e);
         }
@@ -82,7 +69,12 @@ Error: {:?}",
         let ast = ast_result.unwrap();
         if ast != $expected {
             // Use pretty assert for better diffs
-            pretty_assertions::assert_eq!(ast, $expected, "Expression AST mismatch for input: {:?}", $input);
+            pretty_assertions::assert_eq!(
+                ast,
+                $expected,
+                "Expression AST mismatch for input: {:?}",
+                $input
+            );
         }
     };
 }
@@ -100,8 +92,11 @@ fn test_parse_simple_literals() {
     assert_expr_parses_to!(
         r#""hello\world
 ""#,
-        Expression::Literal(Literal::String("hello\\world
-".to_string()))
+        Expression::Literal(Literal::String(
+            "hello\\world
+"
+            .to_string()
+        ))
     );
     assert_expr_parses_to!("true", Expression::Literal(Literal::Boolean(true)));
     assert_expr_parses_to!("false", Expression::Literal(Literal::Boolean(false)));
@@ -116,11 +111,15 @@ fn test_parse_symbol_keyword() {
     );
     assert_expr_parses_to!(
         "my-namespace/my-symbol",
-        Expression::Symbol(rtfs_compiler::ast::Symbol("my-namespace/my-symbol".to_string()))
+        Expression::Symbol(rtfs_compiler::ast::Symbol(
+            "my-namespace/my-symbol".to_string()
+        ))
     );
     assert_expr_parses_to!(
         ":my-keyword",
-        Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword(":my-keyword".to_string())))
+        Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword(
+            ":my-keyword".to_string()
+        )))
     );
 }
 
@@ -141,7 +140,9 @@ fn test_parse_collections() {
     assert_expr_parses_to!(
         "(+ 1 2)",
         Expression::FunctionCall {
-            callee: Box::new(Expression::Symbol(rtfs_compiler::ast::Symbol("+".to_string()))),
+            callee: Box::new(Expression::Symbol(rtfs_compiler::ast::Symbol(
+                "+".to_string()
+            ))),
             arguments: vec![
                 Expression::Literal(Literal::Integer(1)),
                 Expression::Literal(Literal::Integer(2)),

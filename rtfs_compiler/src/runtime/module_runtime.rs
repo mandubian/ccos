@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::ir::converter::{BindingInfo, BindingKind, IrConverter};
 use crate::ir::core::{IrNode, IrType};
-use crate::ir::converter::{IrConverter, BindingInfo, BindingKind};
-use crate::runtime::{IrRuntime, IrEnvironment, RuntimeError, Value};
 use crate::runtime::error::RuntimeResult;
+use crate::runtime::{IrEnvironment, IrRuntime, RuntimeError, Value};
 
 /// Module registry that manages all loaded modules
 #[derive(Debug, Clone)]
@@ -39,10 +39,8 @@ pub struct Module {
     /// Module's exported symbols
     pub exports: RefCell<HashMap<String, ModuleExport>>,
 
-
     /// Module's private namespace
     pub namespace: Rc<RefCell<IrEnvironment>>,
-
 
     /// Module dependencies
     pub dependencies: Vec<String>,
@@ -107,7 +105,6 @@ pub struct ImportSpec {
     /// Specific symbols to import (None = import all)
     pub symbols: Option<Vec<SymbolImport>>,
 
-
     /// Whether to import all symbols into current namespace
     pub refer_all: bool,
 }
@@ -138,51 +135,76 @@ impl ModuleRegistry {
         if !self.module_paths.contains(&path) {
             self.module_paths.push(path);
         }
-    }    /// Register a compiled module
+    }
+    /// Register a compiled module
     pub fn register_module(&self, module: Module) -> RuntimeResult<()> {
         let module_name = module.metadata.name.clone();
-        
+
         // Store the module environment
-        self.module_environments.borrow_mut().insert(module_name.clone(), module.namespace.clone());
-        
+        self.module_environments
+            .borrow_mut()
+            .insert(module_name.clone(), module.namespace.clone());
+
         // Register the module
-        self.modules.borrow_mut().insert(module_name, Rc::new(module));
-        
+        self.modules
+            .borrow_mut()
+            .insert(module_name, Rc::new(module));
+
         Ok(())
-    }    /// Load and compile a module
-    pub fn load_module(&mut self, module_name: &str, ir_runtime: &mut IrRuntime) -> RuntimeResult<Rc<Module>> {
+    }
+    /// Load and compile a module
+    pub fn load_module(
+        &mut self,
+        module_name: &str,
+        ir_runtime: &mut IrRuntime,
+    ) -> RuntimeResult<Rc<Module>> {
         // If already loaded, return it.
         if let Some(module) = self.modules.borrow().get(module_name) {
             return Ok(module.clone());
         }
         // If module is not found, we need to load it from file.
         // Check for circular dependency.
-        if self.loading_stack.borrow().contains(&module_name.to_string()) {
+        if self
+            .loading_stack
+            .borrow()
+            .contains(&module_name.to_string())
+        {
             // It's a cycle. We'll create and register a temporary, empty module to break the cycle.
-            let placeholder_metadata = ModuleMetadata { name: module_name.to_string(), docstring: Some("placeholder for circular dependency".to_string()), source_file: None, version: None, compiled_at: std::time::SystemTime::now() };
+            let placeholder_metadata = ModuleMetadata {
+                name: module_name.to_string(),
+                docstring: Some("placeholder for circular dependency".to_string()),
+                source_file: None,
+                version: None,
+                compiled_at: std::time::SystemTime::now(),
+            };
             let placeholder_module = Rc::new(Module {
                 metadata: placeholder_metadata,
-                ir_node: IrNode::Do { 
-                    id: 0, // placeholder ID for circular dependency breaking
+                ir_node: IrNode::Do {
+                    id: 0,                // placeholder ID for circular dependency breaking
                     ir_type: IrType::Any, // placeholder type
                     expressions: vec![],
-                    source_location: None 
+                    source_location: None,
                 },
                 exports: RefCell::new(HashMap::new()),
                 namespace: Rc::new(RefCell::new(IrEnvironment::new())),
                 dependencies: Vec::new(),
             });
-            
+
             // Register the placeholder to allow dependent modules to compile.
-            self.modules.borrow_mut().insert(module_name.to_string(), placeholder_module.clone());
-            
+            self.modules
+                .borrow_mut()
+                .insert(module_name.to_string(), placeholder_module.clone());
+
             return Ok(placeholder_module);
         }
 
-        self.loading_stack.borrow_mut().push(module_name.to_string());
+        self.loading_stack
+            .borrow_mut()
+            .push(module_name.to_string());
 
         // Compile the module from source, getting back the module structure and the bindings map.
-        let (compiled_module, bindings) = match self.load_module_from_file(module_name, ir_runtime) {
+        let (compiled_module, bindings) = match self.load_module_from_file(module_name, ir_runtime)
+        {
             Ok(result) => result,
             Err(e) => {
                 self.loading_stack.borrow_mut().pop();
@@ -192,16 +214,27 @@ impl ModuleRegistry {
 
         // Now, execute the module's IR to populate its namespace.
         // The module's environment is internal to the CompiledModule structure.
-        ir_runtime.execute_node(&compiled_module.ir_node, &mut compiled_module.namespace.borrow_mut(), false, self).map_err(|e| {
-            self.loading_stack.borrow_mut().pop();
-            e
-        })?;
+        ir_runtime
+            .execute_node(
+                &compiled_module.ir_node,
+                &mut compiled_module.namespace.borrow_mut(),
+                false,
+                self,
+            )
+            .map_err(|e| {
+                self.loading_stack.borrow_mut().pop();
+                e
+            })?;
 
         // After execution, populate the exports using the bindings map and the populated environment.
-        if let IrNode::Module { exports: export_names, .. } = &compiled_module.ir_node {
+        if let IrNode::Module {
+            exports: export_names,
+            ..
+        } = &compiled_module.ir_node
+        {
             let mut exports_map = compiled_module.exports.borrow_mut();
             let module_env_borrow = compiled_module.namespace.borrow();
-            
+
             // DEBUG: Print bindings and environment keys before export population
             #[cfg(debug_assertions)]
             {
@@ -243,37 +276,47 @@ impl ModuleRegistry {
         self.loading_stack.borrow_mut().pop();
 
         // Register the definitive, fully-loaded module. This will overwrite any placeholders.
-        self.modules.borrow_mut().insert(module_name.to_string(), compiled_module.clone());
-        self.module_environments.borrow_mut().insert(module_name.to_string(), compiled_module.namespace.clone());
-        
+        self.modules
+            .borrow_mut()
+            .insert(module_name.to_string(), compiled_module.clone());
+        self.module_environments
+            .borrow_mut()
+            .insert(module_name.to_string(), compiled_module.namespace.clone());
+
         Ok(compiled_module)
     }
 
     /// Load and compile a module from a source file
-    fn load_module_from_file(&mut self, module_name: &str, ir_runtime: &mut IrRuntime) -> RuntimeResult<(Rc<Module>, HashMap<String, BindingInfo>)> {
+    fn load_module_from_file(
+        &mut self,
+        module_name: &str,
+        ir_runtime: &mut IrRuntime,
+    ) -> RuntimeResult<(Rc<Module>, HashMap<String, BindingInfo>)> {
         // Resolve module path from module name
         let module_path = self.resolve_module_path(module_name)?;
-        
+
         // Read the source file
         let source_content = self.read_module_source(&module_path)?;
-        
+
         // Parse the module source
         let parsed_ast = self.parse_module_source(&source_content, &module_path)?;
-        
+
         // Convert module AST to IR and compile
-        let compiled_result = self.compile_module_ast(module_name, parsed_ast, &module_path, ir_runtime)?;
-        
+        let compiled_result =
+            self.compile_module_ast(module_name, parsed_ast, &module_path, ir_runtime)?;
+
         Ok(compiled_result)
-    }    /// Compile module AST to a CompiledModule
+    }
+    /// Compile module AST to a CompiledModule
     fn compile_module_ast(
         &mut self,
         module_name: &str,
         module_def: crate::ast::ModuleDefinition,
         source_path: &std::path::Path,
-        ir_runtime: &mut IrRuntime
+        ir_runtime: &mut IrRuntime,
     ) -> RuntimeResult<(Rc<Module>, HashMap<String, BindingInfo>)> {
         use std::collections::HashMap;
-        
+
         // Create module metadata
         let metadata = ModuleMetadata {
             name: module_name.to_string(),
@@ -282,18 +325,18 @@ impl ModuleRegistry {
             version: None, // Could extract from module metadata
             compiled_at: std::time::SystemTime::now(),
         };
-          // Create module namespace environment with stdlib as parent, wrapped for interior mutability
+        // Create module namespace environment with stdlib as parent, wrapped for interior mutability
         let stdlib_env = Rc::new(IrEnvironment::with_stdlib(self)?);
         let module_env = Rc::new(RefCell::new(IrEnvironment::with_parent(stdlib_env)));
-        
+
         // Process module dependencies first
         let mut dependencies = Vec::new();
         let mut loaded_dependencies = HashMap::new();
-        
+
         for definition in &module_def.definitions {
             if let crate::ast::ModuleLevelDefinition::Import(import_def) = definition {
                 let dep_module_name = import_def.module_name.0.clone();
-                
+
                 if !loaded_dependencies.contains_key(&dep_module_name) {
                     let loaded_dep_module = self.load_module(&dep_module_name, ir_runtime)?;
                     loaded_dependencies.insert(dep_module_name.clone(), loaded_dep_module);
@@ -303,7 +346,7 @@ impl ModuleRegistry {
                 }
             }
         }
-        
+
         let mut ir_converter = IrConverter::with_module_registry(self);
 
         for definition in &module_def.definitions {
@@ -337,7 +380,9 @@ impl ModuleRegistry {
                         // Import specific symbols: (import [module :only [sym1 sym2]])
                         for symbol_ast in only_symbols {
                             let export_name = &symbol_ast.0;
-                            if let Some(export) = loaded_dep_module.exports.borrow().get(export_name) {
+                            if let Some(export) =
+                                loaded_dep_module.exports.borrow().get(export_name)
+                            {
                                 let binding_id = ir_converter.next_id();
                                 let binding_kind = match export.export_type {
                                     ExportType::Function => BindingKind::Function,
@@ -382,7 +427,8 @@ impl ModuleRegistry {
                     }
                     (Some(_), Some(_)) => {
                         return Err(RuntimeError::ModuleError(
-                            "Invalid import specification: cannot combine :as with :only".to_string()
+                            "Invalid import specification: cannot combine :as with :only"
+                                .to_string(),
                         ));
                     }
                 }
@@ -391,24 +437,27 @@ impl ModuleRegistry {
 
         // Convert module definitions to IR
         let mut ir_definitions = Vec::new();
-        
+
         for definition in &module_def.definitions {
             match definition {
                 crate::ast::ModuleLevelDefinition::Import(_) => {
                     // Already processed above
                     continue;
-                }                crate::ast::ModuleLevelDefinition::Def(def_expr) => {
+                }
+                crate::ast::ModuleLevelDefinition::Def(def_expr) => {
                     // Convert def expression to Expression and then to IR
                     let expr = crate::ast::Expression::Def(Box::new(def_expr.clone()));
-                    let ir_node = ir_converter.convert_expression(expr)
-                        .map_err(|e| RuntimeError::ModuleError(format!("IR conversion failed: {:?}", e)))?;
+                    let ir_node = ir_converter.convert_expression(expr).map_err(|e| {
+                        RuntimeError::ModuleError(format!("IR conversion failed: {:?}", e))
+                    })?;
                     ir_definitions.push(ir_node);
                 }
                 crate::ast::ModuleLevelDefinition::Defn(defn_expr) => {
                     // Convert defn expression to Expression and then to IR
                     let expr = crate::ast::Expression::Defn(Box::new(defn_expr.clone()));
-                    let ir_node = ir_converter.convert_expression(expr)
-                        .map_err(|e| RuntimeError::ModuleError(format!("IR conversion failed: {:?}", e)))?;
+                    let ir_node = ir_converter.convert_expression(expr).map_err(|e| {
+                        RuntimeError::ModuleError(format!("IR conversion failed: {:?}", e))
+                    })?;
                     ir_definitions.push(ir_node);
                 }
             }
@@ -427,7 +476,7 @@ impl ModuleRegistry {
             definitions: ir_definitions,
             source_location: None,
         };
-        
+
         let mut bindings = ir_converter.into_bindings();
 
         // Overwrite/ensure bindings for top-level definitions are correct.
@@ -436,7 +485,9 @@ impl ModuleRegistry {
         if let IrNode::Module { definitions, .. } = &module_ir_node {
             for def in definitions {
                 match def {
-                    IrNode::FunctionDef { id, name, ir_type, .. } => {
+                    IrNode::FunctionDef {
+                        id, name, ir_type, ..
+                    } => {
                         let binding_info = BindingInfo {
                             name: name.clone(),
                             binding_id: *id,
@@ -445,7 +496,9 @@ impl ModuleRegistry {
                         };
                         bindings.insert(name.clone(), binding_info);
                     }
-                    IrNode::VariableDef { id, name, ir_type, .. } => {
+                    IrNode::VariableDef {
+                        id, name, ir_type, ..
+                    } => {
                         let binding_info = BindingInfo {
                             name: name.clone(),
                             binding_id: *id,
@@ -466,7 +519,7 @@ impl ModuleRegistry {
             namespace: module_env,
             dependencies,
         };
-        
+
         Ok((Rc::new(compiled_module), bindings))
     }
 
@@ -476,7 +529,8 @@ impl ModuleRegistry {
 
     pub fn loaded_modules(&self) -> std::cell::Ref<HashMap<String, Rc<Module>>> {
         self.modules.borrow()
-    }    pub fn is_qualified_symbol(name: &str) -> bool {
+    }
+    pub fn is_qualified_symbol(name: &str) -> bool {
         if let Some(slash_pos) = name.find('/') {
             // Must have non-empty module name and non-empty symbol name
             slash_pos > 0 && slash_pos < name.len() - 1
@@ -519,7 +573,7 @@ impl ModuleRegistry {
                         )))
                     }
                 }
-                Err(_) => Err(RuntimeError::ModuleNotFound(module_name.to_string()))
+                Err(_) => Err(RuntimeError::ModuleNotFound(module_name.to_string())),
             }
         }
     }
@@ -538,33 +592,37 @@ impl ModuleRegistry {
     fn resolve_module_path(&self, module_name: &str) -> RuntimeResult<PathBuf> {
         // Convert module name like "math.utils" to file path like "math/utils.rtfs"
         let file_name = module_name.replace('.', "/") + ".rtfs";
-        
+
         for search_path in &self.module_paths {
             let full_path = search_path.join(&file_name);
             if full_path.exists() {
                 return Ok(full_path);
             }
         }
-        
+
         Err(RuntimeError::ModuleNotFound(format!(
-            "Module '{}' not found in module paths: {:?}", 
-            module_name, 
-            self.module_paths
+            "Module '{}' not found in module paths: {:?}",
+            module_name, self.module_paths
         )))
     }
 
     /// Read module source from file
     fn read_module_source(&self, module_path: &PathBuf) -> RuntimeResult<String> {
-        std::fs::read_to_string(module_path)
-            .map_err(|e| RuntimeError::ModuleError(format!(
-                "Failed to read module file '{}': {}", 
-                module_path.display(), 
+        std::fs::read_to_string(module_path).map_err(|e| {
+            RuntimeError::ModuleError(format!(
+                "Failed to read module file '{}': {}",
+                module_path.display(),
                 e
-            )))
+            ))
+        })
     }
 
     /// Parse module source into AST
-    fn parse_module_source(&self, source_content: &str, module_path: &PathBuf) -> RuntimeResult<crate::ast::ModuleDefinition> {
+    fn parse_module_source(
+        &self,
+        source_content: &str,
+        module_path: &PathBuf,
+    ) -> RuntimeResult<crate::ast::ModuleDefinition> {
         // For now, return a simple placeholder module definition
         // In a real implementation, this would use the parser to parse the source
         let placeholder_module = crate::ast::ModuleDefinition {
@@ -573,7 +631,7 @@ impl ModuleRegistry {
             definitions: vec![],
             exports: None,
         };
-        
+
         // TODO: Implement actual parsing of source_content
         // This is a temporary implementation to resolve the compilation error
         Ok(placeholder_module)
@@ -605,93 +663,133 @@ impl ModuleAwareRuntime {
         match program {
             IrNode::Program { forms, .. } => {
                 let mut last_value = Value::Nil;
-                
+
                 for form in forms {
                     last_value = self.execute_top_level_form(form)?;
                 }
-                
+
                 Ok(last_value)
             }
-            _ => self.ir_runtime.execute_program(program, &mut self.module_registry),
+            _ => self
+                .ir_runtime
+                .execute_program(program, &mut self.module_registry),
         }
     }
 
     /// Execute a top-level form (module, import, def, etc.)
     fn execute_top_level_form(&mut self, form: &IrNode) -> RuntimeResult<Value> {
         match form {
-            IrNode::Module { .. } => {
-                self.execute_module_definition(form)
-            }
-            IrNode::Import { .. } => {
-                self.execute_import(form)
-            }
+            IrNode::Module { .. } => self.execute_module_definition(form),
+            IrNode::Import { .. } => self.execute_import(form),
             _ => {
                 // Regular IR node execution
                 let mut env = IrEnvironment::new();
-                self.ir_runtime.execute_node(form, &mut env, false, &mut self.module_registry)
+                self.ir_runtime
+                    .execute_node(form, &mut env, false, &mut self.module_registry)
             }
         }
     }
 
     /// Execute a module definition
     fn execute_module_definition(&mut self, module_node: &IrNode) -> RuntimeResult<Value> {
-        if let IrNode::Module { name, exports, definitions, .. } = module_node {
+        if let IrNode::Module {
+            name,
+            exports,
+            definitions,
+            ..
+        } = module_node
+        {
             // Create module environment
-            let module_env: Rc<RefCell<IrEnvironment>> = Rc::new(RefCell::new(IrEnvironment::new()));
+            let module_env: Rc<RefCell<IrEnvironment>> =
+                Rc::new(RefCell::new(IrEnvironment::new()));
             let mut module_exports = HashMap::new();
 
-            // Execute module definitions
+            // First, execute all definitions and collect them in the environment
             for definition in definitions {
                 match definition {
-                    IrNode::Import { module_name, alias, imports, .. } => {
+                    IrNode::Import {
+                        module_name,
+                        alias,
+                        imports,
+                        ..
+                    } => {
                         let import_spec = ImportSpec {
                             module_name: module_name.clone(),
                             alias: alias.clone(),
                             symbols: imports.as_ref().map(|syms| {
-                                syms.iter().map(|s| SymbolImport {
-                                    original_name: s.clone(),
-                                    local_name: None,
-                                }).collect()
+                                syms.iter()
+                                    .map(|s| SymbolImport {
+                                        original_name: s.clone(),
+                                        local_name: None,
+                                    })
+                                    .collect()
                             }),
                             refer_all: false, // This needs to be determined from AST
                         };
-                        self.module_registry.import_symbols(&import_spec, &mut module_env.borrow_mut(), &mut self.ir_runtime)?;
+                        self.module_registry.import_symbols(
+                            &import_spec,
+                            &mut module_env.borrow_mut(),
+                            &mut self.ir_runtime,
+                        )?;
                     }
-                    IrNode::FunctionDef { name: func_name, lambda, .. } => {
-                        let func_value = self.ir_runtime.execute_node(lambda, &mut module_env.borrow_mut(), false, &mut self.module_registry)?;
-                        // let binding_id = module_env.borrow().binding_count() as u64 + 40000;
-                        module_env.borrow_mut().define(func_name.clone(), func_value.clone());
-
-                        // Add to exports if listed
-                        if exports.contains(func_name) {
-                            module_exports.insert(func_name.clone(), ModuleExport {
-                                original_name: func_name.clone(),
-                                export_name: func_name.clone(),
-                                value: func_value,
-                                ir_type: IrType::Any, // Would infer proper type
-                                export_type: ExportType::Function,
-                            });
-                        }
+                    IrNode::FunctionDef {
+                        name: func_name,
+                        lambda,
+                        ..
+                    } => {
+                        let func_value = self.ir_runtime.execute_node(
+                            lambda,
+                            &mut module_env.borrow_mut(),
+                            false,
+                            &mut self.module_registry,
+                        )?;
+                        module_env
+                            .borrow_mut()
+                            .define(func_name.clone(), func_value.clone());
                     }
-                    IrNode::VariableDef { name: var_name, init_expr, .. } => {
-                        let var_value = self.ir_runtime.execute_node(init_expr, &mut module_env.borrow_mut(), false, &mut self.module_registry)?;
-                        let binding_id = module_env.borrow().binding_count() as u64 + 50000;
-                        module_env.borrow_mut().define(var_name.clone(), var_value.clone());
-
-                        // Add to exports if listed
-                        if exports.contains(var_name) {
-                            module_exports.insert(var_name.clone(), ModuleExport {
-                                original_name: var_name.clone(),
-                                export_name: var_name.clone(),
-                                value: var_value,
-                                ir_type: IrType::Any, // Would infer proper type
-                                export_type: ExportType::Variable,
-                            });
-                        }
+                    IrNode::VariableDef {
+                        name: var_name,
+                        init_expr,
+                        ..
+                    } => {
+                        let var_value = self.ir_runtime.execute_node(
+                            init_expr,
+                            &mut module_env.borrow_mut(),
+                            false,
+                            &mut self.module_registry,
+                        )?;
+                        module_env
+                            .borrow_mut()
+                            .define(var_name.clone(), var_value.clone());
                     }
                     _ => {
-                        self.ir_runtime.execute_node(definition, &mut module_env.borrow_mut(), false, &mut self.module_registry)?;
+                        self.ir_runtime.execute_node(
+                            definition,
+                            &mut module_env.borrow_mut(),
+                            false,
+                            &mut self.module_registry,
+                        )?;
                     }
+                }
+            }
+
+            // Now, register all exports listed in the exports vector
+            for export_name in exports {
+                if let Some(value) = module_env.borrow().get(export_name) {
+                    let export_type = match &value {
+                        Value::Function(_) => ExportType::Function,
+                        _ => ExportType::Variable,
+                    };
+                    module_exports.insert(
+                        export_name.clone(),
+                        ModuleExport {
+                            original_name: export_name.clone(),
+                            export_name: export_name.clone(),
+                            value: value.clone(),
+                            ir_type: IrType::Any,
+                            export_type,
+                        },
+                    );
                 }
             }
 
@@ -715,32 +813,48 @@ impl ModuleAwareRuntime {
 
             Ok(Value::String(format!("Module {} loaded", name)))
         } else {
-            Err(RuntimeError::InvalidArgument("Expected Module node".to_string()))
+            Err(RuntimeError::InvalidArgument(
+                "Expected Module node".to_string(),
+            ))
         }
     }
 
     /// Execute an import statement
     fn execute_import(&mut self, import_node: &IrNode) -> RuntimeResult<Value> {
-        if let IrNode::Import { module_name, alias, imports, .. } = import_node {
+        if let IrNode::Import {
+            module_name,
+            alias,
+            imports,
+            ..
+        } = import_node
+        {
             let import_spec = ImportSpec {
                 module_name: module_name.clone(),
                 alias: alias.clone(),
                 symbols: imports.as_ref().map(|syms| {
-                    syms.iter().map(|s| SymbolImport {
-                        original_name: s.clone(),
-                        local_name: None,
-                    }).collect()
+                    syms.iter()
+                        .map(|s| SymbolImport {
+                            original_name: s.clone(),
+                            local_name: None,
+                        })
+                        .collect()
                 }),
                 refer_all: false, // Would need to detect this from IR
             };
 
             // Import into global environment (simplified)
             let mut global_env = IrEnvironment::new();
-            self.module_registry.import_symbols(&import_spec, &mut global_env, &mut self.ir_runtime)?;
+            self.module_registry.import_symbols(
+                &import_spec,
+                &mut global_env,
+                &mut self.ir_runtime,
+            )?;
 
             Ok(Value::String(format!("Imported {}", module_name)))
         } else {
-            Err(RuntimeError::InvalidArgument("Expected Import node".to_string()))
+            Err(RuntimeError::InvalidArgument(
+                "Expected Import node".to_string(),
+            ))
         }
     }
 
@@ -763,30 +877,36 @@ mod tests {
     fn test_module_registry_creation() {
         let registry = ModuleRegistry::new();
         assert_eq!(registry.loaded_modules().len(), 0);
-    }    #[test]
+    }
+    #[test]
     fn test_module_loading_from_file() {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let mut ir_runtime = IrRuntime::new();
-        
+
         // Test loading the math.utils module
         let module = registry.load_module("math.utils", &mut ir_runtime).unwrap();
         assert_eq!(module.metadata.name, "math.utils");
-        
+
         // Check that the expected exports are present
         let expected_exports = vec!["add", "multiply", "square"];
         for export in expected_exports {
-            assert!(module.exports.borrow().contains_key(export), "Missing export: {}", export);
+            assert!(
+                module.exports.borrow().contains_key(export),
+                "Missing export: {}",
+                export
+            );
         }
-    }    #[test]
+    }
+    #[test]
     fn test_qualified_symbol_resolution() {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let mut ir_runtime = IrRuntime::new();
-        
+
         // Load math.utils module from file
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
-        
+
         // Resolve qualified symbol - should succeed now
         let result = registry.resolve_qualified_symbol("math.utils/add");
         assert!(result.is_ok(), "Should resolve math.utils/add symbol");
@@ -795,18 +915,27 @@ mod tests {
     #[test]
     fn test_circular_dependency_detection() {
         let mut registry = ModuleRegistry::new();
-        registry.loading_stack.borrow_mut().push("module-a".to_string());
+        registry
+            .loading_stack
+            .borrow_mut()
+            .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
         let mut ir_runtime = IrRuntime::new();
         let result = registry.load_module("module-a", &mut ir_runtime);
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();
         assert_eq!(module.metadata.name, "module-a");
-        assert!(module.metadata.docstring.as_deref().unwrap_or("").contains("placeholder"));
-    }    #[test]
+        assert!(module
+            .metadata
+            .docstring
+            .as_deref()
+            .unwrap_or("")
+            .contains("placeholder"));
+    }
+    #[test]
     fn test_module_aware_runtime() {
         let runtime = ModuleAwareRuntime::new();
-        
+
         // Test that we can access both IR runtime and module registry
         assert_eq!(runtime.module_registry().loaded_modules().len(), 0);
     }

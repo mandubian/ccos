@@ -7,8 +7,8 @@ use super::module_runtime::ModuleRegistry;
 use super::values::{Function, Value};
 use crate::ast::Expression;
 // use crate::ir::IrNode;
-use crate::ir::core::IrNode;
 use crate::ir::converter::IrConverter;
+use crate::ir::core::IrNode;
 use crate::runtime::RuntimeStrategy;
 
 /// A `RuntimeStrategy` that uses the `IrRuntime`.
@@ -94,8 +94,7 @@ impl IrRuntime {
             IrNode::VariableDef {
                 name, init_expr, ..
             } => {
-                let value_to_assign =
-                    self.execute_node(init_expr, env, false, module_registry)?;
+                let value_to_assign = self.execute_node(init_expr, env, false, module_registry)?;
                 env.define(name.clone(), value_to_assign);
                 Ok(Value::Nil)
             }
@@ -123,9 +122,7 @@ impl IrRuntime {
                 arguments,
                 ..
             } => self.execute_call(function, arguments, env, is_tail_call, module_registry),
-            IrNode::QualifiedSymbolRef {
-                module, symbol, ..
-            } => {
+            IrNode::QualifiedSymbolRef { module, symbol, .. } => {
                 let qualified_name = format!("{}/{}", module, symbol);
                 module_registry.resolve_qualified_symbol(&qualified_name)
             }
@@ -207,6 +204,7 @@ impl IrRuntime {
         match function {
             Value::Function(f) => match f {
                 Function::Native(native_fn) => (native_fn.func)(args.to_vec()),
+                Function::Builtin(builtin_fn) => (builtin_fn.func)(args.to_vec()),
                 Function::Ir(ir_fn) => {
                     let param_names: Vec<String> = ir_fn
                         .params

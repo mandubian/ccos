@@ -120,7 +120,7 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
             }
             RuntimeType::Fallback => {
                 let module_registry = ModuleRegistry::new();
-                Box::new(rtfs_compiler::runtime::ir_runtime::IrStrategy::new(
+                Box::new(rtfs_compiler::runtime::IrWithFallbackStrategy::new(
                     module_registry,
                 ))
             }

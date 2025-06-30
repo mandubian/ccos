@@ -1,8 +1,8 @@
 // RTFS Intermediate Representation (IR)
 // Typed, canonical representation of RTFS programs
 
+use crate::ast::{Keyword, Literal, MapKey};
 use std::collections::HashMap;
-use crate::ast::{Keyword, MapKey, Literal};
 
 /// Unique identifier for IR nodes (for scope resolution and linking)
 pub type NodeId = u64;
@@ -28,7 +28,7 @@ pub enum IrType {
     Symbol,
     Any,
     Never,
-    
+
     // Collection types
     Vector(Box<IrType>),
     List(Box<IrType>),
@@ -37,20 +37,20 @@ pub enum IrType {
         entries: Vec<IrMapTypeEntry>,
         wildcard: Option<Box<IrType>>,
     },
-    
+
     // Function types
     Function {
         param_types: Vec<IrType>,
         variadic_param_type: Option<Box<IrType>>,
         return_type: Box<IrType>,
     },
-    
+
     // Advanced types
     Union(Vec<IrType>),
     Intersection(Vec<IrType>),
     Resource(String),
     LiteralValue(Literal),
-    
+
     // Type references (for aliases and forward declarations)
     TypeRef(String),
 }
@@ -79,7 +79,7 @@ pub enum IrNode {
         forms: Vec<IrNode>,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Literals
     Literal {
         id: NodeId,
@@ -87,7 +87,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Variable operations
     VariableBinding {
         id: NodeId,
@@ -124,7 +124,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Function operations
     Apply {
         id: NodeId,
@@ -133,7 +133,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     Lambda {
         id: NodeId,
         params: Vec<IrNode>, // IrParam nodes
@@ -143,7 +143,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     Param {
         id: NodeId,
         binding: Box<IrNode>, // Can be VariableBinding or destructuring pattern
@@ -151,7 +151,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Control flow
     If {
         id: NodeId,
@@ -161,29 +161,21 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-      Let {
+    Let {
         id: NodeId,
         bindings: Vec<IrLetBinding>,
         body: Vec<IrNode>,
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
-    Letrec {
-        id: NodeId,
-        bindings: Vec<IrLetBinding>,
-        body: Vec<IrNode>,
-        ir_type: IrType,
-        source_location: Option<SourceLocation>,
-    },
-    
+
     Do {
         id: NodeId,
         expressions: Vec<IrNode>,
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Pattern matching
     Match {
         id: NodeId,
@@ -192,7 +184,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Advanced constructs
     TryCatch {
         id: NodeId,
@@ -202,14 +194,14 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     Parallel {
         id: NodeId,
         bindings: Vec<IrParallelBinding>,
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     WithResource {
         id: NodeId,
         binding: Box<IrNode>,
@@ -218,7 +210,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     LogStep {
         id: NodeId,
         level: Keyword,
@@ -227,7 +219,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Module system
     Module {
         id: NodeId,
@@ -236,7 +228,7 @@ pub enum IrNode {
         definitions: Vec<IrNode>,
         source_location: Option<SourceLocation>,
     },
-    
+
     FunctionDef {
         id: NodeId,
         name: String,
@@ -244,7 +236,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     Import {
         id: NodeId,
         module_name: String,
@@ -252,7 +244,7 @@ pub enum IrNode {
         imports: Option<Vec<String>>,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Task system
     Task {
         id: NodeId,
@@ -265,7 +257,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     TaskContextAccess {
         id: NodeId,
         field_name: Keyword,
@@ -279,7 +271,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     // Collection literals
     Vector {
         id: NodeId,
@@ -287,7 +279,7 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
-    
+
     Map {
         id: NodeId,
         entries: Vec<IrMapEntry>,
@@ -374,9 +366,9 @@ impl IrNode {
             IrNode::FunctionDef { id, .. } => *id,
             IrNode::Apply { id, .. } => *id,
             IrNode::Lambda { id, .. } => *id,
-            IrNode::Param { id, .. } => *id,            IrNode::If { id, .. } => *id,
+            IrNode::Param { id, .. } => *id,
+            IrNode::If { id, .. } => *id,
             IrNode::Let { id, .. } => *id,
-            IrNode::Letrec { id, .. } => *id,
             IrNode::Do { id, .. } => *id,
             IrNode::Match { id, .. } => *id,
             IrNode::TryCatch { id, .. } => *id,
@@ -390,7 +382,7 @@ impl IrNode {
             IrNode::DiscoverAgents { id, .. } => *id,
         }
     }
-    
+
     /// Get the type of this node (if it has one)
     pub fn ir_type(&self) -> Option<&IrType> {
         match self {
@@ -403,9 +395,9 @@ impl IrNode {
             IrNode::FunctionDef { ir_type, .. } => Some(ir_type),
             IrNode::Apply { ir_type, .. } => Some(ir_type),
             IrNode::Lambda { ir_type, .. } => Some(ir_type),
-            IrNode::Param { ir_type, .. } => Some(ir_type),            IrNode::If { ir_type, .. } => Some(ir_type),
+            IrNode::Param { ir_type, .. } => Some(ir_type),
+            IrNode::If { ir_type, .. } => Some(ir_type),
             IrNode::Let { ir_type, .. } => Some(ir_type),
-            IrNode::Letrec { ir_type, .. } => Some(ir_type),
             IrNode::Do { ir_type, .. } => Some(ir_type),
             IrNode::Match { ir_type, .. } => Some(ir_type),
             IrNode::TryCatch { ir_type, .. } => Some(ir_type),
@@ -420,36 +412,88 @@ impl IrNode {
             _ => None,
         }
     }
-    
+
     /// Get source location if available
     pub fn source_location(&self) -> Option<&SourceLocation> {
         match self {
-            IrNode::Program { source_location, .. } => source_location.as_ref(),
-            IrNode::Literal { source_location, .. } => source_location.as_ref(),
-            IrNode::VariableBinding { source_location, .. } => source_location.as_ref(),
-            IrNode::VariableRef { source_location, .. } => source_location.as_ref(),
-            IrNode::ResourceRef { source_location, .. } => source_location.as_ref(),
-            IrNode::QualifiedSymbolRef { source_location, .. } => source_location.as_ref(),
-            IrNode::VariableDef { source_location, .. } => source_location.as_ref(),
-            IrNode::FunctionDef { source_location, .. } => source_location.as_ref(),
-            IrNode::Apply { source_location, .. } => source_location.as_ref(),
-            IrNode::Lambda { source_location, .. } => source_location.as_ref(),
-            IrNode::Param { source_location, .. } => source_location.as_ref(),            IrNode::If { source_location, .. } => source_location.as_ref(),
-            IrNode::Let { source_location, .. } => source_location.as_ref(),
-            IrNode::Letrec { source_location, .. } => source_location.as_ref(),
-            IrNode::Do { source_location, .. } => source_location.as_ref(),
-            IrNode::Match { source_location, .. } => source_location.as_ref(),
-            IrNode::TryCatch { source_location, .. } => source_location.as_ref(),
-            IrNode::Parallel { source_location, .. } => source_location.as_ref(),
-            IrNode::WithResource { source_location, .. } => source_location.as_ref(),
-            IrNode::LogStep { source_location, .. } => source_location.as_ref(),
-            IrNode::Module { source_location, .. } => source_location.as_ref(),
-            IrNode::Import { source_location, .. } => source_location.as_ref(),
-            IrNode::Task { source_location, .. } => source_location.as_ref(),
-            IrNode::TaskContextAccess { source_location, .. } => source_location.as_ref(),
-            IrNode::DiscoverAgents { source_location, .. } => source_location.as_ref(),
-            IrNode::Vector { source_location, .. } => source_location.as_ref(),
-            IrNode::Map { source_location, .. } => source_location.as_ref(),
+            IrNode::Program {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Literal {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::VariableBinding {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::VariableRef {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::ResourceRef {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::QualifiedSymbolRef {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::VariableDef {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::FunctionDef {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Apply {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Lambda {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Param {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::If {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Let {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Do {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Match {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::TryCatch {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Parallel {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::WithResource {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::LogStep {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Module {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Import {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Task {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::TaskContextAccess {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::DiscoverAgents {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Vector {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Map {
+                source_location, ..
+            } => source_location.as_ref(),
         }
     }
 }

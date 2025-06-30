@@ -1,17 +1,19 @@
 // Standard library implementation for RTFS
 // Contains all built-in functions and tool interfaces
 
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::RefCell;
-use crate::ast::{Symbol, MapKey};
+use crate::ast::{MapKey, Symbol};
+use crate::ir::core::{IrNode, IrType};
 use crate::runtime::environment::Environment;
+use crate::runtime::environment::IrEnvironment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::module_runtime::{
+    ExportType, Module, ModuleExport, ModuleMetadata, ModuleRegistry,
+};
 use crate::runtime::values::{Arity, BuiltinFunction, Function};
 use crate::runtime::Value;
-use crate::runtime::environment::IrEnvironment;
-use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
-use crate::ir::core::{IrNode, IrType};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 pub struct StandardLibrary;
 
@@ -19,7 +21,7 @@ impl StandardLibrary {
     /// Create a new environment with all standard library functions loaded
     pub fn create_global_environment() -> Environment {
         let mut env = Environment::new();
-        
+
         // Load all built-in functions
         Self::load_arithmetic_functions(&mut env);
         Self::load_comparison_functions(&mut env);
@@ -30,177 +32,252 @@ impl StandardLibrary {
         Self::load_tool_functions(&mut env);
         Self::load_agent_functions(&mut env);
         // Self::load_task_functions(&mut env);
-        
+
         env
     }
-    
+
     /// Load arithmetic functions (+, -, *, /)
     fn load_arithmetic_functions(env: &mut Environment) {
         // Addition (+)
-        env.define(&Symbol("+".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "+".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::add),
-        })));
-        
+        env.define(
+            &Symbol("+".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "+".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::add),
+            })),
+        );
+
         // Subtraction (-)
-        env.define(&Symbol("-".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "-".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::subtract),
-        })));
-        
+        env.define(
+            &Symbol("-".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "-".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::subtract),
+            })),
+        );
+
         // Multiplication (*)
-        env.define(&Symbol("*".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "*".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::multiply),
-        })));
-          // Division (/)
-        env.define(&Symbol("/".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "/".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::divide),
-        })));
-        
+        env.define(
+            &Symbol("*".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "*".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::multiply),
+            })),
+        );
+        // Division (/)
+        env.define(
+            &Symbol("/".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "/".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::divide),
+            })),
+        );
+
         // Max
-        env.define(&Symbol("max".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "max".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::max_value),
-        })));
-        
+        env.define(
+            &Symbol("max".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "max".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::max_value),
+            })),
+        );
+
         // Min
-        env.define(&Symbol("min".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "min".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::min_value),
-        })));
+        env.define(
+            &Symbol("min".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "min".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::min_value),
+            })),
+        );
     }
-    
+
     /// Load comparison functions (=, !=, >, <, >=, <=)
     fn load_comparison_functions(env: &mut Environment) {
-        env.define(&Symbol("=".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "=".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::equal),
-        })));
-        
-        env.define(&Symbol("!=".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "!=".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::not_equal),
-        })));
-        
-        env.define(&Symbol(">".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: ">".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::greater_than),
-        })));
-        
-        env.define(&Symbol("<".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "<".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::less_than),
-        })));
-        
-        env.define(&Symbol(">=".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: ">=".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::greater_equal),
-        })));
-        
-        env.define(&Symbol("<=".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "<=".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::less_equal),
-        })));
+        env.define(
+            &Symbol("=".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "=".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::equal),
+            })),
+        );
+
+        env.define(
+            &Symbol("!=".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "!=".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::not_equal),
+            })),
+        );
+
+        env.define(
+            &Symbol(">".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: ">".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::greater_than),
+            })),
+        );
+
+        env.define(
+            &Symbol("<".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "<".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::less_than),
+            })),
+        );
+
+        env.define(
+            &Symbol(">=".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: ">=".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::greater_equal),
+            })),
+        );
+
+        env.define(
+            &Symbol("<=".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "<=".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::less_equal),
+            })),
+        );
     }
-    
+
     /// Load boolean functions (and, or, not)
     fn load_boolean_functions(env: &mut Environment) {
-        env.define(&Symbol("and".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "and".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::and),
-        })));
-        
-        env.define(&Symbol("or".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "or".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::or),
-        })));
-        
-        env.define(&Symbol("not".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "not".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::not),
-        })));
+        env.define(
+            &Symbol("and".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "and".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::and),
+            })),
+        );
+
+        env.define(
+            &Symbol("or".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "or".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::or),
+            })),
+        );
+
+        env.define(
+            &Symbol("not".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "not".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::not),
+            })),
+        );
     }
-    
+
     /// Load string functions (str, string-length, substring)
     fn load_string_functions(env: &mut Environment) {
-        env.define(&Symbol("str".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "str".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::str),
-        })));
-        
-        env.define(&Symbol("string-length".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "string-length".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::string_length),
-        })));
-        
-        env.define(&Symbol("substring".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "substring".to_string(),
-            arity: Arity::Variadic(2),
-            func: Rc::new(Self::substring),
-        })));
+        env.define(
+            &Symbol("str".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "str".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::str),
+            })),
+        );
+
+        env.define(
+            &Symbol("string-length".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-length".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::string_length),
+            })),
+        );
+
+        env.define(
+            &Symbol("substring".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "substring".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::substring),
+            })),
+        );
     }
-    
+
     /// Load collection functions (get, assoc, dissoc, count, conj, vector, map)
     fn load_collection_functions(env: &mut Environment) {
-        env.define(&Symbol("get".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "get".to_string(),
-            arity: Arity::Variadic(2),
-            func: Rc::new(Self::get),
-        })));
-        
-        env.define(&Symbol("assoc".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "assoc".to_string(),
-            arity: Arity::Variadic(3),
-            func: Rc::new(Self::assoc),
-        })));
-        
-        env.define(&Symbol("dissoc".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "dissoc".to_string(),
-            arity: Arity::Variadic(2),
-            func: Rc::new(Self::dissoc),
-        })));
-        
-        env.define(&Symbol("count".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "count".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::count),
-        })));
-        
-        env.define(&Symbol("conj".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "conj".to_string(),
-            arity: Arity::Variadic(2),
-            func: Rc::new(Self::conj),
-        })));
-        
-        env.define(&Symbol("vector".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "vector".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::vector),
-        })));
-        env.define(&Symbol("hash-map".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "hash-map".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::hash_map),
-        })));          
+        env.define(
+            &Symbol("get".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "get".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::get),
+            })),
+        );
+
+        env.define(
+            &Symbol("assoc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "assoc".to_string(),
+                arity: Arity::Variadic(3),
+                func: Rc::new(Self::assoc),
+            })),
+        );
+
+        env.define(
+            &Symbol("dissoc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "dissoc".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::dissoc),
+            })),
+        );
+
+        env.define(
+            &Symbol("count".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "count".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::count),
+            })),
+        );
+
+        env.define(
+            &Symbol("conj".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "conj".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::conj),
+            })),
+        );
+
+        env.define(
+            &Symbol("vector".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "vector".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::vector),
+            })),
+        );
+        env.define(
+            &Symbol("hash-map".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "hash-map".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::hash_map),
+            })),
+        );
         // TODO: map and filter need special evaluator handling - disabled for now
         // env.define(&Symbol("map".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
         //     name: "map".to_string(),
@@ -212,306 +289,458 @@ impl StandardLibrary {
         //     arity: Arity::Fixed(2),
         //     func: Rc::new(Self::filter_placeholder),
         // })));
-          env.define(&Symbol("reduce".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "reduce".to_string(),
-            arity: Arity::Variadic(2),
-            func: Rc::new(Self::reduce),
-        })));
+        env.define(
+            &Symbol("reduce".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "reduce".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::reduce),
+            })),
+        );
 
         // List functions
-        env.define(&Symbol("empty?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "empty?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::empty_p),
-        })));
+        env.define(
+            &Symbol("empty?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "empty?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::empty_p),
+            })),
+        );
 
-        env.define(&Symbol("cons".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "cons".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::cons),
-        })));
+        env.define(
+            &Symbol("cons".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "cons".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::cons),
+            })),
+        );
 
-        env.define(&Symbol("first".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "first".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::first),
-        })));
+        env.define(
+            &Symbol("first".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "first".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::first),
+            })),
+        );
 
-        env.define(&Symbol("rest".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "rest".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::rest),
-        })));
-        
+        env.define(
+            &Symbol("rest".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "rest".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::rest),
+            })),
+        );
+
         // Additional collection functions
-        env.define(&Symbol("get-in".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "get-in".to_string(),
-            arity: Arity::Variadic(2),
-            func: Rc::new(Self::get_in),
-        })));
-        
-        env.define(&Symbol("partition".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "partition".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::partition),
-        })));
+        env.define(
+            &Symbol("get-in".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "get-in".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::get_in),
+            })),
+        );
+
+        env.define(
+            &Symbol("partition".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "partition".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::partition),
+            })),
+        );
+
+        env.define(
+            &Symbol("map".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "map".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::map),
+            })),
+        );
     }
-      /// Load type predicate functions (int?, float?, string?, etc.)
+    /// Load type predicate functions (int?, float?, string?, etc.)
     fn load_type_predicate_functions(env: &mut Environment) {
-        env.define(&Symbol("int?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "int?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::int_p),
-        })));
-        
-        env.define(&Symbol("float?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "float?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::float_p),
-        })));
-        
-        env.define(&Symbol("number?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "number?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::number_p),
-        })));
-        
-        env.define(&Symbol("string?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "string?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::string_p),
-        })));
-        
-        env.define(&Symbol("bool?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "bool?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::nil_p),
-        })));
-        
-        env.define(&Symbol("nil?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "nil?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::nil_p),
-        })));
-        
-        env.define(&Symbol("map?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "map?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::map_p),
-        })));
-        
-        env.define(&Symbol("vector?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "vector?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::vector_p),
-        })));
-        
-        env.define(&Symbol("keyword?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "keyword?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::keyword_p),
-        })));
-        
-        env.define(&Symbol("symbol?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "symbol?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::symbol_p),
-        })));
-        
-        env.define(&Symbol("fn?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "fn?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::fn_p),
-        })));
+        env.define(
+            &Symbol("int?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "int?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::int_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("float?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "float?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::float_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("number?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "number?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::number_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("string?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::string_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("bool?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "bool?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::nil_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("nil?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "nil?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::nil_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("map?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "map?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::map_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("vector?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "vector?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::vector_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("keyword?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "keyword?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::keyword_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("symbol?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "symbol?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::symbol_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("fn?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "fn?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::fn_p),
+            })),
+        );
     }
-    
+
     /// Load tool interface functions (placeholder implementations)
     fn load_tool_functions(env: &mut Environment) {
         // For now, we'll create placeholder implementations
         // These would need to be implemented with actual I/O, networking, etc.
-          env.define(&Symbol("tool:log".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:log".to_string(),
-            arity: Arity::Variadic(0), // Changed from Exact(1) to Any to match implementation
-            func: Rc::new(Self::tool_log),
-        })));
-        
-        env.define(&Symbol("tool:print".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:print".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::tool_print),
-        })));
-        
-        env.define(&Symbol("tool:current-time".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:current-time".to_string(),
-            arity: Arity::Fixed(0),
-            func: Rc::new(Self::tool_current_time),
-        })));
-        
-        env.define(&Symbol("tool:parse-json".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:parse-json".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_parse_json),
-        })));
-        
-        env.define(&Symbol("tool:serialize-json".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:serialize-json".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_serialize_json),
-        })));
-        
+        env.define(
+            &Symbol("tool:log".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:log".to_string(),
+                arity: Arity::Variadic(0), // Changed from Exact(1) to Any to match implementation
+                func: Rc::new(Self::tool_log),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:print".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:print".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::tool_print),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:current-time".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:current-time".to_string(),
+                arity: Arity::Fixed(0),
+                func: Rc::new(Self::tool_current_time),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:parse-json".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:parse-json".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_parse_json),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:serialize-json".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:serialize-json".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_serialize_json),
+            })),
+        );
+
         // Enhanced tool functions for resource management
-        env.define(&Symbol("tool:open-file".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:open-file".to_string(),
-            arity: Arity::Range(1, 3),
-            func: Rc::new(Self::tool_open_file),
-        })));
-        
-        env.define(&Symbol("tool:read-line".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:read-line".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_read_line),
-        })));
-        
-        env.define(&Symbol("tool:write-line".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:write-line".to_string(),
-            arity: Arity::Fixed(2),
-            func: Rc::new(Self::tool_write_line),
-        })));
-        
-        env.define(&Symbol("tool:close-file".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:close-file".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_close_file),
-        })));
-        
-        env.define(&Symbol("tool:get-env".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:get-env".to_string(),
-            arity: Arity::Range(1, 2),
-            func: Rc::new(Self::tool_get_env),
-        })));
-        
-        env.define(&Symbol("tool:http-fetch".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:http-fetch".to_string(),
-            arity: Arity::Range(1, 2),
-            func: Rc::new(Self::tool_http_fetch),
-        })));        env.define(&Symbol("tool:file-exists?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:file-exists?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_file_exists_p),
-        })));
-        
+        env.define(
+            &Symbol("tool:open-file".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:open-file".to_string(),
+                arity: Arity::Range(1, 3),
+                func: Rc::new(Self::tool_open_file),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:read-line".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:read-line".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_read_line),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:write-line".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:write-line".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::tool_write_line),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:close-file".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:close-file".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_close_file),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:get-env".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:get-env".to_string(),
+                arity: Arity::Range(1, 2),
+                func: Rc::new(Self::tool_get_env),
+            })),
+        );
+
+        env.define(
+            &Symbol("tool:http-fetch".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:http-fetch".to_string(),
+                arity: Arity::Range(1, 2),
+                func: Rc::new(Self::tool_http_fetch),
+            })),
+        );
+        env.define(
+            &Symbol("tool:file-exists?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:file-exists?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_file_exists_p),
+            })),
+        );
+
         // Add convenience aliases without prefixes
-        env.define(&Symbol("log".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "log".to_string(),
-            arity: Arity::Variadic(0),
-            func: Rc::new(Self::tool_log),
-        })));
-        
-        env.define(&Symbol("current-time".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "current-time".to_string(),
-            arity: Arity::Fixed(0),
-            func: Rc::new(Self::tool_current_time),
-        })));
-        
-        env.define(&Symbol("parse-json".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "parse-json".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_parse_json),
-        })));
-        
-        env.define(&Symbol("serialize-json".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "serialize-json".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_serialize_json),
-        })));
-        
-        env.define(&Symbol("get-env".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "get-env".to_string(),
-            arity: Arity::Fixed(1), // Changed from Range(1, 2) to match implementation
-            func: Rc::new(Self::tool_get_env),
-        })));
-        
-        env.define(&Symbol("file-exists?".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "file-exists?".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::tool_file_exists_p),
-        })));}
-    
+        env.define(
+            &Symbol("log".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "log".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::tool_log),
+            })),
+        );
+
+        env.define(
+            &Symbol("current-time".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "current-time".to_string(),
+                arity: Arity::Fixed(0),
+                func: Rc::new(Self::tool_current_time),
+            })),
+        );
+
+        env.define(
+            &Symbol("parse-json".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "parse-json".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_parse_json),
+            })),
+        );
+
+        env.define(
+            &Symbol("serialize-json".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "serialize-json".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_serialize_json),
+            })),
+        );
+
+        env.define(
+            &Symbol("get-env".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "get-env".to_string(),
+                arity: Arity::Fixed(1), // Changed from Range(1, 2) to match implementation
+                func: Rc::new(Self::tool_get_env),
+            })),
+        );
+
+        env.define(
+            &Symbol("file-exists?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "file-exists?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_file_exists_p),
+            })),
+        );
+    }
+
     /// Load agent system functions
     fn load_agent_functions(env: &mut Environment) {
         // Agent discovery function
-        env.define(&Symbol("discover-agents".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "discover-agents".to_string(),
-            arity: Arity::Fixed(0), // Changed to match implementation
-            func: Rc::new(Self::discover_agents),
-        })));          // Task coordination function
-        env.define(&Symbol("task-coordination".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "task-coordination".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::task_coordination),
-        })));
-          // Mathematical functions
-        env.define(&Symbol("fact".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "fact".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::factorial),
-        })));
-        
+        env.define(
+            &Symbol("discover-agents".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "discover-agents".to_string(),
+                arity: Arity::Fixed(0), // Changed to match implementation
+                func: Rc::new(Self::discover_agents),
+            })),
+        ); // Task coordination function
+        env.define(
+            &Symbol("task-coordination".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "task-coordination".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::task_coordination),
+            })),
+        );
+        // Mathematical functions
+        env.define(
+            &Symbol("fact".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "fact".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::factorial),
+            })),
+        );
+
         // Add factorial alias for convenience
-        env.define(&Symbol("factorial".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "factorial".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::factorial),
-        })));
-        
-        env.define(&Symbol("max".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "max".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::max_value),
-        })));
-        
-        env.define(&Symbol("min".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "min".to_string(),
-            arity: Arity::Variadic(1),
-            func: Rc::new(Self::min_value),
-        })));
-        
-        env.define(&Symbol("length".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "length".to_string(),
-            arity: Arity::Fixed(1),
-            func: Rc::new(Self::length_value),
-        })));
-        
+        env.define(
+            &Symbol("factorial".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "factorial".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::factorial),
+            })),
+        );
+
+        env.define(
+            &Symbol("max".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "max".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::max_value),
+            })),
+        );
+
+        env.define(
+            &Symbol("min".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "min".to_string(),
+                arity: Arity::Variadic(1),
+                func: Rc::new(Self::min_value),
+            })),
+        );
+
+        env.define(
+            &Symbol("length".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "length".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::length_value),
+            })),
+        );
+
         // Advanced agent system functions
-        env.define(&Symbol("discover-and-assess-agents".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "discover-and-assess-agents".to_string(),
-            arity: Arity::Fixed(0),
-            func: Rc::new(Self::discover_and_assess_agents),
-        })));
-        
-        env.define(&Symbol("establish-system-baseline".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "establish-system-baseline".to_string(),
-            arity: Arity::Fixed(0),
-            func: Rc::new(Self::establish_system_baseline),
-        })));
-        
+        env.define(
+            &Symbol("discover-and-assess-agents".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "discover-and-assess-agents".to_string(),
+                arity: Arity::Fixed(0),
+                func: Rc::new(Self::discover_and_assess_agents),
+            })),
+        );
+
+        env.define(
+            &Symbol("establish-system-baseline".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "establish-system-baseline".to_string(),
+                arity: Arity::Fixed(0),
+                func: Rc::new(Self::establish_system_baseline),
+            })),
+        );
+
         // Tool functions for agent coordination
-        env.define(&Symbol("tool:current-timestamp-ms".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "tool:current-timestamp-ms".to_string(),
-            arity: Arity::Fixed(0),
-            func: Rc::new(Self::current_timestamp_ms),
-        })));
-        
+        env.define(
+            &Symbol("tool:current-timestamp-ms".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool:current-timestamp-ms".to_string(),
+                arity: Arity::Fixed(0),
+                func: Rc::new(Self::current_timestamp_ms),
+            })),
+        );
+
         // Add alias without prefix for convenience
-        env.define(&Symbol("current-timestamp-ms".to_string()), Value::Function(Function::Builtin(BuiltinFunction {
-            name: "current-timestamp-ms".to_string(),
-            arity: Arity::Fixed(0),
-            func: Rc::new(Self::current_timestamp_ms),
-        })));
+        env.define(
+            &Symbol("current-timestamp-ms".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "current-timestamp-ms".to_string(),
+                arity: Arity::Fixed(0),
+                func: Rc::new(Self::current_timestamp_ms),
+            })),
+        );
     }
 
     /// Load task-related functions
-    // fn load_task_functions(env: &mut Environment) {        
+    // fn load_task_functions(env: &mut Environment) {
     //     env.define(&Symbol("rtfs.task/current".to_string()), Value::Function(Function::BuiltinWithEvaluator(BuiltinFunctionWithEvaluator {
     //         name: "rtfs.task/current".to_string(),
     //         arity: Arity::Fixed(0),
@@ -591,7 +820,7 @@ impl StandardLibrary {
                     vec.push(item.clone());
                 }
                 Ok(collection)
-            },
+            }
             Value::Map(map) => {
                 if args.len() != 3 {
                     return Err(RuntimeError::ArityMismatch {
@@ -603,7 +832,7 @@ impl StandardLibrary {
                 let key = Self::value_to_map_key(&args[1])?;
                 map.insert(key, args[2].clone());
                 Ok(collection)
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "vector or map".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -618,9 +847,9 @@ impl StandardLibrary {
     // }
 
     // fn filter_with_evaluator(args: &[Expression], evaluator: &crate::runtime::evaluator::Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
-    //     // Implementation commented out  
+    //     // Implementation commented out
     //     Err(RuntimeError::new("filter function not implemented"))
-    // }    
+    // }
     fn reduce(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 2 || args.len() > 3 {
@@ -634,14 +863,20 @@ impl StandardLibrary {
 
         let collection = match collection_val {
             Value::Vector(v) => v.clone(),
-            _ => return Err(RuntimeError::new("reduce expects a vector as its last argument")),
+            _ => {
+                return Err(RuntimeError::new(
+                    "reduce expects a vector as its last argument",
+                ))
+            }
         };
 
         if collection.is_empty() {
             return if args.len() == 3 {
                 Ok(args[1].clone()) // initial value
             } else {
-                Err(RuntimeError::new("reduce on empty collection with no initial value"))
+                Err(RuntimeError::new(
+                    "reduce on empty collection with no initial value",
+                ))
             };
         }
 
@@ -650,7 +885,7 @@ impl StandardLibrary {
         } else {
             (collection[0].clone(), &collection[1..])
         };
-        
+
         let func_ptr = match function {
             Value::Function(Function::Builtin(builtin_func)) => builtin_func.func.clone(),
             _ => return Err(RuntimeError::new("reduce requires a builtin function")),
@@ -696,7 +931,7 @@ impl StandardLibrary {
                 let mut new_vec = vec![args[0].clone()];
                 new_vec.extend_from_slice(v);
                 Ok(Value::Vector(new_vec))
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "vector".to_string(),
                 actual: args[1].type_name().to_string(),
@@ -740,7 +975,7 @@ impl StandardLibrary {
                 } else {
                     Ok(Value::Vector(v[1..].to_vec()))
                 }
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "vector".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -758,20 +993,26 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         let collection = &args[0];
         let path = &args[1];
-        let default = if args.len() == 3 { Some(args[2].clone()) } else { None };
-        
+        let default = if args.len() == 3 {
+            Some(args[2].clone())
+        } else {
+            None
+        };
+
         let path_vec = match path {
             Value::Vector(v) => v,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: path.type_name().to_string(),
-                operation: "get-in path".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: path.type_name().to_string(),
+                    operation: "get-in path".to_string(),
+                })
+            }
         };
-        
+
         let mut current = collection.clone();
         for key in path_vec {
             match (&current, key) {
@@ -781,25 +1022,25 @@ impl StandardLibrary {
                     } else {
                         return Ok(default.unwrap_or(Value::Nil));
                     }
-                },
+                }
                 (Value::Map(m), Value::String(s)) => {
                     if let Some(val) = m.get(&MapKey::String(s.clone())) {
                         current = val.clone();
                     } else {
                         return Ok(default.unwrap_or(Value::Nil));
                     }
-                },
+                }
                 (Value::Vector(v), Value::Integer(i)) => {
                     if let Some(val) = v.get(*i as usize) {
                         current = val.clone();
                     } else {
                         return Ok(default.unwrap_or(Value::Nil));
                     }
-                },
+                }
                 _ => return Ok(default.unwrap_or(Value::Nil)),
             }
         }
-        
+
         Ok(current)
     }
 
@@ -812,49 +1053,86 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         let size = match &args[0] {
             Value::Integer(i) if *i > 0 => *i as usize,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "positive integer".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "partition size".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "positive integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "partition size".to_string(),
+                })
+            }
         };
-        
-        if size == 0 {
-            return Err(RuntimeError::new("partition size must be positive"));
-        }
 
         let collection = match &args[1] {
             Value::Vector(v) => v.clone(),
-            _ => return Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "partition collection".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "partition collection".to_string(),
+                })
+            }
         };
-        
-        let partitions: Vec<Value> = collection
-            .chunks(size)
-            .map(|chunk| Value::Vector(chunk.to_vec()))
-            .collect();
-        
-        Ok(Value::Vector(partitions))
+
+        let mut result = Vec::new();
+        for chunk in collection.chunks(size) {
+            result.push(Value::Vector(chunk.to_vec()));
+        }
+        Ok(Value::Vector(result))
     }
-}
-/// Implementation of built-in functions
-impl StandardLibrary {
+
+    fn map(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection = &args[1];
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map".to_string(),
+                })
+            }
+        };
+        let mut result = Vec::new();
+        for item in collection_vec {
+            match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item];
+                    let mapped_value = (builtin_func.func)(func_args)?;
+                    result.push(mapped_value);
+                }
+                // For now, only support builtin functions in stdlib map
+                // User-defined functions will be handled by the evaluator
+                _ => {
+                    return Err(RuntimeError::NotImplemented(
+                        "map: user-defined functions not yet supported in stdlib".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(Value::Vector(result))
+    }
+
     // Arithmetic functions
     fn add(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
             return Ok(Value::Integer(0));
         }
-        
+
         let mut result_int: Option<i64> = None;
         let mut result_float: Option<f64> = None;
-        
+
         for arg in args {
             match arg {
                 Value::Integer(n) => {
@@ -865,27 +1143,29 @@ impl StandardLibrary {
                     } else {
                         result_int = Some(*n);
                     }
-                },
+                }
                 Value::Float(f) => {
                     let current = result_float.unwrap_or(result_int.unwrap_or(0) as f64);
                     result_float = Some(current + f);
                     result_int = None;
-                },
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: arg.type_name().to_string(),
-                    operation: "+".to_string(),
-                }),
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "number".to_string(),
+                        actual: arg.type_name().to_string(),
+                        operation: "+".to_string(),
+                    })
+                }
             }
         }
-        
+
         if let Some(f) = result_float {
             Ok(Value::Float(f))
         } else {
             Ok(Value::Integer(result_int.unwrap_or(0)))
         }
     }
-    
+
     fn subtract(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -895,7 +1175,7 @@ impl StandardLibrary {
                 actual: 0,
             });
         }
-        
+
         if args.len() == 1 {
             // Negation
             match &args[0] {
@@ -912,30 +1192,34 @@ impl StandardLibrary {
             let mut result = match &args[0] {
                 Value::Integer(n) => (*n as f64, false),
                 Value::Float(f) => (*f, true),
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "-".to_string(),
-                }),
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "number".to_string(),
+                        actual: args[0].type_name().to_string(),
+                        operation: "-".to_string(),
+                    })
+                }
             };
-            
+
             for arg in &args[1..] {
                 match arg {
                     Value::Integer(n) => {
                         result.0 -= *n as f64;
-                    },
+                    }
                     Value::Float(f) => {
                         result.0 -= f;
                         result.1 = true;
-                    },
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "number".to_string(),
-                        actual: arg.type_name().to_string(),
-                        operation: "-".to_string(),
-                    }),
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "number".to_string(),
+                            actual: arg.type_name().to_string(),
+                            operation: "-".to_string(),
+                        })
+                    }
                 }
             }
-            
+
             if result.1 {
                 Ok(Value::Float(result.0))
             } else {
@@ -943,16 +1227,16 @@ impl StandardLibrary {
             }
         }
     }
-    
+
     fn multiply(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
             return Ok(Value::Integer(1));
         }
-        
+
         let mut result_int: Option<i64> = None;
         let mut result_float: Option<f64> = None;
-        
+
         for arg in args {
             match arg {
                 Value::Integer(n) => {
@@ -963,27 +1247,29 @@ impl StandardLibrary {
                     } else {
                         result_int = Some(*n);
                     }
-                },
+                }
                 Value::Float(f) => {
                     let current = result_float.unwrap_or(result_int.unwrap_or(1) as f64);
                     result_float = Some(current * f);
                     result_int = None;
-                },
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: arg.type_name().to_string(),
-                    operation: "*".to_string(),
-                }),
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "number".to_string(),
+                        actual: arg.type_name().to_string(),
+                        operation: "*".to_string(),
+                    })
+                }
             }
         }
-        
+
         if let Some(f) = result_float {
             Ok(Value::Float(f))
         } else {
             Ok(Value::Integer(result_int.unwrap_or(1)))
         }
     }
-    
+
     fn divide(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -993,45 +1279,54 @@ impl StandardLibrary {
                 actual: 0,
             });
         }
-        
+
         let mut result = match &args[0] {
             Value::Integer(n) => *n as f64,
             Value::Float(f) => *f,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "number".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "/".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "number".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "/".to_string(),
+                })
+            }
         };
-        
+
         for arg in &args[1..] {
             let divisor = match arg {
                 Value::Integer(n) => *n as f64,
                 Value::Float(f) => *f,
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "number".to_string(),
-                    actual: arg.type_name().to_string(),
-                    operation: "/".to_string(),
-                }),
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "number".to_string(),
+                        actual: arg.type_name().to_string(),
+                        operation: "/".to_string(),
+                    })
+                }
             };
-            
+
             if divisor == 0.0 {
                 return Err(RuntimeError::DivisionByZero);
             }
-            
+
             result /= divisor;
         }
-        
-        Ok(Value::Float(result))
+
+        // Check if the result is a whole number and return integer if so
+        if result.fract() == 0.0 {
+            Ok(Value::Integer(result as i64))
+        } else {
+            Ok(Value::Float(result))
+        }
     }
-    
+
     // Comparison functions
     fn equal(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
             return Ok(Value::Boolean(true));
         }
-        
+
         let first = &args[0];
         for arg in &args[1..] {
             if first != arg {
@@ -1040,7 +1335,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(true))
     }
-    
+
     fn not_equal(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1052,7 +1347,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(args[0] != args[1]))
     }
-    
+
     fn greater_than(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1062,10 +1357,10 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         Self::compare_values(&args[0], &args[1], ">", |a, b| a > b)
     }
-    
+
     fn less_than(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1075,10 +1370,10 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         Self::compare_values(&args[0], &args[1], "<", |a, b| a < b)
     }
-    
+
     fn greater_equal(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1088,10 +1383,10 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         Self::compare_values(&args[0], &args[1], ">=", |a, b| a >= b)
     }
-    
+
     fn less_equal(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1101,15 +1396,15 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         Self::compare_values(&args[0], &args[1], "<=", |a, b| a <= b)
     }
-    
+
     fn compare_values(
-        a: &Value, 
-        b: &Value, 
-        op: &str, 
-        cmp: fn(f64, f64) -> bool
+        a: &Value,
+        b: &Value,
+        op: &str,
+        cmp: fn(f64, f64) -> bool,
     ) -> RuntimeResult<Value> {
         let (a_val, b_val) = match (a, b) {
             (Value::Integer(a), Value::Integer(b)) => (*a as f64, *b as f64),
@@ -1124,17 +1419,19 @@ impl StandardLibrary {
                     "<=" => a <= b,
                     _ => false,
                 }));
-            },
-            _ => return Err(RuntimeError::TypeError {
-                expected: "comparable types".to_string(),
-                actual: format!("{} and {}", a.type_name(), b.type_name()),
-                operation: op.to_string(),
-            }),
+            }
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "comparable types".to_string(),
+                    actual: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: op.to_string(),
+                })
+            }
         };
-        
+
         Ok(Value::Boolean(cmp(a_val, b_val)))
     }
-    
+
     // Boolean functions
     fn and(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -1145,7 +1442,7 @@ impl StandardLibrary {
         }
         Ok(args.last().cloned().unwrap_or(Value::Boolean(true)))
     }
-    
+
     fn or(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         for arg in args {
@@ -1155,7 +1452,7 @@ impl StandardLibrary {
         }
         Ok(args.last().cloned().unwrap_or(Value::Nil))
     }
-    
+
     fn not(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1167,17 +1464,18 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(!args[0].is_truthy()))
     }
-    
+
     // String functions
     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
-        let result = args.iter()
+        let result = args
+            .iter()
             .map(|v| v.to_string())
             .collect::<Vec<String>>()
             .join("");
         Ok(Value::String(result))
     }
-    
+
     fn string_length(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1187,7 +1485,7 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::String(s) => Ok(Value::Integer(s.chars().count() as i64)),
             _ => Err(RuntimeError::TypeError {
@@ -1197,7 +1495,7 @@ impl StandardLibrary {
             }),
         }
     }
-    
+
     fn substring(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 2 || args.len() > 3 {
@@ -1207,45 +1505,51 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         let string = match &args[0] {
             Value::String(s) => s,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "substring".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "substring".to_string(),
+                })
+            }
         };
-        
+
         let start = match &args[1] {
             Value::Integer(n) => *n as usize,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "integer".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "substring".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "substring".to_string(),
+                })
+            }
         };
-        
+
         let end = if args.len() == 3 {
             match &args[2] {
                 Value::Integer(n) => Some(*n as usize),
-                _ => return Err(RuntimeError::TypeError {
-                    expected: "integer".to_string(),
-                    actual: args[2].type_name().to_string(),
-                    operation: "substring".to_string(),
-                }),
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "integer".to_string(),
+                        actual: args[2].type_name().to_string(),
+                        operation: "substring".to_string(),
+                    })
+                }
             }
         } else {
             None
         };
-        
+
         let chars: Vec<char> = string.chars().collect();
         let slice = if let Some(end) = end {
             chars.get(start..end)
         } else {
             chars.get(start..)
         };
-        
+
         match slice {
             Some(chars) => Ok(Value::String(chars.iter().collect())),
             None => Err(RuntimeError::IndexOutOfBounds {
@@ -1254,7 +1558,7 @@ impl StandardLibrary {
             }),
         }
     }
-    
+
     // Collection functions (simplified implementations)
     fn get(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -1265,18 +1569,18 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         let default = args.get(2).cloned().unwrap_or(Value::Nil);
-        
+
         match (&args[0], &args[1]) {
             (Value::Map(map), key) => {
                 let map_key = Self::value_to_map_key(key)?;
                 Ok(map.get(&map_key).cloned().unwrap_or(default))
-            },
+            }
             (Value::Vector(vec), Value::Integer(index)) => {
                 let idx = *index as usize;
                 Ok(vec.get(idx).cloned().unwrap_or(default))
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "map or vector with appropriate key/index".to_string(),
                 actual: format!("{} with {}", args[0].type_name(), args[1].type_name()),
@@ -1284,7 +1588,7 @@ impl StandardLibrary {
             }),
         }
     }
-    
+
     fn count(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1294,7 +1598,7 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
             Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
@@ -1306,12 +1610,12 @@ impl StandardLibrary {
             }),
         }
     }
-    
+
     fn vector(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         Ok(Value::Vector(args.to_vec()))
     }
-    
+
     fn hash_map(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() % 2 != 0 {
@@ -1321,17 +1625,17 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         let mut result = HashMap::new();
         for chunk in args.chunks(2) {
             let key = Self::value_to_map_key(&chunk[0])?;
             let value = chunk[1].clone();
             result.insert(key, value);
         }
-        
+
         Ok(Value::Map(result))
     }
-    
+
     // Placeholder implementations for other collection functions
     fn assoc(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -1342,11 +1646,11 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::Map(map) => {
                 let mut new_map = map.clone();
-                
+
                 // Process key-value pairs
                 for chunk in args[1..].chunks(2) {
                     if chunk.len() == 2 {
@@ -1355,9 +1659,9 @@ impl StandardLibrary {
                         new_map.insert(key, value);
                     }
                 }
-                
+
                 Ok(Value::Map(new_map))
-            },
+            }
             Value::Vector(vec) => {
                 if args.len() != 3 {
                     return Err(RuntimeError::ArityMismatch {
@@ -1366,16 +1670,18 @@ impl StandardLibrary {
                         actual: args.len(),
                     });
                 }
-                
+
                 let index = match &args[1] {
                     Value::Integer(i) => *i as usize,
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "integer".to_string(),
-                        actual: args[1].type_name().to_string(),
-                        operation: "assoc".to_string(),
-                    }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "integer".to_string(),
+                            actual: args[1].type_name().to_string(),
+                            operation: "assoc".to_string(),
+                        })
+                    }
                 };
-                
+
                 let mut new_vec = vec.clone();
                 if index < new_vec.len() {
                     new_vec[index] = args[2].clone();
@@ -1386,7 +1692,7 @@ impl StandardLibrary {
                         length: new_vec.len(),
                     })
                 }
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "map or vector".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -1394,7 +1700,7 @@ impl StandardLibrary {
             }),
         }
     }
-    
+
     fn dissoc(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 2 {
@@ -1404,19 +1710,19 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::Map(map) => {
                 let mut new_map = map.clone();
-                
+
                 // Remove all specified keys
                 for key_val in &args[1..] {
                     let key = Self::value_to_map_key(key_val)?;
                     new_map.remove(&key);
                 }
-                
+
                 Ok(Value::Map(new_map))
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "map".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -1424,7 +1730,7 @@ impl StandardLibrary {
             }),
         }
     }
-    
+
     // Type predicate functions
     fn int_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -1437,7 +1743,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Integer(_))))
     }
-    
+
     fn float_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1449,7 +1755,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Float(_))))
     }
-    
+
     fn number_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1459,9 +1765,12 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        Ok(Value::Boolean(matches!(args[0], Value::Integer(_) | Value::Float(_))))
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::Integer(_) | Value::Float(_)
+        )))
     }
-    
+
     fn string_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1473,7 +1782,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::String(_))))
     }
-    
+
     fn bool_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1485,7 +1794,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Boolean(_))))
     }
-    
+
     fn nil_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1497,7 +1806,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Nil)))
     }
-    
+
     fn map_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1509,7 +1818,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Map(_))))
     }
-    
+
     fn vector_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1521,7 +1830,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Vector(_))))
     }
-    
+
     fn keyword_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1533,7 +1842,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Keyword(_))))
     }
-    
+
     fn symbol_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1545,7 +1854,7 @@ impl StandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
     }
-    
+
     fn fn_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1561,7 +1870,8 @@ impl StandardLibrary {
     // Tool functions
     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
-        let message = args.iter()
+        let message = args
+            .iter()
             .map(|v| format!("{:?}", v))
             .collect::<Vec<_>>()
             .join(" ");
@@ -1571,7 +1881,8 @@ impl StandardLibrary {
 
     fn tool_print(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
-        let message = args.iter()
+        let message = args
+            .iter()
             .map(|v| format!("{:?}", v))
             .collect::<Vec<_>>()
             .join(" ");
@@ -1598,32 +1909,44 @@ impl StandardLibrary {
 
     fn tool_parse_json(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - JSON parsing not implemented
-        Err(RuntimeError::NotImplemented("JSON parsing not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "JSON parsing not implemented".to_string(),
+        ))
     }
 
     fn tool_serialize_json(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - JSON serialization not implemented
-        Err(RuntimeError::NotImplemented("JSON serialization not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "JSON serialization not implemented".to_string(),
+        ))
     }
 
     fn tool_open_file(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "File operations not implemented".to_string(),
+        ))
     }
 
     fn tool_read_line(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "File operations not implemented".to_string(),
+        ))
     }
 
     fn tool_write_line(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "File operations not implemented".to_string(),
+        ))
     }
 
     fn tool_close_file(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented("File operations not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "File operations not implemented".to_string(),
+        ))
     }
 
     fn tool_get_env(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -1635,13 +1958,11 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
-            Value::String(key) => {
-                match std::env::var(key) {
-                    Ok(value) => Ok(Value::String(value)),
-                    Err(_) => Ok(Value::Nil),
-                }
+            Value::String(key) => match std::env::var(key) {
+                Ok(value) => Ok(Value::String(value)),
+                Err(_) => Ok(Value::Nil),
             },
             _ => Err(RuntimeError::TypeError {
                 expected: "string".to_string(),
@@ -1653,7 +1974,9 @@ impl StandardLibrary {
 
     fn tool_http_fetch(_args: Vec<Value>) -> RuntimeResult<Value> {
         // Placeholder - HTTP operations not implemented
-        Err(RuntimeError::NotImplemented("HTTP operations not implemented".to_string()))
+        Err(RuntimeError::NotImplemented(
+            "HTTP operations not implemented".to_string(),
+        ))
     }
 
     fn tool_file_exists_p(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -1665,11 +1988,9 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
-            Value::String(path) => {
-                Ok(Value::Boolean(std::path::Path::new(path).exists()))
-            },
+            Value::String(path) => Ok(Value::Boolean(std::path::Path::new(path).exists())),
             _ => Err(RuntimeError::TypeError {
                 expected: "string".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -1698,12 +2019,12 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::Integer(n) => {
                 if *n < 0 {
                     return Err(RuntimeError::InvalidArgument(
-                        "Factorial is not defined for negative numbers".to_string()
+                        "Factorial is not defined for negative numbers".to_string(),
                     ));
                 }
                 let mut result = 1i64;
@@ -1711,7 +2032,7 @@ impl StandardLibrary {
                     result *= i;
                 }
                 Ok(Value::Integer(result))
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "integer".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -1729,7 +2050,7 @@ impl StandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
             Value::String(s) => Ok(Value::Integer(s.len() as i64)),
@@ -1760,9 +2081,9 @@ impl StandardLibrary {
             .as_millis();
         Ok(Value::Integer(timestamp as i64))
     }
-    
+
     // fn task_current_with_evaluator(
-    //     _args: &[Expression], 
+    //     _args: &[Expression],
     //     ir_runtime: &mut IrRuntime,
     //     _env: &mut IrEnvironment
     // ) -> RuntimeResult<Value> {
@@ -1781,13 +2102,13 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
         version: Some("1.0.0".to_string()),
         compiled_at: std::time::SystemTime::now(),
     };
-    
+
     // Create module exports by directly creating all stdlib functions
     let mut exports = HashMap::new();
-    
+
     // Add all stdlib functions directly
     add_stdlib_exports(&mut exports);
-    
+
     // Create the module
     let module = Module {
         metadata,
@@ -1801,10 +2122,10 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
         namespace: Rc::new(RefCell::new(IrEnvironment::new())),
         dependencies: vec![],
     };
-    
+
     // Register the module
     module_registry.register_module(module)?;
-    
+
     Ok(())
 }
 
@@ -1812,93 +2133,192 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
 fn add_stdlib_exports(exports: &mut HashMap<String, ModuleExport>) {
     // Add arithmetic functions
     add_function_export(exports, "+", |args| StandardLibrary::add(args.to_vec()));
-    add_function_export(exports, "-", |args| StandardLibrary::subtract(args.to_vec()));  
-    add_function_export(exports, "*", |args| StandardLibrary::multiply(args.to_vec()));
+    add_function_export(exports, "-", |args| {
+        StandardLibrary::subtract(args.to_vec())
+    });
+    add_function_export(exports, "*", |args| {
+        StandardLibrary::multiply(args.to_vec())
+    });
     add_function_export(exports, "/", |args| StandardLibrary::divide(args.to_vec()));
-    add_function_export(exports, "max", |args| StandardLibrary::max_value(args.to_vec()));
-    add_function_export(exports, "min", |args| StandardLibrary::min_value(args.to_vec()));
-    
+    add_function_export(exports, "max", |args| {
+        StandardLibrary::max_value(args.to_vec())
+    });
+    add_function_export(exports, "min", |args| {
+        StandardLibrary::min_value(args.to_vec())
+    });
+
     // Add comparison functions
     add_function_export(exports, "=", |args| StandardLibrary::equal(args.to_vec()));
-    add_function_export(exports, "!=", |args| StandardLibrary::not_equal(args.to_vec()));
-    add_function_export(exports, ">", |args| StandardLibrary::greater_than(args.to_vec()));
-    add_function_export(exports, "<", |args| StandardLibrary::less_than(args.to_vec()));
-    add_function_export(exports, ">=", |args| StandardLibrary::greater_equal(args.to_vec()));
-    add_function_export(exports, "<=", |args| StandardLibrary::less_equal(args.to_vec()));
-    
+    add_function_export(exports, "!=", |args| {
+        StandardLibrary::not_equal(args.to_vec())
+    });
+    add_function_export(exports, ">", |args| {
+        StandardLibrary::greater_than(args.to_vec())
+    });
+    add_function_export(exports, "<", |args| {
+        StandardLibrary::less_than(args.to_vec())
+    });
+    add_function_export(exports, ">=", |args| {
+        StandardLibrary::greater_equal(args.to_vec())
+    });
+    add_function_export(exports, "<=", |args| {
+        StandardLibrary::less_equal(args.to_vec())
+    });
+
     // Add boolean functions
     add_function_export(exports, "and", |args| StandardLibrary::and(args.to_vec()));
     add_function_export(exports, "or", |args| StandardLibrary::or(args.to_vec()));
     add_function_export(exports, "not", |args| StandardLibrary::not(args.to_vec()));
-    
+
     // Add string functions
     add_function_export(exports, "str", |args| StandardLibrary::str(args.to_vec()));
-    add_function_export(exports, "substring", |args| StandardLibrary::substring(args.to_vec()));
-    add_function_export(exports, "str-length", |args| StandardLibrary::string_length(args.to_vec()));
-    
+    add_function_export(exports, "substring", |args| {
+        StandardLibrary::substring(args.to_vec())
+    });
+    add_function_export(exports, "str-length", |args| {
+        StandardLibrary::string_length(args.to_vec())
+    });
+
     // Add collection functions
-    add_function_export(exports, "count", |args| StandardLibrary::count(args.to_vec()));
-    add_function_export(exports, "first", |args| StandardLibrary::first(args.to_vec()));
+    add_function_export(exports, "count", |args| {
+        StandardLibrary::count(args.to_vec())
+    });
+    add_function_export(exports, "first", |args| {
+        StandardLibrary::first(args.to_vec())
+    });
     add_function_export(exports, "rest", |args| StandardLibrary::rest(args.to_vec()));
     add_function_export(exports, "cons", |args| StandardLibrary::cons(args.to_vec()));
     add_function_export(exports, "conj", |args| StandardLibrary::conj(args.to_vec()));
-    add_function_export(exports, "vector", |args| StandardLibrary::vector(args.to_vec()));
-    add_function_export(exports, "hash-map", |args| StandardLibrary::hash_map(args.to_vec()));
-    add_function_export(exports, "reduce", |args| StandardLibrary::reduce(args.to_vec()));
+    add_function_export(exports, "vector", |args| {
+        StandardLibrary::vector(args.to_vec())
+    });
+    add_function_export(exports, "hash-map", |args| {
+        StandardLibrary::hash_map(args.to_vec())
+    });
+    add_function_export(exports, "reduce", |args| {
+        StandardLibrary::reduce(args.to_vec())
+    });
     add_function_export(exports, "get", |args| StandardLibrary::get(args.to_vec()));
-    add_function_export(exports, "assoc", |args| StandardLibrary::assoc(args.to_vec()));
-    add_function_export(exports, "dissoc", |args| StandardLibrary::dissoc(args.to_vec()));
-    add_function_export(exports, "get-in", |args| StandardLibrary::get_in(args.to_vec()));
-    add_function_export(exports, "partition", |args| StandardLibrary::partition(args.to_vec()));
-    
+    add_function_export(exports, "assoc", |args| {
+        StandardLibrary::assoc(args.to_vec())
+    });
+    add_function_export(exports, "dissoc", |args| {
+        StandardLibrary::dissoc(args.to_vec())
+    });
+    add_function_export(exports, "get-in", |args| {
+        StandardLibrary::get_in(args.to_vec())
+    });
+    add_function_export(exports, "partition", |args| {
+        StandardLibrary::partition(args.to_vec())
+    });
+    add_function_export(exports, "map", |args| StandardLibrary::map(args.to_vec()));
+
     // Add type predicate functions
-    add_function_export(exports, "int?", |args| StandardLibrary::int_p(args.to_vec()));
-    add_function_export(exports, "float?", |args| StandardLibrary::float_p(args.to_vec()));
-    add_function_export(exports, "number?", |args| StandardLibrary::number_p(args.to_vec()));
-    add_function_export(exports, "string?", |args| StandardLibrary::string_p(args.to_vec()));
-    add_function_export(exports, "boolean?", |args| StandardLibrary::bool_p(args.to_vec()));
-    add_function_export(exports, "nil?", |args| StandardLibrary::nil_p(args.to_vec()));
-    add_function_export(exports, "map?", |args| StandardLibrary::map_p(args.to_vec()));
-    add_function_export(exports, "vector?", |args| StandardLibrary::vector_p(args.to_vec()));
-    add_function_export(exports, "keyword?", |args| StandardLibrary::keyword_p(args.to_vec()));
-    add_function_export(exports, "symbol?", |args| StandardLibrary::symbol_p(args.to_vec()));
+    add_function_export(exports, "int?", |args| {
+        StandardLibrary::int_p(args.to_vec())
+    });
+    add_function_export(exports, "float?", |args| {
+        StandardLibrary::float_p(args.to_vec())
+    });
+    add_function_export(exports, "number?", |args| {
+        StandardLibrary::number_p(args.to_vec())
+    });
+    add_function_export(exports, "string?", |args| {
+        StandardLibrary::string_p(args.to_vec())
+    });
+    add_function_export(exports, "boolean?", |args| {
+        StandardLibrary::bool_p(args.to_vec())
+    });
+    add_function_export(exports, "nil?", |args| {
+        StandardLibrary::nil_p(args.to_vec())
+    });
+    add_function_export(exports, "map?", |args| {
+        StandardLibrary::map_p(args.to_vec())
+    });
+    add_function_export(exports, "vector?", |args| {
+        StandardLibrary::vector_p(args.to_vec())
+    });
+    add_function_export(exports, "keyword?", |args| {
+        StandardLibrary::keyword_p(args.to_vec())
+    });
+    add_function_export(exports, "symbol?", |args| {
+        StandardLibrary::symbol_p(args.to_vec())
+    });
     add_function_export(exports, "fn?", |args| StandardLibrary::fn_p(args.to_vec()));
-    add_function_export(exports, "empty?", |args| StandardLibrary::empty_p(args.to_vec()));
-    
+    add_function_export(exports, "empty?", |args| {
+        StandardLibrary::empty_p(args.to_vec())
+    });
+
     // Add tool functions
-    add_function_export(exports, "tool/log", |args| StandardLibrary::tool_log(args.to_vec()));
-    add_function_export(exports, "tool/print", |args| StandardLibrary::tool_print(args.to_vec()));
-    add_function_export(exports, "tool/current-time", |args| StandardLibrary::tool_current_time(args.to_vec()));
-    add_function_export(exports, "tool/parse-json", |args| StandardLibrary::tool_parse_json(args.to_vec()));
-    add_function_export(exports, "tool/serialize-json", |args| StandardLibrary::tool_serialize_json(args.to_vec()));
-    add_function_export(exports, "tool/get-env", |args| StandardLibrary::tool_get_env(args.to_vec()));
-    add_function_export(exports, "tool/file-exists?", |args| StandardLibrary::tool_file_exists_p(args.to_vec()));
+    add_function_export(exports, "tool/log", |args| {
+        StandardLibrary::tool_log(args.to_vec())
+    });
+    add_function_export(exports, "tool/print", |args| {
+        StandardLibrary::tool_print(args.to_vec())
+    });
+    add_function_export(exports, "tool/current-time", |args| {
+        StandardLibrary::tool_current_time(args.to_vec())
+    });
+    add_function_export(exports, "tool/parse-json", |args| {
+        StandardLibrary::tool_parse_json(args.to_vec())
+    });
+    add_function_export(exports, "tool/serialize-json", |args| {
+        StandardLibrary::tool_serialize_json(args.to_vec())
+    });
+    add_function_export(exports, "tool/get-env", |args| {
+        StandardLibrary::tool_get_env(args.to_vec())
+    });
+    add_function_export(exports, "tool/file-exists?", |args| {
+        StandardLibrary::tool_file_exists_p(args.to_vec())
+    });
+
+    // Add agent functions
+    add_function_export(exports, "discover-agents", |args| {
+        StandardLibrary::discover_agents(args.to_vec())
+    });
+    add_function_export(exports, "task-coordination", |args| {
+        StandardLibrary::task_coordination(args.to_vec())
+    });
+    add_function_export(exports, "factorial", |args| {
+        StandardLibrary::factorial(args.to_vec())
+    });
+    add_function_export(exports, "length", |args| {
+        StandardLibrary::length_value(args.to_vec())
+    });
+    add_function_export(exports, "discover-and-assess-agents", |args| {
+        StandardLibrary::discover_and_assess_agents(args.to_vec())
+    });
+    add_function_export(exports, "establish-system-baseline", |args| {
+        StandardLibrary::establish_system_baseline(args.to_vec())
+    });
+    add_function_export(exports, "current-timestamp-ms", |args| {
+        StandardLibrary::current_timestamp_ms(args.to_vec())
+    });
 }
 
 /// Helper function to add a single function export
-fn add_function_export<F>(
-    exports: &mut HashMap<String, ModuleExport>,
-    name: &str,
-    func: F,
-) where
+fn add_function_export<F>(exports: &mut HashMap<String, ModuleExport>, name: &str, func: F)
+where
     F: Fn(Vec<Value>) -> RuntimeResult<Value> + 'static,
 {
     let arity = match name {
         // Variadic functions
         "+" | "-" | "*" | "/" | "=" | "and" | "or" | "vector" | "hash-map" => Arity::Variadic(1),
         // Fixed arity functions
-        "!=" | ">" | "<" | ">=" | "<=" | "cons" | "get" | "assoc" | "substring" => Arity::Fixed(2),
+        "!=" | ">" | "<" | ">=" | "<=" | "cons" | "get" | "assoc" | "substring" | "map" => {
+            Arity::Fixed(2)
+        }
         "get-in" => Arity::Fixed(2),
         // Most functions are fixed with 1 arg
         _ => Arity::Fixed(1),
     };
-    
+
     let builtin_func = BuiltinFunction {
         name: name.to_string(),
         arity,
         func: Rc::new(func),
     };
-    
+
     let export = ModuleExport {
         original_name: name.to_string(),
         export_name: name.to_string(),
@@ -1906,6 +2326,6 @@ fn add_function_export<F>(
         ir_type: IrType::Any,
         export_type: ExportType::Function,
     };
-    
+
     exports.insert(name.to_string(), export);
 }

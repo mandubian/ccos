@@ -1,21 +1,18 @@
 // rtfs_compiler/src/tests/test_utils.rs
 // This file will contain common utilities for setting up test environments.
 
-use std::rc::Rc;
-use crate::runtime::{
-    evaluator::Evaluator,
-    ir_runtime::IrRuntime,
-    module_runtime::ModuleRegistry,
-    values::Value,
-    stdlib,
-};
 use crate::ir::converter::IrConverter;
 use crate::parser;
+use crate::runtime::{
+    evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry, stdlib,
+    values::Value,
+};
+use std::rc::Rc;
 
 /// Creates a standard module registry for testing.
 pub fn create_test_module_registry() -> ModuleRegistry {
     let registry = ModuleRegistry::new();
-    // Note: We are not loading stdlib here by default. 
+    // Note: We are not loading stdlib here by default.
     // Tests that need stdlib should load it explicitly.
     registry
 }
@@ -34,9 +31,9 @@ pub fn create_test_ir_runtime() -> IrRuntime {
 
 /// A helper to parse, convert to IR, and execute code using the IR runtime.
 pub fn execute_ir_code(
-    runtime: &mut IrRuntime, 
-    module_registry: &mut ModuleRegistry, 
-    code: &str
+    runtime: &mut IrRuntime,
+    module_registry: &mut ModuleRegistry,
+    code: &str,
 ) -> Result<Value, String> {
     // Parse the code to get TopLevel AST nodes
     let top_level_forms = match parser::parse(code) {
@@ -44,21 +41,33 @@ pub fn execute_ir_code(
         Err(e) => return Err(format!("Parse error: {:?}", e)),
     };
 
-    // Convert the first form to an expression if needed
-    let expr = match top_level_forms.first() {
-        Some(crate::ast::TopLevel::Expression(expr)) => expr.clone(),
-        Some(other) => return Err(format!("Expected expression, got: {:?}", other)),
-        None => return Err("No forms found".to_string()),
-    };
-
-    // Convert expression to IR
+    // Convert each top-level form to IR
     let mut converter = IrConverter::with_module_registry(module_registry);
-    let ir = match converter.convert(&expr) {
-        Ok(ir) => ir,
-        Err(e) => return Err(format!("IR conversion error: {:?}", e)),
+    let mut ir_forms = Vec::new();
+
+    for form in top_level_forms {
+        match form {
+            crate::ast::TopLevel::Expression(expr) => {
+                let ir_node = match converter.convert(&expr) {
+                    Ok(ir) => ir,
+                    Err(e) => return Err(format!("IR conversion error: {:?}", e)),
+                };
+                ir_forms.push(ir_node);
+            }
+            _ => return Err("Only expressions are supported in this test utility".to_string()),
+        }
+    }
+
+    // Create a program node
+    let program_node = crate::ir::core::IrNode::Program {
+        id: converter.next_id(),
+        version: "1.0".to_string(),
+        forms: ir_forms,
+        source_location: None,
     };
 
-    // Execute the IR node
-    runtime.execute_program(&ir, module_registry)
+    // Execute the IR program
+    runtime
+        .execute_program(&program_node, module_registry)
         .map_err(|e| format!("Runtime error: {:?}", e))
 }

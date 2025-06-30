@@ -47,6 +47,10 @@ impl Environment {
     pub fn define(&mut self, name: &Symbol, value: Value) {
         self.bindings.insert(name.clone(), value);
     }
+
+    pub fn symbol_names(&self) -> Vec<String> {
+        self.bindings.keys().map(|s| s.0.clone()).collect()
+    }
 }
 
 /// The runtime environment for the IR interpreter.

@@ -3,7 +3,8 @@
 use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
 use crate::ast::{
     self, CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
-    Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, TopLevel, TryCatchExpr, WithResourceExpr,
+    Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, TopLevel, TryCatchExpr,
+    WithResourceExpr,
 };
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
@@ -28,19 +29,18 @@ pub struct Evaluator {
 fn values_equivalent(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Nil, Value::Nil) => true,
-        (Value::Function(Function::Closure(c1)), 
-         Value::Function(Function::Closure(c2))) => {
+        (Value::Function(Function::Closure(c1)), Value::Function(Function::Closure(c2))) => {
             c1.body == c2.body
-        },
-        (Value::Function(Function::Builtin(b1)), 
-         Value::Function(Function::Builtin(b2))) => {
+        }
+        (Value::Function(Function::Builtin(b1)), Value::Function(Function::Builtin(b2))) => {
             b1.name == b2.name
-        },
+        }
         _ => false, // Different types or can't compare
     }
 }
 
-impl Evaluator {    /// Create a new evaluator with standard library loaded and default agent discovery
+impl Evaluator {
+    /// Create a new evaluator with standard library loaded and default agent discovery
     pub fn new(module_registry: Rc<ModuleRegistry>) -> Self {
         let env = StandardLibrary::create_global_environment();
 
@@ -51,7 +51,8 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             max_recursion_depth: 1000, // Default max recursion depth
             task_context: None,
         }
-    }    pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value) -> Self {
+    }
+    pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value) -> Self {
         let env = StandardLibrary::create_global_environment();
 
         Evaluator {
@@ -66,7 +67,8 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     /// Set the task context for the evaluator
     pub fn set_task_context(&mut self, context: Value) {
         self.task_context = Some(context);
-    }    /// Get the current task context
+    }
+    /// Get the current task context
     pub fn get_task_context(&self) -> Option<Value> {
         self.task_context.clone()
     }
@@ -79,26 +81,81 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 TopLevel::Expression(expr) => {
                     last_value = self.eval_expr(expr, &mut env)?;
                 }
-                TopLevel::Intent(_intent) => {
-                    // TODO: Implement intent evaluation
-                    return Err(RuntimeError::NotImplemented("Intent evaluation not yet implemented".to_string()));
+                TopLevel::Intent(intent) => {
+                    // Evaluate intent properties and return intent metadata
+                    let mut intent_metadata = HashMap::new();
+                    for property in &intent.properties {
+                        let key = crate::ast::MapKey::String(property.key.0.clone());
+                        let value = self.eval_expr(&property.value, &mut env)?;
+                        intent_metadata.insert(key, value);
+                    }
+                    last_value = Value::Map(intent_metadata);
                 }
-                TopLevel::Plan(_plan) => {
-                    // TODO: Implement plan evaluation
-                    return Err(RuntimeError::NotImplemented("Plan evaluation not yet implemented".to_string()));
+                TopLevel::Plan(plan) => {
+                    // Evaluate plan properties and return plan metadata
+                    let mut plan_metadata = HashMap::new();
+                    for property in &plan.properties {
+                        let key = crate::ast::MapKey::String(property.key.0.clone());
+                        let value = self.eval_expr(&property.value, &mut env)?;
+                        plan_metadata.insert(key, value);
+                    }
+                    last_value = Value::Map(plan_metadata);
                 }
-                TopLevel::Action(_action) => {
-                    // TODO: Implement action evaluation
-                    return Err(RuntimeError::NotImplemented("Action evaluation not yet implemented".to_string()));
+                TopLevel::Action(action) => {
+                    // Evaluate action properties and return action metadata
+                    let mut action_metadata = HashMap::new();
+                    for property in &action.properties {
+                        let key = crate::ast::MapKey::String(property.key.0.clone());
+                        let value = self.eval_expr(&property.value, &mut env)?;
+                        action_metadata.insert(key, value);
+                    }
+                    last_value = Value::Map(action_metadata);
                 }
-                TopLevel::Capability(_capability) => {
-                    last_value = Value::Nil; // Capabilities don't return values in this context
+                TopLevel::Capability(capability) => {
+                    // Evaluate capability properties and return capability metadata
+                    let mut capability_metadata = HashMap::new();
+                    for property in &capability.properties {
+                        let key = crate::ast::MapKey::String(property.key.0.clone());
+                        let value = self.eval_expr(&property.value, &mut env)?;
+                        capability_metadata.insert(key, value);
+                    }
+                    last_value = Value::Map(capability_metadata);
                 }
-                TopLevel::Resource(_resource) => {
-                    last_value = Value::Nil; // Resources don't return values in this context
+                TopLevel::Resource(resource) => {
+                    // Evaluate resource properties and return resource metadata
+                    let mut resource_metadata = HashMap::new();
+                    for property in &resource.properties {
+                        let key = crate::ast::MapKey::String(property.key.0.clone());
+                        let value = self.eval_expr(&property.value, &mut env)?;
+                        resource_metadata.insert(key, value);
+                    }
+                    last_value = Value::Map(resource_metadata);
                 }
-                TopLevel::Module(_module) => {
-                    last_value = Value::Nil; // Modules don't return values in this context
+                TopLevel::Module(module) => {
+                    // Evaluate module properties and return module metadata
+                    let mut module_metadata = HashMap::new();
+                    // Add module name
+                    module_metadata.insert(
+                        crate::ast::MapKey::String("name".to_string()),
+                        Value::String(module.name.0.clone()),
+                    );
+                    // Add docstring if present
+                    if let Some(docstring) = &module.docstring {
+                        module_metadata.insert(
+                            crate::ast::MapKey::String("docstring".to_string()),
+                            Value::String(docstring.clone()),
+                        );
+                    }
+                    // Add exports if present
+                    if let Some(exports) = &module.exports {
+                        let export_values: Vec<Value> =
+                            exports.iter().map(|e| Value::String(e.0.clone())).collect();
+                        module_metadata.insert(
+                            crate::ast::MapKey::String("exports".to_string()),
+                            Value::Vector(export_values),
+                        );
+                    }
+                    last_value = Value::Map(module_metadata);
                 }
             }
         }
@@ -109,34 +166,32 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
         match expr {
-            Expression::Literal(lit) => self.eval_literal(lit),            
-            Expression::Symbol(sym) => env.lookup(sym).ok_or_else(|| RuntimeError::UndefinedSymbol(sym.clone())),            
+            Expression::Literal(lit) => self.eval_literal(lit),
+            Expression::Symbol(sym) => env
+                .lookup(sym)
+                .ok_or_else(|| RuntimeError::UndefinedSymbol(sym.clone())),
             Expression::List(exprs) => {
                 // Empty list evaluates to empty list
                 if exprs.is_empty() {
                     return Ok(Value::Vector(vec![]));
                 }
-                
+
                 // First element should be a function
                 let func_expr = &exprs[0];
                 let func_value = self.eval_expr(func_expr, env)?;
-                
+
                 // Evaluate arguments
-                let args: Result<Vec<Value>, RuntimeError> = exprs[1..]
-                    .iter()
-                    .map(|e| self.eval_expr(e, env))
-                    .collect();
+                let args: Result<Vec<Value>, RuntimeError> =
+                    exprs[1..].iter().map(|e| self.eval_expr(e, env)).collect();
                 let args = args?;
-                
+
                 self.call_function(func_value, &args, env)
-            },
+            }
             Expression::Vector(exprs) => {
-                let values: Result<Vec<Value>, RuntimeError> = exprs
-                    .iter()
-                    .map(|e| self.eval_expr(e, env))
-                    .collect();
+                let values: Result<Vec<Value>, RuntimeError> =
+                    exprs.iter().map(|e| self.eval_expr(e, env)).collect();
                 Ok(Value::Vector(values?))
-            },
+            }
             Expression::Map(map) => {
                 let mut result = HashMap::new();
                 for (key, value_expr) in map {
@@ -144,10 +199,10 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                     result.insert(key.clone(), value);
                 }
                 Ok(Value::Map(result))
-            },
+            }
             Expression::FunctionCall { callee, arguments } => {
                 let func_value = self.eval_expr(callee, env)?;
-                
+
                 match &func_value {
                     Value::Function(Function::Builtin(f)) if f.name == "quote" => {
                         // Handle quote specially
@@ -163,19 +218,16 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                     }
                     _ => {
                         // Evaluate arguments and call normally
-                        let args: RuntimeResult<Vec<Value>> = arguments
-                            .iter()
-                            .map(|e| self.eval_expr(e, env))
-                            .collect();
+                        let args: RuntimeResult<Vec<Value>> =
+                            arguments.iter().map(|e| self.eval_expr(e, env)).collect();
                         let args = args?;
-                        
+
                         self.call_function(func_value, &args, env)
                     }
                 }
-            },
+            }
             Expression::If(if_expr) => self.eval_if(if_expr, env),
             Expression::Let(let_expr) => self.eval_let(let_expr, env),
-            Expression::Letrec(let_expr) => self.eval_letrec(let_expr, env),
             Expression::Do(do_expr) => self.eval_do(do_expr, env),
             Expression::Match(match_expr) => self.eval_match(match_expr, env),
             Expression::LogStep(log_expr) => self.eval_log_step(log_expr, env),
@@ -185,9 +237,13 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
-            Expression::DiscoverAgents(discover_expr) => self.eval_discover_agents(discover_expr, env),
+            Expression::DiscoverAgents(discover_expr) => {
+                self.eval_discover_agents(discover_expr, env)
+            }
             Expression::ResourceRef(s) => Ok(Value::String(s.clone())),
-            // Expression::TaskContext(task_context) => self.eval_task_context(task_context, env),
+            Expression::TaskContextAccess(task_context) => {
+                self.eval_task_context(task_context, env)
+            }
         }
     }
 
@@ -196,12 +252,16 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         let mut env = self.env.clone();
         self.eval_expr(expr, &mut env)
     }
-    
+
     /// Evaluate an expression with a provided environment
-    pub fn evaluate_with_env(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
+    pub fn evaluate_with_env(
+        &self,
+        expr: &Expression,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         self.eval_expr(expr, env)
     }
-    
+
     fn eval_literal(&self, lit: &Literal) -> RuntimeResult<Value> {
         match lit {
             Literal::Integer(n) => Ok(Value::Integer(*n)),
@@ -216,17 +276,29 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         }
     }
 
-    pub fn call_function(&self, func_value: Value, args: &[Value], env: &mut Environment) -> RuntimeResult<Value> {
+    pub fn call_function(
+        &self,
+        func_value: Value,
+        args: &[Value],
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         match func_value {
             Value::FunctionPlaceholder(cell) => {
                 let f = cell.borrow().clone();
                 if let Value::Function(f) = f {
                     self.call_function(Value::Function(f), args, env)
                 } else {
-                    Err(RuntimeError::InternalError("Function placeholder not resolved".to_string()))
+                    Err(RuntimeError::InternalError(
+                        "Function placeholder not resolved".to_string(),
+                    ))
                 }
-            },
+            }
             Value::Function(Function::Builtin(func)) => {
+                // Special handling for map function to support user-defined functions
+                if func.name == "map" && args.len() == 2 {
+                    return self.handle_map_with_user_functions(&args[0], &args[1], env);
+                }
+
                 // Check arity
                 if !self.check_arity(&func.arity, args.len()) {
                     return Err(RuntimeError::ArityMismatch {
@@ -235,13 +307,13 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         actual: args.len(),
                     });
                 }
-                
+
                 (func.func)(args.to_vec())
-            },
+            }
             Value::Function(Function::Closure(closure)) => {
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
-                
+
                 // Bind arguments to parameters
                 for (param, arg) in closure.params.iter().zip(args.iter()) {
                     func_env.define(param, arg.clone());
@@ -249,7 +321,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
 
                 // Execute function body
                 self.eval_expr(&closure.body, &mut func_env)
-            },
+            }
             Value::Keyword(keyword) => {
                 // Keywords act as functions: (:key map) is equivalent to (get map :key)
                 if args.len() == 1 {
@@ -257,7 +329,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         Value::Map(map) => {
                             let map_key = crate::ast::MapKey::Keyword(keyword);
                             Ok(map.get(&map_key).cloned().unwrap_or(Value::Nil))
-                        },
+                        }
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
                             actual: match &args[0] {
@@ -287,7 +359,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         Value::Map(map) => {
                             let map_key = crate::ast::MapKey::Keyword(keyword);
                             Ok(map.get(&map_key).cloned().unwrap_or(args[1].clone()))
-                        },
+                        }
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
                             actual: match &args[0] {
@@ -318,7 +390,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         actual: args.len(),
                     })
                 }
-            },
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "function".to_string(),
                 actual: func_value.type_name().to_string(),
@@ -326,7 +398,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             }),
         }
     }
-    
+
     fn check_arity(&self, arity: &Arity, arg_count: usize) -> bool {
         match arity {
             Arity::Fixed(n) => arg_count == *n,
@@ -334,7 +406,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
         }
     }
-    
+
     fn arity_to_string(&self, arity: &Arity) -> String {
         match arity {
             Arity::Fixed(n) => n.to_string(),
@@ -342,10 +414,10 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             Arity::Range(min, max) => format!("between {} and {}", min, max),
         }
     }
-    
+
     fn eval_if(&self, if_expr: &IfExpr, env: &mut Environment) -> RuntimeResult<Value> {
         let condition = self.eval_expr(&if_expr.condition, env)?;
-        
+
         if condition.is_truthy() {
             self.eval_expr(&if_expr.then_branch, env)
         } else if let Some(else_branch) = &if_expr.else_branch {
@@ -353,21 +425,171 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         } else {
             Ok(Value::Nil)
         }
-    }    fn eval_let(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
+    }
+    fn eval_let(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Only use recursion detection for function bindings
+        let all_bindings_are_functions = let_expr
+            .bindings
+            .iter()
+            .all(|binding| matches!(&*binding.value, Expression::Fn(_) | Expression::Defn(_)));
+        if all_bindings_are_functions && self.detect_recursion_in_let(&let_expr.bindings) {
+            self.eval_let_with_recursion(let_expr, env)
+        } else {
+            self.eval_let_simple(let_expr, env)
+        }
+    }
+
+    fn detect_recursion_in_let(&self, bindings: &[crate::ast::LetBinding]) -> bool {
+        // Collect all binding names
+        let binding_names: std::collections::HashSet<&str> = bindings
+            .iter()
+            .filter_map(|b| {
+                if let crate::ast::Pattern::Symbol(s) = &b.pattern {
+                    Some(s.0.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Check if any binding value references other binding names
+        for binding in bindings {
+            if self.expr_references_symbols(&binding.value, &binding_names) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn expr_references_symbols(
+        &self,
+        expr: &Expression,
+        symbols: &std::collections::HashSet<&str>,
+    ) -> bool {
+        match expr {
+            Expression::Symbol(s) => symbols.contains(s.0.as_str()),
+            Expression::FunctionCall { callee, arguments } => {
+                // Check function name
+                if let Expression::Symbol(s) = &**callee {
+                    if symbols.contains(s.0.as_str()) {
+                        return true;
+                    }
+                }
+                // Check arguments
+                for arg in arguments {
+                    if self.expr_references_symbols(arg, symbols) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expression::Let(let_expr) => {
+                // Check bindings and body
+                for binding in &let_expr.bindings {
+                    if self.expr_references_symbols(&binding.value, symbols) {
+                        return true;
+                    }
+                }
+                for body_expr in &let_expr.body {
+                    if self.expr_references_symbols(body_expr, symbols) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expression::If(if_expr) => {
+                self.expr_references_symbols(&if_expr.condition, symbols)
+                    || self.expr_references_symbols(&if_expr.then_branch, symbols)
+                    || if_expr.else_branch.as_ref().map_or(false, |else_expr| {
+                        self.expr_references_symbols(else_expr, symbols)
+                    })
+            }
+            Expression::Do(do_expr) => do_expr
+                .expressions
+                .iter()
+                .any(|expr| self.expr_references_symbols(expr, symbols)),
+            Expression::Fn(fn_expr) => fn_expr
+                .body
+                .iter()
+                .any(|expr| self.expr_references_symbols(expr, symbols)),
+            Expression::Def(def_expr) => self.expr_references_symbols(&def_expr.value, symbols),
+            Expression::Defn(defn_expr) => defn_expr
+                .body
+                .iter()
+                .any(|expr| self.expr_references_symbols(expr, symbols)),
+            Expression::Match(match_expr) => {
+                self.expr_references_symbols(&match_expr.expression, symbols)
+                    || match_expr.clauses.iter().any(|clause| {
+                        clause
+                            .guard
+                            .as_ref()
+                            .map_or(false, |guard| self.expr_references_symbols(guard, symbols))
+                            || self.expr_references_symbols(&clause.body, symbols)
+                    })
+            }
+            Expression::TryCatch(try_expr) => {
+                try_expr
+                    .try_body
+                    .iter()
+                    .any(|expr| self.expr_references_symbols(expr, symbols))
+                    || try_expr.catch_clauses.iter().any(|clause| {
+                        clause
+                            .body
+                            .iter()
+                            .any(|expr| self.expr_references_symbols(expr, symbols))
+                    })
+            }
+            Expression::WithResource(with_expr) => {
+                self.expr_references_symbols(&with_expr.resource_init, symbols)
+                    || with_expr
+                        .body
+                        .iter()
+                        .any(|expr| self.expr_references_symbols(expr, symbols))
+            }
+            Expression::Parallel(parallel_expr) => parallel_expr
+                .bindings
+                .iter()
+                .any(|binding| self.expr_references_symbols(&binding.expression, symbols)),
+            Expression::DiscoverAgents(discover_expr) => {
+                self.expr_references_symbols(&discover_expr.criteria, symbols)
+                    || discover_expr.options.as_ref().map_or(false, |options| {
+                        self.expr_references_symbols(options, symbols)
+                    })
+            }
+            Expression::LogStep(log_expr) => log_expr
+                .values
+                .iter()
+                .any(|expr| self.expr_references_symbols(expr, symbols)),
+            // These don't reference symbols
+            Expression::Literal(_)
+            | Expression::Vector(_)
+            | Expression::Map(_)
+            | Expression::List(_)
+            | Expression::ResourceRef(_)
+            | Expression::TaskContextAccess(_) => false,
+        }
+    }
+
+    fn eval_let_simple(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
         let mut let_env = Environment::with_parent(Rc::new(env.clone()));
-        
+
         for binding in &let_expr.bindings {
             let value = self.eval_expr(&binding.value, &mut let_env)?;
             self.bind_pattern(&binding.pattern, &value, &mut let_env)?;
         }
-        
+
         self.eval_do_body(&let_expr.body, &mut let_env)
     }
-    
-    fn eval_letrec(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
+
+    fn eval_let_with_recursion(
+        &self,
+        let_expr: &LetExpr,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         let mut letrec_env = Environment::with_parent(Rc::new(env.clone()));
         let mut placeholders = Vec::new();
 
+        // First pass: create placeholders for all function bindings
         for binding in &let_expr.bindings {
             if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
                 let placeholder_cell = Rc::new(RefCell::new(Value::Nil));
@@ -375,11 +597,12 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 placeholders.push((symbol.clone(), binding.value.clone(), placeholder_cell));
             } else {
                 return Err(RuntimeError::NotImplemented(
-                    "Complex patterns not yet supported in letrec".to_string(),
+                    "Complex patterns not yet supported in recursive let".to_string(),
                 ));
             }
         }
 
+        // Second pass: evaluate all bindings with placeholders available
         for (symbol, value_expr, placeholder_cell) in placeholders {
             let value = self.eval_expr(&value_expr, &mut letrec_env)?;
             if matches!(value, Value::Function(_)) {
@@ -388,30 +611,30 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 return Err(RuntimeError::TypeError {
                     expected: "function".to_string(),
                     actual: value.type_name().to_string(),
-                    operation: format!("binding {} in letrec", symbol.0),
+                    operation: format!("binding {} in recursive let", symbol.0),
                 });
             }
         }
 
         self.eval_do_body(&let_expr.body, &mut letrec_env)
     }
-    
+
     fn eval_do(&self, do_expr: &DoExpr, env: &mut Environment) -> RuntimeResult<Value> {
         self.eval_do_body(&do_expr.expressions, env)
     }
-    
+
     fn eval_do_body(&self, exprs: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
         if exprs.is_empty() {
             return Ok(Value::Nil);
         }
-        
+
         let mut result = Value::Nil;
         for expr in exprs {
             result = self.eval_expr(expr, env)?;
         }
         Ok(result)
     }
-    
+
     fn eval_match(&self, match_expr: &MatchExpr, env: &mut Environment) -> RuntimeResult<Value> {
         let value_to_match = self.eval_expr(&match_expr.expression, env)?;
 
@@ -432,7 +655,11 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     }
 
     fn eval_log_step(&self, log_expr: &LogStepExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        let level = log_expr.level.as_ref().map(|k| k.0.as_str()).unwrap_or("info");
+        let level = log_expr
+            .level
+            .as_ref()
+            .map(|k| k.0.as_str())
+            .unwrap_or("info");
         let mut messages = Vec::new();
         for expr in &log_expr.values {
             messages.push(self.eval_expr(expr, env)?.to_string());
@@ -441,13 +668,21 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         Ok(Value::Nil)
     }
 
-    fn eval_try_catch(&self, try_expr: &TryCatchExpr, env: &mut Environment) -> RuntimeResult<Value> {
+    fn eval_try_catch(
+        &self,
+        try_expr: &TryCatchExpr,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         match self.eval_do_body(&try_expr.try_body, env) {
             Ok(value) => Ok(value),
             Err(e) => {
                 for catch_clause in &try_expr.catch_clauses {
                     let mut catch_env = Environment::with_parent(Rc::new(env.clone()));
-                    if self.match_catch_pattern(&catch_clause.pattern, &e.to_value(), &mut catch_env)? {
+                    if self.match_catch_pattern(
+                        &catch_clause.pattern,
+                        &e.to_value(),
+                        &mut catch_env,
+                    )? {
                         return self.eval_do_body(&catch_clause.body, &mut catch_env);
                     }
                 }
@@ -458,11 +693,17 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
 
     fn eval_fn(&self, fn_expr: &FnExpr, env: &mut Environment) -> RuntimeResult<Value> {
         Ok(Value::Function(Function::new_closure(
-            fn_expr.params.iter().map(|p| match &p.pattern {
-                crate::ast::Pattern::Symbol(s) => s.clone(),
-                _ => unimplemented!(),
-            }).collect(),
-            Box::new(Expression::Do(DoExpr { expressions: fn_expr.body.clone() })),
+            fn_expr
+                .params
+                .iter()
+                .map(|p| match &p.pattern {
+                    crate::ast::Pattern::Symbol(s) => s.clone(),
+                    _ => unimplemented!(),
+                })
+                .collect(),
+            Box::new(Expression::Do(DoExpr {
+                expressions: fn_expr.body.clone(),
+            })),
             Rc::new(env.clone()),
         )))
     }
@@ -476,14 +717,16 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
         let mut resource_env = Environment::with_parent(Rc::new(env.clone()));
         resource_env.define(&with_expr.resource_symbol, resource);
         self.eval_do_body(&with_expr.body, &mut resource_env)
-    }    fn eval_parallel(&self, parallel_expr: &ParallelExpr, env: &mut Environment) -> RuntimeResult<Value> {
+    }
+    fn eval_parallel(
+        &self,
+        parallel_expr: &ParallelExpr,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         let mut results = HashMap::new();
         for binding in &parallel_expr.bindings {
             let value = self.eval_expr(&binding.expression, env)?;
-            results.insert(
-                MapKey::Keyword(Keyword(binding.symbol.0.clone())),
-                value,
-            );
+            results.insert(MapKey::Keyword(Keyword(binding.symbol.0.clone())), value);
         }
         Ok(Value::Map(results))
     }
@@ -496,11 +739,17 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
 
     fn eval_defn(&self, defn_expr: &DefnExpr, env: &mut Environment) -> RuntimeResult<Value> {
         let function = Value::Function(Function::new_closure(
-            defn_expr.params.iter().map(|p| match &p.pattern {
-                crate::ast::Pattern::Symbol(s) => s.clone(),
-                _ => unimplemented!(),
-            }).collect(),
-            Box::new(Expression::Do(DoExpr { expressions: defn_expr.body.clone() })),
+            defn_expr
+                .params
+                .iter()
+                .map(|p| match &p.pattern {
+                    crate::ast::Pattern::Symbol(s) => s.clone(),
+                    _ => unimplemented!(),
+                })
+                .collect(),
+            Box::new(Expression::Do(DoExpr {
+                expressions: defn_expr.body.clone(),
+            })),
             Rc::new(env.clone()),
         ));
         env.define(&defn_expr.name, function.clone());
@@ -528,12 +777,15 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
     }
 
     /// Clean up a resource handle by calling its appropriate cleanup function
-    fn cleanup_resource(&self, handle: &mut crate::runtime::values::ResourceHandle) -> RuntimeResult<()> {
+    fn cleanup_resource(
+        &self,
+        handle: &mut crate::runtime::values::ResourceHandle,
+    ) -> RuntimeResult<()> {
         // Check if already released
         if handle.state == crate::runtime::values::ResourceState::Released {
             return Ok(());
         }
-        
+
         // Determine cleanup function based on resource type
         let cleanup_result = match handle.id.as_str() {
             "FileHandle" => {
@@ -541,46 +793,55 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 // For now, just log the cleanup
                 println!("Cleaning up FileHandle: {}", handle.id);
                 Ok(Value::Nil)
-            },
+            }
             "DatabaseConnectionHandle" => {
                 println!("Cleaning up DatabaseConnectionHandle: {}", handle.id);
                 Ok(Value::Nil)
-            },
+            }
             _ => {
                 println!("Cleaning up generic resource: {}", handle.id);
                 Ok(Value::Nil)
             }
         };
-        
+
         // Mark as released regardless of cleanup success
         handle.state = crate::runtime::values::ResourceState::Released;
-        
+
         match cleanup_result {
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
     }
-      /// Check if a resource handle is valid for use
+    /// Check if a resource handle is valid for use
     #[allow(dead_code)]
-    fn check_resource_state(&self, handle: &crate::runtime::values::ResourceHandle) -> RuntimeResult<()> {
+    fn check_resource_state(
+        &self,
+        handle: &crate::runtime::values::ResourceHandle,
+    ) -> RuntimeResult<()> {
         match handle.state {
             crate::runtime::values::ResourceState::Active => Ok(()),
-            crate::runtime::values::ResourceState::Released => {
-                Err(RuntimeError::ResourceError {
-                    resource_type: handle.id.clone(),
-                    message: "Attempted to use released resource handle".to_string(),
-                })
-            }
+            crate::runtime::values::ResourceState::Released => Err(RuntimeError::ResourceError {
+                resource_type: handle.id.clone(),
+                message: "Attempted to use released resource handle".to_string(),
+            }),
         }
-    }    /// Evaluate a discover-agents expression
-    fn eval_discover_agents(&self, _discover_expr: &crate::ast::DiscoverAgentsExpr, _env: &mut Environment) -> RuntimeResult<Value> {
+    }
+    /// Evaluate a discover-agents expression
+    fn eval_discover_agents(
+        &self,
+        _discover_expr: &crate::ast::DiscoverAgentsExpr,
+        _env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         // TODO: Implement agent discovery
         Ok(Value::Vector(vec![]))
     }
-      /// Parse a map of criteria into SimpleDiscoveryQuery
-    fn parse_criteria_to_query(&self, criteria_map: &std::collections::HashMap<crate::ast::MapKey, Value>) -> RuntimeResult<SimpleDiscoveryQuery> {
-        use crate::ast::{MapKey, Keyword};
-        
+    /// Parse a map of criteria into SimpleDiscoveryQuery
+    fn parse_criteria_to_query(
+        &self,
+        criteria_map: &std::collections::HashMap<crate::ast::MapKey, Value>,
+    ) -> RuntimeResult<SimpleDiscoveryQuery> {
+        use crate::ast::{Keyword, MapKey};
+
         let mut query = SimpleDiscoveryQuery {
             capability_id: None,
             version_constraint: None,
@@ -589,7 +850,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             discovery_query: None,
             limit: None,
         };
-        
+
         for (key, value) in criteria_map {
             match key {
                 MapKey::Keyword(Keyword(keyword_name)) => {
@@ -599,179 +860,186 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                             if !capabilities.is_empty() {
                                 query.capability_id = Some(capabilities[0].clone());
                             }
-                        },
+                        }
                         "capability-id" | "capability_id" => {
                             query.capability_id = Some(self.parse_string_value(value)?);
-                        },
+                        }
                         "agent-id" | "agent_id" => {
                             query.agent_id = Some(self.parse_string_value(value)?);
-                        },
+                        }
                         "version" | "version-constraint" | "version_constraint" => {
                             query.version_constraint = Some(self.parse_string_value(value)?);
-                        },
+                        }
                         "tags" | "discovery-tags" | "discovery_tags" => {
                             query.discovery_tags = Some(self.parse_capabilities_list(value)?);
-                        },
-                        "limit" | "max-results" | "max_results" => {
-                            match value {
-                                Value::Integer(i) => {
-                                    query.limit = Some(*i as u32);
-                                },
-                                _ => return Err(RuntimeError::TypeError {
+                        }
+                        "limit" | "max-results" | "max_results" => match value {
+                            Value::Integer(i) => {
+                                query.limit = Some(*i as u32);
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
                                     expected: "Integer".to_string(),
                                     actual: format!("{:?}", value),
                                     operation: "parsing limit".to_string(),
-                                }),
+                                })
                             }
                         },
                         _ => {
                             // Ignore unknown keys for now
                         }
                     }
-                },
+                }
                 _ => {
                     // Ignore non-keyword keys for now
                 }
             }
         }
-        
+
         Ok(query)
     }
 
     /// Parse discovery options from a map
-    fn parse_options_to_query(&self, options_map: &std::collections::HashMap<crate::ast::MapKey, Value>) -> RuntimeResult<SimpleDiscoveryOptions> {
-        use crate::ast::{MapKey, Keyword};
-        
+    fn parse_options_to_query(
+        &self,
+        options_map: &std::collections::HashMap<crate::ast::MapKey, Value>,
+    ) -> RuntimeResult<SimpleDiscoveryOptions> {
+        use crate::ast::{Keyword, MapKey};
+
         let mut options = SimpleDiscoveryOptions {
             timeout_ms: None,
             cache_policy: None,
             include_offline: None,
             max_results: None,
         };
-        
+
         for (key, value) in options_map {
             match key {
                 MapKey::Keyword(Keyword(keyword_name)) => {
                     match keyword_name.as_str() {
-                        "timeout" | "timeout-ms" | "timeout_ms" => {
-                            match value {
-                                Value::Integer(ms) => {
-                                    options.timeout_ms = Some(*ms as u64);
-                                },
-                                _ => return Err(RuntimeError::TypeError {
+                        "timeout" | "timeout-ms" | "timeout_ms" => match value {
+                            Value::Integer(ms) => {
+                                options.timeout_ms = Some(*ms as u64);
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
                                     expected: "Integer".to_string(),
                                     actual: format!("{:?}", value),
                                     operation: "parsing timeout".to_string(),
-                                }),
+                                })
                             }
                         },
-                        "cache" | "cache-policy" | "cache_policy" => {
-                            match value {
-                                Value::String(policy) => {
-                                    use crate::agent::SimpleCachePolicy;
-                                    options.cache_policy = Some(match policy.as_str() {
-                                        "use-cache" | "use_cache" => SimpleCachePolicy::UseCache,
-                                        "no-cache" | "no_cache" => SimpleCachePolicy::NoCache,
-                                        "refresh-cache" | "refresh_cache" => SimpleCachePolicy::RefreshCache,
-                                        _ => SimpleCachePolicy::UseCache,
-                                    });
-                                },
-                                _ => return Err(RuntimeError::TypeError {
+                        "cache" | "cache-policy" | "cache_policy" => match value {
+                            Value::String(policy) => {
+                                use crate::agent::SimpleCachePolicy;
+                                options.cache_policy = Some(match policy.as_str() {
+                                    "use-cache" | "use_cache" => SimpleCachePolicy::UseCache,
+                                    "no-cache" | "no_cache" => SimpleCachePolicy::NoCache,
+                                    "refresh-cache" | "refresh_cache" => {
+                                        SimpleCachePolicy::RefreshCache
+                                    }
+                                    _ => SimpleCachePolicy::UseCache,
+                                });
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
                                     expected: "String".to_string(),
                                     actual: format!("{:?}", value),
                                     operation: "parsing cache policy".to_string(),
-                                }),
+                                })
                             }
                         },
-                        "include-offline" | "include_offline" => {
-                            match value {
-                                Value::Boolean(include) => {
-                                    options.include_offline = Some(*include);
-                                },
-                                _ => return Err(RuntimeError::TypeError {
+                        "include-offline" | "include_offline" => match value {
+                            Value::Boolean(include) => {
+                                options.include_offline = Some(*include);
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
                                     expected: "Boolean".to_string(),
                                     actual: format!("{:?}", value),
                                     operation: "parsing include-offline".to_string(),
-                                }),
+                                })
                             }
                         },
-                        "max-results" | "max_results" => {
-                            match value {
-                                Value::Integer(max) => {
-                                    options.max_results = Some(*max as u32);
-                                },
-                                _ => return Err(RuntimeError::TypeError {
+                        "max-results" | "max_results" => match value {
+                            Value::Integer(max) => {
+                                options.max_results = Some(*max as u32);
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
                                     expected: "Integer".to_string(),
                                     actual: format!("{:?}", value),
                                     operation: "parsing max-results".to_string(),
-                                }),
+                                })
                             }
                         },
                         _ => {
                             // Ignore unknown keys
                         }
                     }
-                },
+                }
                 _ => {
                     // Ignore non-keyword keys
                 }
             }
         }
-        
+
         Ok(options)
     }
 
     /// Convert a SimpleAgentCard to an RTFS Value
     fn simple_agent_card_to_value(&self, agent_card: SimpleAgentCard) -> Value {
         use std::collections::HashMap;
-        
+
         let mut map = HashMap::new();
-        
+
         // Add agent ID
         map.insert(
             crate::ast::MapKey::Keyword(crate::ast::Keyword("agent-id".to_string())),
-            Value::String(agent_card.agent_id)
+            Value::String(agent_card.agent_id),
         );
-        
+
         // Add name if present
         if let Some(name) = agent_card.name {
             map.insert(
                 crate::ast::MapKey::Keyword(crate::ast::Keyword("name".to_string())),
-                Value::String(name)
+                Value::String(name),
             );
         }
-        
+
         // Add version if present
         if let Some(version) = agent_card.version {
             map.insert(
                 crate::ast::MapKey::Keyword(crate::ast::Keyword("version".to_string())),
-                Value::String(version)
+                Value::String(version),
             );
         }
-        
+
         // Add capabilities
-        let capabilities: Vec<Value> = agent_card.capabilities.into_iter()
+        let capabilities: Vec<Value> = agent_card
+            .capabilities
+            .into_iter()
             .map(|cap| Value::String(cap))
             .collect();
         map.insert(
             crate::ast::MapKey::Keyword(crate::ast::Keyword("capabilities".to_string())),
-            Value::Vector(capabilities)
+            Value::Vector(capabilities),
         );
-        
+
         // Add endpoint if present
         if let Some(endpoint) = agent_card.endpoint {
             map.insert(
                 crate::ast::MapKey::Keyword(crate::ast::Keyword("endpoint".to_string())),
-                Value::String(endpoint)
+                Value::String(endpoint),
             );
         }
-        
+
         // Add metadata as a JSON string for now
         map.insert(
             crate::ast::MapKey::Keyword(crate::ast::Keyword("metadata".to_string())),
-            Value::String(agent_card.metadata.to_string())
+            Value::String(agent_card.metadata.to_string()),
         );
-        
+
         Value::Map(map)
     }
 
@@ -783,15 +1051,17 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 for item in vec {
                     match item {
                         Value::String(s) => capabilities.push(s.clone()),
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            actual: format!("{:?}", item),
-                            operation: "parsing capability".to_string(),
-                        }),
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "String".to_string(),
+                                actual: format!("{:?}", item),
+                                operation: "parsing capability".to_string(),
+                            })
+                        }
                     }
                 }
                 Ok(capabilities)
-            },
+            }
             Value::String(s) => Ok(vec![s.clone()]),
             _ => Err(RuntimeError::TypeError {
                 expected: "Vector or String".to_string(),
@@ -799,7 +1069,8 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 operation: "parsing capabilities".to_string(),
             }),
         }
-    }    /// Helper function to parse a string value
+    }
+    /// Helper function to parse a string value
     fn parse_string_value(&self, value: &Value) -> RuntimeResult<String> {
         match value {
             Value::String(s) => Ok(s.clone()),
@@ -810,23 +1081,28 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
             }),
         }
     }
-      /// Match a match pattern against a value (placeholder implementation)
-    fn match_match_pattern(&self, pattern: &crate::ast::MatchPattern, value: &Value, env: &mut Environment) -> RuntimeResult<bool> {
+    /// Match a match pattern against a value (placeholder implementation)
+    fn match_match_pattern(
+        &self,
+        pattern: &crate::ast::MatchPattern,
+        value: &Value,
+        env: &mut Environment,
+    ) -> RuntimeResult<bool> {
         match pattern {
             crate::ast::MatchPattern::Symbol(symbol) => {
                 env.define(symbol, value.clone());
                 Ok(true)
-            },
+            }
             crate::ast::MatchPattern::Wildcard => {
                 Ok(true) // Wildcard always matches
-            },
+            }
             crate::ast::MatchPattern::Literal(lit_pattern) => {
                 let lit_value = self.eval_literal(lit_pattern)?;
                 Ok(lit_value == *value)
-            },
+            }
             crate::ast::MatchPattern::Keyword(keyword_pattern) => {
                 Ok(*value == Value::Keyword(keyword_pattern.clone()))
-            },
+            }
             crate::ast::MatchPattern::Vector { elements, rest } => {
                 if let Value::Vector(values) = value {
                     if let Some(rest_symbol) = rest {
@@ -858,7 +1134,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         if elements.len() != values.len() {
                             return Ok(false);
                         }
-                        
+
                         let mut temp_env = env.clone();
                         let mut all_matched = true;
                         for (p, v) in elements.iter().zip(values.iter()) {
@@ -878,7 +1154,7 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 } else {
                     Ok(false) // Pattern is a vector, but value is not
                 }
-            },
+            }
             crate::ast::MatchPattern::Map { entries, rest } => {
                 if let Value::Map(value_map) = value {
                     let mut temp_env = env.clone();
@@ -919,39 +1195,62 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 } else {
                     Ok(false) // Pattern is a map, but value is not
                 }
-            },
-            _ => Err(RuntimeError::NotImplemented(format!("Complex match pattern matching not yet implemented for: {:?}", pattern))),
+            }
+            _ => Err(RuntimeError::NotImplemented(format!(
+                "Complex match pattern matching not yet implemented for: {:?}",
+                pattern
+            ))),
         }
     }
-    
+
     /// Match a catch pattern against an error value (placeholder implementation)
-    fn match_catch_pattern_actual(&self, pattern: &crate::ast::CatchPattern, _error_value: &Value) -> RuntimeResult<bool> {
+    fn match_catch_pattern_actual(
+        &self,
+        pattern: &crate::ast::CatchPattern,
+        _error_value: &Value,
+    ) -> RuntimeResult<bool> {
         match pattern {
             crate::ast::CatchPattern::Symbol(_symbol) => {
                 // Symbols always match in catch clauses
                 Ok(true)
-            },
-            _ => Err(RuntimeError::NotImplemented("Complex catch pattern matching not yet implemented".to_string())),
+            }
+            _ => Err(RuntimeError::NotImplemented(
+                "Complex catch pattern matching not yet implemented".to_string(),
+            )),
         }
     }
-    
-    /// Coerce a value to a specific type (placeholder implementation) 
-    fn coerce_value_to_type(&self, value: Value, _type_annotation: &crate::ast::TypeExpr) -> RuntimeResult<Value> {
+
+    /// Coerce a value to a specific type (placeholder implementation)
+    fn coerce_value_to_type(
+        &self,
+        value: Value,
+        _type_annotation: &crate::ast::TypeExpr,
+    ) -> RuntimeResult<Value> {
         // For now, just return the value as-is
         // TODO: Implement actual type coercion logic
         Ok(value)
-    }    /// Bind a pattern to a value in an environment
-    fn bind_pattern(&self, pattern: &crate::ast::Pattern, value: &Value, env: &mut Environment) -> RuntimeResult<()> {
+    }
+    /// Bind a pattern to a value in an environment
+    fn bind_pattern(
+        &self,
+        pattern: &crate::ast::Pattern,
+        value: &Value,
+        env: &mut Environment,
+    ) -> RuntimeResult<()> {
         match pattern {
             crate::ast::Pattern::Symbol(symbol) => {
                 env.define(symbol, value.clone());
                 Ok(())
-            },
+            }
             crate::ast::Pattern::Wildcard => {
                 // Wildcard does nothing, successfully "matches" any value.
                 Ok(())
-            },
-            crate::ast::Pattern::VectorDestructuring { elements, rest, as_symbol } => {
+            }
+            crate::ast::Pattern::VectorDestructuring {
+                elements,
+                rest,
+                as_symbol,
+            } => {
                 // First, bind the whole value to as_symbol if provided
                 if let Some(as_sym) = as_symbol {
                     env.define(as_sym, value.clone());
@@ -968,10 +1267,13 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                             operation: "vector destructuring".to_string(),
                         });
                     }
-                    
+
                     if vector_values.len() < required_elements {
                         return Err(RuntimeError::TypeError {
-                            expected: format!("vector with at least {} elements", required_elements),
+                            expected: format!(
+                                "vector with at least {} elements",
+                                required_elements
+                            ),
                             actual: format!("vector with {} elements", vector_values.len()),
                             operation: "vector destructuring".to_string(),
                         });
@@ -996,8 +1298,12 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                         operation: "vector destructuring".to_string(),
                     })
                 }
-            },
-            crate::ast::Pattern::MapDestructuring { entries, rest, as_symbol } => {
+            }
+            crate::ast::Pattern::MapDestructuring {
+                entries,
+                rest,
+                as_symbol,
+            } => {
                 // First, bind the whole value to as_symbol if provided
                 if let Some(as_sym) = as_symbol {
                     env.define(as_sym, value.clone());
@@ -1021,12 +1327,14 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                                     // or return error for required patterns
                                     self.bind_pattern(pattern, &Value::Nil, env)?;
                                 }
-                            },
+                            }
                             crate::ast::MapDestructuringEntry::Keys(symbols) => {
                                 // Handle :keys [key1 key2] syntax
                                 for symbol in symbols {
                                     // Convert symbol to keyword for map lookup
-                                    let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(symbol.0.clone()));
+                                    let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(
+                                        symbol.0.clone(),
+                                    ));
                                     bound_keys.insert(key.clone());
                                     if let Some(map_value) = map_values.get(&key) {
                                         env.define(symbol, map_value.clone());
@@ -1058,6 +1366,91 @@ impl Evaluator {    /// Create a new evaluator with standard library loaded and 
                 }
             }
         }
+    }
+
+    fn eval_task_context(
+        &self,
+        task_context: &crate::ast::TaskContextAccessExpr,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        // Access task context field by name
+        if let Some(context) = &self.task_context {
+            match context {
+                Value::Map(context_map) => {
+                    let field_key = crate::ast::MapKey::Keyword(task_context.field.clone());
+                    Ok(context_map.get(&field_key).cloned().unwrap_or(Value::Nil))
+                }
+                _ => Err(RuntimeError::TypeError {
+                    expected: "map".to_string(),
+                    actual: format!("{:?}", context),
+                    operation: "task context access".to_string(),
+                }),
+            }
+        } else {
+            Err(RuntimeError::Generic(
+                "No task context available".to_string(),
+            ))
+        }
+    }
+
+    fn handle_map_with_user_functions(
+        &self,
+        function: &Value,
+        collection: &Value,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map".to_string(),
+                })
+            }
+        };
+
+        let mut result = Vec::new();
+        for item in collection_vec {
+            match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    // Use the stdlib implementation for builtin functions
+                    let func_args = vec![item];
+                    let mapped_value = (builtin_func.func)(func_args)?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    // Call user-defined functions using the evaluator
+                    let func_args = vec![item];
+                    let mapped_value = self.call_function(
+                        Value::Function(Function::Closure(closure.clone())),
+                        &func_args,
+                        env,
+                    )?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::Native(native_func)) => {
+                    // Call native functions
+                    let func_args = vec![item];
+                    let mapped_value = (native_func.func)(func_args)?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::Ir(ir_func)) => {
+                    // TODO: Implement IR function calling
+                    return Err(RuntimeError::NotImplemented(
+                        "map: IR functions not yet supported".to_string(),
+                    ));
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "map".to_string(),
+                    })
+                }
+            }
+        }
+        Ok(Value::Vector(result))
     }
 }
 
