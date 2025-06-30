@@ -193,7 +193,6 @@ pub enum Expression {
     },
     If(#[validate] IfExpr),
     Let(#[validate] LetExpr),
-    Letrec(#[validate] LetExpr), // Letrec uses the same structure as Let
     Do(#[validate] DoExpr),
     Fn(#[validate] FnExpr),
     Def(#[validate] Box<DefExpr>),   // Added for def as an expression
@@ -204,7 +203,8 @@ pub enum Expression {
     Parallel(#[validate] ParallelExpr),
     WithResource(#[validate] WithResourceExpr),
     Match(#[validate] MatchExpr),
-    ResourceRef(String), // Added
+    ResourceRef(String),                      // Added
+    TaskContextAccess(TaskContextAccessExpr), // Added for @context-key syntax
 }
 
 impl Validate for Expression {
@@ -231,7 +231,6 @@ impl Validate for Expression {
             }
             Expression::If(expr) => expr.validate(),
             Expression::Let(expr) => expr.validate(),
-            Expression::Letrec(expr) => expr.validate(),
             Expression::Do(expr) => expr.validate(),
             Expression::Fn(expr) => expr.validate(),
             Expression::Def(expr) => expr.validate(),
@@ -524,4 +523,11 @@ pub struct DiscoverAgentsExpr {
     /// Options map (optional)
     #[validate(nested)]
     pub options: Option<Box<Expression>>, // Optional Map expression
+}
+
+/// Task context access expression (@context-key)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
+pub struct TaskContextAccessExpr {
+    pub field: Keyword, // The field name to access from task context
 }

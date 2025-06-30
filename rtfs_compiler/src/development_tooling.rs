@@ -1,11 +1,14 @@
 // RTFS Development Tooling - Step 3 Implementation
 // REPL interface, testing framework, and development utilities
 
-use std::collections::HashMap;
 use crate::ir::converter::IrConverter;
-use std::io::{self, Write};
 use crate::parser::parse_expression;
-use crate::runtime::{Runtime, RuntimeStrategy, TreeWalkingStrategy, RuntimeStrategyValue, IrRuntime};
+use crate::runtime::{
+    IrRuntime, IrWithFallbackStrategy, Runtime, RuntimeStrategy, RuntimeStrategyValue,
+    TreeWalkingStrategy,
+};
+use std::collections::HashMap;
+use std::io::{self, Write};
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]
@@ -21,20 +24,24 @@ impl IrStrategy {
     }
 }
 impl RuntimeStrategy for IrStrategy {
-    
-    fn run(&mut self, program: &crate::ast::Expression) -> Result<crate::runtime::Value, crate::runtime::RuntimeError> {
+    fn run(
+        &mut self,
+        program: &crate::ast::Expression,
+    ) -> Result<crate::runtime::Value, crate::runtime::RuntimeError> {
         // Delegate to execute method foErr(crate::runtime::RuntimeError::NotImplemented("IrStrategy execution not yet implemented".to_string()))self.execute(program)
-        Err(crate::runtime::RuntimeError::NotImplemented("IrStrategy execution not yet implemented".to_string()))
+        Err(crate::runtime::RuntimeError::NotImplemented(
+            "IrStrategy execution not yet implemented".to_string(),
+        ))
     }
-    
+
     fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
         Box::new(IrStrategy::new())
     }
 }
 
-use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ast::Expression;
 use crate::runtime::evaluator::Evaluator;
+use crate::runtime::module_runtime::ModuleRegistry;
 use std::rc::Rc;
 
 /// RTFS Read-Eval-Print Loop (REPL) interface
@@ -72,20 +79,27 @@ impl Default for ReplContext {
 impl RtfsRepl {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
-            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(
-                Evaluator::new(Rc::new(module_registry.clone()))
-            ))),
+            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
+                module_registry.clone(),
+            ))))),
             module_registry,
             context: ReplContext::default(),
             history: Vec::new(),
             // optimizer: Some(EnhancedOptimizationPipeline::new()),
         }
     }
-    pub fn with_runtime_strategy(strategy: RuntimeStrategyValue, module_registry: ModuleRegistry) -> Self {
+    pub fn with_runtime_strategy(
+        strategy: RuntimeStrategyValue,
+        module_registry: ModuleRegistry,
+    ) -> Self {
         let runtime_strategy: Box<dyn RuntimeStrategy> = match strategy {
-            RuntimeStrategyValue::Ast => Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(module_registry.clone())))),
+            RuntimeStrategyValue::Ast => Box::new(TreeWalkingStrategy::new(Evaluator::new(
+                Rc::new(module_registry.clone()),
+            ))),
             RuntimeStrategyValue::Ir => Box::new(IrStrategy::new()),
-            RuntimeStrategyValue::IrWithFallback => Box::new(IrStrategy::new()), // Placeholder
+            RuntimeStrategyValue::IrWithFallback => {
+                Box::new(IrWithFallbackStrategy::new(module_registry.clone()))
+            }
         };
         Self {
             runtime: Runtime::new(runtime_strategy),
@@ -162,19 +176,34 @@ impl RtfsRepl {
             }
             ":ast" => {
                 self.context.show_ast = !self.context.show_ast;
-                println!("🔍 AST display: {}", if self.context.show_ast { "ON" } else { "OFF" });
+                println!(
+                    "🔍 AST display: {}",
+                    if self.context.show_ast { "ON" } else { "OFF" }
+                );
             }
             ":ir" => {
                 self.context.show_ir = !self.context.show_ir;
-                println!("⚡ IR display: {}", if self.context.show_ir { "ON" } else { "OFF" });
+                println!(
+                    "⚡ IR display: {}",
+                    if self.context.show_ir { "ON" } else { "OFF" }
+                );
             }
             ":opt" => {
                 self.context.show_optimizations = !self.context.show_optimizations;
-                println!("🚀 Optimization display: {}", if self.context.show_optimizations { "ON" } else { "OFF" });
+                println!(
+                    "🚀 Optimization display: {}",
+                    if self.context.show_optimizations {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                );
             }
             ":runtime-ast" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::Ast;
-                self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(self.module_registry.clone())))));
+                self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
+                    Rc::new(self.module_registry.clone()),
+                ))));
                 println!("🔄 Switched to AST runtime");
             }
             ":runtime-ir" => {
@@ -184,7 +213,9 @@ impl RtfsRepl {
             }
             ":runtime-fallback" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::IrWithFallback;
-                self.runtime = Runtime::new(Box::new(IrStrategy::new())); // Placeholder
+                self.runtime = Runtime::new(Box::new(IrWithFallbackStrategy::new(
+                    self.module_registry.clone(),
+                )));
                 println!("🔄 Switched to IR with AST fallback runtime");
             }
             ":test" => {
@@ -299,27 +330,23 @@ impl RtfsRepl {
 
     fn run_test_suite(&mut self) {
         println!("🧪 Running RTFS Test Suite...");
-        
+
         let test_cases = vec![
             // Basic arithmetic
             ("(+ 1 2 3)", "6"),
             ("(- 10 3)", "7"),
             ("(* 2 3 4)", "24"),
             ("(/ 15 3)", "5"),
-            
             // Data structures
             ("(vector 1 2 3)", "[1, 2, 3]"),
             ("(count [1 2 3])", "3"),
             ("(conj [1 2] 3)", "[1, 2, 3]"),
-            
             // Conditionals
             ("(if true 1 0)", "1"),
             ("(if false 1 0)", "0"),
-            
             // Let bindings
             ("(let [x 5] x)", "5"),
             ("(let [x 5 y 10] (+ x y))", "15"),
-            
             // Type predicates
             ("(nil? nil)", "true"),
             ("(int? 42)", "true"),
@@ -331,26 +358,24 @@ impl RtfsRepl {
 
         for (i, (expr, expected)) in test_cases.iter().enumerate() {
             print!("  Test {}: {} ... ", i + 1, expr);
-            
+
             match parse_expression(expr) {
-                Ok(ast) => {
-                    match self.runtime.run(&Expression::from(ast)) {
-                        Ok(result) => {
-                            let result_str = format!("{:#?}", result);
-                            if result_str.contains(expected) {
-                                println!("✅ PASS");
-                                passed += 1;
-                            } else {
-                                println!("❌ FAIL (expected: {}, got: {})", expected, result_str);
-                                failed += 1;
-                            }
-                        }
-                        Err(e) => {
-                            println!("❌ FAIL (runtime error: {:?})", e);
+                Ok(ast) => match self.runtime.run(&Expression::from(ast)) {
+                    Ok(result) => {
+                        let result_str = format!("{:#?}", result);
+                        if result_str.contains(expected) {
+                            println!("✅ PASS");
+                            passed += 1;
+                        } else {
+                            println!("❌ FAIL (expected: {}, got: {})", expected, result_str);
                             failed += 1;
                         }
                     }
-                }
+                    Err(e) => {
+                        println!("❌ FAIL (runtime error: {:?})", e);
+                        failed += 1;
+                    }
+                },
                 Err(e) => {
                     println!("❌ FAIL (parse error: {:?})", e);
                     failed += 1;
@@ -361,12 +386,15 @@ impl RtfsRepl {
         println!("\n📊 Test Results:");
         println!("  ✅ Passed: {}", passed);
         println!("  ❌ Failed: {}", failed);
-        println!("  📈 Success Rate: {:.1}%", (passed as f64 / (passed + failed) as f64) * 100.0);
+        println!(
+            "  📈 Success Rate: {:.1}%",
+            (passed as f64 / (passed + failed) as f64) * 100.0
+        );
     }
 
     fn run_benchmarks(&mut self) {
         println!("⏱️ Running RTFS Benchmarks...");
-        
+
         let benchmark_cases = vec![
             "(+ 1 2)",
             "(let [x 10] (+ x 5))",
@@ -377,35 +405,37 @@ impl RtfsRepl {
 
         for (i, expr) in benchmark_cases.iter().enumerate() {
             println!("\n  Benchmark {}: {}", i + 1, expr);
-            
+
             match parse_expression(expr) {
                 Ok(ast) => {
                     // Warm up
                     for _ in 0..10 {
                         let _ = self.runtime.run(&Expression::from(ast.clone()));
                     }
-                    
+
                     // Benchmark
                     let iterations = 1000;
                     let start = std::time::Instant::now();
-                    
+
                     for _ in 0..iterations {
                         match self.runtime.run(&Expression::from(ast.clone())) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(e) => {
                                 println!("    ❌ Error during benchmark: {:?}", e);
                                 break;
                             }
                         }
                     }
-                    
+
                     let duration = start.elapsed();
                     let avg_time = duration / iterations;
-                    
+
                     println!("    ⏱️ {} iterations in {:?}", iterations, duration);
                     println!("    📊 Average: {:?} per evaluation", avg_time);
-                    println!("    🚀 Rate: {:.0} evaluations/second", 
-                        1_000_000.0 / avg_time.as_micros() as f64 * 1_000_000.0);
+                    println!(
+                        "    🚀 Rate: {:.0} evaluations/second",
+                        1_000_000.0 / avg_time.as_micros() as f64 * 1_000_000.0
+                    );
                 }
                 Err(e) => {
                     println!("    ❌ Parse error: {:?}", e);
@@ -433,10 +463,10 @@ pub struct TestCase {
 
 #[derive(Debug, Clone)]
 pub enum TestExpectation {
-    Success(String),         // Expected successful result
-    Error(String),           // Expected error message contains
-    ParseError,              // Expected parse error
-    RuntimeError,            // Expected runtime error
+    Success(String),          // Expected successful result
+    Error(String),            // Expected error message contains
+    ParseError,               // Expected parse error
+    RuntimeError,             // Expected runtime error
     Custom(fn(&str) -> bool), // Custom validation function (not serializable)
 }
 
@@ -444,7 +474,9 @@ impl RtfsTestFramework {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
             tests: Vec::new(),
-            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(module_registry.clone()))))),
+            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
+                module_registry.clone(),
+            ))))),
             module_registry,
         }
     }
@@ -461,9 +493,10 @@ impl RtfsTestFramework {
             expected: TestExpectation::Success(expected.to_string()),
             tags: vec!["basic".to_string()],
         });
-    }    pub fn run_all_tests(&mut self) -> TestResults {
+    }
+    pub fn run_all_tests(&mut self) -> TestResults {
         println!("🧪 Running {} tests...", self.tests.len());
-        
+
         let mut results = TestResults {
             total: self.tests.len(),
             passed: 0,
@@ -476,7 +509,7 @@ impl RtfsTestFramework {
         let tests = self.tests.clone();
         for (i, test) in tests.iter().enumerate() {
             print!("  [{}] {} ... ", i + 1, test.name);
-            
+
             let result = self.run_single_test(test);
             match result {
                 TestResult::Pass => {
@@ -509,78 +542,78 @@ impl RtfsTestFramework {
 
     fn run_single_test(&mut self, test: &TestCase) -> TestResult {
         match parse_expression(&test.code) {
-            Ok(ast) => {
-                match self.runtime.run(&Expression::from(ast)) {
-                    Ok(result) => {
-                        let result_str = format!("{:#?}", result);
-                        match &test.expected {
-                            TestExpectation::Success(expected) => {
-                                if result_str.contains(expected) {
-                                    TestResult::Pass
-                                } else {
-                                    TestResult::Fail(format!("Expected '{}', got '{}'", expected, result_str))
-                                }
-                            }
-                            TestExpectation::Error(_) => {
-                                TestResult::Fail("Expected error but got success".to_string())
-                            }
-                            TestExpectation::ParseError => {
-                                TestResult::Fail("Expected parse error but parsing succeeded".to_string())
-                            }
-                            TestExpectation::RuntimeError => {
-                                TestResult::Fail("Expected runtime error but execution succeeded".to_string())
-                            }
-                            TestExpectation::Custom(_) => {
-                                TestResult::Error("Custom expectations not implemented".to_string())
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let error_str = format!("{:?}", e);
-                        match &test.expected {
-                            TestExpectation::Error(expected) => {
-                                if error_str.contains(expected) {
-                                    TestResult::Pass
-                                } else {
-                                    TestResult::Fail(format!("Expected error containing '{}', got '{}'", expected, error_str))
-                                }
-                            }
-                            TestExpectation::RuntimeError => {
+            Ok(ast) => match self.runtime.run(&Expression::from(ast)) {
+                Ok(result) => {
+                    let result_str = format!("{:#?}", result);
+                    match &test.expected {
+                        TestExpectation::Success(expected) => {
+                            if result_str.contains(expected) {
                                 TestResult::Pass
+                            } else {
+                                TestResult::Fail(format!(
+                                    "Expected '{}', got '{}'",
+                                    expected, result_str
+                                ))
                             }
-                            _ => {
-                                TestResult::Fail(format!("Unexpected runtime error: {}", error_str))
-                            }
+                        }
+                        TestExpectation::Error(_) => {
+                            TestResult::Fail("Expected error but got success".to_string())
+                        }
+                        TestExpectation::ParseError => TestResult::Fail(
+                            "Expected parse error but parsing succeeded".to_string(),
+                        ),
+                        TestExpectation::RuntimeError => TestResult::Fail(
+                            "Expected runtime error but execution succeeded".to_string(),
+                        ),
+                        TestExpectation::Custom(_) => {
+                            TestResult::Error("Custom expectations not implemented".to_string())
                         }
                     }
                 }
-            }
-            Err(e) => {
-                match &test.expected {
-                    TestExpectation::ParseError => {
-                        TestResult::Pass
-                    }
-                    _ => {
-                        TestResult::Error(format!("Parse error: {:?}", e))
+                Err(e) => {
+                    let error_str = format!("{:?}", e);
+                    match &test.expected {
+                        TestExpectation::Error(expected) => {
+                            if error_str.contains(expected) {
+                                TestResult::Pass
+                            } else {
+                                TestResult::Fail(format!(
+                                    "Expected error containing '{}', got '{}'",
+                                    expected, error_str
+                                ))
+                            }
+                        }
+                        TestExpectation::RuntimeError => TestResult::Pass,
+                        _ => TestResult::Fail(format!("Unexpected runtime error: {}", error_str)),
                     }
                 }
-            }
+            },
+            Err(e) => match &test.expected {
+                TestExpectation::ParseError => TestResult::Pass,
+                _ => TestResult::Error(format!("Parse error: {:?}", e)),
+            },
         }
     }
 
     pub fn run_tests_with_tag(&mut self, tag: &str) -> TestResults {
-        let filtered_tests: Vec<_> = self.tests.iter()
+        let filtered_tests: Vec<_> = self
+            .tests
+            .iter()
             .filter(|test| test.tags.contains(&tag.to_string()))
             .collect();
-        
-        println!("🧪 Running {} tests with tag '{}'...", filtered_tests.len(), tag);
-        
+
+        println!(
+            "🧪 Running {} tests with tag '{}'...",
+            filtered_tests.len(),
+            tag
+        );
+
         // Create temporary test framework with filtered tests
         let mut temp_framework = RtfsTestFramework::new(self.module_registry.clone());
         for test in filtered_tests {
             temp_framework.add_test(test.clone());
         }
-        
+
         temp_framework.run_all_tests()
     }
 }
@@ -624,7 +657,7 @@ impl TestResults {
         println!("  ❌ Failed: {}", self.failed);
         println!("  💥 Errors: {}", self.errors);
         println!("  📈 Success Rate: {:.1}%", self.success_rate());
-        
+
         if !self.failures.is_empty() {
             println!("\n🔍 Failure Details:");
             for failure in &self.failures {
@@ -639,15 +672,15 @@ impl TestResults {
 pub fn run_development_tooling_demo() {
     println!("\n=== RTFS Development Tooling Demo - Step 3 ===");
     println!("Demonstrating REPL interface and testing framework:\n");
-    
+
     // Test Framework Demo
     println!("🧪 Testing Framework Demo:");
     demo_testing_framework();
-    
+
     // REPL Demo (non-interactive)
     println!("\n💻 REPL Interface Demo:");
     demo_repl_interface();
-    
+
     println!("\n✅ Development Tooling Demo (Step 3) Complete!");
     println!("   - REPL interface implemented with commands");
     println!("   - Built-in testing framework functional");
@@ -658,7 +691,7 @@ pub fn run_development_tooling_demo() {
 fn demo_testing_framework() {
     let module_registry = ModuleRegistry::new();
     let mut framework = RtfsTestFramework::new(module_registry);
-    
+
     // Add comprehensive test suite
     framework.add_basic_test("arithmetic_add", "(+ 1 2 3)", "6");
     framework.add_basic_test("arithmetic_multiply", "(* 2 3 4)", "24");
@@ -666,7 +699,7 @@ fn demo_testing_framework() {
     framework.add_basic_test("let_binding", "(let [x 5] x)", "5");
     framework.add_basic_test("conditional_true", "(if true 1 0)", "1");
     framework.add_basic_test("conditional_false", "(if false 1 0)", "0");
-    
+
     // Add error test cases
     framework.add_test(TestCase {
         name: "division_by_zero".to_string(),
@@ -675,15 +708,18 @@ fn demo_testing_framework() {
         expected: TestExpectation::RuntimeError,
         tags: vec!["error".to_string(), "arithmetic".to_string()],
     });
-    
+
     // Run all tests
     let results = framework.run_all_tests();
     results.print_summary();
-    
+
     // Demo tagged test runs
     println!("\n🏷️ Running tests with 'basic' tag:");
     let basic_results = framework.run_tests_with_tag("basic");
-    println!("  Basic tests success rate: {:.1}%", basic_results.success_rate());
+    println!(
+        "  Basic tests success rate: {:.1}%",
+        basic_results.success_rate()
+    );
 }
 
 fn demo_repl_interface() {
@@ -697,7 +733,7 @@ fn demo_repl_interface() {
     println!("   - :test          Run test suite");
     println!("   - :bench         Run benchmarks");
     println!("   - :quit          Exit REPL");
-    
+
     println!("\n   Example session:");
     println!("   rtfs> (+ 1 2 3)");
     println!("   ✅ Integer(6)");
@@ -706,7 +742,7 @@ fn demo_repl_interface() {
     println!("   rtfs> (let [x 5] x)");
     println!("   🔍 AST: LetExpr {{ ... }}");
     println!("   ✅ Integer(5)");
-    
+
     println!("\n   To start interactive REPL, use:");
     println!("   let module_registry = ModuleRegistry::new();");
     println!("   RtfsRepl::new(module_registry).run()");
@@ -721,7 +757,7 @@ pub fn run_all_tests_with_framework() {
     framework.add_basic_test("Subtraction", "(- 5 3)", "2");
     framework.add_basic_test("Multiplication", "(* 4 2)", "8");
     framework.add_basic_test("Division", "(/ 10 2)", "5");
-    
+
     // Add error test cases
     framework.add_test(TestCase {
         name: "division_by_zero".to_string(),
@@ -730,7 +766,7 @@ pub fn run_all_tests_with_framework() {
         expected: TestExpectation::RuntimeError,
         tags: vec!["error".to_string(), "arithmetic".to_string()],
     });
-    
+
     // Run all tests
     let results = framework.run_all_tests();
     results.print_summary();

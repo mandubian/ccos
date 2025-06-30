@@ -1,0 +1,150 @@
+#[cfg(test)]
+mod object_tests {
+    use crate::{
+        ast::TopLevel,
+        parser,
+        runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
+        validator::SchemaValidator,
+    };
+    use std::rc::Rc;
+
+    #[test]
+    fn test_intent_definition() {
+        let intent_code = r#"
+        (intent :rtfs.core:v2.0:intent
+            :type :rtfs.core:v2.0:intent
+            :intent-id "intent-001"
+            :goal "Process user data"
+            :created-at "2024-01-01T00:00:00Z"
+            :created-by "user-001"
+            :status "active"
+        )
+        "#;
+        let parsed = parser::parse(intent_code).expect("Failed to parse intent");
+        assert_eq!(parsed.len(), 1);
+        let validation_result = SchemaValidator::validate_object(&parsed[0]);
+        assert!(
+            validation_result.is_ok(),
+            "Intent validation failed: {:?}",
+            validation_result
+        );
+    }
+
+    #[test]
+    fn test_plan_definition() {
+        let plan_code = r#"
+        (plan :rtfs.core:v2.0:plan
+            :type :rtfs.core:v2.0:plan
+            :plan-id "plan-001"
+            :created-at "2024-01-01T00:00:00Z"
+            :created-by "user-001"
+            :intent-ids ["intent-001"]
+            :program (+ 1 2)
+            :status "ready"
+        )
+        "#;
+        let parsed = parser::parse(plan_code).expect("Failed to parse plan");
+        assert_eq!(parsed.len(), 1);
+        let validation_result = SchemaValidator::validate_object(&parsed[0]);
+        assert!(
+            validation_result.is_ok(),
+            "Plan validation failed: {:?}",
+            validation_result
+        );
+    }
+
+    #[test]
+    fn test_action_definition() {
+        let action_code = r#"
+        (action :rtfs.core:v2.0:action
+            :type :rtfs.core:v2.0:action
+            :action-id "action-001"
+            :timestamp "2024-01-01T00:00:00Z"
+            :plan-id "plan-001"
+            :step-id "step-001"
+            :intent-id "intent-001"
+            :capability-used "data-processing"
+            :executor "agent-001"
+            :input {:data "test"}
+            :output {:result "success"}
+            :execution {:duration 100}
+            :signature "abc123"
+        )
+        "#;
+        let parsed = parser::parse(action_code).expect("Failed to parse action");
+        assert_eq!(parsed.len(), 1);
+        let validation_result = SchemaValidator::validate_object(&parsed[0]);
+        assert!(
+            validation_result.is_ok(),
+            "Action validation failed: {:?}",
+            validation_result
+        );
+    }
+
+    #[test]
+    fn test_rtfs2_integration() {
+        let rtfs2_program = r#"
+        ;; Define an intent
+        (intent :rtfs.core:v2.0:intent
+            :type :rtfs.core:v2.0:intent
+            :intent-id "test-intent"
+            :goal "Test RTFS 2.0 integration"
+            :created-at "2024-01-01T00:00:00Z"
+            :created-by "test-user"
+            :status "active"
+        )
+        
+        ;; Define a plan
+        (plan :rtfs.core:v2.0:plan
+            :type :rtfs.core:v2.0:plan
+            :plan-id "test-plan"
+            :created-at "2024-01-01T00:00:00Z"
+            :created-by "test-user"
+            :intent-ids ["test-intent"]
+            :program (+ 1 2)
+            :status "ready"
+        )
+        
+        ;; Execute the plan
+        (+ 1 2)
+        "#;
+        let parsed = parser::parse(rtfs2_program).expect("Failed to parse RTFS 2.0 program");
+        assert_eq!(parsed.len(), 3);
+
+        // Validate objects
+        for item in &parsed[..2] {
+            let validation_result = SchemaValidator::validate_object(item);
+            assert!(
+                validation_result.is_ok(),
+                "RTFS 2.0 object validation failed"
+            );
+        }
+
+        // Execute the expression
+        let module_registry = Rc::new(ModuleRegistry::new());
+        let evaluator = Evaluator::new(module_registry);
+        if let TopLevel::Expression(expr) = &parsed[2] {
+            let result = evaluator.evaluate(expr);
+            assert!(result.is_ok(), "Expression evaluation failed");
+            assert_eq!(result.unwrap(), Value::Integer(3));
+        } else {
+            panic!("Expected expression");
+        }
+    }
+
+    fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
+        let parsed = parser::parse(input).expect("Failed to parse");
+        let module_registry = Rc::new(ModuleRegistry::new());
+        let evaluator = Evaluator::new(module_registry);
+        if let Some(last_item) = parsed.last() {
+            match last_item {
+                TopLevel::Expression(expr) => evaluator.evaluate(expr),
+                _ => Ok(Value::String("object_defined".to_string())),
+            }
+        } else {
+            Err(crate::runtime::error::RuntimeError::Generic(
+                "Empty program".to_string(),
+            ))
+        }
+    }
+}

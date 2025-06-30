@@ -1,12 +1,13 @@
 // Cross-Module IR Integration Tests
 // Tests that verify cross-module function calls work through the IR optimization pipeline
 
-
 #[cfg(test)]
 mod tests {
     use crate::runtime::stdlib;
     use crate::runtime::values::Value;
-    use crate::tests::test_utils::{create_test_module_registry, create_test_ir_runtime, execute_ir_code};
+    use crate::tests::test_utils::{
+        create_test_ir_runtime, create_test_module_registry, execute_ir_code,
+    };
 
     #[test]
     fn test_cross_module_ir_execution() {
@@ -21,7 +22,7 @@ mod tests {
         println!("📦 Testing stdlib module access...");
 
         // 3. Define the code to run that uses the standard library
-        let code = "(+ 10 5)";  // Use a simple stdlib function
+        let code = "(+ 10 5)"; // Use a simple stdlib function
         println!("🚀 Executing code: {}", code);
 
         // 4. Execute the code using the helper function, which handles parsing, IR conversion, and execution.

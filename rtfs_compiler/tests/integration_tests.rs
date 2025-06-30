@@ -1,13 +1,13 @@
-use std::rc::Rc;
+use rtfs_compiler::ast::{Keyword, MapKey};
+use rtfs_compiler::parser::parse_expression;
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+use rtfs_compiler::runtime::Value;
+use rtfs_compiler::*;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
-use rtfs_compiler::*;
-use rtfs_compiler::ast::{Keyword, MapKey};
-use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use rtfs_compiler::parser::parse_expression;
-use rtfs_compiler::runtime::Value;
-use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
@@ -70,8 +70,15 @@ fn values_are_equal(a: &rtfs_compiler::runtime::Value, b: &rtfs_compiler::runtim
             }
             true
         }
-        (rtfs_compiler::runtime::Value::Vector(vec_a), rtfs_compiler::runtime::Value::Vector(vec_b)) => {
-            vec_a.len() == vec_b.len() && vec_a.iter().zip(vec_b.iter()).all(|(x, y)| values_are_equal(x, y))
+        (
+            rtfs_compiler::runtime::Value::Vector(vec_a),
+            rtfs_compiler::runtime::Value::Vector(vec_b),
+        ) => {
+            vec_a.len() == vec_b.len()
+                && vec_a
+                    .iter()
+                    .zip(vec_b.iter())
+                    .all(|(x, y)| values_are_equal(x, y))
         }
         _ => a == b,
     }
@@ -81,7 +88,7 @@ fn values_are_equal(a: &rtfs_compiler::runtime::Value, b: &rtfs_compiler::runtim
 fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let test_file_path = format!("{}/tests/rtfs_files/{}.rtfs", manifest_dir, config.name);
-    
+
     // Check if file exists
     if !Path::new(&test_file_path).exists() {
         return Err(format!("Test file not found: {}", test_file_path));
@@ -91,26 +98,35 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     let content = fs::read_to_string(&test_file_path)
         .map_err(|e| format!("Failed to read file {}: {}", test_file_path, e))?;
 
-    let module_registry = ModuleRegistry::new();
-    // The 'run' method handles parsing, so we don't need to parse here.
-    let runtime_strategy = match strategy {
-        "ast" => runtime::RuntimeStrategy::Ast,
-        "ir" => runtime::RuntimeStrategy::Ir,
+    let module_registry = Rc::new(ModuleRegistry::new());
+
+    // Create runtime based on strategy
+    let mut runtime = match strategy {
+        "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
+        "ir" => {
+            let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
+            runtime::Runtime::new(Box::new(ir_strategy))
+        }
         _ => unreachable!(),
     };
-    let mut runtime = runtime::Runtime::with_strategy(runtime_strategy, &module_registry);
 
     let task_context = if let Some(context_str) = config.task_context {
         let parsed_expr = parse_expression(context_str)
             .map_err(|e| format!("Failed to parse task_context: {:?}", e))?;
 
         // Use a runtime with the same strategy as the one under test
-        let mut temp_runtime =
-            runtime::Runtime::with_strategy(runtime.strategy(), &module_registry);
+        let mut temp_runtime = match strategy {
+            "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
+            "ir" => {
+                let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
+                runtime::Runtime::new(Box::new(ir_strategy))
+            }
+            _ => unreachable!(),
+        };
 
         Some(
             temp_runtime
-                .evaluate_expression(&parsed_expr)
+                .run(&parsed_expr)
                 .map_err(|e| format!("Failed to evaluate task_context: {:?}", e))?,
         )
     } else {
@@ -118,24 +134,40 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     };
 
     if let Some(ctx) = &task_context {
-        println!("[test_runner] task_context for {} ({}): {:?}", config.name, strategy, ctx);
+        println!(
+            "[test_runner] task_context for {} ({}): {:?}",
+            config.name, strategy, ctx
+        );
     }
 
+    // Parse the content first
+    let parsed =
+        parse_expression(&content).map_err(|e| format!("Failed to parse content: {:?}", e))?;
+
     // Execute the code using the run method
-    match runtime.run(&content, task_context.clone()) {
+    match runtime.run(&parsed) {
         Ok(result) => {
             if !config.should_execute {
-                return Err(format!("Execution succeeded unexpectedly. Result: {:?}", result));
+                return Err(format!(
+                    "Execution succeeded unexpectedly. Result: {:?}",
+                    result
+                ));
             }
-            
+
             if let Some(expected_value) = &config.expected_value {
                 if !values_are_equal(&result, expected_value) {
-                    return Err(format!("Result mismatch. Expected: '{:?}', Got: '{:?}'", expected_value, result));
+                    return Err(format!(
+                        "Result mismatch. Expected: '{:?}', Got: '{:?}'",
+                        expected_value, result
+                    ));
                 }
             } else if let Some(expected) = &config.expected_result {
                 let result_str = format!("{:?}", result);
                 if &result_str != expected {
-                    return Err(format!("Result mismatch. Expected: '{}', Got: '{}'", expected, result_str));
+                    return Err(format!(
+                        "Result mismatch. Expected: '{}', Got: '{}'",
+                        expected, result_str
+                    ));
                 }
             }
             Ok(format!("{:?}", result))
@@ -148,7 +180,10 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
             let error_str = format!("{:?}", e);
             if let Some(expected) = config.expected_error {
                 if !error_str.contains(expected) {
-                    return Err(format!("Error mismatch. Expected to contain: '{}', Got: '{}'", expected, error_str));
+                    return Err(format!(
+                        "Error mismatch. Expected to contain: '{}', Got: '{}'",
+                        expected, error_str
+                    ));
                 }
             }
             Ok("Expected execution error".to_string())
@@ -365,30 +400,66 @@ fn test_letrec_simple() {
 fn test_mutual_recursion() {
     run_all_tests_for_file(&TestConfig {
         name: "test_mutual_recursion".to_string(),
-        expected_result: Some("Vector([Boolean(true), Boolean(false), Boolean(false), Boolean(true)])".to_string()),
+        expected_result: Some(
+            "Vector([Boolean(true), Boolean(false), Boolean(false), Boolean(true)])".to_string(),
+        ),
         ..TestConfig::new("test_mutual_recursion")
     });
 }
 
 #[test]
 fn test_computational_heavy() {
+    use rtfs_compiler::ast::{Keyword, MapKey};
     use rtfs_compiler::runtime::Value;
-    use rtfs_compiler::ast::{MapKey, Keyword};
     use std::collections::HashMap;
 
     let mut calculations = HashMap::new();
-    calculations.insert(MapKey::Keyword(Keyword("product".to_string())), Value::Integer(6000));
-    calculations.insert(MapKey::Keyword(Keyword("difference".to_string())), Value::Integer(-5940));
-    calculations.insert(MapKey::Keyword(Keyword("category".to_string())), Value::Keyword(Keyword("medium".to_string())));
-    calculations.insert(MapKey::Keyword(Keyword("sum".to_string())), Value::Integer(60));
-    calculations.insert(MapKey::Keyword(Keyword("bonus".to_string())), Value::Integer(-11880));
+    calculations.insert(
+        MapKey::Keyword(Keyword("product".to_string())),
+        Value::Integer(6000),
+    );
+    calculations.insert(
+        MapKey::Keyword(Keyword("difference".to_string())),
+        Value::Integer(-5940),
+    );
+    calculations.insert(
+        MapKey::Keyword(Keyword("category".to_string())),
+        Value::Keyword(Keyword("medium".to_string())),
+    );
+    calculations.insert(
+        MapKey::Keyword(Keyword("sum".to_string())),
+        Value::Integer(60),
+    );
+    calculations.insert(
+        MapKey::Keyword(Keyword("bonus".to_string())),
+        Value::Integer(-11880),
+    );
 
     let mut expected_map = HashMap::new();
-    expected_map.insert(MapKey::Keyword(Keyword("performance-score".to_string())), Value::Integer(135));
-    expected_map.insert(MapKey::Keyword(Keyword("calculations".to_string())), Value::Map(calculations));
-    expected_map.insert(MapKey::Keyword(Keyword("efficiency-rating".to_string())), Value::Keyword(Keyword("good".to_string())));
-    expected_map.insert(MapKey::Keyword(Keyword("recursive-sum".to_string())), Value::Integer(15));
-    expected_map.insert(MapKey::Keyword(Keyword("input-values".to_string())), Value::Vector(vec![Value::Integer(10), Value::Integer(20), Value::Integer(30)]));
+    expected_map.insert(
+        MapKey::Keyword(Keyword("performance-score".to_string())),
+        Value::Integer(135),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("calculations".to_string())),
+        Value::Map(calculations),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("efficiency-rating".to_string())),
+        Value::Keyword(Keyword("good".to_string())),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("recursive-sum".to_string())),
+        Value::Integer(15),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("input-values".to_string())),
+        Value::Vector(vec![
+            Value::Integer(10),
+            Value::Integer(20),
+            Value::Integer(30),
+        ]),
+    );
 
     run_all_tests_for_file(&TestConfig {
         name: "test_computational_heavy".to_string(),
@@ -410,7 +481,9 @@ fn test_string_ops() {
 fn test_vector_ops() {
     run_all_tests_for_file(&TestConfig {
         name: "test_vector_ops".to_string(),
-        expected_result: Some("Vector([Integer(1), Integer(2), Integer(3), Integer(4)])".to_string()),
+        expected_result: Some(
+            "Vector([Integer(1), Integer(2), Integer(3), Integer(4)])".to_string(),
+        ),
         ..TestConfig::new("test_vector_ops")
     });
 }
@@ -445,40 +518,102 @@ fn test_wildcard_destructuring() {
 #[test]
 fn test_advanced_focused() {
     let mut batch1_results = HashMap::new();
-    batch1_results.insert(MapKey::Keyword(Keyword("batch-size".to_string())), Value::Integer(3));
-    batch1_results.insert(MapKey::Keyword(Keyword("sum".to_string())), Value::Integer(6));
-    batch1_results.insert(MapKey::Keyword(Keyword("average".to_string())), Value::Float(2.0));
-    batch1_results.insert(MapKey::Keyword(Keyword("max".to_string())), Value::Integer(3));
-    batch1_results.insert(MapKey::Keyword(Keyword("min".to_string())), Value::Integer(1));
+    batch1_results.insert(
+        MapKey::Keyword(Keyword("batch-size".to_string())),
+        Value::Integer(3),
+    );
+    batch1_results.insert(
+        MapKey::Keyword(Keyword("sum".to_string())),
+        Value::Integer(6),
+    );
+    batch1_results.insert(
+        MapKey::Keyword(Keyword("average".to_string())),
+        Value::Float(2.0),
+    );
+    batch1_results.insert(
+        MapKey::Keyword(Keyword("max".to_string())),
+        Value::Integer(3),
+    );
+    batch1_results.insert(
+        MapKey::Keyword(Keyword("min".to_string())),
+        Value::Integer(1),
+    );
 
     let mut batch2_results = HashMap::new();
-    batch2_results.insert(MapKey::Keyword(Keyword("batch-size".to_string())), Value::Integer(3));
-    batch2_results.insert(MapKey::Keyword(Keyword("sum".to_string())), Value::Integer(15));
-    batch2_results.insert(MapKey::Keyword(Keyword("average".to_string())), Value::Float(5.0));
-    batch2_results.insert(MapKey::Keyword(Keyword("max".to_string())), Value::Integer(6));
-    batch2_results.insert(MapKey::Keyword(Keyword("min".to_string())), Value::Integer(4));
+    batch2_results.insert(
+        MapKey::Keyword(Keyword("batch-size".to_string())),
+        Value::Integer(3),
+    );
+    batch2_results.insert(
+        MapKey::Keyword(Keyword("sum".to_string())),
+        Value::Integer(15),
+    );
+    batch2_results.insert(
+        MapKey::Keyword(Keyword("average".to_string())),
+        Value::Float(5.0),
+    );
+    batch2_results.insert(
+        MapKey::Keyword(Keyword("max".to_string())),
+        Value::Integer(6),
+    );
+    batch2_results.insert(
+        MapKey::Keyword(Keyword("min".to_string())),
+        Value::Integer(4),
+    );
 
     let mut batch3_results = HashMap::new();
-    batch3_results.insert(MapKey::Keyword(Keyword("batch-size".to_string())), Value::Integer(3));
-    batch3_results.insert(MapKey::Keyword(Keyword("sum".to_string())), Value::Integer(24));
-    batch3_results.insert(MapKey::Keyword(Keyword("average".to_string())), Value::Float(8.0));
-    batch3_results.insert(MapKey::Keyword(Keyword("max".to_string())), Value::Integer(9));
-    batch3_results.insert(MapKey::Keyword(Keyword("min".to_string())), Value::Integer(7));
+    batch3_results.insert(
+        MapKey::Keyword(Keyword("batch-size".to_string())),
+        Value::Integer(3),
+    );
+    batch3_results.insert(
+        MapKey::Keyword(Keyword("sum".to_string())),
+        Value::Integer(24),
+    );
+    batch3_results.insert(
+        MapKey::Keyword(Keyword("average".to_string())),
+        Value::Float(8.0),
+    );
+    batch3_results.insert(
+        MapKey::Keyword(Keyword("max".to_string())),
+        Value::Integer(9),
+    );
+    batch3_results.insert(
+        MapKey::Keyword(Keyword("min".to_string())),
+        Value::Integer(7),
+    );
 
     let mut expected_map = HashMap::new();
-    expected_map.insert(MapKey::Keyword(Keyword("status".to_string())), Value::Keyword(Keyword("success".to_string())));
-    expected_map.insert(MapKey::Keyword(Keyword("processed-batches".to_string())), Value::Integer(3));
-    expected_map.insert(MapKey::Keyword(Keyword("total-sum".to_string())), Value::Integer(45));
-    expected_map.insert(MapKey::Keyword(Keyword("overall-average".to_string())), Value::Float(5.0));
-    expected_map.insert(MapKey::Keyword(Keyword("batch-results".to_string())), Value::Vector(vec![
-        Value::Map(batch1_results),
-        Value::Map(batch2_results),
-        Value::Map(batch3_results),
-    ]));
+    expected_map.insert(
+        MapKey::Keyword(Keyword("status".to_string())),
+        Value::Keyword(Keyword("success".to_string())),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("processed-batches".to_string())),
+        Value::Integer(3),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("total-sum".to_string())),
+        Value::Integer(45),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("overall-average".to_string())),
+        Value::Float(5.0),
+    );
+    expected_map.insert(
+        MapKey::Keyword(Keyword("batch-results".to_string())),
+        Value::Vector(vec![
+            Value::Map(batch1_results),
+            Value::Map(batch2_results),
+            Value::Map(batch3_results),
+        ]),
+    );
 
     run_all_tests_for_file(&TestConfig {
         name: "test_advanced_focused".to_string(),
-        task_context: Some(r#"{:description "Process data with advanced error handling and parallel execution" :input-data [1 2 3 4 5 6 7 8 9 10] :batch-size 3}"#),
+        task_context: Some(
+            r#"{:description "Process data with advanced error handling and parallel execution" :input-data [1 2 3 4 5 6 7 8 9 10] :batch-size 3}"#,
+        ),
         expected_value: Some(Value::Map(expected_map)),
         ..TestConfig::new("test_advanced_focused")
     });

@@ -1132,47 +1132,4 @@ pub(super) fn build_discover_agents_expr(discover_agents_expr_pair: Pair<Rule>) 
     })
 }
 
-pub(super) fn build_letrec_expr(pair: Pair<Rule>) -> Result<LetExpr, PestParseError> {
-    // Letrec uses the same structure as let, but with recursive binding semantics
-    // The difference is handled during evaluation, not parsing
-    let span = pair_to_source_span(&pair);
-    let mut iter = pair.into_inner().peekable();
-    let mut bindings = Vec::new();
-    let mut body_expressions = Vec::new();
-
-    // Skip the letrec_keyword if present
-    if let Some(p) = iter.peek() {
-        if p.as_rule() == Rule::letrec_keyword {
-            iter.next();
-        }
-    }
-
-    // Parse let_binding tokens (same structure as let)
-    for pair in &mut iter {
-        match pair.as_rule() {            Rule::let_binding => {
-                let pair_clone = pair.clone();
-                let binding = build_let_binding(&pair, pair_clone.into_inner())?;
-                bindings.push(binding);
-            }
-            _ => {
-                // Must be a body expression
-                let expr = build_expression(pair)?;
-                body_expressions.push(expr);
-            }
-        }
-    }
-
-    if body_expressions.is_empty() {
-        return Err(PestParseError::MissingToken { 
-            token: "letrec body expression".to_string(),
-            span: Some(span)
-        });
-    }
-
-    Ok(LetExpr { 
-        bindings, 
-        body: body_expressions 
-    })
-}
-
 

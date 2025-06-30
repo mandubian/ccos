@@ -14,10 +14,6 @@ regex = ["dep:regex"]
 repl = ["rustyline"]
 
 [[bin]]
-name = "rtfs-main"
-path = "src/main.rs"
-
-[[bin]]
 name = "rtfs_compiler"
 path = "src/bin/rtfs_compiler.rs"
 
