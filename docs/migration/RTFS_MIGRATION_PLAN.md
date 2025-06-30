@@ -309,11 +309,107 @@ This document outlines the migration strategy from RTFS 1.0 to RTFS 2.0, focusin
 8. **Standard Library Enhancements**: Complete stdlib with map, task_coordination, and optimized arithmetic functions
 9. **Test Consolidation**: Comprehensive test suite organized by domain with all tests passing
 
+### 🚨 **CRITICAL UNIMPLEMENTED FUNCTIONS TRACKING** - Implementation Roadmap
+
+**Status:** 📋 **TRACKING REQUIRED** - Comprehensive list of unimplemented functions and TODO items
+
+**Why Important:** While major migration phases are completed, there are still critical unimplemented functions that need to be addressed for full language completeness. These are tracked in `rtfs_compiler/TODO_IMPLEMENTATION_TRACKER.md`.
+
+#### **🔴 HIGH PRIORITY UNIMPLEMENTED FUNCTIONS (Core Functionality)**
+
+1. **Pattern Matching in Functions** (`src/runtime/evaluator.rs` lines 712, 758)
+
+   - `unimplemented!()` in `eval_fn` and `eval_defn` for complex pattern matching
+   - Complex match pattern matching not yet implemented (line 1211)
+   - Complex catch pattern matching not yet implemented (line 1229)
+
+2. **IR Node Execution** (`src/runtime/ir_runtime.rs` line 172)
+
+   - Generic "Execution for IR node is not yet implemented" for multiple IR node types
+   - Critical for IR runtime completeness
+
+3. **Expression Conversion** (`src/runtime/values.rs` line 234)
+
+   - `unimplemented!()` in `From<Expression>` implementation
+   - Missing conversion for non-literal expressions
+
+4. **Type Coercion** (`src/runtime/evaluator.rs` line 1241)
+   - TODO: Implement actual type coercion logic in `coerce_value_to_type`
+
+#### **🟡 MEDIUM PRIORITY UNIMPLEMENTED FUNCTIONS (Standard Library)**
+
+1. **File Operations** (`src/runtime/stdlib.rs` lines 1997-2020)
+
+   - JSON parsing not implemented (lines 1983-1999)
+   - JSON serialization not implemented (lines 1990-1992)
+   - File operations not implemented (read-file, write-file, append-file, delete-file)
+
+2. **HTTP Operations** (`src/runtime/stdlib.rs` lines 2048-2050)
+
+   - HTTP operations not implemented
+
+3. **Agent System Functions** (`src/runtime/stdlib.rs` lines 2076-2144)
+   - Agent discovery not implemented
+   - Task coordination not implemented
+   - Agent discovery and assessment not implemented
+   - System baseline establishment not implemented
+
+#### **🟢 LOW PRIORITY UNIMPLEMENTED FEATURES (Advanced)**
+
+1. **IR Converter Enhancements** (`src/ir/converter.rs`)
+
+   - Source location tracking (lines 825, 830, 840, 895, 904)
+   - Specific type support for timestamp, UUID, resource handle (lines 861-863)
+   - Capture analysis implementation (lines 1058, 1324)
+   - Pattern handling improvements (lines 1260, 1289, 1594)
+
+2. **Parser Features** (`src/parser/`)
+
+   - Import definition parsing (line 213 in toplevel.rs)
+   - Docstring parsing (line 225 in toplevel.rs)
+   - Generic expression building (line 104 in expressions.rs)
+
+3. **Language Features**
+   - Quasiquote/unquote syntax support (integration_tests.rs lines 1588-1599)
+   - Destructuring with default values (ast.rs line 76)
+
+#### **📋 IMPLEMENTATION STRATEGY**
+
+**Phase 1: Core Functionality (High Priority)**
+
+1. Fix pattern matching in functions (evaluator.rs lines 712, 758)
+2. Implement missing IR node execution (ir_runtime.rs line 172)
+3. Complete expression conversion (values.rs line 234)
+4. Implement type coercion logic (evaluator.rs line 1241)
+
+**Phase 2: Standard Library (Medium Priority)**
+
+1. Implement file operations (read-file, write-file, etc.)
+2. Add JSON parsing and serialization
+3. Implement HTTP operations
+4. Complete agent system functions
+
+**Phase 3: Advanced Features (Low Priority)**
+
+1. Add source location tracking throughout IR converter
+2. Implement capture analysis for closures
+3. Add quasiquote/unquote syntax support
+4. Enhance parser with import and docstring support
+
+**📊 Progress Tracking:**
+
+- **Total Unimplemented Items:** 25+ critical functions and features
+- **High Priority:** 4 core functionality items
+- **Medium Priority:** 8 standard library items
+- **Low Priority:** 13+ advanced features
+- **Status:** All items tracked in `TODO_IMPLEMENTATION_TRACKER.md`
+
 ### 🔄 Next Steps
 
 1. **Object Builders**: Implement fluent APIs for creating RTFS 2.0 objects
 2. **Runtime Integration**: Add execution support for RTFS 2.0 objects
 3. **Advanced Tooling**: Develop interactive tools for RTFS 2.0 development
+4. **Unimplemented Functions**: Address critical unimplemented functions (see above)
 
 ### 📊 Migration Progress
 
