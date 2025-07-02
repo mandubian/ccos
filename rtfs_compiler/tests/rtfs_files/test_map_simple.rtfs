@@ -1,0 +1,24 @@
+;; Simple map test
+(println "=== Simple Map Test ===")
+
+;; Test 1: Empty map
+(let [empty-map {}]
+  (println "Empty map:" empty-map))
+
+;; Test 2: Single entry map
+(let [single-map {:key "value"}]
+  (println "Single map:" single-map))
+
+;; Test 3: Two entry map
+(let [two-map {:a 1 :b 2}]
+  (println "Two entry map:" two-map))
+
+;; Test 4: String keys
+(let [string-map {"key" "value"}]
+  (println "String key map:" string-map))
+
+;; Test 5: Mixed keys
+(let [mixed-map {:keyword "value" "string" 42}]
+  (println "Mixed key map:" mixed-map))
+
+(println "=== Map Test Complete ===") 

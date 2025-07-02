@@ -1,0 +1,94 @@
+;; Enhanced HTTP Functions Test
+;; Testing custom headers and request bodies
+
+;; Test 1: Basic GET request (no changes)
+(println "=== Test 1: Basic GET request ===")
+(let [response (tool:http-fetch "https://httpbin.org/get")]
+  (println "Status:" (get response :status))
+  (println "Body length:" (string-length (get response :body))))
+
+;; Test 2: GET request with custom headers
+(println "\n=== Test 2: GET request with custom headers ===")
+(let [headers {:user-agent "RTFS-Test/1.0" :accept "application/json" :x-custom-header "test-value"}
+      response (tool:http-fetch "https://httpbin.org/headers" "GET" headers)]
+  (println "Status:" (get response :status))
+  (println "Response body contains our headers:" (string-contains (get response :body) "RTFS-Test")))
+
+;; Test 3: POST request with JSON body
+(println "\n=== Test 3: POST request with JSON body ===")
+(let [json-data (tool:serialize-json {:name "RTFS Test" :version "1.0" :features ["http" "json" "file-io"]})
+      headers {:content-type "application/json" :accept "application/json"}
+      response (tool:http-fetch "https://httpbin.org/post" "POST" headers json-data)]
+  (println "Status:" (get response :status))
+  (println "Response contains our data:" (string-contains (get response :body) "RTFS Test")))
+
+;; Test 4: PUT request with custom headers and body
+(println "\n=== Test 4: PUT request with custom headers and body ===")
+(let [headers {:content-type "text/plain" :x-request-id "12345"}
+      body "Hello from RTFS!"
+      response (tool:http-fetch "https://httpbin.org/put" "PUT" headers body)]
+  (println "Status:" (get response :status))
+  (println "Response contains our body:" (string-contains (get response :body) "Hello from RTFS")))
+
+;; Test 5: DELETE request with custom headers
+(println "\n=== Test 5: DELETE request with custom headers ===")
+(let [headers {:authorization "Bearer test-token" :x-client-id "rtfs-client"}
+      response (tool:http-fetch "https://httpbin.org/delete" "DELETE" headers)]
+  (println "Status:" (get response :status))
+  (println "DELETE request completed successfully"))
+
+;; Test 6: PATCH request with JSON body
+(println "\n=== Test 6: PATCH request with JSON body ===")
+(let [patch-data (tool:serialize-json {:status "updated" :timestamp (tool:current-time)})
+      headers {:content-type "application/json"}
+      response (tool:http-fetch "https://httpbin.org/patch" "PATCH" headers patch-data)]
+  (println "Status:" (get response :status))
+  (println "PATCH request completed"))
+
+;; Test 7: Error handling - invalid URL
+(println "\n=== Test 7: Error handling - invalid URL ===")
+;; Both forms are supported: (catch e ...) and (catch _ e ...)
+(try
+  (let [response (tool:http-fetch "https://invalid-domain-that-does-not-exist-12345.com/get")]
+    (println "Unexpected success:" (get response :status)))
+  (catch e
+    (println "Expected error caught (single-symbol catch):" e)))
+
+;; Test 7b: Error handling with explicit wildcard pattern
+(println "\n=== Test 7b: Error handling - invalid URL (explicit wildcard) ===")
+(try
+  (let [response (tool:http-fetch "https://invalid-domain-that-does-not-exist-12345.com/get")]
+    (println "Unexpected success (wildcard):" (get response :status)))
+  (catch _ err
+    (println "Expected error caught (wildcard catch):" err)))
+
+;; Test 8: Complex headers with different value types
+(println "\n=== Test 8: Complex headers with different value types ===")
+(let [headers {:content-type "application/json" :accept-language "en-US,en;q=0.9" :cache-control "no-cache" :x-numeric-header 42 :x-boolean-header true}
+      response (tool:http-fetch "https://httpbin.org/headers" "GET" headers)]
+  (println "Status:" (get response :status))
+  (println "Headers sent successfully"))
+
+;; Test 9: Large JSON payload
+(println "\n=== Test 9: Large JSON payload ===")
+(let [large-data (tool:serialize-json {:items (map (fn [i] {:id i :name (str "item-" i)}) (range 1 101)) :metadata {:total 100 :timestamp (tool:current-time)}})
+      headers {:content-type "application/json"}
+      response (tool:http-fetch "https://httpbin.org/post" "POST" headers large-data)]
+  (println "Status:" (get response :status))
+  (println "Large payload sent successfully"))
+
+;; Test 10: Multiple requests with different configurations
+(println "\n=== Test 10: Multiple requests with different configurations ===")
+(let [requests [{:url "https://httpbin.org/get" :method "GET" :headers {:accept "application/json"}}
+                {:url "https://httpbin.org/post" :method "POST" :headers {:content-type "application/json"} :body (tool:serialize-json {:test "multiple" :requests true})}
+                {:url "https://httpbin.org/put" :method "PUT" :headers {:x-custom "value"} :body "simple text"}]
+      results (map (fn [req]
+                     (let [response (tool:http-fetch (:url req) (:method req) (:headers req) (:body req))]
+                       {:url (:url req) :status (get response :status) :success (= (get response :status) 200)}))
+                   requests)]
+  (println "Multiple requests completed:")
+  (map (fn [result]
+         (println "  " (:url result) "-> Status:" (:status result) "Success:" (:success result)))
+       results))
+
+(println "\n=== Enhanced HTTP Functions Test Complete ===") 

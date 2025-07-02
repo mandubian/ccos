@@ -1,0 +1,4 @@
+;; Test the specific map that's causing issues
+(let [headers {:content-type "application/json" :accept-language "en-US,en;q=0.9" :cache-control "no-cache" :x-numeric-header 42 :x-boolean-header true}
+      response (tool:http-fetch "https://httpbin.org/get")]
+  (println "Specific map test complete")) 

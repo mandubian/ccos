@@ -1,6 +1,6 @@
 // --- Whitespace and Comments ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT    = _{ ";" ~ (!"\n" ~ ANY)* }
+COMMENT    = _{ ";;" ~ (!"\n" ~ ANY)* }
 
 // --- Terminal Characters ---
 COLON = @{ ":" }
@@ -215,7 +215,7 @@ try_body_expression = _{ !(catch_clause | finally_clause) ~ expression }
 
 try_catch_expr = { "(" ~ try_keyword ~ try_body_expression+ ~ catch_clause* ~ finally_clause? ~ ")" } // Use try_keyword and try_body_expression
 // Changed + to * for catch
-catch_clause   =  { "(" ~ catch_keyword ~ catch_pattern ~ symbol ~ expression+ ~ ")" } // Use catch_keyword
+catch_clause   =  { "(" ~ catch_keyword ~ symbol ~ symbol? ~ expression+ ~ ")" } // Use catch_keyword
 finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_keyword
 catch_pattern  = _{ type_expr | keyword | symbol }
 // symbol implies catch-all

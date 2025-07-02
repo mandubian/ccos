@@ -107,19 +107,31 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
     fn from(runtime_type: RuntimeType) -> Self {
         match runtime_type {
             RuntimeType::Ast => {
-                let module_registry = ModuleRegistry::new();
+                let mut module_registry = ModuleRegistry::new();
+                // Load standard library
+                if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    eprintln!("Warning: Failed to load standard library: {:?}", e);
+                }
                 let evaluator =
                     rtfs_compiler::runtime::Evaluator::new(std::rc::Rc::new(module_registry));
                 Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
             }
             RuntimeType::Ir => {
-                let module_registry = ModuleRegistry::new();
+                let mut module_registry = ModuleRegistry::new();
+                // Load standard library
+                if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    eprintln!("Warning: Failed to load standard library: {:?}", e);
+                }
                 Box::new(rtfs_compiler::runtime::ir_runtime::IrStrategy::new(
                     module_registry,
                 ))
             }
             RuntimeType::Fallback => {
-                let module_registry = ModuleRegistry::new();
+                let mut module_registry = ModuleRegistry::new();
+                // Load standard library
+                if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    eprintln!("Warning: Failed to load standard library: {:?}", e);
+                }
                 Box::new(rtfs_compiler::runtime::IrWithFallbackStrategy::new(
                     module_registry,
                 ))
@@ -210,65 +222,59 @@ fn main() {
         println!("⚠️  Schema validation skipped");
     }
 
-    // Phase 2: Process each top-level item
+    // Phase 2: Process top-level items
     let mut all_results = Vec::new();
     let mut total_ir_time = std::time::Duration::ZERO;
     let mut total_opt_time = std::time::Duration::ZERO;
 
-    for (i, item) in parsed_items.iter().enumerate() {
-        if args.verbose {
-            println!(
-                "\n🔄 Processing item {}: {:?}",
-                i + 1,
-                std::mem::discriminant(item)
-            );
-        }
+    if args.execute {
+        // Execute all expressions together to preserve state
+        let exec_start = Instant::now();
 
-        match item {
-            TopLevel::Expression(expr) => {
-                // Convert expression to IR
-                let ir_start = Instant::now();
-                let mut ir_converter = IrConverter::new();
-                let ir_node = match ir_converter.convert_expression(expr.clone()) {
-                    Ok(ir) => ir,
-                    Err(e) => {
-                        eprintln!("❌ IR conversion error for expression {}: {:?}", i + 1, e);
-                        std::process::exit(1);
+        // Create a shared runtime strategy for all expressions to preserve state
+        let runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
+        let mut runtime = Runtime::new(runtime_strategy);
+
+        // For AST runtime, we can use eval_toplevel to preserve state
+        if let RuntimeType::Ast = args.runtime {
+            // Create an evaluator that can handle multiple top-level items
+            let mut module_registry = ModuleRegistry::new();
+            // Load standard library
+            if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                eprintln!("Warning: Failed to load standard library: {:?}", e);
+            }
+            let mut evaluator =
+                rtfs_compiler::runtime::Evaluator::new(std::rc::Rc::new(module_registry));
+
+            match evaluator.eval_toplevel(&parsed_items) {
+                Ok(value) => {
+                    let exec_time = exec_start.elapsed();
+                    if args.verbose {
+                        println!("✅ Execution completed in {:?}", exec_time);
+                        println!("📊 Result: {:?}", value);
                     }
-                };
-                let ir_time = ir_start.elapsed();
-                total_ir_time += ir_time;
-
+                    all_results.push(value);
+                }
+                Err(e) => {
+                    eprintln!("❌ Runtime error: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            // For other runtimes, execute each expression individually
+            for (i, item) in parsed_items.iter().enumerate() {
                 if args.verbose {
-                    println!("✅ IR conversion completed in {:?}", ir_time);
+                    println!(
+                        "\n🔄 Processing item {}: {:?}",
+                        i + 1,
+                        std::mem::discriminant(item)
+                    );
                 }
 
-                // Optimize IR
-                let opt_start = Instant::now();
-                let opt_level_for_optimizer = args.opt_level.clone();
-                let mut optimizer = EnhancedOptimizationPipeline::with_optimization_level(
-                    opt_level_for_optimizer.into(),
-                );
-                let optimized_ir = optimizer.optimize(ir_node);
-                let opt_time = opt_start.elapsed();
-                total_opt_time += opt_time;
-
-                if args.verbose {
-                    println!("✅ Optimization completed in {:?}", opt_time);
-                }
-
-                // Execute if requested
-                if args.execute {
-                    let exec_start = Instant::now();
-
-                    let runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
-                    let mut runtime = Runtime::new(runtime_strategy);
-
-                    match runtime.run(expr) {
+                match item {
+                    TopLevel::Expression(expr) => match runtime.run(expr) {
                         Ok(value) => {
-                            let exec_time = exec_start.elapsed();
                             if args.verbose {
-                                println!("✅ Execution completed in {:?}", exec_time);
                                 println!("📊 Result: {:?}", value);
                             }
                             all_results.push(value);
@@ -277,20 +283,89 @@ fn main() {
                             eprintln!("❌ Runtime error for expression {}: {:?}", i + 1, e);
                             std::process::exit(1);
                         }
+                    },
+                    TopLevel::Intent(_)
+                    | TopLevel::Plan(_)
+                    | TopLevel::Action(_)
+                    | TopLevel::Capability(_)
+                    | TopLevel::Resource(_)
+                    | TopLevel::Module(_) => {
+                        if args.verbose {
+                            println!("📋 RTFS 2.0 object (no execution needed)");
+                        }
                     }
                 }
             }
-            TopLevel::Intent(_)
-            | TopLevel::Plan(_)
-            | TopLevel::Action(_)
-            | TopLevel::Capability(_)
-            | TopLevel::Resource(_)
-            | TopLevel::Module(_) => {
-                if args.verbose {
-                    println!("📋 RTFS 2.0 object (no execution needed)");
+        }
+    } else {
+        // Process items based on runtime choice (even when not executing)
+        for (i, item) in parsed_items.iter().enumerate() {
+            if args.verbose {
+                println!(
+                    "\n🔄 Processing item {}: {:?}",
+                    i + 1,
+                    std::mem::discriminant(item)
+                );
+            }
+
+            match item {
+                TopLevel::Expression(expr) => {
+                    match args.runtime {
+                        RuntimeType::Ast => {
+                            // For AST runtime, just validate the expression without IR conversion
+                            if args.verbose {
+                                println!("📋 AST validation completed (no IR conversion needed)");
+                            }
+                        }
+                        RuntimeType::Ir | RuntimeType::Fallback => {
+                            // Convert expression to IR for IR-based runtimes
+                            let ir_start = Instant::now();
+                            let mut ir_converter = IrConverter::new();
+                            let ir_node = match ir_converter.convert_expression(expr.clone()) {
+                                Ok(ir) => ir,
+                                Err(e) => {
+                                    eprintln!(
+                                        "❌ IR conversion error for expression {}: {:?}",
+                                        i + 1,
+                                        e
+                                    );
+                                    std::process::exit(1);
+                                }
+                            };
+                            let ir_time = ir_start.elapsed();
+                            total_ir_time += ir_time;
+
+                            if args.verbose {
+                                println!("✅ IR conversion completed in {:?}", ir_time);
+                            }
+
+                            // Optimize IR
+                            let opt_start = Instant::now();
+                            let opt_level_for_optimizer = args.opt_level.clone();
+                            let mut optimizer =
+                                EnhancedOptimizationPipeline::with_optimization_level(
+                                    opt_level_for_optimizer.into(),
+                                );
+                            let _optimized_ir = optimizer.optimize(ir_node);
+                            let opt_time = opt_start.elapsed();
+                            total_opt_time += opt_time;
+
+                            if args.verbose {
+                                println!("✅ Optimization completed in {:?}", opt_time);
+                            }
+                        }
+                    }
                 }
-                // For now, we just validate and acknowledge RTFS 2.0 objects
-                // In the future, we might want to serialize them or process them differently
+                TopLevel::Intent(_)
+                | TopLevel::Plan(_)
+                | TopLevel::Action(_)
+                | TopLevel::Capability(_)
+                | TopLevel::Resource(_)
+                | TopLevel::Module(_) => {
+                    if args.verbose {
+                        println!("📋 RTFS 2.0 object (no execution needed)");
+                    }
+                }
             }
         }
     }

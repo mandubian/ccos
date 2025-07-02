@@ -232,7 +232,71 @@ impl From<Expression> for Value {
                 let values = map.into_iter().map(|(k, v)| (k, Value::from(v))).collect();
                 Value::Map(values)
             }
-            _ => unimplemented!(),
+            Expression::FunctionCall { callee, arguments } => {
+                // For now, return a placeholder function value
+                // In a real implementation, this would evaluate the function call
+                Value::String(format!(
+                    "#<function-call: {:?} {}>",
+                    callee,
+                    arguments.len()
+                ))
+            }
+            Expression::If(if_expr) => {
+                // For now, return a placeholder for if expressions
+                Value::String("#<if-expression>".to_string())
+            }
+            Expression::Let(let_expr) => {
+                // For now, return a placeholder for let expressions
+                Value::String("#<let-expression>".to_string())
+            }
+            Expression::Do(do_expr) => {
+                // For now, return a placeholder for do expressions
+                Value::String("#<do-expression>".to_string())
+            }
+            Expression::Fn(fn_expr) => {
+                // For now, return a placeholder for function expressions
+                Value::String("#<fn-expression>".to_string())
+            }
+            Expression::Def(def_expr) => {
+                // For now, return a placeholder for def expressions
+                Value::String(format!("#<def: {}>", def_expr.symbol.0))
+            }
+            Expression::Defn(defn_expr) => {
+                // For now, return a placeholder for defn expressions
+                Value::String(format!("#<defn: {}>", defn_expr.name.0))
+            }
+            Expression::DiscoverAgents(discover_expr) => {
+                // For now, return a placeholder for discover-agents expressions
+                Value::String("#<discover-agents>".to_string())
+            }
+            Expression::TryCatch(try_expr) => {
+                // For now, return a placeholder for try-catch expressions
+                Value::String("#<try-catch>".to_string())
+            }
+            Expression::Parallel(parallel_expr) => {
+                // For now, return a placeholder for parallel expressions
+                Value::String("#<parallel>".to_string())
+            }
+            Expression::WithResource(with_expr) => {
+                // For now, return a placeholder for with-resource expressions
+                Value::String(format!("#<with-resource: {}>", with_expr.resource_symbol.0))
+            }
+            Expression::Match(match_expr) => {
+                // For now, return a placeholder for match expressions
+                Value::String("#<match>".to_string())
+            }
+            Expression::ResourceRef(resource_name) => {
+                // Return the resource name as a string
+                Value::String(format!("@{}", resource_name))
+            }
+            Expression::TaskContextAccess(task_context) => {
+                // Return a placeholder for task context access
+                Value::String(format!("#<task-context: {}>", task_context.field.0))
+            }
+            Expression::LogStep(log_expr) => {
+                // For now, return a placeholder for log step expressions
+                Value::String("#<log-step>".to_string())
+            }
         }
     }
 }

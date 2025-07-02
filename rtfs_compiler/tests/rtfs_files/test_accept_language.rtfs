@@ -1,0 +1,4 @@
+;; Test accept-language with different string value
+(let [headers {:content-type "application/json" :accept-language "simple"}
+      response (tool:http-fetch "https://httpbin.org/get")]
+  (println "Accept-language test complete")) 

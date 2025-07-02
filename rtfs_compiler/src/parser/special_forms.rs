@@ -797,28 +797,61 @@ pub(super) fn build_try_catch_expr(try_catch_expr_pair: Pair<Rule>) -> Result<Tr
                         span: Some(catch_clause_span.clone()) 
                     })?;
 
-                let pattern_pair = clause_inner.next().ok_or_else(|| PestParseError::InvalidInput { 
-                    message: "Catch clause requires a pattern".to_string(), 
-                    span: Some(catch_clause_span.clone()) 
+                let pattern_symbol_pair = clause_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                    message: "Catch clause requires at least one symbol after 'catch'".to_string(),
+                    span: Some(catch_clause_span.clone())
                 })?;
-                let pattern_span = pair_to_source_span(&pattern_pair);
-                let pattern = build_catch_pattern(pattern_pair)?;
-
-                let binding_symbol_pair = clause_inner.next().ok_or_else(|| PestParseError::InvalidInput { 
-                    message: "Catch clause requires a binding symbol".to_string(), 
-                    span: Some(pattern_span.clone()) // Span of previous element
-                })?;
-                let binding_symbol_span = pair_to_source_span(&binding_symbol_pair);
-                if binding_symbol_pair.as_rule() != Rule::symbol {
-                    return Err(PestParseError::InvalidInput { 
-                        message: format!("Expected symbol for catch binding, found {:?}", binding_symbol_pair.as_rule()), 
-                        span: Some(binding_symbol_span.clone()) 
+                if pattern_symbol_pair.as_rule() != Rule::symbol {
+                    return Err(PestParseError::InvalidInput {
+                        message: format!("Expected symbol for catch pattern, found {:?}", pattern_symbol_pair.as_rule()),
+                        span: Some(pair_to_source_span(&pattern_symbol_pair)),
                     });
                 }
-                let binding = build_symbol(binding_symbol_pair)?;
+                let pattern = build_catch_pattern(pattern_symbol_pair.clone())?;
+                let binding_symbol_pair = clause_inner.peek();
+                let binding = if let Some(binding_symbol_pair) = binding_symbol_pair {
+                    if binding_symbol_pair.as_rule() == Rule::symbol {
+                        let binding_symbol_pair = clause_inner.next().unwrap();
+                        build_symbol(binding_symbol_pair)?
+                    } else {
+                        // Only one symbol, use as both pattern and binding
+                        match &pattern {
+                            CatchPattern::Symbol(s) => s.clone(),
+                            CatchPattern::Wildcard => {
+                                return Err(PestParseError::InvalidInput {
+                                    message: "Wildcard pattern requires a binding symbol".to_string(),
+                                    span: Some(pair_to_source_span(&pattern_symbol_pair)),
+                                });
+                            }
+                            _ => {
+                                return Err(PestParseError::InvalidInput {
+                                    message: "Non-symbol pattern requires a binding symbol".to_string(),
+                                    span: Some(pair_to_source_span(&pattern_symbol_pair)),
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    // Only one symbol, use as both pattern and binding
+                    match &pattern {
+                        CatchPattern::Symbol(s) => s.clone(),
+                        CatchPattern::Wildcard => {
+                            return Err(PestParseError::InvalidInput {
+                                message: "Wildcard pattern requires a binding symbol".to_string(),
+                                span: Some(pair_to_source_span(&pattern_symbol_pair)),
+                            });
+                        }
+                        _ => {
+                            return Err(PestParseError::InvalidInput {
+                                message: "Non-symbol pattern requires a binding symbol".to_string(),
+                                span: Some(pair_to_source_span(&pattern_symbol_pair)),
+                            });
+                        }
+                    }
+                };
 
                 let mut catch_body_expressions = Vec::new();
-                let mut last_catch_expr_span = binding_symbol_span.clone();
+                let mut last_catch_expr_span = pair_to_source_span(&pattern_symbol_pair);
                 while let Some(body_expr_candidate) = clause_inner.next() {
                     match body_expr_candidate.as_rule() {
                         Rule::WHITESPACE | Rule::COMMENT => continue,
@@ -829,9 +862,9 @@ pub(super) fn build_try_catch_expr(try_catch_expr_pair: Pair<Rule>) -> Result<Tr
                     }
                 }
                 if catch_body_expressions.is_empty() {
-                    return Err(PestParseError::InvalidInput { 
-                        message: "Catch clause requires at least one body expression".to_string(), 
-                        span: Some(last_catch_expr_span) // Span of the binding if body is empty
+                    return Err(PestParseError::InvalidInput {
+                        message: "Catch clause requires at least one body expression".to_string(),
+                        span: Some(last_catch_expr_span),
                     });
                 }
                 catch_clauses.push(CatchClause {
@@ -909,7 +942,14 @@ fn build_catch_pattern(pair: Pair<Rule>) -> Result<CatchPattern, PestParseError>
     match pair.as_rule() {
         Rule::type_expr => Ok(CatchPattern::Type(build_type_expr(pair.clone())?)),
         Rule::keyword => Ok(CatchPattern::Keyword(build_keyword(pair.clone())?)),
-        Rule::symbol => Ok(CatchPattern::Symbol(build_symbol(pair.clone())?)),
+        Rule::symbol => {
+            let symbol = build_symbol(pair.clone())?;
+            if symbol.0 == "_" {
+                Ok(CatchPattern::Wildcard)
+            } else {
+                Ok(CatchPattern::Symbol(symbol))
+            }
+        },
         Rule::primitive_type => Ok(CatchPattern::Symbol(build_symbol(pair.clone())?)),
         unknown_rule => Err(PestParseError::InvalidInput { 
             message: format!("Invalid rule for catch_pattern: {:?}, content: '{}'", unknown_rule, pair.as_str()), 

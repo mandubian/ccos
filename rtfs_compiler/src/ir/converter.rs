@@ -667,6 +667,166 @@ impl<'a> IrConverter<'a> {
                     return_type: Box::new(IrType::Nil),
                 },
             ),
+            // Additional tool functions
+            (
+                "println",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Nil),
+                },
+            ),
+            (
+                "tool:print",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Nil),
+                },
+            ),
+            (
+                "tool:http-fetch",
+                IrType::Function {
+                    param_types: vec![IrType::String],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Any),
+                },
+            ),
+            (
+                "tool:parse-json",
+                IrType::Function {
+                    param_types: vec![IrType::String],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Any),
+                },
+            ),
+            (
+                "tool:serialize-json",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::String),
+                },
+            ),
+            (
+                "tool:get-env",
+                IrType::Function {
+                    param_types: vec![IrType::String],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::String),
+                },
+            ),
+            (
+                "tool:file-exists?",
+                IrType::Function {
+                    param_types: vec![IrType::String],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Bool),
+                },
+            ),
+            (
+                "tool:current-time",
+                IrType::Function {
+                    param_types: vec![],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::String),
+                },
+            ),
+            // Additional stdlib functions
+            (
+                "string-contains",
+                IrType::Function {
+                    param_types: vec![IrType::String, IrType::String],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Bool),
+                },
+            ),
+            (
+                "type-name",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::String),
+                },
+            ),
+            (
+                "range",
+                IrType::Function {
+                    param_types: vec![IrType::Int],
+                    variadic_param_type: Some(Box::new(IrType::Int)),
+                    return_type: Box::new(IrType::Vector(Box::new(IrType::Int))),
+                },
+            ),
+            (
+                "hash-map",
+                IrType::Function {
+                    param_types: vec![],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Map {
+                        entries: vec![],
+                        wildcard: Some(Box::new(IrType::Any)),
+                    }),
+                },
+            ),
+            (
+                "get-in",
+                IrType::Function {
+                    param_types: vec![IrType::Any, IrType::Vector(Box::new(IrType::Any))],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Any),
+                },
+            ),
+            (
+                "current-timestamp-ms",
+                IrType::Function {
+                    param_types: vec![],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Int),
+                },
+            ),
+            (
+                "discover-agents",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+                },
+            ),
+            (
+                "task-coordination",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Any),
+                },
+            ),
+            (
+                "factorial",
+                IrType::Function {
+                    param_types: vec![IrType::Int],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Int),
+                },
+            ),
+            (
+                "discover-and-assess-agents",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+                },
+            ),
+            (
+                "establish-system-baseline",
+                IrType::Function {
+                    param_types: vec![IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Map {
+                        entries: vec![],
+                        wildcard: Some(Box::new(IrType::Any)),
+                    }),
+                },
+            ),
             // Special forms
             (
                 "lambda",
@@ -1032,6 +1192,9 @@ impl<'a> IrConverter<'a> {
             body_exprs.push(self.convert_expression(body_expr.clone())?);
         }
 
+        // Analyze captures BEFORE exiting lambda scope
+        let captures = self.analyze_captures(&body_exprs);
+
         // Exit lambda scope
         self.exit_scope();
 
@@ -1056,7 +1219,7 @@ impl<'a> IrConverter<'a> {
             params,
             variadic_param: None,
             body: body_exprs,
-            captures: Vec::new(), // TODO: Implement capture analysis
+            captures,
             ir_type: function_type,
             source_location: None,
         })
@@ -1139,11 +1302,71 @@ impl<'a> IrConverter<'a> {
 
         // Pass 2: Process function bindings with placeholders in scope
         for (binding, binding_id) in function_bindings {
-            let init_expr = self.convert_expression(*binding.value)?;
+            // Do NOT enter a new scope here; the placeholder is already in the current scope
+            let init_expr = match *binding.value {
+                Expression::Fn(mut fn_expr) => {
+                    // Patch: do not enter a new scope in convert_fn, so the placeholder is visible
+                    // Instead, convert params and body in the current scope
+                    let id = self.next_id();
+                    let mut params = Vec::new();
+                    for p_def in fn_expr.params {
+                        if let Pattern::Symbol(s) = p_def.pattern {
+                            let param_id = self.next_id();
+                            let param_type =
+                                self.convert_type_annotation_option(p_def.type_annotation)?;
+                            let binding_info = BindingInfo {
+                                name: s.0.clone(),
+                                binding_id: param_id,
+                                ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                kind: BindingKind::Parameter,
+                            };
+                            self.define_binding(s.0.clone(), binding_info);
+                            params.push(IrNode::Param {
+                                id: param_id,
+                                binding: Box::new(IrNode::VariableBinding {
+                                    id: param_id,
+                                    name: s.0,
+                                    ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                    source_location: None,
+                                }),
+                                type_annotation: param_type.clone(),
+                                ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                source_location: None,
+                            });
+                        }
+                    }
+                    let variadic_param = None; // TODO: handle variadic
+                    let mut body = Vec::new();
+                    for expr in fn_expr.body {
+                        body.push(self.convert_expression(expr)?);
+                    }
+                    let return_type = body
+                        .last()
+                        .and_then(|n| n.ir_type())
+                        .cloned()
+                        .unwrap_or(IrType::Any);
+                    let param_types: Vec<IrType> =
+                        params.iter().filter_map(|p| p.ir_type()).cloned().collect();
+                    let function_type = IrType::Function {
+                        param_types,
+                        variadic_param_type: None,
+                        return_type: Box::new(return_type),
+                    };
+                    IrNode::Lambda {
+                        id,
+                        params,
+                        variadic_param,
+                        body,
+                        captures: Vec::new(),
+                        ir_type: function_type,
+                        source_location: None,
+                    }
+                }
+                _ => self.convert_expression(*binding.value)?,
+            };
             let binding_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
             let pattern_node =
                 self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
-
             bindings.push(IrLetBinding {
                 pattern: pattern_node,
                 type_annotation: binding
@@ -1240,7 +1463,7 @@ impl<'a> IrConverter<'a> {
                 let binding_info = BindingInfo {
                     name: s.0.clone(),
                     binding_id: param_id,
-                    ir_type: param_type.clone(),
+                    ir_type: param_type.clone().unwrap_or(IrType::Any),
                     kind: BindingKind::Parameter,
                 };
                 self.define_binding(s.0.clone(), binding_info);
@@ -1250,11 +1473,11 @@ impl<'a> IrConverter<'a> {
                     binding: Box::new(IrNode::VariableBinding {
                         id: param_id,
                         name: s.0,
-                        ir_type: param_type.clone(),
+                        ir_type: param_type.clone().unwrap_or(IrType::Any),
                         source_location: None,
                     }),
-                    type_annotation: Some(param_type.clone()),
-                    ir_type: param_type,
+                    type_annotation: param_type.clone(),
+                    ir_type: param_type.clone().unwrap_or(IrType::Any),
                     source_location: None,
                 });
             }
@@ -1269,7 +1492,7 @@ impl<'a> IrConverter<'a> {
                 let binding_info = BindingInfo {
                     name: s.0.clone(),
                     binding_id: param_id,
-                    ir_type: param_type.clone(),
+                    ir_type: param_type.clone().unwrap_or(IrType::Any),
                     kind: BindingKind::Parameter,
                 };
                 self.define_binding(s.0.clone(), binding_info);
@@ -1279,11 +1502,11 @@ impl<'a> IrConverter<'a> {
                     binding: Box::new(IrNode::VariableBinding {
                         id: param_id,
                         name: s.0,
-                        ir_type: param_type.clone(),
+                        ir_type: param_type.clone().unwrap_or(IrType::Any),
                         source_location: None,
                     }),
-                    type_annotation: Some(param_type.clone()),
-                    ir_type: param_type.clone(),
+                    type_annotation: param_type.clone(),
+                    ir_type: param_type.clone().unwrap_or(IrType::Any),
                     source_location: None,
                 }))
             } else {
@@ -1297,6 +1520,10 @@ impl<'a> IrConverter<'a> {
         for expr in fn_expr.body {
             body.push(self.convert_expression(expr)?);
         }
+
+        // Analyze captures BEFORE exiting function scope
+        let captures = self.analyze_captures(&body);
+
         self.exit_scope();
 
         let return_type = if let Some(ret_type_expr) = fn_expr.return_type {
@@ -1322,7 +1549,7 @@ impl<'a> IrConverter<'a> {
             params,
             variadic_param,
             body,
-            captures: vec![], // TODO
+            captures,
             ir_type: IrType::Function {
                 param_types,
                 variadic_param_type,
@@ -1472,6 +1699,7 @@ impl<'a> IrConverter<'a> {
                 CatchPattern::Keyword(k) => IrPattern::Literal(Literal::Keyword(k)),
                 CatchPattern::Type(t) => IrPattern::Type(self.convert_type_annotation(t)?),
                 CatchPattern::Symbol(s) => IrPattern::Variable(s.0),
+                CatchPattern::Wildcard => IrPattern::Wildcard,
             };
             let body = clause
                 .body
@@ -1680,103 +1908,288 @@ impl<'a> IrConverter<'a> {
                 ir_type,
                 source_location: None,
             }),
-            Pattern::VectorDestructuring { .. } => {
-                // Create a destructuring pattern (simplified)
-                Ok(IrNode::VariableBinding {
-                    id: binding_id,
-                    name: format!("__vector_destructure_{}", binding_id),
-                    ir_type,
-                    source_location: None,
-                })
-            }
-            Pattern::MapDestructuring { .. } => {
-                // Similar to vector - simplified destructuring
-                Ok(IrNode::VariableBinding {
-                    id: binding_id,
-                    name: format!("__map_destructure_{}", binding_id),
-                    ir_type,
-                    source_location: None,
-                })
-            }
-        }
-    }
-
-    /// Convert type annotation to IR type
-    fn convert_type_annotation(&mut self, type_expr: TypeExpr) -> IrConversionResult<IrType> {
-        match type_expr {
-            TypeExpr::Primitive(PrimitiveType::Int) => Ok(IrType::Int),
-            TypeExpr::Primitive(PrimitiveType::Float) => Ok(IrType::Float),
-            TypeExpr::Primitive(PrimitiveType::String) => Ok(IrType::String),
-            TypeExpr::Primitive(PrimitiveType::Bool) => Ok(IrType::Bool),
-            TypeExpr::Primitive(PrimitiveType::Keyword) => Ok(IrType::Keyword),
-            TypeExpr::Primitive(PrimitiveType::Symbol) => Ok(IrType::Symbol),
-            TypeExpr::Any => Ok(IrType::Any),
-            TypeExpr::Never => Ok(IrType::Never),
-            TypeExpr::Vector(element_type) => {
-                let ir_element_type = self.convert_type_annotation(*element_type)?;
-                Ok(IrType::Vector(Box::new(ir_element_type)))
-            }
-            TypeExpr::Union(types) => {
-                let mut ir_types = Vec::new();
-                for t in types {
-                    ir_types.push(self.convert_type_annotation(t)?);
-                }
-                Ok(IrType::Union(ir_types))
-            }
-            TypeExpr::Literal(lit) => Ok(IrType::LiteralValue(lit)),
-            TypeExpr::Alias(sym) => Ok(IrType::TypeRef(sym.0)),
-            _ => Ok(IrType::Any), // TODO: Implement remaining type conversions
-        }
-    }
-
-    fn convert_type_annotation_option(
-        &mut self,
-        type_expr: Option<TypeExpr>,
-    ) -> IrConversionResult<IrType> {
-        match type_expr {
-            Some(t) => self.convert_type_annotation(t),
-            None => Ok(IrType::Any),
-        }
-    }
-
-    fn convert_match_pattern(&mut self, pattern: MatchPattern) -> IrConversionResult<IrPattern> {
-        match pattern {
-            MatchPattern::Literal(l) => Ok(IrPattern::Literal(l)),
-            MatchPattern::Symbol(s) => Ok(IrPattern::Variable(s.0)),
-            MatchPattern::Keyword(k) => Ok(IrPattern::Literal(Literal::Keyword(k))),
-            MatchPattern::Wildcard => Ok(IrPattern::Wildcard),
-            MatchPattern::Vector { elements, rest } => {
-                let mut ir_elements = Vec::new();
-                for el in elements {
-                    ir_elements.push(self.convert_match_pattern(el)?);
-                }
-                Ok(IrPattern::Vector {
-                    elements: ir_elements,
+            Pattern::VectorDestructuring {
+                elements,
+                rest,
+                as_symbol: _,
+            } => {
+                // Convert to IrPattern
+                let ir_pattern = IrPattern::Vector {
+                    elements: elements
+                        .into_iter()
+                        .map(|p| self.convert_pattern_to_irpattern(p))
+                        .collect::<Result<_, _>>()?,
                     rest: rest.map(|s| s.0),
+                };
+                Ok(IrNode::Destructure {
+                    id: binding_id,
+                    pattern: ir_pattern,
+                    value: Box::new(IrNode::VariableRef {
+                        id: binding_id + 1,
+                        name: format!("__destructure_value_{}", binding_id),
+                        binding_id,
+                        ir_type: ir_type.clone(),
+                        source_location: None,
+                    }),
+                    ir_type,
+                    source_location: None,
                 })
             }
-            MatchPattern::Map { entries, rest } => {
+            Pattern::MapDestructuring {
+                entries,
+                rest,
+                as_symbol: _,
+            } => {
                 let mut ir_entries = Vec::new();
                 for entry in entries {
-                    ir_entries.push(IrMapPatternEntry {
-                        key: entry.key,
-                        pattern: self.convert_match_pattern(*entry.pattern)?,
-                    });
+                    match entry {
+                        MapDestructuringEntry::KeyBinding { key, pattern } => {
+                            let pattern = self.convert_pattern_to_irpattern(*pattern)?;
+                            ir_entries.push(IrMapPatternEntry { key, pattern });
+                        }
+                        MapDestructuringEntry::Keys(symbols) => {
+                            for sym in symbols {
+                                ir_entries.push(IrMapPatternEntry {
+                                    key: MapKey::Keyword(Keyword(sym.0.clone())),
+                                    pattern: IrPattern::Variable(sym.0),
+                                });
+                            }
+                        }
+                    }
+                }
+                let ir_pattern = IrPattern::Map {
+                    entries: ir_entries,
+                    rest: rest.map(|s| s.0),
+                };
+                Ok(IrNode::Destructure {
+                    id: binding_id,
+                    pattern: ir_pattern,
+                    value: Box::new(IrNode::VariableRef {
+                        id: binding_id + 1,
+                        name: format!("__destructure_value_{}", binding_id),
+                        binding_id,
+                        ir_type: ir_type.clone(),
+                        source_location: None,
+                    }),
+                    ir_type,
+                    source_location: None,
+                })
+            }
+        }
+    }
+
+    fn convert_pattern_to_irpattern(&mut self, pattern: Pattern) -> IrConversionResult<IrPattern> {
+        match pattern {
+            Pattern::Symbol(sym) => Ok(IrPattern::Variable(sym.0)),
+            Pattern::Wildcard => Ok(IrPattern::Wildcard),
+            Pattern::VectorDestructuring {
+                elements,
+                rest,
+                as_symbol: _,
+            } => Ok(IrPattern::Vector {
+                elements: elements
+                    .into_iter()
+                    .map(|p| self.convert_pattern_to_irpattern(p))
+                    .collect::<Result<_, _>>()?,
+                rest: rest.map(|s| s.0),
+            }),
+            Pattern::MapDestructuring {
+                entries,
+                rest,
+                as_symbol: _,
+            } => {
+                let mut ir_entries = Vec::new();
+                for entry in entries {
+                    match entry {
+                        MapDestructuringEntry::KeyBinding { key, pattern } => {
+                            let pattern = self.convert_pattern_to_irpattern(*pattern)?;
+                            ir_entries.push(IrMapPatternEntry { key, pattern });
+                        }
+                        MapDestructuringEntry::Keys(symbols) => {
+                            for sym in symbols {
+                                ir_entries.push(IrMapPatternEntry {
+                                    key: MapKey::Keyword(Keyword(sym.0.clone())),
+                                    pattern: IrPattern::Variable(sym.0),
+                                });
+                            }
+                        }
+                    }
                 }
                 Ok(IrPattern::Map {
                     entries: ir_entries,
                     rest: rest.map(|s| s.0),
                 })
             }
-            MatchPattern::Type(type_expr, _) => {
-                let ir_type = self.convert_type_annotation(type_expr)?;
-                Ok(IrPattern::Type(ir_type))
+        }
+    }
+
+    /// Analyze which variables from outer scopes are captured by a lambda
+    fn analyze_captures(&self, body: &[IrNode]) -> Vec<IrCapture> {
+        let mut captures = Vec::new();
+        let mut captured_names = std::collections::HashSet::new();
+
+        // Collect all variable references in the body
+        for node in body {
+            self.collect_variable_references(node, &mut captured_names);
+        }
+
+        // Convert captured names to IrCapture objects
+        for name in captured_names {
+            if let Some(binding_info) = self.lookup_symbol(&name) {
+                captures.push(IrCapture {
+                    name: name.clone(),
+                    binding_id: binding_info.binding_id,
+                    ir_type: binding_info.ir_type.clone(),
+                });
             }
-            MatchPattern::As(_, pattern) => {
-                // This is tricky. The `as` pattern binds the whole value.
-                // For now, we ignore the `as` binding and just convert the inner pattern.
-                // A more complete implementation would handle this binding.
-                self.convert_match_pattern(*pattern)
+        }
+
+        captures
+    }
+
+    /// Recursively collect variable references from an IR node
+    fn collect_variable_references(
+        &self,
+        node: &IrNode,
+        captured_names: &mut std::collections::HashSet<String>,
+    ) {
+        match node {
+            IrNode::VariableRef { name, .. } => {
+                // Check if this variable is from an outer scope
+                if let Some(binding_info) = self.lookup_symbol(name) {
+                    // If it's not a parameter (which would be in current scope), it's captured
+                    if binding_info.kind != BindingKind::Parameter {
+                        captured_names.insert(name.clone());
+                    }
+                }
+            }
+            IrNode::Lambda { body, .. } => {
+                // Don't traverse into nested lambdas for capture analysis
+                // Each lambda should do its own capture analysis
+                return;
+            }
+            IrNode::Apply {
+                function,
+                arguments,
+                ..
+            } => {
+                self.collect_variable_references(function, captured_names);
+                for arg in arguments {
+                    self.collect_variable_references(arg, captured_names);
+                }
+            }
+            IrNode::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.collect_variable_references(condition, captured_names);
+                self.collect_variable_references(then_branch, captured_names);
+                if let Some(else_branch) = else_branch {
+                    self.collect_variable_references(else_branch, captured_names);
+                }
+            }
+            IrNode::Let { bindings, body, .. } => {
+                for binding in bindings {
+                    self.collect_variable_references(&binding.init_expr, captured_names);
+                }
+                for expr in body {
+                    self.collect_variable_references(expr, captured_names);
+                }
+            }
+            IrNode::Do { expressions, .. } => {
+                for expr in expressions {
+                    self.collect_variable_references(expr, captured_names);
+                }
+            }
+            IrNode::Vector { elements, .. } => {
+                for element in elements {
+                    self.collect_variable_references(element, captured_names);
+                }
+            }
+            IrNode::Map { entries, .. } => {
+                for entry in entries {
+                    self.collect_variable_references(&entry.key, captured_names);
+                    self.collect_variable_references(&entry.value, captured_names);
+                }
+            }
+            IrNode::TryCatch {
+                try_body,
+                catch_clauses,
+                finally_body,
+                ..
+            } => {
+                for expr in try_body {
+                    self.collect_variable_references(expr, captured_names);
+                }
+                for clause in catch_clauses {
+                    for expr in &clause.body {
+                        self.collect_variable_references(expr, captured_names);
+                    }
+                }
+                if let Some(finally_body) = finally_body {
+                    for expr in finally_body {
+                        self.collect_variable_references(expr, captured_names);
+                    }
+                }
+            }
+            IrNode::WithResource {
+                binding,
+                init_expr,
+                body,
+                ..
+            } => {
+                self.collect_variable_references(binding, captured_names);
+                self.collect_variable_references(init_expr, captured_names);
+                for expr in body {
+                    self.collect_variable_references(expr, captured_names);
+                }
+            }
+            IrNode::LogStep { values, .. } => {
+                for value in values {
+                    self.collect_variable_references(value, captured_names);
+                }
+            }
+            IrNode::DiscoverAgents { criteria, .. } => {
+                self.collect_variable_references(criteria, captured_names);
+            }
+            IrNode::VariableDef { init_expr, .. } => {
+                self.collect_variable_references(init_expr, captured_names);
+            }
+            IrNode::FunctionDef { lambda, .. } => {
+                self.collect_variable_references(lambda, captured_names);
+            }
+            IrNode::Task {
+                intent,
+                contracts,
+                plan,
+                execution_trace,
+                ..
+            } => {
+                self.collect_variable_references(intent, captured_names);
+                self.collect_variable_references(contracts, captured_names);
+                self.collect_variable_references(plan, captured_names);
+                for expr in execution_trace {
+                    self.collect_variable_references(expr, captured_names);
+                }
+            }
+            IrNode::Destructure { value, .. } => {
+                self.collect_variable_references(value, captured_names);
+            }
+            // These nodes don't contain variable references
+            IrNode::Literal { .. }
+            | IrNode::VariableBinding { .. }
+            | IrNode::ResourceRef { .. }
+            | IrNode::QualifiedSymbolRef { .. }
+            | IrNode::Param { .. }
+            | IrNode::Match { .. }
+            | IrNode::Parallel { .. }
+            | IrNode::Module { .. }
+            | IrNode::Import { .. }
+            | IrNode::TaskContextAccess { .. }
+            | IrNode::Program { .. } => {
+                // No variable references in these node types
             }
         }
     }
@@ -1787,5 +2200,28 @@ impl<'a> IrConverter<'a> {
         } else {
             self.scope_stack.remove(0)
         }
+    }
+
+    /// TODO: Implement type annotation conversion logic
+    fn convert_type_annotation(&mut self, t: TypeExpr) -> IrConversionResult<IrType> {
+        // TODO: Properly convert/resolve type annotations
+        Ok(IrType::Any)
+    }
+
+    /// TODO: Implement type annotation option conversion logic
+    fn convert_type_annotation_option(
+        &mut self,
+        t: Option<TypeExpr>,
+    ) -> IrConversionResult<Option<IrType>> {
+        // TODO: Properly convert/resolve type annotation options
+        match t {
+            Some(te) => Ok(Some(self.convert_type_annotation(te)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn convert_match_pattern(&mut self, _pat: MatchPattern) -> IrConversionResult<IrPattern> {
+        // TODO: Implement real match pattern conversion
+        Ok(IrPattern::Wildcard)
     }
 }

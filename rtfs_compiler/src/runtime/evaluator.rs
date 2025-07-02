@@ -3,7 +3,7 @@
 use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
 use crate::ast::{
     self, CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
-    Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, TopLevel, TryCatchExpr,
+    Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr,
 };
 use crate::runtime::environment::Environment;
@@ -694,6 +694,7 @@ impl Evaluator {
                         &catch_clause.pattern,
                         &e.to_value(),
                         &mut catch_env,
+                        Some(&catch_clause.binding),
                     )? {
                         return self.eval_do_body(&catch_clause.body, &mut catch_env);
                     }
@@ -708,10 +709,7 @@ impl Evaluator {
             fn_expr
                 .params
                 .iter()
-                .map(|p| match &p.pattern {
-                    crate::ast::Pattern::Symbol(s) => s.clone(),
-                    _ => unimplemented!(),
-                })
+                .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
             Box::new(Expression::Do(DoExpr {
                 expressions: fn_expr.body.clone(),
@@ -754,10 +752,7 @@ impl Evaluator {
             defn_expr
                 .params
                 .iter()
-                .map(|p| match &p.pattern {
-                    crate::ast::Pattern::Symbol(s) => s.clone(),
-                    _ => unimplemented!(),
-                })
+                .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
             Box::new(Expression::Do(DoExpr {
                 expressions: defn_expr.body.clone(),
@@ -773,10 +768,17 @@ impl Evaluator {
         pattern: &CatchPattern,
         value: &Value,
         env: &mut Environment,
+        binding: Option<&Symbol>,
     ) -> RuntimeResult<bool> {
         match pattern {
             CatchPattern::Symbol(s) => {
                 env.define(s, value.clone());
+                Ok(true)
+            }
+            CatchPattern::Wildcard => {
+                if let Some(b) = binding {
+                    env.define(b, value.clone());
+                }
                 Ok(true)
             }
             CatchPattern::Keyword(k) => Ok(Value::Keyword(k.clone()) == *value),
@@ -836,6 +838,21 @@ impl Evaluator {
                 resource_type: handle.id.clone(),
                 message: "Attempted to use released resource handle".to_string(),
             }),
+        }
+    }
+
+    /// Extract the primary symbol from a parameter pattern for function creation
+    /// This is used when creating functions to get the parameter names
+    fn extract_param_symbol(&self, pattern: &crate::ast::Pattern) -> Symbol {
+        match pattern {
+            crate::ast::Pattern::Symbol(s) => s.clone(),
+            crate::ast::Pattern::Wildcard => Symbol("_".to_string()),
+            crate::ast::Pattern::VectorDestructuring { as_symbol, .. } => as_symbol
+                .clone()
+                .unwrap_or_else(|| Symbol("vec".to_string())),
+            crate::ast::Pattern::MapDestructuring { as_symbol, .. } => as_symbol
+                .clone()
+                .unwrap_or_else(|| Symbol("map".to_string())),
         }
     }
     /// Evaluate a discover-agents expression
@@ -1215,33 +1232,6 @@ impl Evaluator {
         }
     }
 
-    /// Match a catch pattern against an error value (placeholder implementation)
-    fn match_catch_pattern_actual(
-        &self,
-        pattern: &crate::ast::CatchPattern,
-        _error_value: &Value,
-    ) -> RuntimeResult<bool> {
-        match pattern {
-            crate::ast::CatchPattern::Symbol(_symbol) => {
-                // Symbols always match in catch clauses
-                Ok(true)
-            }
-            _ => Err(RuntimeError::NotImplemented(
-                "Complex catch pattern matching not yet implemented".to_string(),
-            )),
-        }
-    }
-
-    /// Coerce a value to a specific type (placeholder implementation)
-    fn coerce_value_to_type(
-        &self,
-        value: Value,
-        _type_annotation: &crate::ast::TypeExpr,
-    ) -> RuntimeResult<Value> {
-        // For now, just return the value as-is
-        // TODO: Implement actual type coercion logic
-        Ok(value)
-    }
     /// Bind a pattern to a value in an environment
     fn bind_pattern(
         &self,

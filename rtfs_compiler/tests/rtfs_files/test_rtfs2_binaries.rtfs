@@ -1,4 +1,4 @@
-; Test RTFS 2.0 objects for binary verification
+;; Test RTFS 2.0 objects for binary verification
 
 intent test-intent {
   name: "test-intent"
@@ -36,5 +36,5 @@ module test-module {
   exports: ["function1", "function2"]
 }
 
-; Test RTFS 1.0 expression for backward compatibility
+;; Test RTFS 1.0 expression for backward compatibility
 let x = 5 in x * x 
