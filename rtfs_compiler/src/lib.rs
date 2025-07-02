@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod ast;
+pub mod ccos;
 pub mod development_tooling;
 pub mod error_reporting;
 pub mod ir;
@@ -36,3 +37,6 @@ pub mod builders;
 pub use builders::{
     ActionBuilder, CapabilityBuilder, IntentBuilder, ModuleBuilder, PlanBuilder, ResourceBuilder,
 };
+
+// Re-export CCOS components
+pub use ccos::{types::*, CCOSRuntime};

@@ -50,6 +50,7 @@ rustyline = { version = "13.0", optional = true }
 
 # Utilities
 indexmap = "2.0"
+sha2 = "0.10"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
