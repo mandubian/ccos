@@ -34,6 +34,8 @@ pub type TaskId = String;
 /// This is the persistent, addressable object representing the "why" behind a task
 #[derive(Debug, Clone)]
 pub struct Intent {
+    /// Human-readable symbolic name (RTFS symbol) for the intent
+    pub name: String,
     pub intent_id: IntentId,
     pub goal: String,
     pub constraints: HashMap<String, Value>,
@@ -48,6 +50,7 @@ pub struct Intent {
 }
 
 impl Intent {
+    /// Create a new intent with an auto-generated name (same as intent_id) and goal
     pub fn new(goal: String) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -56,6 +59,7 @@ impl Intent {
 
         Self {
             intent_id: format!("intent-{}", Uuid::new_v4()),
+            name: String::new(),
             goal,
             constraints: HashMap::new(),
             preferences: HashMap::new(),
@@ -67,6 +71,13 @@ impl Intent {
             status: IntentStatus::Active,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Create a new intent with explicit symbolic name
+    pub fn with_name(name: String, goal: String) -> Self {
+        let mut intent = Self::new(goal);
+        intent.name = name;
+        intent
     }
 
     pub fn with_constraint(mut self, key: String, value: Value) -> Self {
@@ -101,10 +112,30 @@ pub enum IntentStatus {
 
 /// Represents a transient but archivable RTFS script
 /// This is the "how" - the concrete, executable RTFS program
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PlanLanguage {
+    Rtfs20,
+    Wasm,
+    Python,
+    GraphJson,
+    Other(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanBody {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+/// Represents a node in the Living Intent Graph
+/// This is the persistent, addressable object representing the "why" behind a task
 #[derive(Debug, Clone)]
 pub struct Plan {
+    /// Symbolic name for the plan (RTFS symbol or friendly label)
+    pub name: String,
     pub plan_id: PlanId,
-    pub rtfs_code: String,
+    pub language: PlanLanguage,
+    pub body: PlanBody,
     pub intent_ids: Vec<IntentId>,
     pub created_at: u64,
     pub executed_at: Option<u64>,
@@ -112,7 +143,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn new(rtfs_code: String, intent_ids: Vec<IntentId>) -> Self {
+    pub fn new(language: PlanLanguage, body: PlanBody, intent_ids: Vec<IntentId>) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -120,12 +151,31 @@ impl Plan {
 
         Self {
             plan_id: format!("plan-{}", Uuid::new_v4()),
-            rtfs_code,
+            name: String::new(),
+            language,
+            body,
             intent_ids,
             created_at: now,
             executed_at: None,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Create a new plan with explicit symbolic name
+    pub fn new_named(
+        name: String,
+        language: PlanLanguage,
+        body: PlanBody,
+        intent_ids: Vec<IntentId>,
+    ) -> Self {
+        let mut plan = Self::new(language, body, intent_ids);
+        plan.name = name;
+        plan
+    }
+
+    /// Convenience helper for plain RTFS 2.0 source code
+    pub fn new_rtfs(rtfs_code: String, intent_ids: Vec<IntentId>) -> Self {
+        Self::new(PlanLanguage::Rtfs20, PlanBody::Text(rtfs_code), intent_ids)
     }
 
     pub fn mark_executed(&mut self) {
@@ -491,9 +541,11 @@ mod tests {
 
     #[test]
     fn test_plan_creation() {
-        let plan = Plan::new("(+ 1 2)".to_string(), vec!["intent-1".to_string()]);
+        let plan = Plan::new_rtfs("(+ 1 2)".to_string(), vec!["intent-1".to_string()]);
 
-        assert_eq!(plan.rtfs_code, "(+ 1 2)");
+        assert_eq!(plan.language, PlanLanguage::Rtfs20);
+        assert_eq!(plan.body, PlanBody::Text("(+ 1 2)".to_string()));
+        assert_eq!(plan.name, "");
         assert_eq!(plan.intent_ids, vec!["intent-1"]);
         assert!(plan.executed_at.is_none());
     }

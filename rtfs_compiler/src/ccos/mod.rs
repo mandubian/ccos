@@ -236,7 +236,7 @@ impl CCOSRuntime {
         let action = self.causal_chain.create_action(intent.clone())?;
 
         // 3. Execute with context awareness
-        let plan = types::Plan::new("".to_string(), vec![intent.intent_id.clone()]);
+        let plan = types::Plan::new_rtfs("".to_string(), vec![intent.intent_id.clone()]);
         let result = self.execute_rtfs_plan(&plan, context)?;
 
         // 4. Create execution result
