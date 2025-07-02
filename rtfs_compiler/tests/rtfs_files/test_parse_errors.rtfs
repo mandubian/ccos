@@ -1,0 +1,40 @@
+;; Test file with various parsing errors to demonstrate enhanced error reporting
+
+;; Error 1: Missing opening brace for intent
+intent my-intent
+  name: "test-intent"
+}
+
+;; Error 2: Using // instead of ; for comments
+// This is a comment with wrong syntax
+let x = 5
+
+;; Error 3: Missing quotes around string value
+intent another-intent {
+  name: test-value
+}
+
+;; Error 4: Invalid property syntax
+intent bad-intent {
+  name = "test"
+}
+
+;; Error 5: Missing closing brace
+intent incomplete-intent {
+  name: "test"
+
+;; Error 6: Valid RTFS 2.0 object for comparison
+intent valid-intent {
+  name: "valid-intent"
+  description: "This is a valid intent"
+}
+
+;; Error 7: Invalid keyword usage
+intent keyword-error {
+  :name: "test"
+}
+
+;; Error 8: Missing property value
+intent missing-value {
+  name:
+} 

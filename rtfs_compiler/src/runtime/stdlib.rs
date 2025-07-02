@@ -1,7 +1,7 @@
 // Standard library implementation for RTFS
 // Contains all built-in functions and tool interfaces
 
-use crate::ast::{MapKey, Symbol};
+use crate::ast::{Keyword, MapKey, Symbol};
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::environment::Environment;
 use crate::runtime::environment::IrEnvironment;
@@ -14,9 +14,62 @@ use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext,
 use crate::runtime::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 pub struct StandardLibrary;
+
+/// File handle for managing open files
+struct FileHandle {
+    file: File,
+    reader: Option<BufReader<File>>,
+    path: String,
+}
+
+impl FileHandle {
+    fn new(file: File, path: String) -> Self {
+        Self {
+            file,
+            reader: None,
+            path,
+        }
+    }
+
+    fn get_reader(&mut self) -> &mut BufReader<File> {
+        if self.reader.is_none() {
+            // Reopen the file for reading
+            if let Ok(file) = OpenOptions::new().read(true).open(&self.path) {
+                self.reader = Some(BufReader::new(file));
+            }
+        }
+        self.reader.as_mut().unwrap()
+    }
+}
+
+/// Global file handle registry
+static mut FILE_HANDLES: Option<RefCell<HashMap<i64, FileHandle>>> = None;
+
+fn get_file_handles() -> &'static RefCell<HashMap<i64, FileHandle>> {
+    unsafe {
+        if FILE_HANDLES.is_none() {
+            FILE_HANDLES = Some(RefCell::new(HashMap::new()));
+        }
+        FILE_HANDLES.as_ref().unwrap()
+    }
+}
+
+static mut NEXT_FILE_HANDLE_ID: i64 = 1;
+
+fn get_next_file_handle_id() -> i64 {
+    unsafe {
+        let id = NEXT_FILE_HANDLE_ID;
+        NEXT_FILE_HANDLE_ID += 1;
+        id
+    }
+}
 
 impl StandardLibrary {
     /// Create a new environment with all standard library functions loaded
@@ -95,6 +148,48 @@ impl StandardLibrary {
                 name: "min".to_string(),
                 arity: Arity::Variadic(1),
                 func: Rc::new(Self::min_value),
+            })),
+        );
+
+        // Increment function
+        env.define(
+            &Symbol("inc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "inc".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(|args| {
+                    if args.len() != 1 {
+                        return Err(RuntimeError::Generic(
+                            "inc expects exactly 1 argument".to_string(),
+                        ));
+                    }
+                    match &args[0] {
+                        Value::Integer(n) => Ok(Value::Integer(n + 1)),
+                        Value::Float(f) => Ok(Value::Float(f + 1.0)),
+                        _ => Err(RuntimeError::Generic("inc expects a number".to_string())),
+                    }
+                }),
+            })),
+        );
+
+        // Decrement function
+        env.define(
+            &Symbol("dec".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "dec".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(|args| {
+                    if args.len() != 1 {
+                        return Err(RuntimeError::Generic(
+                            "dec expects exactly 1 argument".to_string(),
+                        ));
+                    }
+                    match &args[0] {
+                        Value::Integer(n) => Ok(Value::Integer(n - 1)),
+                        Value::Float(f) => Ok(Value::Float(f - 1.0)),
+                        _ => Err(RuntimeError::Generic("dec expects a number".to_string())),
+                    }
+                }),
             })),
         );
     }
@@ -212,6 +307,15 @@ impl StandardLibrary {
                 name: "substring".to_string(),
                 arity: Arity::Variadic(2),
                 func: Rc::new(Self::substring),
+            })),
+        );
+
+        env.define(
+            &Symbol("string-contains".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-contains".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::string_contains),
             })),
         );
     }
@@ -377,7 +481,52 @@ impl StandardLibrary {
                 func: Rc::new(Self::hash_map),
             })),
         );
+
+        env.define(
+            &Symbol("range".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "range".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::range),
+            })),
+        );
     }
+
+    fn range(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "range".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let start = match &args[0] {
+            Value::Integer(i) => *i,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "range".to_string(),
+                })
+            }
+        };
+        let end = match &args[1] {
+            Value::Integer(i) => *i,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Integer".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "range".to_string(),
+                })
+            }
+        };
+        if end < start {
+            return Ok(Value::Vector(vec![]));
+        }
+        let vec = (start..end).map(Value::Integer).collect();
+        Ok(Value::Vector(vec))
+    }
+
     /// Load type predicate functions (int?, float?, string?, etc.)
     fn load_type_predicate_functions(env: &mut Environment) {
         env.define(
@@ -411,6 +560,15 @@ impl StandardLibrary {
             &Symbol("string?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::string_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("string-p".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-p".to_string(),
                 arity: Arity::Fixed(1),
                 func: Rc::new(Self::string_p),
             })),
@@ -579,7 +737,7 @@ impl StandardLibrary {
             &Symbol("tool:http-fetch".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool:http-fetch".to_string(),
-                arity: Arity::Range(1, 2),
+                arity: Arity::Range(1, 4),
                 func: Rc::new(Self::tool_http_fetch),
             })),
         );
@@ -644,6 +802,70 @@ impl StandardLibrary {
                 name: "file-exists?".to_string(),
                 arity: Arity::Fixed(1),
                 func: Rc::new(Self::tool_file_exists_p),
+            })),
+        );
+
+        env.define(
+            &Symbol("print".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "print".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::tool_print),
+            })),
+        );
+
+        env.define(
+            &Symbol("println".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "println".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::println),
+            })),
+        );
+
+        // Add convenience aliases for file operations
+        env.define(
+            &Symbol("open-file".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "open-file".to_string(),
+                arity: Arity::Range(1, 3),
+                func: Rc::new(Self::tool_open_file),
+            })),
+        );
+
+        env.define(
+            &Symbol("read-line".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "read-line".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_read_line),
+            })),
+        );
+
+        env.define(
+            &Symbol("write-line".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "write-line".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::tool_write_line),
+            })),
+        );
+
+        env.define(
+            &Symbol("close-file".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "close-file".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::tool_close_file),
+            })),
+        );
+
+        env.define(
+            &Symbol("http-fetch".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "http-fetch".to_string(),
+                arity: Arity::Range(1, 4),
+                func: Rc::new(Self::tool_http_fetch),
             })),
         );
     }
@@ -1963,6 +2185,17 @@ impl StandardLibrary {
         Ok(Value::Nil)
     }
 
+    fn println(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        let message = args
+            .iter()
+            .map(|v| format!("{:?}", v))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("{}", message);
+        Ok(Value::Nil)
+    }
+
     fn tool_current_time(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if !args.is_empty() {
@@ -1980,46 +2213,340 @@ impl StandardLibrary {
         Ok(Value::Integer(timestamp as i64))
     }
 
-    fn tool_parse_json(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - JSON parsing not implemented
-        Err(RuntimeError::NotImplemented(
-            "JSON parsing not implemented".to_string(),
-        ))
+    fn tool_parse_json(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:parse-json".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(json_str) => match serde_json::from_str::<serde_json::Value>(json_str) {
+                Ok(json_value) => Ok(Self::json_value_to_rtfs_value(&json_value)),
+                Err(e) => Err(RuntimeError::Generic(format!("JSON parsing error: {}", e))),
+            },
+            _ => Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "tool:parse-json".to_string(),
+            }),
+        }
     }
 
-    fn tool_serialize_json(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - JSON serialization not implemented
-        Err(RuntimeError::NotImplemented(
-            "JSON serialization not implemented".to_string(),
-        ))
+    fn tool_serialize_json(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:serialize-json".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let json_value = Self::rtfs_value_to_json_value(&args[0])?;
+        match serde_json::to_string_pretty(&json_value) {
+            Ok(json_str) => Ok(Value::String(json_str)),
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "JSON serialization error: {}",
+                e
+            ))),
+        }
     }
 
-    fn tool_open_file(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented(
-            "File operations not implemented".to_string(),
-        ))
+    /// Convert a serde_json::Value to an RTFS Value
+    fn json_value_to_rtfs_value(json_value: &serde_json::Value) -> Value {
+        match json_value {
+            serde_json::Value::Null => Value::Nil,
+            serde_json::Value::Bool(b) => Value::Boolean(*b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Integer(i)
+                } else if let Some(f) = n.as_f64() {
+                    Value::Float(f)
+                } else {
+                    Value::String(n.to_string())
+                }
+            }
+            serde_json::Value::String(s) => {
+                // Handle keyword strings (strings starting with ":")
+                if s.starts_with(':') {
+                    Value::Keyword(Keyword(s[1..].to_string()))
+                } else {
+                    Value::String(s.clone())
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                let values: Vec<Value> = arr.iter().map(Self::json_value_to_rtfs_value).collect();
+                Value::Vector(values)
+            }
+            serde_json::Value::Object(obj) => {
+                let mut map = HashMap::new();
+                for (key, value) in obj {
+                    // Handle keyword keys (keys starting with ":")
+                    let map_key = if key.starts_with(':') {
+                        MapKey::Keyword(Keyword(key[1..].to_string()))
+                    } else {
+                        MapKey::String(key.clone())
+                    };
+                    map.insert(map_key, Self::json_value_to_rtfs_value(value));
+                }
+                Value::Map(map)
+            }
+        }
     }
 
-    fn tool_read_line(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented(
-            "File operations not implemented".to_string(),
-        ))
+    /// Convert an RTFS Value to a serde_json::Value
+    fn rtfs_value_to_json_value(rtfs_value: &Value) -> RuntimeResult<serde_json::Value> {
+        match rtfs_value {
+            Value::Nil => Ok(serde_json::Value::Null),
+            Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
+            Value::Integer(i) => Ok(serde_json::Value::Number(serde_json::Number::from(*i))),
+            Value::Float(f) => serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| RuntimeError::Generic("Invalid float value".to_string())),
+            Value::String(s) => Ok(serde_json::Value::String(s.clone())),
+            Value::Vector(vec) => {
+                let json_array: Result<Vec<serde_json::Value>, RuntimeError> =
+                    vec.iter().map(Self::rtfs_value_to_json_value).collect();
+                Ok(serde_json::Value::Array(json_array?))
+            }
+            Value::Map(map) => {
+                let mut json_obj = serde_json::Map::new();
+                for (key, value) in map {
+                    let key_str = match key {
+                        MapKey::String(s) => s.clone(),
+                        MapKey::Keyword(k) => format!(":{}", k.0),
+                        MapKey::Integer(i) => i.to_string(),
+                    };
+                    json_obj.insert(key_str, Self::rtfs_value_to_json_value(value)?);
+                }
+                Ok(serde_json::Value::Object(json_obj))
+            }
+            Value::Keyword(k) => Ok(serde_json::Value::String(format!(":{}", k.0))),
+            Value::Symbol(s) => Ok(serde_json::Value::String(format!("{}", s.0))),
+            Value::Timestamp(ts) => Ok(serde_json::Value::String(format!("@{}", ts))),
+            Value::Uuid(uuid) => Ok(serde_json::Value::String(format!("@{}", uuid))),
+            Value::ResourceHandle(handle) => Ok(serde_json::Value::String(format!("@{}", handle))),
+            Value::Function(_) => Err(RuntimeError::Generic(
+                "Cannot serialize functions to JSON".to_string(),
+            )),
+            Value::FunctionPlaceholder(_) => Err(RuntimeError::Generic(
+                "Cannot serialize function placeholders to JSON".to_string(),
+            )),
+            Value::Error(e) => Err(RuntimeError::Generic(format!(
+                "Cannot serialize errors to JSON: {}",
+                e.message
+            ))),
+            Value::List(_) => Err(RuntimeError::Generic(
+                "Cannot serialize lists to JSON (use vectors instead)".to_string(),
+            )),
+        }
     }
 
-    fn tool_write_line(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented(
-            "File operations not implemented".to_string(),
-        ))
+    fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() < 1 || args.len() > 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:open-file".to_string(),
+                expected: "1-3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let path = match &args[0] {
+            Value::String(p) => p,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "tool:open-file".to_string(),
+                });
+            }
+        };
+
+        let mode = if args.len() > 1 {
+            match &args[1] {
+                Value::String(m) => m.as_str(),
+                Value::Keyword(k) => &k.0,
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "string or keyword".to_string(),
+                        actual: args[1].type_name().to_string(),
+                        operation: "tool:open-file".to_string(),
+                    });
+                }
+            }
+        } else {
+            "r" // Default to read mode
+        };
+
+        let mut open_options = OpenOptions::new();
+        match mode {
+            "r" | "read" => {
+                open_options.read(true);
+            }
+            "w" | "write" => {
+                open_options.write(true).create(true).truncate(true);
+            }
+            "a" | "append" => {
+                open_options.write(true).create(true).append(true);
+            }
+            "r+" | "read-write" => {
+                open_options.read(true).write(true).create(true);
+            }
+            _ => {
+                return Err(RuntimeError::InvalidArgument(format!(
+                    "Invalid file mode: {}. Use 'r', 'w', 'a', or 'r+'",
+                    mode
+                )));
+            }
+        }
+
+        match open_options.open(path) {
+            Ok(file) => {
+                let handle_id = get_next_file_handle_id();
+                let file_handle = FileHandle::new(file, path.clone());
+                get_file_handles()
+                    .borrow_mut()
+                    .insert(handle_id, file_handle);
+                Ok(Value::Integer(handle_id))
+            }
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "Failed to open file '{}': {}",
+                path, e
+            ))),
+        }
     }
 
-    fn tool_close_file(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - File operations not implemented
-        Err(RuntimeError::NotImplemented(
-            "File operations not implemented".to_string(),
-        ))
+    fn tool_read_line(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:read-line".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let handle_id = match &args[0] {
+            Value::Integer(id) => *id,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "tool:read-line".to_string(),
+                });
+            }
+        };
+
+        let mut handles = get_file_handles().borrow_mut();
+        let file_handle = handles
+            .get_mut(&handle_id)
+            .ok_or_else(|| RuntimeError::Generic(format!("Invalid file handle: {}", handle_id)))?;
+
+        let reader = file_handle.get_reader();
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => Ok(Value::Nil), // EOF
+            Ok(_) => {
+                // Remove trailing newline
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+                Ok(Value::String(line))
+            }
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "Error reading from file: {}",
+                e
+            ))),
+        }
+    }
+
+    fn tool_write_line(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:write-line".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let handle_id = match &args[0] {
+            Value::Integer(id) => *id,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "tool:write-line".to_string(),
+                });
+            }
+        };
+
+        let content = match &args[1] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "tool:write-line".to_string(),
+                });
+            }
+        };
+
+        let mut handles = get_file_handles().borrow_mut();
+        let file_handle = handles
+            .get_mut(&handle_id)
+            .ok_or_else(|| RuntimeError::Generic(format!("Invalid file handle: {}", handle_id)))?;
+
+        let mut line = content.clone();
+        line.push('\n'); // Add newline
+
+        match file_handle.file.write_all(line.as_bytes()) {
+            Ok(_) => Ok(Value::Boolean(true)),
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "Error writing to file: {}",
+                e
+            ))),
+        }
+    }
+
+    fn tool_close_file(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:close-file".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let handle_id = match &args[0] {
+            Value::Integer(id) => *id,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "tool:close-file".to_string(),
+                });
+            }
+        };
+
+        let mut handles = get_file_handles().borrow_mut();
+        if handles.remove(&handle_id).is_some() {
+            Ok(Value::Boolean(true))
+        } else {
+            Err(RuntimeError::Generic(format!(
+                "Invalid file handle: {}",
+                handle_id
+            )))
+        }
     }
 
     fn tool_get_env(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2045,11 +2572,160 @@ impl StandardLibrary {
         }
     }
 
-    fn tool_http_fetch(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Placeholder - HTTP operations not implemented
-        Err(RuntimeError::NotImplemented(
-            "HTTP operations not implemented".to_string(),
-        ))
+    fn tool_http_fetch(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() < 1 || args.len() > 4 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool:http-fetch".to_string(),
+                expected: "1-4".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let url = match &args[0] {
+            Value::String(u) => u,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "tool:http-fetch".to_string(),
+                });
+            }
+        };
+
+        let method = if args.len() > 1 {
+            match &args[1] {
+                Value::String(m) => m.to_uppercase(),
+                Value::Keyword(k) => k.0.to_uppercase(),
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "string or keyword".to_string(),
+                        actual: args[1].type_name().to_string(),
+                        operation: "tool:http-fetch".to_string(),
+                    });
+                }
+            }
+        } else {
+            "GET".to_string()
+        };
+
+        // Parse custom headers (optional 3rd argument)
+        let custom_headers = if args.len() > 2 {
+            match &args[2] {
+                Value::Map(header_map) => Some(header_map.clone()),
+                Value::Nil => None,
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "map or nil".to_string(),
+                        actual: args[2].type_name().to_string(),
+                        operation: "tool:http-fetch headers".to_string(),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        // Parse request body (optional 4th argument)
+        let request_body = if args.len() > 3 {
+            match &args[3] {
+                Value::String(body) => Some(body.clone()),
+                Value::Nil => None,
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "string or nil".to_string(),
+                        actual: args[3].type_name().to_string(),
+                        operation: "tool:http-fetch body".to_string(),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        // Use a blocking HTTP client for simplicity
+        let client = reqwest::blocking::Client::new();
+
+        let mut request = match method.as_str() {
+            "GET" => client.get(url),
+            "POST" => client.post(url),
+            "PUT" => client.put(url),
+            "DELETE" => client.delete(url),
+            "PATCH" => client.patch(url),
+            "HEAD" => client.head(url),
+            _ => {
+                return Err(RuntimeError::InvalidArgument(format!(
+                    "Unsupported HTTP method: {}. Use GET, POST, PUT, DELETE, PATCH, or HEAD",
+                    method
+                )));
+            }
+        };
+
+        // Add custom headers if provided
+        if let Some(headers) = custom_headers {
+            for (key, value) in headers {
+                let header_name = match key {
+                    MapKey::String(s) => s,
+                    MapKey::Keyword(k) => k.0.clone(),
+                    _ => continue, // Skip non-string/keyword keys
+                };
+
+                let header_value = match value {
+                    Value::String(s) => s,
+                    Value::Integer(i) => i.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Boolean(b) => b.to_string(),
+                    _ => continue, // Skip unsupported value types
+                };
+
+                request = request.header(header_name, header_value);
+            }
+        }
+
+        // Add request body if provided
+        if let Some(body) = request_body {
+            request = request.body(body);
+        }
+
+        match request.send() {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let headers = response.headers();
+
+                // Convert headers to a map
+                let mut header_map = HashMap::new();
+                for (key, value) in headers {
+                    let key_str = key.as_str();
+                    if let Ok(value_str) = value.to_str() {
+                        header_map.insert(
+                            MapKey::String(key_str.to_string()),
+                            Value::String(value_str.to_string()),
+                        );
+                    }
+                }
+
+                // Try to get the response body as text
+                let body = match response.text() {
+                    Ok(text) => Value::String(text),
+                    Err(_) => Value::String("".to_string()),
+                };
+
+                // Create response map
+                let mut response_map = HashMap::new();
+                response_map.insert(
+                    MapKey::Keyword(Keyword("status".to_string())),
+                    Value::Integer(status as i64),
+                );
+                response_map.insert(
+                    MapKey::Keyword(Keyword("headers".to_string())),
+                    Value::Map(header_map),
+                );
+                response_map.insert(MapKey::Keyword(Keyword("body".to_string())), body);
+
+                Ok(Value::Map(response_map))
+            }
+            Err(e) => Err(RuntimeError::Generic(format!("HTTP request failed: {}", e))),
+        }
     }
 
     fn tool_file_exists_p(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2278,6 +2954,54 @@ impl StandardLibrary {
         }
         Ok(accumulator)
     }
+
+    fn string_contains(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "string-contains".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let haystack = match &args[0] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "string-contains".to_string(),
+                })
+            }
+        };
+
+        let needle = match &args[1] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "string-contains".to_string(),
+                })
+            }
+        };
+
+        Ok(Value::Boolean(haystack.contains(needle)))
+    }
+
+    fn type_name(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "type-name".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        Ok(Value::String(args[0].type_name().to_string()))
+    }
 }
 
 /// Load the standard library into a module registry
@@ -2367,6 +3091,12 @@ fn add_stdlib_exports(exports: &mut HashMap<String, ModuleExport>) {
     add_function_export(exports, "str-length", |args| {
         StandardLibrary::string_length(args.to_vec())
     });
+    add_function_export(exports, "string-contains", |args| {
+        StandardLibrary::string_contains(args.to_vec())
+    });
+    add_function_export(exports, "type-name", |args| {
+        StandardLibrary::type_name(args.to_vec())
+    });
 
     // Add collection functions
     add_function_export(exports, "count", |args| {
@@ -2442,23 +3172,83 @@ fn add_stdlib_exports(exports: &mut HashMap<String, ModuleExport>) {
     add_function_export(exports, "tool/log", |args| {
         StandardLibrary::tool_log(args.to_vec())
     });
+    add_function_export(exports, "tool:log", |args| {
+        StandardLibrary::tool_log(args.to_vec())
+    });
     add_function_export(exports, "tool/print", |args| {
         StandardLibrary::tool_print(args.to_vec())
     });
+    add_function_export(exports, "tool:print", |args| {
+        StandardLibrary::tool_print(args.to_vec())
+    });
+    add_function_export(exports, "println", |args| {
+        StandardLibrary::println(args.to_vec())
+    });
     add_function_export(exports, "tool/current-time", |args| {
+        StandardLibrary::tool_current_time(args.to_vec())
+    });
+    add_function_export(exports, "tool:current-time", |args| {
         StandardLibrary::tool_current_time(args.to_vec())
     });
     add_function_export(exports, "tool/parse-json", |args| {
         StandardLibrary::tool_parse_json(args.to_vec())
     });
+    add_function_export(exports, "tool:parse-json", |args| {
+        StandardLibrary::tool_parse_json(args.to_vec())
+    });
     add_function_export(exports, "tool/serialize-json", |args| {
+        StandardLibrary::tool_serialize_json(args.to_vec())
+    });
+    add_function_export(exports, "tool:serialize-json", |args| {
         StandardLibrary::tool_serialize_json(args.to_vec())
     });
     add_function_export(exports, "tool/get-env", |args| {
         StandardLibrary::tool_get_env(args.to_vec())
     });
+    add_function_export(exports, "tool:get-env", |args| {
+        StandardLibrary::tool_get_env(args.to_vec())
+    });
     add_function_export(exports, "tool/file-exists?", |args| {
         StandardLibrary::tool_file_exists_p(args.to_vec())
+    });
+    add_function_export(exports, "tool:file-exists?", |args| {
+        StandardLibrary::tool_file_exists_p(args.to_vec())
+    });
+    add_function_export(exports, "tool/http-fetch", |args| {
+        StandardLibrary::tool_http_fetch(args.to_vec())
+    });
+    add_function_export(exports, "tool:http-fetch", |args| {
+        StandardLibrary::tool_http_fetch(args.to_vec())
+    });
+    add_function_export(exports, "tool/current-timestamp-ms", |args| {
+        StandardLibrary::current_timestamp_ms(args.to_vec())
+    });
+    add_function_export(exports, "tool:current-timestamp-ms", |args| {
+        StandardLibrary::current_timestamp_ms(args.to_vec())
+    });
+    add_function_export(exports, "tool/open-file", |args| {
+        StandardLibrary::tool_open_file(args.to_vec())
+    });
+    add_function_export(exports, "tool:open-file", |args| {
+        StandardLibrary::tool_open_file(args.to_vec())
+    });
+    add_function_export(exports, "tool/read-line", |args| {
+        StandardLibrary::tool_read_line(args.to_vec())
+    });
+    add_function_export(exports, "tool:read-line", |args| {
+        StandardLibrary::tool_read_line(args.to_vec())
+    });
+    add_function_export(exports, "tool/write-line", |args| {
+        StandardLibrary::tool_write_line(args.to_vec())
+    });
+    add_function_export(exports, "tool:write-line", |args| {
+        StandardLibrary::tool_write_line(args.to_vec())
+    });
+    add_function_export(exports, "tool/close-file", |args| {
+        StandardLibrary::tool_close_file(args.to_vec())
+    });
+    add_function_export(exports, "tool:close-file", |args| {
+        StandardLibrary::tool_close_file(args.to_vec())
     });
 
     // Add agent functions
@@ -2482,6 +3272,33 @@ fn add_stdlib_exports(exports: &mut HashMap<String, ModuleExport>) {
     });
     add_function_export(exports, "current-timestamp-ms", |args| {
         StandardLibrary::current_timestamp_ms(args.to_vec())
+    });
+    add_function_export(exports, "range", |args| {
+        StandardLibrary::range(args.to_vec())
+    });
+    add_function_export(exports, "inc", |args| {
+        if args.len() != 1 {
+            return Err(RuntimeError::Generic(
+                "inc expects exactly 1 argument".to_string(),
+            ));
+        }
+        match &args[0] {
+            Value::Integer(n) => Ok(Value::Integer(n + 1)),
+            Value::Float(f) => Ok(Value::Float(f + 1.0)),
+            _ => Err(RuntimeError::Generic("inc expects a number".to_string())),
+        }
+    });
+    add_function_export(exports, "dec", |args| {
+        if args.len() != 1 {
+            return Err(RuntimeError::Generic(
+                "dec expects exactly 1 argument".to_string(),
+            ));
+        }
+        match &args[0] {
+            Value::Integer(n) => Ok(Value::Integer(n - 1)),
+            Value::Float(f) => Ok(Value::Float(f - 1.0)),
+            _ => Err(RuntimeError::Generic("dec expects a number".to_string())),
+        }
     });
 }
 

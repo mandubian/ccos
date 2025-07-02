@@ -1,6 +1,6 @@
 use crate::ast::{
     ActionDefinition, CapabilityDefinition, ImportDefinition, IntentDefinition, ModuleDefinition,
-    PlanDefinition, Property, ResourceDefinition, Symbol, TopLevel,
+    ModuleLevelDefinition, PlanDefinition, Property, ResourceDefinition, Symbol, TopLevel,
 };
 use crate::parser::common::{build_keyword, build_symbol, next_significant};
 use crate::parser::errors::{invalid_input_error, pair_to_source_span, PestParseError};
@@ -186,13 +186,46 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
         .ok_or_else(|| invalid_input_error("Missing module name", &pair))?;
     let name = build_symbol(name_pair)?;
 
-    // For now, create a minimal module definition
-    // TODO: Parse exports, docstring, and definitions
+    // Parse exports if present
+    let mut exports = None;
+    if let Some(next_pair) = inner.peek() {
+        if next_pair.as_rule() == Rule::export_option {
+            let export_pair = inner.next().unwrap();
+            let export_symbols =
+                build_export_option(&export_pair, export_pair.clone().into_inner())?;
+            exports = Some(export_symbols);
+        }
+    }
+
+    // Parse definitions
+    let mut definitions = Vec::new();
+    for def_pair in inner {
+        match def_pair.as_rule() {
+            Rule::def_expr => {
+                let def_expr = crate::parser::special_forms::build_def_expr(def_pair)?;
+                definitions.push(ModuleLevelDefinition::Def(def_expr));
+            }
+            Rule::defn_expr => {
+                let defn_expr = crate::parser::special_forms::build_defn_expr(def_pair)?;
+                definitions.push(ModuleLevelDefinition::Defn(defn_expr));
+            }
+            Rule::import_definition => {
+                // For now, skip import definitions as they're not fully implemented
+                // TODO: Implement import definition parsing
+                continue;
+            }
+            _ => {
+                // Skip whitespace and other non-definition rules
+                continue;
+            }
+        }
+    }
+
     Ok(ModuleDefinition {
         name,
-        docstring: None,
-        exports: None,
-        definitions: vec![],
+        docstring: None, // TODO: Parse docstring if present
+        exports,
+        definitions,
     })
 }
 

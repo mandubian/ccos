@@ -389,6 +389,7 @@ pub enum CatchPattern {
     Keyword(Keyword), // e.g. :Error
     Type(TypeExpr),   // e.g. :my.pkg/CustomErrorType
     Symbol(Symbol),   // e.g. AnyError - acts as a catch-all with binding
+    Wildcard,         // e.g. _ - matches any error
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]

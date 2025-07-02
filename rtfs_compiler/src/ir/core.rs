@@ -286,6 +286,14 @@ pub enum IrNode {
         ir_type: IrType,
         source_location: Option<SourceLocation>,
     },
+
+    Destructure {
+        id: NodeId,
+        pattern: IrPattern,
+        value: Box<IrNode>,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
 }
 
 /// Captured variable information for closures
@@ -380,6 +388,7 @@ impl IrNode {
             IrNode::Task { id, .. } => *id,
             IrNode::TaskContextAccess { id, .. } => *id,
             IrNode::DiscoverAgents { id, .. } => *id,
+            IrNode::Destructure { id, .. } => *id,
         }
     }
 
@@ -409,6 +418,7 @@ impl IrNode {
             IrNode::Task { ir_type, .. } => Some(ir_type),
             IrNode::TaskContextAccess { ir_type, .. } => Some(ir_type),
             IrNode::DiscoverAgents { ir_type, .. } => Some(ir_type),
+            IrNode::Destructure { ir_type, .. } => Some(ir_type),
             _ => None,
         }
     }
@@ -492,6 +502,9 @@ impl IrNode {
                 source_location, ..
             } => source_location.as_ref(),
             IrNode::Map {
+                source_location, ..
+            } => source_location.as_ref(),
+            IrNode::Destructure {
                 source_location, ..
             } => source_location.as_ref(),
         }

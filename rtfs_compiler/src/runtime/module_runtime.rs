@@ -623,18 +623,26 @@ impl ModuleRegistry {
         source_content: &str,
         module_path: &PathBuf,
     ) -> RuntimeResult<crate::ast::ModuleDefinition> {
-        // For now, return a simple placeholder module definition
-        // In a real implementation, this would use the parser to parse the source
-        let placeholder_module = crate::ast::ModuleDefinition {
-            name: crate::ast::Symbol("placeholder".to_string()),
-            docstring: None,
-            definitions: vec![],
-            exports: None,
-        };
+        // Parse the source content using the existing parser
+        let parsed = crate::parser::parse(source_content).map_err(|e| {
+            RuntimeError::ModuleError(format!(
+                "Failed to parse module file '{}': {:?}",
+                module_path.display(),
+                e
+            ))
+        })?;
 
-        // TODO: Implement actual parsing of source_content
-        // This is a temporary implementation to resolve the compilation error
-        Ok(placeholder_module)
+        // Find the module definition in the parsed AST
+        for top_level in parsed {
+            if let crate::ast::TopLevel::Module(module_def) = top_level {
+                return Ok(module_def);
+            }
+        }
+
+        Err(RuntimeError::ModuleError(format!(
+            "No module definition found in file '{}'",
+            module_path.display()
+        )))
     }
 }
 

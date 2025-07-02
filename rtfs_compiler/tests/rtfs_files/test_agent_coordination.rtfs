@@ -1,10 +1,10 @@
-; RTFS Advanced Real-World Example: Distributed Agent Coordination System
-; This example demonstrates advanced RTFS features for multi-agent task coordination:
-; - Agent discovery and dynamic capability matching
-; - Complex workflow orchestration with fault tolerance
-; - Advanced pattern matching and decision trees
-; - Resource sharing and coordination between agents
-; - Real-time monitoring and adaptive load balancing
+;; RTFS Advanced Real-World Example: Distributed Agent Coordination System
+;; This example demonstrates advanced RTFS features for multi-agent task coordination:
+;; - Agent discovery and dynamic capability matching
+;; - Complex workflow orchestration with fault tolerance
+;; - Advanced pattern matching and decision trees
+;; - Resource sharing and coordination between agents
+;; - Real-time monitoring and adaptive load balancing
 
 (task
   :id "distributed-agent-coordination-v2"

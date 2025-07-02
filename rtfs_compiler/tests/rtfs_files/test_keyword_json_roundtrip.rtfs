@@ -1,0 +1,27 @@
+;; Test keyword round-trip with JSON
+;; This demonstrates the current issue where keyword keys become strings after JSON round-trip
+
+;; Create a map with keyword keys
+(let [data {:name "John" :age 30 :city "New York"}]
+  (println "Original data:")
+  (println data)
+  
+  ;; Serialize to JSON
+  (let [json-str (tool:serialize-json data)]
+    (println "\nSerialized JSON:")
+    (println json-str)
+    
+    ;; Parse back from JSON
+    (let [parsed-data (tool:parse-json json-str)]
+      (println "\nParsed back data:")
+      (println parsed-data)
+      
+      ;; Check if keys are still keywords
+      (println "\nChecking key types:")
+      (println "Original :name is keyword?" (keyword? (:name data)))
+      (println "Parsed :name is keyword?" (keyword? (:name parsed-data)))
+      
+      ;; This will fail because parsed keys are strings, not keywords
+      (println "\nTrying to access with keyword:")
+      (println "Original: " (:name data))
+      (println "Parsed: " (:name parsed-data))))) 

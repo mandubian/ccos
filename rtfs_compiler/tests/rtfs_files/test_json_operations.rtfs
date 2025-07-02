@@ -1,0 +1,23 @@
+;; Test JSON operations
+(def test-data 
+  {:name "John Doe"
+   :age 30
+   :active true
+   :scores [85 92 78]
+   :address {:street "123 Main St"
+             :city "Anytown"
+             :zip "12345"}})
+
+;; Test JSON serialization
+(def json-string (tool:serialize-json test-data))
+(println "Serialized JSON:")
+(println json-string)
+
+;; Test JSON parsing
+(def parsed-data (tool:parse-json json-string))
+(println "\nParsed data:")
+(println parsed-data)
+
+;; Test round-trip equality
+(println "\nRound-trip test:")
+(println (= test-data parsed-data)) 

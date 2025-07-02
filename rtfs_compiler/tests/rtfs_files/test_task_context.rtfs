@@ -1,4 +1,4 @@
-; Simple test for TaskContext parsing
+;; Simple test for TaskContext parsing
 (let [task-context (rtfs.task/current)
       value (get task-context "key")]
   value)
