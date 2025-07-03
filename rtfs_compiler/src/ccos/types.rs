@@ -37,6 +37,8 @@ pub struct Intent {
     /// Human-readable symbolic name (RTFS symbol) for the intent
     pub name: String,
     pub intent_id: IntentId,
+    /// Original natural language request from user
+    pub original_request: String,
     pub goal: String,
     pub constraints: HashMap<String, Value>,
     pub preferences: HashMap<String, Value>,
@@ -50,8 +52,13 @@ pub struct Intent {
 }
 
 impl Intent {
-    /// Create a new intent with an auto-generated name (same as intent_id) and goal
+    /// Create a new intent using the same string for original request and goal
     pub fn new(goal: String) -> Self {
+        Self::new_with_request(goal.clone(), goal)
+    }
+
+    /// Create a new intent with explicit original natural language request and goal
+    pub fn new_with_request(original_request: String, goal: String) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -60,6 +67,7 @@ impl Intent {
         Self {
             intent_id: format!("intent-{}", Uuid::new_v4()),
             name: String::new(),
+            original_request,
             goal,
             constraints: HashMap::new(),
             preferences: HashMap::new(),
@@ -74,10 +82,15 @@ impl Intent {
     }
 
     /// Create a new intent with explicit symbolic name
-    pub fn with_name(name: String, goal: String) -> Self {
-        let mut intent = Self::new(goal);
+    pub fn with_name(name: String, original_request: String, goal: String) -> Self {
+        let mut intent = Self::new_with_request(original_request, goal);
         intent.name = name;
         intent
+    }
+
+    /// Create a new intent from natural language request
+    pub fn from_natural_language(original_request: String) -> Self {
+        Self::new_with_request(original_request.clone(), original_request)
     }
 
     pub fn with_constraint(mut self, key: String, value: Value) -> Self {
@@ -110,6 +123,15 @@ pub enum IntentStatus {
     Suspended,
 }
 
+/// Represents the current lifecycle state of a plan
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PlanStatus {
+    Running,
+    Paused,
+    Completed,
+    Aborted,
+}
+
 /// Represents a transient but archivable RTFS script
 /// This is the "how" - the concrete, executable RTFS program
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -137,6 +159,12 @@ pub struct Plan {
     pub language: PlanLanguage,
     pub body: PlanBody,
     pub intent_ids: Vec<IntentId>,
+    /// Lifecycle status of this plan
+    pub status: PlanStatus,
+    /// If this plan replaces another, keep the parent id for audit
+    pub parent_plan_id: Option<PlanId>,
+    /// If aborted, the index (0-based) of the step where execution stopped
+    pub aborted_at_step: Option<u32>,
     pub created_at: u64,
     pub executed_at: Option<u64>,
     pub metadata: HashMap<String, Value>,
@@ -155,6 +183,9 @@ impl Plan {
             language,
             body,
             intent_ids,
+            status: PlanStatus::Running,
+            parent_plan_id: None,
+            aborted_at_step: None,
             created_at: now,
             executed_at: None,
             metadata: HashMap::new(),
@@ -178,7 +209,15 @@ impl Plan {
         Self::new(PlanLanguage::Rtfs20, PlanBody::Text(rtfs_code), intent_ids)
     }
 
-    pub fn mark_executed(&mut self) {
+    /// mark as aborted helper
+    pub fn mark_aborted(&mut self, step_index: u32) {
+        self.status = PlanStatus::Aborted;
+        self.aborted_at_step = Some(step_index);
+    }
+
+    /// mark completed helper
+    pub fn mark_completed(&mut self) {
+        self.status = PlanStatus::Completed;
         self.executed_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -188,6 +227,24 @@ impl Plan {
     }
 }
 
+/// Action category for provenance tracking
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ActionType {
+    /// Standard capability/function execution
+    CapabilityCall,
+    /// Lifecycle markers for plans
+    PlanStarted,
+    PlanPaused,
+    PlanResumed,
+    PlanAborted,
+    PlanCompleted,
+    /// Optional fine-grained runtime step inside RTFS evaluator
+    InternalStep,
+}
+
+/// Built-in capability id for human-in-the-loop questions
+pub const ASK_HUMAN_CAPABILITY_ID: &str = "ccos.ask-human";
+
 /// Represents an immutable record in the Causal Chain
 /// This is the "what happened" - a single, auditable event
 #[derive(Debug, Clone)]
@@ -195,6 +252,8 @@ pub struct Action {
     pub action_id: ActionId,
     pub plan_id: PlanId,
     pub intent_id: IntentId,
+    /// Category of this action (capability call, plan lifecycle, etc.)
+    pub action_type: ActionType,
     pub capability_id: Option<CapabilityId>,
     pub function_name: String,
     pub arguments: Vec<Value>,
@@ -208,7 +267,29 @@ pub struct Action {
 }
 
 impl Action {
-    pub fn new(
+    /// Create a new capability call action
+    pub fn new_capability(
+        plan_id: PlanId,
+        intent_id: IntentId,
+        function_name: String,
+        arguments: Vec<Value>,
+    ) -> Self {
+        Self::base_new(
+            ActionType::CapabilityCall,
+            plan_id,
+            intent_id,
+            function_name,
+            arguments,
+        )
+    }
+
+    /// Create a plan lifecycle action (Started, Aborted, etc.)
+    pub fn new_lifecycle(plan_id: PlanId, intent_id: IntentId, action_type: ActionType) -> Self {
+        Self::base_new(action_type, plan_id, intent_id, String::new(), Vec::new())
+    }
+
+    fn base_new(
+        action_type: ActionType,
         plan_id: PlanId,
         intent_id: IntentId,
         function_name: String,
@@ -223,6 +304,7 @@ impl Action {
             action_id: format!("action-{}", Uuid::new_v4()),
             plan_id,
             intent_id,
+            action_type,
             capability_id: None,
             function_name,
             arguments,
@@ -234,6 +316,16 @@ impl Action {
             timestamp: now,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Backwards-compat helper (old signature)
+    pub fn new(
+        plan_id: PlanId,
+        intent_id: IntentId,
+        function_name: String,
+        arguments: Vec<Value>,
+    ) -> Self {
+        Self::new_capability(plan_id, intent_id, function_name, arguments)
     }
 
     pub fn with_capability(mut self, capability_id: CapabilityId) -> Self {

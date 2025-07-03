@@ -1,6 +1,7 @@
 // Runtime system for RTFS
 // This module contains the evaluator, standard library, and runtime value system
 
+pub mod capability;
 pub mod environment;
 pub mod error;
 pub mod evaluator;

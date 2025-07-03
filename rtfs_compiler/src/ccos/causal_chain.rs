@@ -619,6 +619,97 @@ impl CausalChain {
             .filter(|action| action.timestamp >= start_time && action.timestamp <= end_time)
             .collect()
     }
+
+    /// Log a lifecycle event (PlanStarted, PlanAborted, PlanCompleted, ...)
+    pub fn log_plan_event(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        action_type: super::types::ActionType,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+        // Create lifecycle action
+        let action = Action::new_lifecycle(plan_id.clone(), intent_id.clone(), action_type.clone());
+
+        // Sign
+        let signature = self.signing.sign_action(&action);
+        let mut signed_action = action.clone();
+        signed_action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
+
+        // Append to ledger & metrics
+        self.ledger.append_action(signed_action.clone())?;
+        self.metrics.record_action(&signed_action)?;
+
+        Ok(signed_action)
+    }
+
+    /// Convenience wrappers
+    pub fn log_plan_started(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+    ) -> Result<(), RuntimeError> {
+        self.log_plan_event(plan_id, intent_id, super::types::ActionType::PlanStarted)?;
+        Ok(())
+    }
+
+    pub fn log_plan_aborted(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+    ) -> Result<(), RuntimeError> {
+        self.log_plan_event(plan_id, intent_id, super::types::ActionType::PlanAborted)?;
+        Ok(())
+    }
+
+    pub fn log_plan_completed(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+    ) -> Result<(), RuntimeError> {
+        self.log_plan_event(plan_id, intent_id, super::types::ActionType::PlanCompleted)?;
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------------
+    // Capability call logging
+    // ---------------------------------------------------------------------
+
+    /// Record a capability call in the causal chain.
+    pub fn log_capability_call(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        capability_id: &CapabilityId,
+        function_name: &str,
+        args: Vec<Value>,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+
+        // Build action
+        let action = Action::new_capability(
+            plan_id.clone(),
+            intent_id.clone(),
+            function_name.to_string(),
+            args,
+        )
+        .with_capability(capability_id.to_string());
+
+        // Sign
+        let signature = self.signing.sign_action(&action);
+        let mut signed_action = action.clone();
+        signed_action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
+
+        // Append ledger and metrics
+        self.ledger.append_action(signed_action.clone())?;
+        self.metrics.record_action(&signed_action)?;
+
+        Ok(signed_action)
+    }
 }
 
 #[cfg(test)]

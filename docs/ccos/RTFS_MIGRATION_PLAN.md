@@ -1,8 +1,45 @@
-# RTFS Migration Plan: 1.0 → 2.0
+# RTFS → CCOS Migration Plan
+
+**Location Notice:**
+This migration plan has been moved from `docs/rtfs-2.0/migration/` to `docs/ccos/` to reflect the transition from RTFS 2.0 to the Cognitive Computing Operating System (CCOS) foundation. All future CCOS-related documentation will be found in `docs/ccos/`.
+
+**See also:** [CCOS Foundation Documentation](./CCOS_FOUNDATION.md)
+
+---
+
+# Migration Plan: RTFS 2.0 → CCOS Foundation
+
+This document outlines the migration strategy from the RTFS 2.0 language/runtime to the CCOS foundation layer. The CCOS foundation builds on RTFS 2.0, providing cognitive infrastructure (Intent Graph, Causal Chain, Task Context, Context Horizon) and enabling the next phase of intelligent, orchestrated execution.
+
+## Relationship Between RTFS 2.0 and CCOS
+
+- **RTFS 2.0** provides the language, parser, IR, runtime, and module system.
+- **CCOS** builds on RTFS 2.0, adding cognitive substrate: persistent intent graphs, immutable causal chains, context propagation, and context horizon management.
+- The migration is evolutionary: all RTFS 2.0 code and modules remain valid, but are now orchestrated and extended by the CCOS foundation.
+
+## Migration Steps (Summary)
+
+1. **Stabilize RTFS 2.0 Core:**
+   - Ensure all language features, IR, and runtime are stable and tested.
+2. **Implement CCOS Foundation Modules:**
+   - Add Intent Graph, Causal Chain, Task Context, Context Horizon (see [CCOS Foundation Documentation](./CCOS_FOUNDATION.md)).
+3. **Integrate RTFS Runtime with CCOS:**
+   - Wire RTFS plan execution through CCOSRuntime for context-aware, auditable execution.
+4. **Migrate Documentation:**
+   - Move all CCOS-related docs to `docs/ccos/`.
+   - Reference CCOS foundation in RTFS 2.0 docs as the new execution substrate.
+5. **Deprecate Standalone RTFS 2.0 Execution:**
+   - All new features and orchestration should use the CCOS foundation.
+
+## See Also
+
+- [CCOS Foundation Documentation](./CCOS_FOUNDATION.md)
+- [CCOS Roadmap](../CCOS_ROADMAP.md)
+- [Arbiter/CCOSRuntime Relationship](../ARBITER_CCOSRUNTIME_RELATIONSHIP.md)
 
 ## Overview
 
-This document outlines the migration strategy from RTFS 1.0 to RTFS 2.0, focusing on maintaining backward compatibility while introducing new object-oriented features.
+This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusing on maintaining backward compatibility while introducing new object-oriented features.
 
 ## Migration Phases
 
@@ -167,14 +204,14 @@ This document outlines the migration strategy from RTFS 1.0 to RTFS 2.0, focusin
   - [x] Environment lookup differences that favor user-defined functions in some cases
   - [x] Balanced approach maintaining speed for builtins while enabling full power for user-defined functions
 
-### Phase 6: Runtime Integration 🔄 PENDING
+### Phase 6: Runtime Integration 🟡 IN PROGRESS
 
 - [ ] **Object Runtime Support**
 
   - [ ] Intent execution engine
-  - [ ] Plan execution with step tracking
+  - [x] Plan execution with step tracking **(initial lifecycle logging via `CausalChain::log_plan_*`)**
   - [ ] Action execution with parameter binding
-  - [ ] Capability resolution and invocation
+  - [x] Capability resolution and invocation **(capability wrapping & automatic `CapabilityCall` ledger entries)**
   - [ ] Resource management and access control
   - [ ] Module loading and dependency resolution
 
@@ -290,10 +327,28 @@ This document outlines the migration strategy from RTFS 1.0 to RTFS 2.0, focusin
   - [ ] Human oversight mechanisms
 
 - [ ] **Empathetic Symbiote**
+
   - [ ] Multi-modal user interface
   - [ ] Ambient interaction capabilities
   - [ ] Cognitive partnership features
   - [ ] Personalized experience adaptation
+
+- [ ] **Immune System**
+
+  - [ ] Trust verification (ZK proofs)
+  - [ ] Pathogen detection & quarantine
+  - [ ] Security patch broadcast ("vaccine")
+
+- [ ] **Resource Homeostasis (Metabolism)**
+
+  - [ ] Resource budgeting rules
+  - [ ] Off-peak compute foraging
+  - [ ] Idle-capability credit trading
+
+- [ ] **Persona & Memory Continuity**
+  - [ ] Persona object schema
+  - [ ] Identity versioning
+  - [ ] Preference & memory storage
 
 ## Current Status
 
@@ -419,18 +474,18 @@ This document outlines the migration strategy from RTFS 1.0 to RTFS 2.0, focusin
 - **Phase 4**: 100% Complete ✅
 - **Phase 5**: 100% Complete ✅
 - **Phase 5.5**: 100% Complete ✅
-- **Phase 6**: 0% Complete 🔄
+- **Phase 6**: 15% Complete 🟡
 - **Phase 7**: 0% Complete 🔄
 - **Phase 8**: 0% Complete 🔄
 - **Phase 9**: 0% Complete 🔄
 - **Phase 10**: 0% Complete 🔄
 - **Phase 11**: 0% Complete 🔄
 
-**Progress:** 41%
+**Progress:** 43%
 
 ---
 
-_Last updated: [auto-update on higher-order function implementation and test consolidation]_
+_Last updated: July 2025 – capability logging & plan lifecycle integration_
 
 ## Testing Strategy
 
@@ -516,8 +571,8 @@ The RTFS 2.0 migration has made significant progress with the core infrastructur
 - [ ] Address remaining warnings and dead code
 - [ ] Further runtime and IR migration
 
-**Progress:** 41%
+**Progress:** 43%
 
 ---
 
-_Last updated: [auto-update on higher-order function implementation and test consolidation]_
+_Last updated: July 2025 – capability logging & plan lifecycle integration_
