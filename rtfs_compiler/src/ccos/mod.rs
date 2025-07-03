@@ -10,6 +10,7 @@
 pub mod causal_chain;
 pub mod context_horizon;
 pub mod intent_graph;
+pub mod loaders;
 pub mod subconscious;
 pub mod task_context;
 pub mod types;

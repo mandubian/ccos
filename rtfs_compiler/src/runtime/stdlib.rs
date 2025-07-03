@@ -868,6 +868,19 @@ impl StandardLibrary {
                 func: Rc::new(Self::tool_http_fetch),
             })),
         );
+
+        // ------------------------------------------------------------------
+        // Human-in-the-loop helper (ccos.ask-human capability)
+        // ------------------------------------------------------------------
+
+        env.define(
+            &Symbol("ask-human".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "ask-human".to_string(),
+                arity: Arity::Range(1, 2), // prompt [expected-type]
+                func: Rc::new(Self::ask_human),
+            })),
+        );
     }
 
     /// Load agent system functions
@@ -3002,6 +3015,52 @@ impl StandardLibrary {
 
         Ok(Value::String(args[0].type_name().to_string()))
     }
+
+    /// ask-human builtin: `(ask-human "What is your name?" [:text])` → resource handle ticket
+    fn ask_human(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "ask-human".to_string(),
+                expected: ">=1".to_string(),
+                actual: 0,
+            });
+        }
+
+        let prompt = match &args[0] {
+            Value::String(s) => s.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "ask-human".to_string(),
+                });
+            }
+        };
+
+        // Expected type is optional; currently ignored but validated if provided
+        if args.len() > 1 {
+            match &args[1] {
+                Value::Keyword(_) | Value::String(_) | Value::Nil => {}
+                other => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "keyword or string".to_string(),
+                        actual: other.type_name().to_string(),
+                        operation: "ask-human".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Generate ticket id
+        let ticket_id = format!("prompt-{}", uuid::Uuid::new_v4());
+
+        // TODO: Integrate with Arbiter::issue_user_prompt so that the prompt
+        // is tracked and surfaced to the external user/interface.
+        // For now, we return a ResourceHandle and rely on the surrounding CCOS
+        // runtime to manage the pending prompt lifecycle.
+
+        Ok(Value::ResourceHandle(ticket_id))
+    }
 }
 
 /// Load the standard library into a module registry
@@ -3299,6 +3358,12 @@ fn add_stdlib_exports(exports: &mut HashMap<String, ModuleExport>) {
             Value::Float(f) => Ok(Value::Float(f - 1.0)),
             _ => Err(RuntimeError::Generic("dec expects a number".to_string())),
         }
+    });
+    add_function_export(exports, "file-exists?", |args| {
+        StandardLibrary::tool_file_exists_p(args.to_vec())
+    });
+    add_function_export(exports, "ask-human", |args| {
+        StandardLibrary::ask_human(args.to_vec())
     });
 }
 

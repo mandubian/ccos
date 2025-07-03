@@ -554,8 +554,9 @@ mod tests {
     fn test_token_estimation() {
         let manager = ContextHorizonManager::new().unwrap();
         let intents = vec![
-            Intent::new("Test goal with some content".to_string()),
-            Intent::new("Another test goal".to_string()),
+            Intent::new("Test goal 1".to_string()),
+            Intent::new("Test goal 2".to_string()),
+            Intent::new("Test goal 3".to_string()),
         ];
 
         let tokens = manager.estimate_intent_tokens(&intents);
