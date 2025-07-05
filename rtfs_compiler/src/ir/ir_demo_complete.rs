@@ -1,10 +1,10 @@
 // Complete IR Pipeline Demonstration
 // Shows AST→IR conversion with a real RTFS program
 
-use crate::ir::converter::IrConverter;
 use crate::ast::*;
+use crate::ir::converter::IrConverter;
+use crate::ir::core::IrNode;
 use crate::ir::enhanced_optimizer::EnhancedOptimizationPipeline;
-use crate::ir::core::{IrNode};
 use std::collections::HashMap;
 
 /// Demonstrate the complete IR conversion pipeline
@@ -14,12 +14,12 @@ pub fn demonstrate_ir_pipeline() {
 
     // Create a comprehensive example AST representing a real RTFS program
     let sample_ast = create_comprehensive_sample_ast();
-    
+
     println!("📝 Sample RTFS Program (AST representation):");
     print_ast_structure(&sample_ast);
-    
+
     println!("\n🔄 Converting AST to IR...\n");
-    
+
     // Convert AST to IR
     let mut converter = IrConverter::new();
     match converter.convert(&sample_ast) {
@@ -27,13 +27,13 @@ pub fn demonstrate_ir_pipeline() {
             println!("✅ IR Conversion Successful!");
             println!("\n🔧 Generated IR Structure:");
             print_ir_structure(&ir_node, 0);
-            
+
             println!("\n📊 IR Conversion Statistics:");
             print_conversion_stats(&ir_node);
-            
+
             println!("\n🎯 Type Information:");
             print_type_analysis(&ir_node);
-            
+
             println!("\n🔮 Optimization Opportunities:");
             analyze_optimization_opportunities(&ir_node);
         }
@@ -41,7 +41,7 @@ pub fn demonstrate_ir_pipeline() {
             println!("❌ IR Conversion Failed: {:?}", error);
         }
     }
-    
+
     println!("\n{}", "=".repeat(50));
     println!("🎉 IR Pipeline Demonstration Complete!");
 }
@@ -53,12 +53,12 @@ pub fn demonstrate_ir_optimization_pipeline() {
 
     // Create a sample AST with optimization opportunities
     let sample_ast = create_optimization_sample_ast();
-    
+
     println!("📝 Sample RTFS Program (with optimization opportunities):");
     print_ast_structure(&sample_ast);
-    
+
     println!("\n🔄 Converting AST to IR...\n");
-    
+
     // Convert AST to IR
     let mut converter = IrConverter::new();
     match converter.convert(&sample_ast) {
@@ -66,19 +66,19 @@ pub fn demonstrate_ir_optimization_pipeline() {
             println!("✅ IR Conversion Successful!");
             println!("\n🔧 Original IR Structure (before optimization):");
             print_ir_structure(&ir_node, 0);
-            
+
             println!("\n🎯 Applying Optimizations...");
-              // Create and apply optimization pipeline
+            // Create and apply optimization pipeline
             let mut optimizer = EnhancedOptimizationPipeline::new();
-            
+
             let optimized_ir = optimizer.optimize(ir_node.clone());
-            
+
             println!("\n🚀 Optimized IR Structure:");
             print_ir_structure(&optimized_ir, 0);
-            
+
             println!("\n📊 Optimization Results:");
             compare_ir_nodes(&ir_node, &optimized_ir);
-            
+
             println!("\n🔮 Performance Analysis:");
             analyze_performance_improvements(&ir_node, &optimized_ir);
         }
@@ -86,7 +86,7 @@ pub fn demonstrate_ir_optimization_pipeline() {
             println!("❌ IR Conversion Failed: {:?}", error);
         }
     }
-    
+
     println!("\n{}", "=".repeat(60));
     println!("🎉 IR Optimization Pipeline Demonstration Complete!");
 }
@@ -102,7 +102,7 @@ fn create_comprehensive_sample_ast() -> Expression {
     //     (if (> x 40)
     //       (calculate x y)
     //       0)))
-    
+
     Expression::Let(LetExpr {
         bindings: vec![
             // x = 42
@@ -138,51 +138,48 @@ fn create_comprehensive_sample_ast() -> Expression {
                     ],
                     variadic_param: None,
                     return_type: Some(TypeExpr::Primitive(PrimitiveType::Int)),
-                    body: vec![
+                    body: vec![Expression::List(vec![
+                        Expression::Symbol(Symbol("+".to_string())),
+                        Expression::Symbol(Symbol("a".to_string())),
+                        Expression::Symbol(Symbol("b".to_string())),
                         Expression::List(vec![
-                            Expression::Symbol(Symbol("+".to_string())),
+                            Expression::Symbol(Symbol("*".to_string())),
                             Expression::Symbol(Symbol("a".to_string())),
                             Expression::Symbol(Symbol("b".to_string())),
-                            Expression::List(vec![
-                                Expression::Symbol(Symbol("*".to_string())),
-                                Expression::Symbol(Symbol("a".to_string())),
-                                Expression::Symbol(Symbol("b".to_string())),
-                            ]),
-                        ])
-                    ],
+                        ]),
+                    ])],
+                    delegation_hint: None,
                 })),
             },
         ],
-        body: vec![
-            Expression::Do(DoExpr {
-                expressions: vec![
-                    // (log-step :info "Starting calculation" x y)
-                    Expression::LogStep(Box::new(LogStepExpr {
-                        level: Some(Keyword("info".to_string())),
-                        values: vec![
-                            Expression::Literal(Literal::String("Starting calculation".to_string())),
-                            Expression::Symbol(Symbol("x".to_string())),
-                            Expression::Symbol(Symbol("y".to_string())),
-                        ],
-                        location: None,
-                    })),
-                    // (if (> x 40) (calculate x y) 0)
-                    Expression::If(IfExpr {
-                        condition: Box::new(Expression::List(vec![
-                            Expression::Symbol(Symbol(">".to_string())),
-                            Expression::Symbol(Symbol("x".to_string())),
-                            Expression::Literal(Literal::Integer(40)),
-                        ])),
-                        then_branch: Box::new(Expression::List(vec![
-                            Expression::Symbol(Symbol("calculate".to_string())),
-                            Expression::Symbol(Symbol("x".to_string())),
-                            Expression::Symbol(Symbol("y".to_string())),
-                        ])),
-                        else_branch: Some(Box::new(Expression::Literal(Literal::Integer(0)))),
-                    }),
-                ],
-            }),
-        ],
+        body: vec![Expression::Do(DoExpr {
+            expressions: vec![
+                // (log-step :info "Starting calculation" x y)
+                Expression::LogStep(Box::new(LogStepExpr {
+                    level: Some(Keyword("info".to_string())),
+                    values: vec![
+                        Expression::Literal(Literal::String("Starting calculation".to_string())),
+                        Expression::Symbol(Symbol("x".to_string())),
+                        Expression::Symbol(Symbol("y".to_string())),
+                    ],
+                    location: None,
+                })),
+                // (if (> x 40) (calculate x y) 0)
+                Expression::If(IfExpr {
+                    condition: Box::new(Expression::List(vec![
+                        Expression::Symbol(Symbol(">".to_string())),
+                        Expression::Symbol(Symbol("x".to_string())),
+                        Expression::Literal(Literal::Integer(40)),
+                    ])),
+                    then_branch: Box::new(Expression::List(vec![
+                        Expression::Symbol(Symbol("calculate".to_string())),
+                        Expression::Symbol(Symbol("x".to_string())),
+                        Expression::Symbol(Symbol("y".to_string())),
+                    ])),
+                    else_branch: Some(Box::new(Expression::Literal(Literal::Integer(0)))),
+                }),
+            ],
+        })],
     })
 }
 
@@ -198,7 +195,7 @@ fn create_optimization_sample_ast() -> Expression {
     //     (if true        ; Branch folding opportunity
     //         (+ x z)     ; More constant folding after z is folded
     //         999)))      ; Dead branch
-    
+
     Expression::Let(LetExpr {
         bindings: vec![
             LetBinding {
@@ -228,24 +225,22 @@ fn create_optimization_sample_ast() -> Expression {
                 }),
             },
         ],
-        body: vec![
-            Expression::Do(DoExpr {
-                expressions: vec![
-                    Expression::Literal(Literal::String("unused-string".to_string())),
-                    Expression::If(IfExpr {
-                        condition: Box::new(Expression::Literal(Literal::Boolean(true))),
-                        then_branch: Box::new(Expression::FunctionCall {
-                            callee: Box::new(Expression::Symbol(Symbol("+".to_string()))),
-                            arguments: vec![
-                                Expression::Symbol(Symbol("x".to_string())),
-                                Expression::Symbol(Symbol("z".to_string())),
-                            ],
-                        }),
-                        else_branch: Some(Box::new(Expression::Literal(Literal::Integer(999)))),
+        body: vec![Expression::Do(DoExpr {
+            expressions: vec![
+                Expression::Literal(Literal::String("unused-string".to_string())),
+                Expression::If(IfExpr {
+                    condition: Box::new(Expression::Literal(Literal::Boolean(true))),
+                    then_branch: Box::new(Expression::FunctionCall {
+                        callee: Box::new(Expression::Symbol(Symbol("+".to_string()))),
+                        arguments: vec![
+                            Expression::Symbol(Symbol("x".to_string())),
+                            Expression::Symbol(Symbol("z".to_string())),
+                        ],
                     }),
-                ],
-            }),
-        ],
+                    else_branch: Some(Box::new(Expression::Literal(Literal::Integer(999)))),
+                }),
+            ],
+        })],
     })
 }
 
@@ -272,7 +267,15 @@ fn print_ast_recursive(expr: &Expression, indent: usize) {
         }
         Expression::Fn(fn_expr) => {
             println!("{}🔧 Function Expression", prefix);
-            println!("{}  Parameters: {:?}", prefix, fn_expr.params.iter().map(|p| &p.pattern).collect::<Vec<_>>());
+            println!(
+                "{}  Parameters: {:?}",
+                prefix,
+                fn_expr
+                    .params
+                    .iter()
+                    .map(|p| &p.pattern)
+                    .collect::<Vec<_>>()
+            );
             println!("{}  Return Type: {:?}", prefix, fn_expr.return_type);
             println!("{}  Body:", prefix);
             for (i, body_expr) in fn_expr.body.iter().enumerate() {
@@ -343,7 +346,12 @@ fn print_ast_recursive(expr: &Expression, indent: usize) {
 fn print_ir_structure(node: &IrNode, indent: usize) {
     let prefix = "  ".repeat(indent);
     match node {
-        IrNode::Let { bindings, body, ir_type, .. } => {
+        IrNode::Let {
+            bindings,
+            body,
+            ir_type,
+            ..
+        } => {
             println!("{}🏗️  IR Let [Type: {:?}]", prefix, ir_type);
             println!("{}   Bindings:", prefix);
             for (i, binding) in bindings.iter().enumerate() {
@@ -358,7 +366,12 @@ fn print_ir_structure(node: &IrNode, indent: usize) {
                 print_ir_structure(expr, indent + 2);
             }
         }
-        IrNode::Lambda { params, body, ir_type, .. } => {
+        IrNode::Lambda {
+            params,
+            body,
+            ir_type,
+            ..
+        } => {
             println!("{}⚡ IR Lambda [Type: {:?}]", prefix, ir_type);
             println!("{}   Parameters: {}", prefix, params.len());
             for (i, param) in params.iter().enumerate() {
@@ -371,7 +384,12 @@ fn print_ir_structure(node: &IrNode, indent: usize) {
                 print_ir_structure(expr, indent + 2);
             }
         }
-        IrNode::Apply { function, arguments, ir_type, .. } => {
+        IrNode::Apply {
+            function,
+            arguments,
+            ir_type,
+            ..
+        } => {
             println!("{}📞 IR Apply [Return Type: {:?}]", prefix, ir_type);
             println!("{}   Function:", prefix);
             print_ir_structure(function, indent + 1);
@@ -381,14 +399,24 @@ fn print_ir_structure(node: &IrNode, indent: usize) {
                 print_ir_structure(arg, indent + 2);
             }
         }
-        IrNode::Do { expressions, ir_type, .. } => {
+        IrNode::Do {
+            expressions,
+            ir_type,
+            ..
+        } => {
             println!("{}📋 IR Do [Type: {:?}]", prefix, ir_type);
             for (i, expr) in expressions.iter().enumerate() {
                 println!("{}   {}.", prefix, i + 1);
                 print_ir_structure(expr, indent + 1);
             }
         }
-        IrNode::If { condition, then_branch, else_branch, ir_type, .. } => {
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ir_type,
+            ..
+        } => {
             println!("{}❓ IR If [Type: {:?}]", prefix, ir_type);
             println!("{}   Condition:", prefix);
             print_ir_structure(condition, indent + 1);
@@ -403,12 +431,20 @@ fn print_ir_structure(node: &IrNode, indent: usize) {
             println!("{}🔗 IR VarRef: {} [Type: {:?}]", prefix, name, ir_type);
         }
         IrNode::VariableBinding { name, ir_type, .. } => {
-            println!("{}🏷️  IR VarBinding: {} [Type: {:?}]", prefix, name, ir_type);
+            println!(
+                "{}🏷️  IR VarBinding: {} [Type: {:?}]",
+                prefix, name, ir_type
+            );
         }
         IrNode::Literal { value, ir_type, .. } => {
             println!("{}💎 IR Literal: {:?} [Type: {:?}]", prefix, value, ir_type);
         }
-        IrNode::LogStep { level, values, ir_type, .. } => {
+        IrNode::LogStep {
+            level,
+            values,
+            ir_type,
+            ..
+        } => {
             println!("{}📝 IR LogStep: {:?} [Type: {:?}]", prefix, level, ir_type);
             for (i, value) in values.iter().enumerate() {
                 println!("{}   {}.", prefix, i + 1);
@@ -425,7 +461,7 @@ fn print_ir_structure(node: &IrNode, indent: usize) {
 fn print_conversion_stats(node: &IrNode) {
     let mut stats = ConversionStats::default();
     collect_stats(node, &mut stats);
-    
+
     println!("   📊 Total IR Nodes: {}", stats.total_nodes);
     println!("   🔗 Variable References: {}", stats.variable_refs);
     println!("   📞 Function Calls: {}", stats.function_calls);
@@ -448,10 +484,14 @@ struct ConversionStats {
 
 fn collect_stats(node: &IrNode, stats: &mut ConversionStats) {
     stats.total_nodes += 1;
-    
+
     match node {
         IrNode::VariableRef { .. } => stats.variable_refs += 1,
-        IrNode::Apply { function, arguments, .. } => {
+        IrNode::Apply {
+            function,
+            arguments,
+            ..
+        } => {
             stats.function_calls += 1;
             collect_stats(function, stats);
             for arg in arguments {
@@ -477,7 +517,12 @@ fn collect_stats(node: &IrNode, stats: &mut ConversionStats) {
                 collect_stats(expr, stats);
             }
         }
-        IrNode::If { condition, then_branch, else_branch, .. } => {
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             stats.conditionals += 1;
             collect_stats(condition, stats);
             collect_stats(then_branch, stats);
@@ -504,7 +549,7 @@ fn collect_stats(node: &IrNode, stats: &mut ConversionStats) {
 fn print_type_analysis(node: &IrNode) {
     let mut types = std::collections::HashMap::new();
     collect_types(node, &mut types);
-    
+
     println!("   🎯 Type Distribution:");
     for (type_name, count) in types {
         println!("      {} : {} occurrences", type_name, count);
@@ -516,10 +561,14 @@ fn collect_types(node: &IrNode, types: &mut std::collections::HashMap<String, us
         let type_name = format!("{:?}", ir_type);
         *types.entry(type_name).or_insert(0) += 1;
     }
-    
+
     // Recursively collect from child nodes
     match node {
-        IrNode::Apply { function, arguments, .. } => {
+        IrNode::Apply {
+            function,
+            arguments,
+            ..
+        } => {
             collect_types(function, types);
             for arg in arguments {
                 collect_types(arg, types);
@@ -542,7 +591,12 @@ fn collect_types(node: &IrNode, types: &mut std::collections::HashMap<String, us
                 collect_types(expr, types);
             }
         }
-        IrNode::If { condition, then_branch, else_branch, .. } => {
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             collect_types(condition, types);
             collect_types(then_branch, types);
             if let Some(else_br) = else_branch {
@@ -567,7 +621,7 @@ fn collect_types(node: &IrNode, types: &mut std::collections::HashMap<String, us
 fn analyze_optimization_opportunities(node: &IrNode) {
     let mut opportunities = Vec::new();
     find_optimization_opportunities(node, &mut opportunities, 0);
-    
+
     if opportunities.is_empty() {
         println!("   ✨ No obvious optimization opportunities found - code looks efficient!");
     } else {
@@ -579,17 +633,26 @@ fn analyze_optimization_opportunities(node: &IrNode) {
 
 fn find_optimization_opportunities(node: &IrNode, opportunities: &mut Vec<String>, depth: usize) {
     match node {
-        IrNode::Apply { function, arguments, .. } => {
+        IrNode::Apply {
+            function,
+            arguments,
+            ..
+        } => {
             // Check for constant folding opportunities
             if let IrNode::VariableRef { name, .. } = function.as_ref() {
                 if ["+", "-", "*", "/"].contains(&name.as_str()) {
-                    let all_literals = arguments.iter().all(|arg| matches!(arg, IrNode::Literal { .. }));
+                    let all_literals = arguments
+                        .iter()
+                        .all(|arg| matches!(arg, IrNode::Literal { .. }));
                     if all_literals {
-                        opportunities.push(format!("Constant folding: {} with all literal arguments", name));
+                        opportunities.push(format!(
+                            "Constant folding: {} with all literal arguments",
+                            name
+                        ));
                     }
                 }
             }
-            
+
             // Recurse into function and arguments
             find_optimization_opportunities(function, opportunities, depth + 1);
             for arg in arguments {
@@ -601,7 +664,8 @@ fn find_optimization_opportunities(node: &IrNode, opportunities: &mut Vec<String
             for binding in bindings {
                 if let IrNode::VariableBinding { name, .. } = &binding.pattern {
                     if !is_variable_used_in_body(name, body) {
-                        opportunities.push(format!("Dead code elimination: unused binding '{}'", name));
+                        opportunities
+                            .push(format!("Dead code elimination: unused binding '{}'", name));
                     }
                 }
                 find_optimization_opportunities(&binding.init_expr, opportunities, depth + 1);
@@ -614,19 +678,27 @@ fn find_optimization_opportunities(node: &IrNode, opportunities: &mut Vec<String
             // Check for tail call optimization opportunities
             if body.len() == 1 {
                 if let IrNode::Apply { .. } = &body[0] {
-                    opportunities.push("Tail call optimization: single function call in lambda body".to_string());
+                    opportunities.push(
+                        "Tail call optimization: single function call in lambda body".to_string(),
+                    );
                 }
             }
             for expr in body {
                 find_optimization_opportunities(expr, opportunities, depth + 1);
             }
         }
-        IrNode::If { condition, then_branch, else_branch, .. } => {
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             // Check for constant conditions
             if let IrNode::Literal { .. } = condition.as_ref() {
-                opportunities.push("Branch elimination: constant condition in if expression".to_string());
+                opportunities
+                    .push("Branch elimination: constant condition in if expression".to_string());
             }
-            
+
             find_optimization_opportunities(condition, opportunities, depth + 1);
             find_optimization_opportunities(then_branch, opportunities, depth + 1);
             if let Some(else_br) = else_branch {
@@ -651,25 +723,42 @@ fn is_variable_used_in_body(var_name: &str, body: &[IrNode]) -> bool {
 fn is_variable_used_in_node(var_name: &str, node: &IrNode) -> bool {
     match node {
         IrNode::VariableRef { name, .. } => name == var_name,
-        IrNode::Apply { function, arguments, .. } => {
-            is_variable_used_in_node(var_name, function) || 
-            arguments.iter().any(|arg| is_variable_used_in_node(var_name, arg))
+        IrNode::Apply {
+            function,
+            arguments,
+            ..
+        } => {
+            is_variable_used_in_node(var_name, function)
+                || arguments
+                    .iter()
+                    .any(|arg| is_variable_used_in_node(var_name, arg))
         }
         IrNode::Let { bindings, body, .. } => {
-            bindings.iter().any(|b| is_variable_used_in_node(var_name, &b.init_expr)) ||
-            body.iter().any(|expr| is_variable_used_in_node(var_name, expr))
+            bindings
+                .iter()
+                .any(|b| is_variable_used_in_node(var_name, &b.init_expr))
+                || body
+                    .iter()
+                    .any(|expr| is_variable_used_in_node(var_name, expr))
         }
-        IrNode::If { condition, then_branch, else_branch, .. } => {
-            is_variable_used_in_node(var_name, condition) ||
-            is_variable_used_in_node(var_name, then_branch) ||
-            else_branch.as_ref().map_or(false, |eb| is_variable_used_in_node(var_name, eb))
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            is_variable_used_in_node(var_name, condition)
+                || is_variable_used_in_node(var_name, then_branch)
+                || else_branch
+                    .as_ref()
+                    .map_or(false, |eb| is_variable_used_in_node(var_name, eb))
         }
-        IrNode::Do { expressions, .. } => {
-            expressions.iter().any(|expr| is_variable_used_in_node(var_name, expr))
-        }
-        IrNode::LogStep { values, .. } => {
-            values.iter().any(|value| is_variable_used_in_node(var_name, value))
-        }
+        IrNode::Do { expressions, .. } => expressions
+            .iter()
+            .any(|expr| is_variable_used_in_node(var_name, expr)),
+        IrNode::LogStep { values, .. } => values
+            .iter()
+            .any(|value| is_variable_used_in_node(var_name, value)),
         _ => false,
     }
 }
@@ -678,18 +767,22 @@ fn is_variable_used_in_node(var_name: &str, node: &IrNode) -> bool {
 fn compare_ir_nodes(original: &IrNode, optimized: &IrNode) {
     let original_stats = count_ir_node_types(original);
     let optimized_stats = count_ir_node_types(optimized);
-    
+
     println!("   📊 Node Count Comparison:");
     for (node_type, original_count) in &original_stats {
         let optimized_count = optimized_stats.get(node_type).unwrap_or(&0);
         let difference = *original_count as i32 - *optimized_count as i32;
-        
+
         if difference > 0 {
-            println!("      {} : {} → {} (reduced by {})", 
-                   node_type, original_count, optimized_count, difference);
+            println!(
+                "      {} : {} → {} (reduced by {})",
+                node_type, original_count, optimized_count, difference
+            );
         } else if difference < 0 {
-            println!("      {} : {} → {} (increased by {})", 
-                   node_type, original_count, optimized_count, -difference);
+            println!(
+                "      {} : {} → {} (increased by {})",
+                node_type, original_count, optimized_count, -difference
+            );
         } else {
             println!("      {} : {} (unchanged)", node_type, original_count);
         }
@@ -715,18 +808,27 @@ fn count_ir_node_types_recursive(node: &IrNode, counts: &mut HashMap<String, usi
         IrNode::LogStep { .. } => "LogStep",
         _ => "Other",
     };
-    
+
     *counts.entry(node_type.to_string()).or_insert(0) += 1;
-    
+
     // Recursively count children
     match node {
-        IrNode::Apply { function, arguments, .. } => {
+        IrNode::Apply {
+            function,
+            arguments,
+            ..
+        } => {
             count_ir_node_types_recursive(function, counts);
             for arg in arguments {
                 count_ir_node_types_recursive(arg, counts);
             }
         }
-        IrNode::If { condition, then_branch, else_branch, .. } => {
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             count_ir_node_types_recursive(condition, counts);
             count_ir_node_types_recursive(then_branch, counts);
             if let Some(else_node) = else_branch {
@@ -768,25 +870,37 @@ fn count_ir_node_types_recursive(node: &IrNode, counts: &mut HashMap<String, usi
 fn analyze_performance_improvements(original: &IrNode, optimized: &IrNode) {
     let original_complexity = estimate_execution_complexity(original);
     let optimized_complexity = estimate_execution_complexity(optimized);
-    
+
     let improvement_ratio = if optimized_complexity > 0 {
         original_complexity as f64 / optimized_complexity as f64
     } else {
         f64::INFINITY
     };
-    
+
     println!("   🏃 Execution Complexity Analysis:");
-    println!("      Original complexity:  {} operations", original_complexity);
-    println!("      Optimized complexity: {} operations", optimized_complexity);
-    
+    println!(
+        "      Original complexity:  {} operations",
+        original_complexity
+    );
+    println!(
+        "      Optimized complexity: {} operations",
+        optimized_complexity
+    );
+
     if improvement_ratio > 1.0 {
-        println!("      Performance improvement: {:.2}x faster", improvement_ratio);
+        println!(
+            "      Performance improvement: {:.2}x faster",
+            improvement_ratio
+        );
     } else if improvement_ratio < 1.0 {
-        println!("      Performance regression: {:.2}x slower", 1.0 / improvement_ratio);
+        println!(
+            "      Performance regression: {:.2}x slower",
+            1.0 / improvement_ratio
+        );
     } else {
         println!("      Performance unchanged");
     }
-    
+
     println!("\n   💡 Optimization Benefits:");
     if original_complexity > optimized_complexity {
         println!("      • Reduced computational overhead");
@@ -804,27 +918,52 @@ fn estimate_execution_complexity(node: &IrNode) -> usize {
     match node {
         IrNode::Literal { .. } => 1,
         IrNode::VariableRef { .. } => 2,
-        IrNode::Apply { function, arguments, .. } => {
-            10 + estimate_execution_complexity(function) + 
-            arguments.iter().map(estimate_execution_complexity).sum::<usize>()
+        IrNode::Apply {
+            function,
+            arguments,
+            ..
+        } => {
+            10 + estimate_execution_complexity(function)
+                + arguments
+                    .iter()
+                    .map(estimate_execution_complexity)
+                    .sum::<usize>()
         }
-        IrNode::If { condition, then_branch, else_branch, .. } => {
-            5 + estimate_execution_complexity(condition) +
-            estimate_execution_complexity(then_branch) +
-            else_branch.as_ref().map_or(0, |e| estimate_execution_complexity(e))
+        IrNode::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            5 + estimate_execution_complexity(condition)
+                + estimate_execution_complexity(then_branch)
+                + else_branch
+                    .as_ref()
+                    .map_or(0, |e| estimate_execution_complexity(e))
         }
         IrNode::Let { bindings, body, .. } => {
-            bindings.iter().map(|b| estimate_execution_complexity(&b.init_expr)).sum::<usize>() +
-            body.iter().map(estimate_execution_complexity).sum::<usize>()
+            bindings
+                .iter()
+                .map(|b| estimate_execution_complexity(&b.init_expr))
+                .sum::<usize>()
+                + body
+                    .iter()
+                    .map(estimate_execution_complexity)
+                    .sum::<usize>()
         }
-        IrNode::Do { expressions, .. } => {
-            expressions.iter().map(estimate_execution_complexity).sum::<usize>()
-        }
-        IrNode::Lambda { body, .. } => {
-            body.iter().map(estimate_execution_complexity).sum::<usize>()
-        }
+        IrNode::Do { expressions, .. } => expressions
+            .iter()
+            .map(estimate_execution_complexity)
+            .sum::<usize>(),
+        IrNode::Lambda { body, .. } => body
+            .iter()
+            .map(estimate_execution_complexity)
+            .sum::<usize>(),
         IrNode::LogStep { values, .. } => {
-            15 + values.iter().map(estimate_execution_complexity).sum::<usize>()
+            15 + values
+                .iter()
+                .map(estimate_execution_complexity)
+                .sum::<usize>()
         }
         _ => 5, // Default for other node types
     }

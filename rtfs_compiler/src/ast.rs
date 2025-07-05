@@ -302,6 +302,7 @@ pub struct FnExpr {
     pub return_type: Option<TypeExpr>,
     #[validate(nested)]
     pub body: Vec<Expression>,
+    pub delegation_hint: Option<DelegationHint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -330,6 +331,7 @@ pub struct DefnExpr {
     pub return_type: Option<TypeExpr>,
     #[validate(nested)]
     pub body: Vec<Expression>,
+    pub delegation_hint: Option<DelegationHint>,
 }
 
 // --- New Special Form Structs ---
@@ -531,4 +533,16 @@ pub struct DiscoverAgentsExpr {
 #[schemars(rename_all = "camelCase")]
 pub struct TaskContextAccessExpr {
     pub field: Keyword, // The field name to access from task context
+}
+
+// --- Delegation Hint ---
+/// Optional compile-time hint that instructs the runtime where a function
+/// prefers to execute.  Mirrors (but is independent from) `ExecTarget` in the
+/// CCOS Delegation Engine to avoid circular dependencies.
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DelegationHint {
+    LocalPure,
+    LocalModel(String),
+    RemoteModel(String),
 }
