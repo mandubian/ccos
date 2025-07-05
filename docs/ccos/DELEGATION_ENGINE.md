@@ -61,6 +61,41 @@ Both in-process and remote models implement the same interface. The global
 `ModelRegistry` resolves the string id from `ExecTarget::LocalModel` /
 `RemoteModel` to an actual provider.
 
+### 2.5 Delegation-hint metadata (`^:delegation`)
+
+While the `DelegationEngine` decides _dynamically_ at runtime, authors can
+embed an _authoritative_ or _suggested_ target directly in the source code.
+
+```clojure
+(defn http-get                     ; simple wrapper around stdlib
+  ^:delegation :remote "gpt4o"    ; ← always go to powerful remote model
+  [url]
+  (http/get-json url))
+
+;; Local tiny-LLM example
+(defn classify-sentiment
+  ^:delegation :local-model "phi-mini"
+  [text]
+  (tiny/llm-classify text))
+
+;; Explicitly force pure evaluator (default, shown for completeness)
+(fn ^:delegation :local [x] (+ x 1))
+```
+
+At compile time the parser stores this information as
+
+```rust
+ast::DelegationHint::LocalPure             // :local (or omitted)
+ast::DelegationHint::LocalModel("phi-mini")
+ast::DelegationHint::RemoteModel("gpt4o")
+```
+
+which maps _one-to-one_ to `ExecTarget` via `to_exec_target()` helper.
+
+If a hint is present the evaluator _bypasses_ the `DelegationEngine` for that
+call, guaranteeing the author's intent. Otherwise it falls back to the DE's
+policy decision.
+
 ---
 
 ## 3 Execution Flow
