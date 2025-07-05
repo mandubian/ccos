@@ -7,8 +7,10 @@
 //! - Context Horizon: Management of LLM context window constraints
 //! - Subconscious: Background analysis and wisdom distillation
 
+pub mod arbiter;
 pub mod causal_chain;
 pub mod context_horizon;
+pub mod delegation;
 pub mod intent_graph;
 pub mod loaders;
 pub mod subconscious;

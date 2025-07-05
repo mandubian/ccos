@@ -324,6 +324,7 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
         variadic_param,
         body,
         return_type,
+        delegation_hint: None,
     })
 }
 
@@ -558,6 +559,7 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         variadic_param,
         body,
         return_type,
+        delegation_hint: None,
     })
 }
 

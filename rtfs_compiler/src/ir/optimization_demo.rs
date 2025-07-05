@@ -497,6 +497,7 @@ fn create_function_heavy_program() -> Expression {
                             Expression::Symbol(Symbol("y".to_string())),
                         ],
                     }],
+                    delegation_hint: None,
                 })),
             },
             LetBinding {
@@ -516,6 +517,7 @@ fn create_function_heavy_program() -> Expression {
                             Expression::Symbol(Symbol("x".to_string())),
                         ],
                     }],
+                    delegation_hint: None,
                 })),
             },
         ],

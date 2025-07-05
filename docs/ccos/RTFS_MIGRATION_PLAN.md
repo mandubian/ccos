@@ -216,10 +216,20 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - [ ] Module loading and dependency resolution
 
 - [ ] **Context and State Management**
+
   - [ ] Task context implementation
   - [ ] Resource state tracking
   - [ ] Agent communication state
   - [ ] Module state persistence
+
+- [ ] **Delegation Engine (DE) Integration**
+  - [x] DelegationEngine skeleton (`ExecTarget`, `CallContext`, `StaticDelegationEngine`) merged into `ccos::delegation` 📦
+  - [ ] Metadata plumbing – carry optional `^:delegation` hint from parser → AST → IR
+  - [ ] Evaluator wrapper uses `DelegationEngine::decide` for each function node
+  - [ ] Criterion micro-benchmarks (pure evaluator vs evaluator+DE) – overhead < 0.2 ms / 1 M calls
+  - [ ] `ModelProvider` registry with `LocalEchoModel` stub
+  - [ ] `RemoteModel` path via Arbiter RPC prototype (gRPC/HTTP TBD)
+  - [ ] Decision caching with LRU (≤ 64 K entries) & metrics (`delegation_cache_size`, `cache_hit_rate`)
 
 ### Phase 7: Advanced Features 🔄 PENDING
 

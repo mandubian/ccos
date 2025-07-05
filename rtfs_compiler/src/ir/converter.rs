@@ -1867,6 +1867,7 @@ impl<'a> IrConverter<'a> {
             variadic_param: defn_expr.variadic_param,
             return_type: defn_expr.return_type,
             body: defn_expr.body,
+            delegation_hint: defn_expr.delegation_hint,
         };
         let lambda = self.convert_fn(fn_expr)?;
         let ir_type = lambda.ir_type().cloned().unwrap_or(IrType::Any);
