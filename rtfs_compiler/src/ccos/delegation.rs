@@ -111,16 +111,78 @@ impl DelegationEngine for StaticDelegationEngine {
 /// Anything capable of transforming a textual prompt into a textual output.
 /// A provider may be a quantized on-device transformer, a regex rule engine,
 /// or a remote OpenAI deployment – the Delegation Engine does not care.
-pub trait ModelProvider: Send + Sync {
+pub trait ModelProvider: Send + Sync + std::fmt::Debug {
     /// Stable identifier (e.g. "phi-mini", "gpt4o").
     fn id(&self) -> &'static str;
     /// Perform inference.  Blocking call for now; async wrapper lives above.
     fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
 }
 
+/// Simple echo model for testing - just returns the input with a prefix
+#[derive(Debug)]
+pub struct LocalEchoModel {
+    id: &'static str,
+    prefix: String,
+}
+
+impl LocalEchoModel {
+    pub fn new(id: &'static str, prefix: &str) -> Self {
+        Self {
+            id,
+            prefix: prefix.to_string(),
+        }
+    }
+
+    pub fn default() -> Self {
+        Self::new("echo-model", "[ECHO]")
+    }
+}
+
+impl ModelProvider for LocalEchoModel {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(format!("{} {}", self.prefix, prompt))
+    }
+}
+
+/// Remote model stub that would delegate to Arbiter RPC
+#[derive(Debug)]
+pub struct RemoteArbiterModel {
+    id: &'static str,
+    endpoint_url: String,
+}
+
+impl RemoteArbiterModel {
+    pub fn new(id: &'static str, endpoint_url: &str) -> Self {
+        Self {
+            id,
+            endpoint_url: endpoint_url.to_string(),
+        }
+    }
+
+    pub fn default() -> Self {
+        Self::new("arbiter-remote", "http://localhost:8080/arbiter")
+    }
+}
+
+impl ModelProvider for RemoteArbiterModel {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // TODO: Implement actual RPC call to Arbiter
+        // For now, return a stub response indicating remote delegation
+        Ok(format!("[REMOTE:{}] {}", self.endpoint_url, prompt))
+    }
+}
+
 /// Global registry.  In real code this might live elsewhere; kept here for
 /// convenience while the API stabilises.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ModelRegistry {
     providers: RwLock<HashMap<String, Arc<dyn ModelProvider>>>,
 }
@@ -139,6 +201,14 @@ impl ModelRegistry {
 
     pub fn get(&self, id: &str) -> Option<Arc<dyn ModelProvider>> {
         self.providers.read().unwrap().get(id).cloned()
+    }
+
+    /// Register default providers for testing
+    pub fn with_defaults() -> Self {
+        let registry = Self::new();
+        registry.register(LocalEchoModel::default());
+        registry.register(RemoteArbiterModel::default());
+        registry
     }
 }
 
@@ -173,5 +243,50 @@ mod tests {
             runtime_context_hash: 2,
         };
         assert_eq!(de.decide(&ctx), ExecTarget::LocalPure);
+    }
+
+    #[test]
+    fn local_echo_model_works() {
+        let model = LocalEchoModel::default();
+        assert_eq!(model.id(), "echo-model");
+        
+        let result = model.infer("hello world").unwrap();
+        assert_eq!(result, "[ECHO] hello world");
+    }
+
+    #[test]
+    fn remote_arbiter_model_works() {
+        let model = RemoteArbiterModel::default();
+        assert_eq!(model.id(), "arbiter-remote");
+        
+        let result = model.infer("test prompt").unwrap();
+        assert!(result.contains("[REMOTE:http://localhost:8080/arbiter]"));
+        assert!(result.contains("test prompt"));
+    }
+
+    #[test]
+    fn model_registry_with_defaults() {
+        let registry = ModelRegistry::with_defaults();
+        
+        // Check that default providers are registered
+        assert!(registry.get("echo-model").is_some());
+        assert!(registry.get("arbiter-remote").is_some());
+        
+        // Check that unknown providers are not found
+        assert!(registry.get("unknown-model").is_none());
+    }
+
+    #[test]
+    fn model_registry_custom_provider() {
+        let registry = ModelRegistry::new();
+        
+        // Register a custom provider
+        let custom_model = LocalEchoModel::new("custom-echo", "[CUSTOM]");
+        registry.register(custom_model);
+        
+        // Check that it's registered
+        let provider = registry.get("custom-echo").unwrap();
+        let result = provider.infer("test").unwrap();
+        assert_eq!(result, "[CUSTOM] test");
     }
 }

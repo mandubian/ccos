@@ -123,9 +123,9 @@ mod function_tests {
 
     #[test]
     fn test_delegation_engine_integration() {
-        // Set up a StaticDelegationEngine that delegates "delegate-me" to RemoteModel
+        // Set up a StaticDelegationEngine that delegates "delegate-me" to a model that exists
         let mut static_map = HashMap::new();
-        static_map.insert("delegate-me".to_string(), ExecTarget::RemoteModel("gpt4o".to_string()));
+        static_map.insert("delegate-me".to_string(), ExecTarget::LocalModel("echo-model".to_string()));
         let de = Arc::new(StaticDelegationEngine::new(static_map));
 
         // Define and call the delegated function
@@ -134,10 +134,15 @@ mod function_tests {
         (delegate-me 42)
         "#;
         let result = parse_and_evaluate_with_de(code, de.clone());
-        assert!(result.is_err(), "Expected delegated call to return NotImplemented error");
-        let err = result.unwrap_err();
-        let msg = format!("{}", err);
-        assert!(msg.contains("Delegated execution path not implemented"), "Unexpected error: {}", msg);
+        // Now that model providers are implemented, this should work
+        assert!(result.is_ok(), "Expected delegated call to work with echo model");
+        let value = result.unwrap();
+        // The echo model should return a string with the prompt
+        assert!(matches!(value, Value::String(_)), "Expected string result from model");
+        if let Value::String(s) = value {
+            assert!(s.contains("[ECHO]"), "Expected echo model prefix");
+            assert!(s.contains("arg0: 42"), "Expected argument in prompt");
+        }
 
         // Now test a function that is not delegated (should work)
         let static_map = HashMap::new();

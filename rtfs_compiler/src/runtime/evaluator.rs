@@ -14,7 +14,7 @@ use crate::runtime::values::{Arity, Function, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext};
+use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
 use std::sync::Arc;
 use crate::ccos::delegation::StaticDelegationEngine;
 
@@ -26,6 +26,7 @@ pub struct Evaluator {
     max_recursion_depth: usize,
     task_context: Option<Value>,
     pub delegation_engine: Arc<dyn DelegationEngine>,
+    pub model_registry: Arc<ModelRegistry>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -47,6 +48,7 @@ impl Evaluator {
     /// Create a new evaluator with standard library loaded and default agent discovery
     pub fn new(module_registry: Rc<ModuleRegistry>, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         let env = StandardLibrary::create_global_environment();
+        let model_registry = Arc::new(ModelRegistry::with_defaults());
 
         Evaluator {
             module_registry,
@@ -55,10 +57,12 @@ impl Evaluator {
             max_recursion_depth: 1000, // Default max recursion depth
             task_context: None,
             delegation_engine,
+            model_registry,
         }
     }
     pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         let env = StandardLibrary::create_global_environment();
+        let model_registry = Arc::new(ModelRegistry::with_defaults());
 
         Evaluator {
             module_registry,
@@ -67,6 +71,7 @@ impl Evaluator {
             max_recursion_depth: 1000, // Default max recursion depth
             task_context: Some(task_context),
             delegation_engine,
+            model_registry,
         }
     }
 
@@ -336,10 +341,8 @@ impl Evaluator {
                         DH::LocalPure => {
                             // Normal in-process execution (fall through)
                         }
-                        DH::LocalModel(_id) | DH::RemoteModel(_id) => {
-                            return Err(RuntimeError::NotImplemented(
-                                "Delegated execution path not implemented in evaluator".to_string(),
-                            ));
+                        DH::LocalModel(id) | DH::RemoteModel(id) => {
+                            return self.execute_model_call(id, args, env);
                         }
                     }
                 } else {
@@ -355,10 +358,8 @@ impl Evaluator {
                         ExecTarget::LocalPure => {
                             // Normal in-process execution (fall through)
                         }
-                        ExecTarget::LocalModel(_id) | ExecTarget::RemoteModel(_id) => {
-                            return Err(RuntimeError::NotImplemented(
-                                "Delegated execution path not implemented in evaluator".to_string(),
-                            ));
+                        ExecTarget::LocalModel(id) | ExecTarget::RemoteModel(id) => {
+                            return self.execute_model_call(&id, args, env);
                         }
                     }
                 }
@@ -1434,6 +1435,62 @@ impl Evaluator {
                 "No task context available".to_string(),
             ))
         }
+    }
+
+    fn execute_model_call(
+        &self,
+        model_id: &str,
+        args: &[Value],
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        // Convert arguments to a prompt string
+        let prompt = self.args_to_prompt(args)?;
+        
+        // Look up the model provider
+        let provider = self.model_registry.get(model_id)
+            .ok_or_else(|| RuntimeError::NotImplemented(
+                format!("Model provider '{}' not found", model_id)
+            ))?;
+        
+        // Call the model
+        let response = provider.infer(&prompt)
+            .map_err(|e| RuntimeError::NotImplemented(
+                format!("Model inference failed: {}", e)
+            ))?;
+        
+        // Convert response back to RTFS value
+        Ok(Value::String(response))
+    }
+
+    fn args_to_prompt(&self, args: &[Value]) -> RuntimeResult<String> {
+        let mut prompt_parts = Vec::new();
+        
+        for (i, arg) in args.iter().enumerate() {
+            let arg_str = match arg {
+                Value::String(s) => s.clone(),
+                Value::Integer(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                Value::Nil => "nil".to_string(),
+                Value::Vector(v) => {
+                    let elements: Vec<String> = v.iter()
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            Value::Integer(n) => n.to_string(),
+                            Value::Float(f) => f.to_string(),
+                            Value::Boolean(b) => b.to_string(),
+                            Value::Nil => "nil".to_string(),
+                            _ => format!("{:?}", v),
+                        })
+                        .collect();
+                    format!("[{}]", elements.join(" "))
+                }
+                _ => format!("{:?}", arg),
+            };
+            prompt_parts.push(format!("arg{}: {}", i, arg_str));
+        }
+        
+        Ok(prompt_parts.join("; "))
     }
 
     fn handle_map_with_user_functions(
