@@ -6,7 +6,7 @@ use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
 use super::values::{Function, Value};
 use crate::ast::{Expression, Keyword, MapKey};
-use crate::ccos::delegation::{CallContext, DelegationEngine, ExecTarget};
+use crate::ccos::delegation::{CallContext, DelegationEngine, ExecTarget, ModelRegistry};
 use crate::ir::converter::IrConverter;
 use crate::ir::core::{IrNode, IrPattern};
 use crate::runtime::RuntimeStrategy;
@@ -76,12 +76,17 @@ impl RuntimeStrategy for IrStrategy {
 #[derive(Clone, Debug)]
 pub struct IrRuntime {
     delegation_engine: Arc<dyn DelegationEngine>,
+    model_registry: Arc<ModelRegistry>,
 }
 
 impl IrRuntime {
     /// Creates a new IR runtime.
     pub fn new(delegation_engine: Arc<dyn DelegationEngine>) -> Self {
-        IrRuntime { delegation_engine }
+        let model_registry = Arc::new(ModelRegistry::with_defaults());
+        IrRuntime { 
+            delegation_engine,
+            model_registry,
+        }
     }
 
     /// Executes a program by running its top-level forms.
@@ -441,10 +446,8 @@ impl IrRuntime {
                         ExecTarget::LocalPure => {
                             // Normal in-process execution (fall through)
                         }
-                        ExecTarget::LocalModel(_id) | ExecTarget::RemoteModel(_id) => {
-                            return Err(RuntimeError::NotImplemented(
-                                "Delegated execution path not implemented in IR runtime".to_string(),
-                            ));
+                        ExecTarget::LocalModel(id) | ExecTarget::RemoteModel(id) => {
+                            return self.execute_model_call(&id, args, env);
                         }
                     }
                 }
@@ -501,6 +504,62 @@ impl IrRuntime {
                 function.to_string()
             ))),
         }
+    }
+
+    fn execute_model_call(
+        &self,
+        model_id: &str,
+        args: &[Value],
+        _env: &mut IrEnvironment,
+    ) -> Result<Value, RuntimeError> {
+        // Convert arguments to a prompt string
+        let prompt = self.args_to_prompt(args)?;
+        
+        // Look up the model provider
+        let provider = self.model_registry.get(model_id)
+            .ok_or_else(|| RuntimeError::NotImplemented(
+                format!("Model provider '{}' not found", model_id)
+            ))?;
+        
+        // Call the model
+        let response = provider.infer(&prompt)
+            .map_err(|e| RuntimeError::NotImplemented(
+                format!("Model inference failed: {}", e)
+            ))?;
+        
+        // Convert response back to RTFS value
+        Ok(Value::String(response))
+    }
+
+    fn args_to_prompt(&self, args: &[Value]) -> Result<String, RuntimeError> {
+        let mut prompt_parts = Vec::new();
+        
+        for (i, arg) in args.iter().enumerate() {
+            let arg_str = match arg {
+                Value::String(s) => s.clone(),
+                Value::Integer(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                Value::Nil => "nil".to_string(),
+                Value::Vector(v) => {
+                    let elements: Vec<String> = v.iter()
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            Value::Integer(n) => n.to_string(),
+                            Value::Float(f) => f.to_string(),
+                            Value::Boolean(b) => b.to_string(),
+                            Value::Nil => "nil".to_string(),
+                            _ => format!("{:?}", v),
+                        })
+                        .collect();
+                    format!("[{}]", elements.join(" "))
+                }
+                _ => format!("{:?}", arg),
+            };
+            prompt_parts.push(format!("arg{}: {}", i, arg_str));
+        }
+        
+        Ok(prompt_parts.join("; "))
     }
 
     fn handle_map_with_user_functions(
