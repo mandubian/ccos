@@ -196,11 +196,11 @@ do_expr = { "(" ~ do_keyword ~ expression* ~ ")" }
 
 fn_param_list = { "[" ~ param_def* ~ (AMPERSAND ~ symbol ~ (COLON ~ type_expr)?)? ~ "]" } // New rule for parameter lists
 
-fn_expr   = { "(" ~ fn_keyword ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Use fn_keyword
+fn_expr   = { "(" ~ fn_keyword ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Added WHITESPACE* between metadata and param list
 param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 
 def_expr  = { "(" ~ def_keyword ~ symbol ~ (COLON ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
-defn_expr = { "(" ~ defn_keyword ~ symbol ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Use fn_param_list & defn_keyword
+defn_expr = { "(" ~ defn_keyword ~ symbol ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Added WHITESPACE* between metadata and param list
 
 parallel_expr    = { "(" ~ parallel_keyword ~ parallel_binding+ ~ ")" } // Use parallel_keyword
 parallel_binding = { "[" ~ symbol ~ type_annotation? ~ expression ~ "]" }
@@ -285,4 +285,15 @@ resource_definition = { "(" ~ resource_keyword ~ symbol ~ property* ~ ")" }
 // --- Resource Reference Syntax ---
 resource_ref_keyword = @{ "resource:ref" }
 resource_ref = { "(" ~ resource_ref_keyword ~ string ~ ")" }
+
+// --- Delegation Metadata ---
+metadata = { delegation_meta }
+
+delegation_meta = { "^" ~ ":delegation" ~ WHITESPACE* ~ delegation_target }
+
+delegation_target = { local_model_delegation | remote_delegation | local_delegation }
+
+local_delegation = { ":local" ~ !("-") }
+local_model_delegation = { ":local-model" ~ WHITESPACE* ~ string? }
+remote_delegation = { ":remote" ~ WHITESPACE* ~ string? }
 

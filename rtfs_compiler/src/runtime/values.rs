@@ -165,8 +165,14 @@ impl Function {
         params: Vec<Symbol>,
         body: Box<Expression>,
         env: Rc<Environment>,
+        delegation_hint: Option<crate::ast::DelegationHint>,
     ) -> Function {
-        Function::Closure(Rc::new(Closure { params, body, env }))
+        Function::Closure(Rc::new(Closure {
+            params,
+            body,
+            env,
+            delegation_hint,
+        }))
     }
 
     pub fn new_ir_lambda(
@@ -220,6 +226,7 @@ pub struct Closure {
     pub params: Vec<Symbol>,
     pub body: Box<Expression>,
     pub env: Rc<Environment>,
+    pub delegation_hint: Option<crate::ast::DelegationHint>,
 }
 
 #[derive(Clone, Debug)]

@@ -16,7 +16,7 @@ pub fn demonstrate_advanced_optimizations() {
     // Test different optimization scenarios
     let test_cases = vec![
         (
-            "Mathematical Expression Optimization",
+            "Mathe matical Expression Optimization",
             create_math_heavy_program(),
         ),
         ("Control Flow Optimization", create_control_flow_program()),

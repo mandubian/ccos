@@ -25,7 +25,9 @@ use crate::ast::{
     TryCatchExpr,
     TypeExpr,
     WithResourceExpr,
+    DelegationHint,
 };
+use crate::error_reporting::SourceSpan;
 
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword
@@ -194,10 +196,47 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
         }
     }
 
-    let params_pair = pairs
-        .next()
-        .ok_or_else(|| PestParseError::InvalidInput { message: "fn requires parameters list".to_string(), span: Some(parent_span.clone()) })?;
-    if params_pair.as_rule() != Rule::fn_param_list {        return Err(PestParseError::InvalidInput { 
+    // ---------------------------------------------------------
+    // Parse optional metadata before parameter list
+    // ---------------------------------------------------------
+    let mut delegation_hint: Option<DelegationHint> = None;
+    loop {
+        // Skip whitespace/comments
+        while let Some(p) = pairs.peek() {
+            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+                pairs.next();
+            } else {
+                break;
+            }
+        }
+
+        let peek_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput { message: "fn requires parameter list".to_string(), span: Some(parent_span.clone()) })?;
+
+        match peek_pair.as_rule() {
+            Rule::metadata => {
+                let meta_pair = pairs.next().unwrap();
+                delegation_hint = Some(parse_delegation_meta(meta_pair)?);
+                continue;
+            }
+            Rule::fn_param_list => {
+                break;
+            }
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+                continue;
+            }
+            other => {
+                return Err(PestParseError::InvalidInput {
+                    message: format!("Unexpected token {:?} before fn param list", other),
+                    span: Some(pair_to_source_span(&peek_pair.clone())),
+                });
+            }
+        }
+    }
+
+    let params_pair = pairs.next().unwrap(); // Safe: we peeked it above
+    if params_pair.as_rule() != Rule::fn_param_list {
+        return Err(PestParseError::InvalidInput { 
             message: format!("Expected fn_param_list, found {:?}", params_pair.as_rule()), 
             span: Some(pair_to_source_span(&params_pair)) 
         });
@@ -249,7 +288,7 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
                 type_annotation: rest_type_annotation,
             });            break;
         }        // Regular parameter (param_def contains binding_pattern and optional type)
-        let param_def_pair = params_inner.next().unwrap(); // Should be safe due to peek
+        let param_def_pair = params_inner.next().unwrap();
         let param_def_span = pair_to_source_span(&param_def_pair);
           if param_def_pair.as_rule() != Rule::param_def {
             return Err(PestParseError::InvalidInput { 
@@ -319,12 +358,14 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
             message: "fn requires at least one body expression".to_string(), 
             span: Some(parent_span) 
         });
-    }Ok(FnExpr {
+    }
+
+    Ok(FnExpr {
         params,
         variadic_param,
         body,
         return_type,
-        delegation_hint: None,
+        delegation_hint,
     })
 }
 
@@ -420,9 +461,45 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
     }
     let name = build_symbol(symbol_pair.clone())?;
 
-    let params_pair = pairs
-        .next()
-        .ok_or_else(|| PestParseError::InvalidInput { message: "defn requires parameters list".to_string(), span: Some(defn_span.clone()) })?;
+    // ---------------------------------------------------------
+    // Parse optional metadata before parameter list (defn)
+    // ---------------------------------------------------------
+    let mut delegation_hint: Option<DelegationHint> = None;
+    loop {
+        // Skip whitespace/comments
+        while let Some(p) = pairs.peek() {
+            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+                pairs.next();
+            } else {
+                break;
+            }
+        }
+
+        let peek_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput { message: "defn requires parameter list".to_string(), span: Some(defn_span.clone()) })?;
+
+        match peek_pair.as_rule() {
+            Rule::metadata => {
+                let meta_pair = pairs.next().unwrap();
+                delegation_hint = Some(parse_delegation_meta(meta_pair)?);
+                continue;
+            }
+            Rule::fn_param_list => {
+                break;
+            }
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+                continue;
+            }
+            other => {
+                return Err(PestParseError::InvalidInput {
+                    message: format!("Unexpected token {:?} before defn param list", other),
+                    span: Some(pair_to_source_span(&peek_pair.clone())),
+                });
+            }
+        }
+    }
+
+    let params_pair = pairs.next().unwrap();
     if params_pair.as_rule() != Rule::fn_param_list {
         return Err(PestParseError::InvalidInput { 
             message: format!("Expected fn_param_list for defn, found {:?}", params_pair.as_rule()), 
@@ -559,7 +636,7 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         variadic_param,
         body,
         return_type,
-        delegation_hint: None,
+        delegation_hint,
     })
 }
 
@@ -1172,6 +1249,198 @@ pub(super) fn build_discover_agents_expr(discover_agents_expr_pair: Pair<Rule>) 
         criteria,
         options,
     })
+}
+
+// -----------------------------------------------------------------------------
+// Metadata helpers
+// -----------------------------------------------------------------------------
+
+fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestParseError> {
+    // Extract span information before moving the pair
+    let meta_span = pair_to_source_span(&meta_pair);
+
+    // Parse the structured pest pairs from the grammar
+    let mut pairs = meta_pair.into_inner();
+
+    // Skip the "^:delegation" literal and any whitespace/comments that may follow
+    while let Some(p) = pairs.peek() {
+        match p.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+            }
+            _ => break,
+        }
+    }
+
+    // Get the outer delegation_target rule
+    let target_outer_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "delegation_meta requires delegation_target".to_string(),
+        span: Some(meta_span),
+    })?;
+
+    // Capture its span before moving it
+    let target_outer_span = pair_to_source_span(&target_outer_pair);
+
+    // Handle the case where we get delegation_meta directly
+    let (target_pair, target_span) = if target_outer_pair.as_rule() == Rule::delegation_meta {
+        // Extract the delegation_target from delegation_meta
+        let mut inner = target_outer_pair.into_inner();
+        // Skip the "^:delegation" part and find the delegation_target
+        let delegation_target_pair = inner.find(|p| p.as_rule() == Rule::delegation_target)
+            .ok_or_else(|| PestParseError::InvalidInput {
+                message: "delegation_meta must contain delegation_target".to_string(),
+                span: Some(target_outer_span.clone()),
+            })?;
+        let delegation_target_span = pair_to_source_span(&delegation_target_pair);
+        
+        // Now get the concrete delegation variant from delegation_target
+        let mut target_inner = delegation_target_pair.into_inner();
+        let concrete_pair = target_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+            message: "delegation_target must contain a concrete delegation variant".to_string(),
+            span: Some(delegation_target_span.clone()),
+        })?;
+        let concrete_span = pair_to_source_span(&concrete_pair);
+        (concrete_pair, concrete_span)
+    } else if target_outer_pair.as_rule() == Rule::delegation_target {
+        let mut inner = target_outer_pair.into_inner();
+        let concrete_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+            message: "delegation_target must contain a concrete delegation variant".to_string(),
+            span: Some(target_outer_span.clone()),
+        })?;
+        let concrete_span = pair_to_source_span(&concrete_pair);
+        (concrete_pair, concrete_span)
+    } else {
+        (target_outer_pair, target_outer_span)
+    };
+
+    match target_pair.as_rule() {
+        Rule::local_delegation => Ok(DelegationHint::LocalPure),
+
+        Rule::local_model_delegation => {
+            // Extract the required model id string
+            let model_id_pair = target_pair
+                .into_inner()
+                .find(|p| p.as_rule() == Rule::string)
+                .ok_or_else(|| PestParseError::InvalidInput {
+                    message: ":local-model requires a string argument".to_string(),
+                    span: Some(target_span.clone()),
+                })?;
+
+            let model_id = model_id_pair.as_str().trim_matches('"').to_string();
+            Ok(DelegationHint::LocalModel(model_id))
+        }
+
+        Rule::remote_delegation => {
+            // Extract the required remote model id string
+            let remote_id_pair = target_pair
+                .into_inner()
+                .find(|p| p.as_rule() == Rule::string)
+                .ok_or_else(|| PestParseError::InvalidInput {
+                    message: ":remote requires a string argument".to_string(),
+                    span: Some(target_span.clone()),
+                })?;
+
+            let remote_id = remote_id_pair.as_str().trim_matches('"').to_string();
+            Ok(DelegationHint::RemoteModel(remote_id))
+        }
+
+        _ => Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected concrete delegation variant, found {:?}",
+                target_pair.as_rule()
+            ),
+            span: Some(target_span),
+        }),
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::DelegationHint;
+    use crate::parser::RTFSParser;
+    use pest::Parser;
+
+    #[test]
+    fn test_parse_delegation_meta_local() {
+        let input = "^:delegation :local";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::delegation_meta, input).unwrap();
+        let result = parse_delegation_meta(pairs.next().unwrap());
+        assert_eq!(result.unwrap(), DelegationHint::LocalPure);
+    }
+
+    #[test]
+    fn test_parse_delegation_meta_local_model() {
+        let input = "^:delegation :local-model \"phi-mini\"";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::delegation_meta, input).unwrap();
+        let result = parse_delegation_meta(pairs.next().unwrap());
+        assert!(result.is_ok());
+        if let Ok(DelegationHint::LocalModel(model_id)) = result {
+            assert_eq!(model_id, "phi-mini");
+        } else {
+            panic!("Expected LocalModel delegation hint");
+        }
+    }
+
+    #[test]
+    fn test_parse_delegation_meta_remote() {
+        let input = "^:delegation :remote \"gpt4o\"";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::delegation_meta, input).unwrap();
+        let result = parse_delegation_meta(pairs.next().unwrap());
+        assert_eq!(result.unwrap(), DelegationHint::RemoteModel("gpt4o".to_string()));
+    }
+
+    #[test]
+    fn test_parse_delegation_meta_malformed() {
+        let input = "^:delegation :local-model";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::delegation_meta, input).unwrap();
+        let result = parse_delegation_meta(pairs.next().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fn_with_delegation_hint() {
+        let input = "(fn ^:delegation :local-model \"phi-mini\" [x] (+ x 1))";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::fn_expr, input).unwrap();
+        let result = build_fn_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let fn_expr = result.unwrap();
+        assert_eq!(fn_expr.delegation_hint, Some(DelegationHint::LocalModel("phi-mini".to_string())));
+    }
+
+    #[test]
+    fn test_defn_with_delegation_hint() {
+        let input = "(defn add ^:delegation :remote \"gpt4o\" [x y] (+ x y))";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::defn_expr, input).unwrap();
+        let result = build_defn_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let defn_expr = result.unwrap();
+        assert_eq!(defn_expr.delegation_hint, Some(DelegationHint::RemoteModel("gpt4o".to_string())));
+    }
+
+    #[test]
+    fn test_fn_without_delegation_hint() {
+        let input = "(fn [x] (+ x 1))";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::fn_expr, input).unwrap();
+        let result = build_fn_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let fn_expr = result.unwrap();
+        assert_eq!(fn_expr.delegation_hint, None);
+    }
+
+    #[test]
+    fn test_defn_without_delegation_hint() {
+        let input = "(defn add [x y] (+ x y))";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::defn_expr, input).unwrap();
+        let result = build_defn_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let defn_expr = result.unwrap();
+        assert_eq!(defn_expr.delegation_hint, None);
+    }
 }
 
 
