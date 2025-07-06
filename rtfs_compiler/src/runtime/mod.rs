@@ -21,8 +21,12 @@ pub use module_runtime::{Module, ModuleRegistry};
 pub use values::{Function, Value};
 
 use crate::ast::Expression;
+use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
 use std::rc::Rc;
+use crate::ccos::delegation::StaticDelegationEngine;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Copy)]
 pub enum RuntimeStrategyValue {
@@ -56,9 +60,27 @@ impl Runtime {
     }
 
     pub fn new_with_tree_walking_strategy(module_registry: Rc<ModuleRegistry>) -> Self {
-        let evaluator = Evaluator::new(module_registry);
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let evaluator = Evaluator::new(module_registry, de);
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
+    }
+
+    pub fn evaluate(&self, input: &str) -> Result<Value, RuntimeError> {
+        let parsed = parser::parse(input).expect("Failed to parse input");
+        let module_registry = ModuleRegistry::new();
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+        evaluator.eval_toplevel(&parsed)
+    }
+
+    pub fn evaluate_with_stdlib(&self, input: &str) -> Result<Value, RuntimeError> {
+        let parsed = parser::parse(input).expect("Failed to parse input");
+        let mut module_registry = ModuleRegistry::new();
+        crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+        evaluator.eval_toplevel(&parsed)
     }
 }
 
@@ -93,7 +115,8 @@ pub struct IrWithFallbackStrategy {
 impl IrWithFallbackStrategy {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         let ir_strategy = IrStrategy::new(module_registry.clone());
-        let evaluator = Evaluator::new(Rc::new(module_registry));
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let evaluator = Evaluator::new(Rc::new(module_registry), de);
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {

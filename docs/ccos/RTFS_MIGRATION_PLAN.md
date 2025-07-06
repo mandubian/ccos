@@ -222,10 +222,13 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - [ ] Agent communication state
   - [ ] Module state persistence
 
-- [ ] **Delegation Engine (DE) Integration**
+- [x] **Delegation Engine (DE) Integration** ✅ **COMPLETED**
   - [x] DelegationEngine skeleton (`ExecTarget`, `CallContext`, `StaticDelegationEngine`) merged into `ccos::delegation` 📦
-  - [ ] Metadata plumbing – carry optional `^:delegation` hint from parser → AST → IR
-  - [ ] Evaluator wrapper uses `DelegationEngine::decide` for each function node
+  - [x] Metadata plumbing – carry optional `^:delegation` hint from parser → AST → IR ✅
+  - [x] Evaluator wrapper uses `DelegationEngine::decide` for each function node ✅
+  - [x] IR runtime integration – both AST and IR runtimes wired to DelegationEngine ✅
+  - [x] Function name resolution – `find_function_name` methods in both environments ✅
+  - [x] Delegation hint conversion – `DelegationHint::to_exec_target()` implemented ✅
   - [ ] Criterion micro-benchmarks (pure evaluator vs evaluator+DE) – overhead < 0.2 ms / 1 M calls
   - [ ] `ModelProvider` registry with `LocalEchoModel` stub
   - [ ] `RemoteModel` path via Arbiter RPC prototype (gRPC/HTTP TBD)
@@ -373,6 +376,7 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 7. **Higher-Order Function Support**: Full runtime support for higher-order functions with hybrid evaluator approach
 8. **Standard Library Enhancements**: Complete stdlib with map, task_coordination, and optimized arithmetic functions
 9. **Test Consolidation**: Comprehensive test suite organized by domain with all tests passing
+10. **Delegation Engine Integration**: Complete integration of DelegationEngine with both AST and IR runtimes
 
 ### 🚨 **CRITICAL UNIMPLEMENTED FUNCTIONS TRACKING** - Implementation Roadmap
 
@@ -484,14 +488,14 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 - **Phase 4**: 100% Complete ✅
 - **Phase 5**: 100% Complete ✅
 - **Phase 5.5**: 100% Complete ✅
-- **Phase 6**: 15% Complete 🟡
+- **Phase 6**: 25% Complete 🟡
 - **Phase 7**: 0% Complete 🔄
 - **Phase 8**: 0% Complete 🔄
 - **Phase 9**: 0% Complete 🔄
 - **Phase 10**: 0% Complete 🔄
 - **Phase 11**: 0% Complete 🔄
 
-**Progress:** 43%
+**Progress:** 45%
 
 ---
 
@@ -573,15 +577,24 @@ The RTFS 2.0 migration has made significant progress with the core infrastructur
 - [x] Standard library enhanced with map, task_coordination, and optimized arithmetic functions
 - [x] Test consolidation into domain-specific files with all tests passing
 - [x] Performance optimization showing user-defined functions can be faster than builtins
+- [x] Delegation Engine integration completed:
+  - [x] Evaluator wired to DelegationEngine for function call decisions
+  - [x] IR runtime wired to DelegationEngine for IR function execution
+  - [x] Function name resolution implemented in both environments
+  - [x] Delegation hint conversion from AST to ExecTarget
+  - [x] All runtime constructors updated to include delegation engine parameter
+  - [x] Integration tests passing for both AST and IR delegation paths
 
 ## In Progress / Next Steps
 
+- [ ] Model Provider implementation (LocalEchoModel, RemoteArbiterModel)
+- [ ] Delegation engine performance benchmarks
 - [ ] LLM integration and builder usage examples
 - [ ] Documentation polish and code comments
 - [ ] Address remaining warnings and dead code
 - [ ] Further runtime and IR migration
 
-**Progress:** 43%
+**Progress:** 45%
 
 ---
 

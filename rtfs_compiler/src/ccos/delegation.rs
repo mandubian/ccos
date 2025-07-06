@@ -11,14 +11,14 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
 
 /// Where the evaluator should send the execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExecTarget {
     /// Run directly in the deterministic evaluator.
     LocalPure,
     /// Call an on-device model that implements [`ModelProvider`].
-    LocalModel(&'static str),
+    LocalModel(String),
     /// Delegate to a remote provider via the Arbiter / RPC.
-    RemoteModel(&'static str),
+    RemoteModel(String),
 }
 
 /// Minimal call-site fingerprint used by the Delegation Engine.
@@ -54,20 +54,21 @@ impl<'a> Eq for CallContext<'a> {}
 ///
 /// Guarantee: *pure* – `decide` must be free of side-effects so that the
 /// evaluator can safely cache the result.
-pub trait DelegationEngine: Send + Sync {
+pub trait DelegationEngine: Send + Sync + std::fmt::Debug {
     fn decide(&self, ctx: &CallContext) -> ExecTarget;
 }
 
 /// Simple static mapping + cache implementation.
+#[derive(Debug)]
 pub struct StaticDelegationEngine {
     /// Fast lookup for explicit per-symbol policies.
-    static_map: HashMap<&'static str, ExecTarget>,
+    static_map: HashMap<String, ExecTarget>,
     /// LRU-ish cache keyed by the call context hash.
     cache: RwLock<HashMap<u64, ExecTarget>>, // TODO: replace with proper LRU.
 }
 
 impl StaticDelegationEngine {
-    pub fn new(static_map: HashMap<&'static str, ExecTarget>) -> Self {
+    pub fn new(static_map: HashMap<String, ExecTarget>) -> Self {
         Self {
             static_map,
             cache: RwLock::new(HashMap::new()),
@@ -78,8 +79,8 @@ impl StaticDelegationEngine {
 impl DelegationEngine for StaticDelegationEngine {
     fn decide(&self, ctx: &CallContext) -> ExecTarget {
         // 1. Static fast-path
-        if let Some(&target) = self.static_map.get(ctx.fn_symbol) {
-            return target;
+        if let Some(target) = self.static_map.get(ctx.fn_symbol) {
+            return target.clone();
         }
 
         // 2. Cached dynamic decision
@@ -88,8 +89,8 @@ impl DelegationEngine for StaticDelegationEngine {
             ctx.arg_type_fingerprint ^ ctx.runtime_context_hash
         };
 
-        if let Some(&cached) = self.cache.read().unwrap().get(&key) {
-            return cached;
+        if let Some(cached) = self.cache.read().unwrap().get(&key) {
+            return cached.clone();
         }
 
         // 3. Default fallback
@@ -97,7 +98,7 @@ impl DelegationEngine for StaticDelegationEngine {
 
         // 4. Insert into cache (fire-and-forget).  In production this would be
         // an LRU; for skeleton a plain HashMap suffices.
-        self.cache.write().unwrap().insert(key, decision);
+        self.cache.write().unwrap().insert(key, decision.clone());
 
         decision
     }
@@ -121,7 +122,7 @@ pub trait ModelProvider: Send + Sync {
 /// convenience while the API stabilises.
 #[derive(Default)]
 pub struct ModelRegistry {
-    providers: RwLock<HashMap<&'static str, Arc<dyn ModelProvider>>>,
+    providers: RwLock<HashMap<String, Arc<dyn ModelProvider>>>,
 }
 
 impl ModelRegistry {
@@ -133,7 +134,7 @@ impl ModelRegistry {
         self.providers
             .write()
             .unwrap()
-            .insert(provider.id(), Arc::new(provider));
+            .insert(provider.id().to_string(), Arc::new(provider));
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<dyn ModelProvider>> {
@@ -152,7 +153,7 @@ mod tests {
     #[test]
     fn static_map_override() {
         let mut map = HashMap::new();
-        map.insert("math/inc", ExecTarget::RemoteModel("gpt4o"));
+        map.insert("math/inc".to_string(), ExecTarget::RemoteModel("gpt4o".to_string()));
         let de = StaticDelegationEngine::new(map);
 
         let ctx = CallContext {
@@ -160,7 +161,7 @@ mod tests {
             arg_type_fingerprint: 0,
             runtime_context_hash: 0,
         };
-        assert_eq!(de.decide(&ctx), ExecTarget::RemoteModel("gpt4o"));
+        assert_eq!(de.decide(&ctx), ExecTarget::RemoteModel("gpt4o".to_string()));
     }
 
     #[test]

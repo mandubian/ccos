@@ -6,6 +6,9 @@ mod function_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
     use std::rc::Rc;
+    use crate::ccos::delegation::{StaticDelegationEngine, ExecTarget};
+    use std::sync::Arc;
+    use std::collections::HashMap;
 
     #[test]
     fn test_function_definitions() {
@@ -118,13 +121,43 @@ mod function_tests {
         }
     }
 
+    #[test]
+    fn test_delegation_engine_integration() {
+        // Set up a StaticDelegationEngine that delegates "delegate-me" to RemoteModel
+        let mut static_map = HashMap::new();
+        static_map.insert("delegate-me".to_string(), ExecTarget::RemoteModel("gpt4o".to_string()));
+        let de = Arc::new(StaticDelegationEngine::new(static_map));
+
+        // Define and call the delegated function
+        let code = r#"
+        (defn delegate-me [x] (+ x 1))
+        (delegate-me 42)
+        "#;
+        let result = parse_and_evaluate_with_de(code, de.clone());
+        assert!(result.is_err(), "Expected delegated call to return NotImplemented error");
+        let err = result.unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("Delegated execution path not implemented"), "Unexpected error: {}", msg);
+
+        // Now test a function that is not delegated (should work)
+        let static_map = HashMap::new();
+        let de = Arc::new(StaticDelegationEngine::new(static_map));
+        let code = r#"
+        (defn add1 [x] (+ x 1))
+        (add1 41)
+        "#;
+        let result = parse_and_evaluate_with_de(code, de);
+        assert!(result.is_ok(), "Expected local call to succeed");
+        assert_eq!(result.unwrap(), Value::Integer(42));
+    }
+
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
-        println!("Parsed top-level forms: {:#?}", parsed);
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get map and other builtin functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let mut evaluator = Evaluator::new(Rc::new(module_registry));
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
         println!("Symbols in environment: {:?}", evaluator.env.symbol_names());
         println!(
             "Map lookupable: {:?}",
@@ -138,6 +171,14 @@ mod function_tests {
         }
 
         // Evaluate all top-level forms in sequence
+        evaluator.eval_toplevel(&parsed)
+    }
+
+    fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> RuntimeResult<Value> {
+        let parsed = parser::parse(input).expect("Failed to parse");
+        let mut module_registry = ModuleRegistry::new();
+        crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
         evaluator.eval_toplevel(&parsed)
     }
 }

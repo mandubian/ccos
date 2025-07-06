@@ -14,6 +14,9 @@ use crate::runtime::values::{Arity, Function, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext};
+use std::sync::Arc;
+use crate::ccos::delegation::StaticDelegationEngine;
 
 #[derive(Clone, Debug)]
 pub struct Evaluator {
@@ -22,6 +25,7 @@ pub struct Evaluator {
     recursion_depth: usize,
     max_recursion_depth: usize,
     task_context: Option<Value>,
+    pub delegation_engine: Arc<dyn DelegationEngine>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -41,7 +45,7 @@ fn values_equivalent(a: &Value, b: &Value) -> bool {
 
 impl Evaluator {
     /// Create a new evaluator with standard library loaded and default agent discovery
-    pub fn new(module_registry: Rc<ModuleRegistry>) -> Self {
+    pub fn new(module_registry: Rc<ModuleRegistry>, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         let env = StandardLibrary::create_global_environment();
 
         Evaluator {
@@ -50,9 +54,10 @@ impl Evaluator {
             recursion_depth: 0,
             max_recursion_depth: 1000, // Default max recursion depth
             task_context: None,
+            delegation_engine,
         }
     }
-    pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value) -> Self {
+    pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         let env = StandardLibrary::create_global_environment();
 
         Evaluator {
@@ -61,6 +66,7 @@ impl Evaluator {
             recursion_depth: 0,
             max_recursion_depth: 1000, // Default max recursion depth
             task_context: Some(task_context),
+            delegation_engine,
         }
     }
 
@@ -322,7 +328,7 @@ impl Evaluator {
 
                 (func.func)(args.to_vec(), self, env)
             }
-            Value::Function(Function::Closure(closure)) => {
+            Value::Function(Function::Closure(ref closure)) => {
                 // Delegation fast-path: if the function carries a delegation hint we act on it
                 if let Some(hint) = &closure.delegation_hint {
                     use crate::ast::DelegationHint as DH;
@@ -331,6 +337,25 @@ impl Evaluator {
                             // Normal in-process execution (fall through)
                         }
                         DH::LocalModel(_id) | DH::RemoteModel(_id) => {
+                            return Err(RuntimeError::NotImplemented(
+                                "Delegated execution path not implemented in evaluator".to_string(),
+                            ));
+                        }
+                    }
+                } else {
+                    // No hint: consult DelegationEngine
+                    // Try to find the function name by looking up the function value in the environment
+                    let fn_symbol = env.find_function_name(&func_value).unwrap_or("unknown-function");
+                    let ctx = CallContext {
+                        fn_symbol,
+                        arg_type_fingerprint: 0, // TODO: hash argument types
+                        runtime_context_hash: 0, // TODO: hash runtime context
+                    };
+                    match self.delegation_engine.decide(&ctx) {
+                        ExecTarget::LocalPure => {
+                            // Normal in-process execution (fall through)
+                        }
+                        ExecTarget::LocalModel(_id) | ExecTarget::RemoteModel(_id) => {
                             return Err(RuntimeError::NotImplemented(
                                 "Delegated execution path not implemented in evaluator".to_string(),
                             ));
@@ -1474,6 +1499,7 @@ impl Evaluator {
 
 impl Default for Evaluator {
     fn default() -> Self {
-        Self::new(Rc::new(ModuleRegistry::new()))
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        Self::new(Rc::new(ModuleRegistry::new()), de)
     }
 }

@@ -546,3 +546,16 @@ pub enum DelegationHint {
     LocalModel(String),
     RemoteModel(String),
 }
+
+impl DelegationHint {
+    /// Convert this delegation hint to the corresponding ExecTarget.
+    /// This bridges the AST layer with the runtime delegation engine.
+    pub fn to_exec_target(&self) -> crate::ccos::delegation::ExecTarget {
+        use crate::ccos::delegation::ExecTarget;
+        match self {
+            DelegationHint::LocalPure => ExecTarget::LocalPure,
+            DelegationHint::LocalModel(id) => ExecTarget::LocalModel(id.to_string()),
+            DelegationHint::RemoteModel(id) => ExecTarget::RemoteModel(id.to_string()),
+        }
+    }
+}
