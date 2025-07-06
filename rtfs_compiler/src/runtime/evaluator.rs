@@ -323,6 +323,20 @@ impl Evaluator {
                 (func.func)(args.to_vec(), self, env)
             }
             Value::Function(Function::Closure(closure)) => {
+                // Delegation fast-path: if the function carries a delegation hint we act on it
+                if let Some(hint) = &closure.delegation_hint {
+                    use crate::ast::DelegationHint as DH;
+                    match hint {
+                        DH::LocalPure => {
+                            // Normal in-process execution (fall through)
+                        }
+                        DH::LocalModel(_id) | DH::RemoteModel(_id) => {
+                            return Err(RuntimeError::NotImplemented(
+                                "Delegated execution path not implemented in evaluator".to_string(),
+                            ));
+                        }
+                    }
+                }
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
 
@@ -715,6 +729,7 @@ impl Evaluator {
                 expressions: fn_expr.body.clone(),
             })),
             Rc::new(env.clone()),
+            fn_expr.delegation_hint.clone(),
         )))
     }
 
@@ -758,6 +773,7 @@ impl Evaluator {
                 expressions: defn_expr.body.clone(),
             })),
             Rc::new(env.clone()),
+            defn_expr.delegation_hint.clone(),
         ));
         env.define(&defn_expr.name, function.clone());
         Ok(function)
