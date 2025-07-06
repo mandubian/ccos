@@ -7,6 +7,8 @@ mod collections_tests {
     };
     use std::collections::HashMap;
     use std::rc::Rc;
+    use crate::ccos::delegation::StaticDelegationEngine;
+    use std::sync::Arc;
 
     #[test]
     fn test_vectors() {
@@ -57,7 +59,7 @@ mod collections_tests {
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
         let module_registry = Rc::new(ModuleRegistry::new());
-        let evaluator = Evaluator::new(module_registry);
+        let evaluator = Evaluator::new(module_registry, Arc::new(StaticDelegationEngine::new(HashMap::new())));
         if let Some(last_item) = parsed.last() {
             match last_item {
                 TopLevel::Expression(expr) => evaluator.evaluate(expr),

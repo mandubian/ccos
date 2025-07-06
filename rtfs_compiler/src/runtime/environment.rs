@@ -51,6 +51,20 @@ impl Environment {
     pub fn symbol_names(&self) -> Vec<String> {
         self.bindings.keys().map(|s| s.0.clone()).collect()
     }
+
+    /// Find the name of a function value by searching through all bindings
+    pub fn find_function_name(&self, func_value: &Value) -> Option<&str> {
+        for (symbol, value) in &self.bindings {
+            if value == func_value {
+                return Some(&symbol.0);
+            }
+        }
+        // Search parent environments
+        if let Some(parent) = &self.parent {
+            return parent.find_function_name(func_value);
+        }
+        None
+    }
 }
 
 /// The runtime environment for the IR interpreter.
@@ -152,5 +166,19 @@ impl IrEnvironment {
     /// Defines a function in the IR environment. Currently an alias for `define`.
     pub fn define_ir_function(&mut self, name: String, _node_id: NodeId, value: Value) {
         self.define(name, value);
+    }
+
+    /// Find the name of a function value by searching through all bindings
+    pub fn find_function_name(&self, func_value: &Value) -> Option<&str> {
+        for (name, value) in &self.bindings {
+            if value == func_value {
+                return Some(name);
+            }
+        }
+        // Search parent environments
+        if let Some(parent) = &self.parent {
+            return parent.find_function_name(func_value);
+        }
+        None
     }
 }

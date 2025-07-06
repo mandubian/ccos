@@ -6,6 +6,9 @@ mod control_flow_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
     use std::rc::Rc;
+    use crate::ccos::delegation::StaticDelegationEngine;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_if_expressions() {
@@ -43,7 +46,7 @@ mod control_flow_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get arithmetic functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let mut evaluator = Evaluator::new(Rc::new(module_registry));
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())));
 
         // Evaluate all top-level forms in sequence using the evaluator's environment
         let result = evaluator.eval_toplevel(&parsed);

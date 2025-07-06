@@ -8,6 +8,9 @@ use crate::runtime::{
     values::Value,
 };
 use std::rc::Rc;
+use crate::ccos::delegation::StaticDelegationEngine;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Creates a standard module registry for testing.
 pub fn create_test_module_registry() -> ModuleRegistry {
@@ -19,14 +22,15 @@ pub fn create_test_module_registry() -> ModuleRegistry {
 
 /// Creates a new AST evaluator with the standard library loaded.
 pub fn create_test_evaluator() -> Evaluator {
-    let mut module_registry = create_test_module_registry();
-    stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-    Evaluator::new(Rc::new(module_registry))
+    let module_registry = ModuleRegistry::new();
+    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+    Evaluator::new(Rc::new(module_registry), de)
 }
 
 /// Creates a new IR runtime.
-pub fn create_test_ir_runtime() -> IrRuntime {
-    IrRuntime::new()
+pub fn create_test_ir_runtime() -> crate::runtime::ir_runtime::IrRuntime {
+    let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+    crate::runtime::ir_runtime::IrRuntime::new(delegation_engine)
 }
 
 /// A helper to parse, convert to IR, and execute code using the IR runtime.

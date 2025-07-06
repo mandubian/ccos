@@ -6,12 +6,14 @@ use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
 use super::values::{Function, Value};
 use crate::ast::{Expression, Keyword, MapKey};
+use crate::ccos::delegation::{CallContext, DelegationEngine, ExecTarget};
 use crate::ir::converter::IrConverter;
 use crate::ir::core::{IrNode, IrPattern};
 use crate::runtime::RuntimeStrategy;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// A `RuntimeStrategy` that uses the `IrRuntime`.
 /// It owns both the runtime and the module registry, breaking the dependency cycle.
@@ -19,15 +21,28 @@ use std::rc::Rc;
 pub struct IrStrategy {
     runtime: IrRuntime,
     module_registry: ModuleRegistry,
+    delegation_engine: Arc<dyn DelegationEngine>,
 }
 
 impl IrStrategy {
     pub fn new(mut module_registry: ModuleRegistry) -> Self {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
+        let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
         Self {
-            runtime: IrRuntime::new(),
+            runtime: IrRuntime::new(delegation_engine.clone()),
             module_registry,
+            delegation_engine,
+        }
+    }
+
+    pub fn with_delegation_engine(mut module_registry: ModuleRegistry, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
+        // Load stdlib into the module registry if not already loaded
+        let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
+        Self {
+            runtime: IrRuntime::new(delegation_engine.clone()),
+            module_registry,
+            delegation_engine,
         }
     }
 }
@@ -58,16 +73,15 @@ impl RuntimeStrategy for IrStrategy {
 
 /// The Intermediate Representation (IR) runtime.
 /// Executes a program represented in IR form.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct IrRuntime {
-    // This runtime is now stateless.
-    // The ModuleRegistry is managed by the IrStrategy.
+    delegation_engine: Arc<dyn DelegationEngine>,
 }
 
 impl IrRuntime {
     /// Creates a new IR runtime.
-    pub fn new() -> Self {
-        IrRuntime::default()
+    pub fn new(delegation_engine: Arc<dyn DelegationEngine>) -> Self {
+        IrRuntime { delegation_engine }
     }
 
     /// Executes a program by running its top-level forms.
@@ -413,51 +427,74 @@ impl IrRuntime {
                 let actual = cell.borrow().clone();
                 self.apply_function(actual, args, env, _is_tail_call, module_registry)
             }
-            Value::Function(f) => match f {
-                Function::Native(native_fn) => (native_fn.func)(args.to_vec()),
-                Function::Builtin(builtin_fn) => {
-                    // Special handling for map function to support user-defined functions
-                    if builtin_fn.name == "map" && args.len() == 2 {
-                        return self.handle_map_with_user_functions(
-                            &args[0],
-                            &args[1],
-                            env,
-                            module_registry,
-                        );
+            Value::Function(ref f) => {
+                // Check delegation for IR functions
+                if let Function::Ir(_) = f {
+                    // Try to find the function name by looking up the function value in the environment
+                    let fn_symbol = env.find_function_name(&function).unwrap_or("unknown-function");
+                    let ctx = CallContext {
+                        fn_symbol,
+                        arg_type_fingerprint: 0, // TODO: hash argument types
+                        runtime_context_hash: 0, // TODO: hash runtime context
+                    };
+                    match self.delegation_engine.decide(&ctx) {
+                        ExecTarget::LocalPure => {
+                            // Normal in-process execution (fall through)
+                        }
+                        ExecTarget::LocalModel(_id) | ExecTarget::RemoteModel(_id) => {
+                            return Err(RuntimeError::NotImplemented(
+                                "Delegated execution path not implemented in IR runtime".to_string(),
+                            ));
+                        }
                     }
-                    (builtin_fn.func)(args.to_vec())
                 }
-                Function::Ir(ir_fn) => {
-                    let param_names: Vec<String> = ir_fn
-                        .params
-                        .iter()
-                        .map(|p| match p {
-                            IrNode::VariableBinding { name, .. } => Ok(name.clone()),
-                            IrNode::Param { binding, .. } => {
-                                if let IrNode::VariableBinding { name, .. } = binding.as_ref() {
-                                    Ok(name.clone())
-                                } else {
-                                    Err(RuntimeError::new("Expected VariableBinding inside Param"))
-                                }
-                            }
-                            _ => Err(RuntimeError::new("Expected symbol in lambda parameters")),
-                        })
-                        .collect::<Result<Vec<String>, RuntimeError>>()?;
 
-                    let mut new_env = ir_fn.closure_env.new_child_for_ir(
-                        &param_names,
-                        args,
-                        ir_fn.variadic_param.is_some(),
-                    )?;
-                    let mut result = Value::Nil;
-                    for node in &ir_fn.body {
-                        result = self.execute_node(node, &mut new_env, false, module_registry)?;
+                match f {
+                    Function::Native(native_fn) => (native_fn.func)(args.to_vec()),
+                    Function::Builtin(builtin_fn) => {
+                        // Special handling for map function to support user-defined functions
+                        if builtin_fn.name == "map" && args.len() == 2 {
+                            return self.handle_map_with_user_functions(
+                                &args[0],
+                                &args[1],
+                                env,
+                                module_registry,
+                            );
+                        }
+                        (builtin_fn.func)(args.to_vec())
                     }
-                    Ok(result)
+                    Function::Ir(ir_fn) => {
+                        let param_names: Vec<String> = ir_fn
+                            .params
+                            .iter()
+                            .map(|p| match p {
+                                IrNode::VariableBinding { name, .. } => Ok(name.clone()),
+                                IrNode::Param { binding, .. } => {
+                                    if let IrNode::VariableBinding { name, .. } = binding.as_ref() {
+                                        Ok(name.clone())
+                                    } else {
+                                        Err(RuntimeError::new("Expected VariableBinding inside Param"))
+                                    }
+                                }
+                                _ => Err(RuntimeError::new("Expected symbol in lambda parameters")),
+                            })
+                            .collect::<Result<Vec<String>, RuntimeError>>()?;
+
+                        let mut new_env = ir_fn.closure_env.new_child_for_ir(
+                            &param_names,
+                            args,
+                            ir_fn.variadic_param.is_some(),
+                        )?;
+                        let mut result = Value::Nil;
+                        for node in &ir_fn.body {
+                            result = self.execute_node(node, &mut new_env, false, module_registry)?;
+                        }
+                        Ok(result)
+                    }
+                    _ => Err(RuntimeError::new(
+                        "Calling this type of function from the IR runtime is not currently supported.",
+                    )),
                 }
-                _ => Err(RuntimeError::new(
-                    "Calling this type of function from the IR runtime is not currently supported.",
-                )),
             },
             _ => Err(RuntimeError::Generic(format!(
                 "Not a function: {}",

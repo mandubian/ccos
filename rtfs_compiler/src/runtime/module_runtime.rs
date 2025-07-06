@@ -5,11 +5,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ir::converter::{BindingInfo, BindingKind, IrConverter};
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::{IrEnvironment, IrRuntime, RuntimeError, Value};
+use crate::ccos::delegation::StaticDelegationEngine;
 
 /// Module registry that manages all loaded modules
 #[derive(Debug, Clone)]
@@ -561,7 +563,8 @@ impl ModuleRegistry {
             }
         } else {
             // Before failing, try to load the module
-            let mut ir_runtime = IrRuntime::new(); // Temporary runtime
+            let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
+            let mut ir_runtime = IrRuntime::new(delegation_engine); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
                     if let Some(export) = module.exports.borrow().get(symbol_name) {
@@ -660,7 +663,7 @@ impl ModuleAwareRuntime {
     pub fn new() -> Self {
         let module_registry = ModuleRegistry::new();
         ModuleAwareRuntime {
-            ir_runtime: IrRuntime::new(),
+            ir_runtime: IrRuntime::new(Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()))),
             module_registry,
         }
     }
@@ -890,7 +893,8 @@ mod tests {
     fn test_module_loading_from_file() {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let mut ir_runtime = IrRuntime::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut ir_runtime = IrRuntime::new(delegation_engine);
 
         // Test loading the math.utils module
         let module = registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -910,7 +914,8 @@ mod tests {
     fn test_qualified_symbol_resolution() {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let mut ir_runtime = IrRuntime::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut ir_runtime = IrRuntime::new(delegation_engine);
 
         // Load math.utils module from file
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -928,7 +933,8 @@ mod tests {
             .borrow_mut()
             .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
-        let mut ir_runtime = IrRuntime::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut ir_runtime = IrRuntime::new(delegation_engine);
         let result = registry.load_module("module-a", &mut ir_runtime);
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();

@@ -2,7 +2,10 @@
 mod tests {
     use crate::runtime::module_runtime::ModuleRegistry;
     use crate::runtime::ir_runtime::IrRuntime;
+    use crate::ccos::delegation::StaticDelegationEngine;
     use std::path::PathBuf;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_file_based_module_loading() {
@@ -12,7 +15,8 @@ mod tests {
         let test_modules_path = PathBuf::from("test_modules");
         registry.add_module_path(test_modules_path);
         
-        let mut ir_runtime = IrRuntime::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut ir_runtime = IrRuntime::new(delegation_engine);
         
         // Test loading math.utils module
         let result = registry.load_module("math.utils", &mut ir_runtime);
@@ -72,7 +76,8 @@ mod tests {
         // The actual path resolution is internal, so we test indirectly
         // by trying to load a non-existent module and checking the error message
         let mut test_registry = ModuleRegistry::new();
-        let mut ir_runtime = IrRuntime::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut ir_runtime = IrRuntime::new(delegation_engine);
         
         let result = test_registry.load_module("non.existent.module", &mut ir_runtime);
         assert!(result.is_err());
@@ -88,7 +93,8 @@ mod tests {
     #[test]
     fn test_circular_dependency_detection() {
         let mut registry = ModuleRegistry::new();
-        let mut ir_runtime = IrRuntime::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let mut ir_runtime = IrRuntime::new(delegation_engine);
         
         // Since loading_stack is private, we can't directly test circular dependency detection.
         // Instead, we test that loading a non-existent module fails appropriately.
@@ -104,4 +110,6 @@ mod tests {
             assert!(error_msg.contains("Module file not found") || error_msg.contains("not found"));
         }
     }
+
+
 }

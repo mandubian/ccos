@@ -9,6 +9,8 @@ use crate::runtime::{
 };
 use std::collections::HashMap;
 use std::io::{self, Write};
+use crate::ccos::delegation::StaticDelegationEngine;
+use std::sync::Arc;
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]
@@ -18,8 +20,9 @@ struct IrStrategy {
 
 impl IrStrategy {
     fn new() -> Self {
+        let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
         Self {
-            ir_runtime: IrRuntime::new(),
+            ir_runtime: IrRuntime::new(delegation_engine),
         }
     }
 }
@@ -81,7 +84,7 @@ impl RtfsRepl {
         Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
                 module_registry.clone(),
-            ))))),
+            ), Arc::new(StaticDelegationEngine::new(HashMap::new())))))),
             module_registry,
             context: ReplContext::default(),
             history: Vec::new(),
@@ -95,8 +98,9 @@ impl RtfsRepl {
         let runtime_strategy: Box<dyn RuntimeStrategy> = match strategy {
             RuntimeStrategyValue::Ast => Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Rc::new(module_registry.clone()),
+                Arc::new(StaticDelegationEngine::new(HashMap::new())),
             ))),
-            RuntimeStrategyValue::Ir => Box::new(IrStrategy::new()),
+            RuntimeStrategyValue::Ir => Box::new(crate::runtime::ir_runtime::IrStrategy::new(module_registry.clone())),
             RuntimeStrategyValue::IrWithFallback => {
                 Box::new(IrWithFallbackStrategy::new(module_registry.clone()))
             }
@@ -203,12 +207,13 @@ impl RtfsRepl {
                 self.context.runtime_strategy = RuntimeStrategyValue::Ast;
                 self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                     Rc::new(self.module_registry.clone()),
+                    Arc::new(StaticDelegationEngine::new(HashMap::new())),
                 ))));
                 println!("🔄 Switched to AST runtime");
             }
             ":runtime-ir" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::Ir;
-                self.runtime = Runtime::new(Box::new(IrStrategy::new()));
+                self.runtime = Runtime::new(Box::new(crate::runtime::ir_runtime::IrStrategy::new(self.module_registry.clone())));
                 println!("🔄 Switched to IR runtime");
             }
             ":runtime-fallback" => {
@@ -474,9 +479,9 @@ impl RtfsTestFramework {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
             tests: Vec::new(),
-            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
+                          runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
                 module_registry.clone(),
-            ))))),
+              ), Arc::new(StaticDelegationEngine::new(HashMap::new())))))),
             module_registry,
         }
     }
@@ -771,3 +776,5 @@ pub fn run_all_tests_with_framework() {
     let results = framework.run_all_tests();
     results.print_summary();
 }
+
+
