@@ -5,12 +5,13 @@ use rtfs_compiler::parser::parse_expression;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::MapKey;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn test_factorial() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test factorial of 0
     let expr = parse_expression("(factorial 0)").expect("Parse failed");
@@ -47,7 +48,7 @@ fn test_factorial() {
 fn test_length_value() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test length of empty vector
     let expr = parse_expression("(length [])").expect("Parse failed");
@@ -90,7 +91,7 @@ fn test_length_value() {
 fn test_current_time() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test current-time returns a string
     let expr = parse_expression("(current-time)").expect("Parse failed");
@@ -114,7 +115,7 @@ fn test_current_time() {
 fn test_json_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test parse-json with simple object
     let expr = parse_expression("(parse-json \"{\\\"name\\\": \\\"John\\\", \\\"age\\\": 30}\")").expect("Parse failed");
@@ -185,7 +186,7 @@ fn test_json_functions() {
 fn test_file_exists() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test file-exists? with existing file (Cargo.toml should exist)
     let expr = parse_expression("(file-exists? \"Cargo.toml\")").expect("Parse failed");
@@ -207,7 +208,7 @@ fn test_file_exists() {
 fn test_get_env() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Set an environment variable for testing
     std::env::set_var("RTFS_TEST_VAR", "test_value");
@@ -235,7 +236,7 @@ fn test_get_env() {
 fn test_log_function() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test log function (just ensure it doesn't crash)
     let expr = parse_expression("(log \"test message\")").expect("Parse failed");
@@ -258,7 +259,7 @@ fn test_log_function() {
 fn test_agent_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test discover-agents
     let expr = parse_expression("(discover-agents)").expect("Parse failed");
@@ -307,7 +308,7 @@ fn test_agent_functions() {
 fn test_map_filter_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test map function
     let expr = parse_expression("(map (fn [x] (* x 2)) [1 2 3])").expect("Parse failed");
@@ -349,7 +350,7 @@ fn test_map_filter_functions() {
 fn test_reduce_function() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test reduce with initial value
     let expr = parse_expression("(reduce + 0 [1 2 3])").expect("Parse failed");

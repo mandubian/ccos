@@ -10,7 +10,7 @@ fn test_mutual_recursion_pattern() {
 
     let parsed = parser::parse(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
     let result = if let TopLevel::Expression(expr) = &parsed[0] {
         evaluator
             .evaluate(expr)
@@ -37,7 +37,7 @@ fn test_nested_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
@@ -52,7 +52,7 @@ fn test_higher_order_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
@@ -67,7 +67,7 @@ fn test_three_way_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");

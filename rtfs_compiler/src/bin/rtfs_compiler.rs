@@ -113,7 +113,10 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
                 let evaluator =
-                    rtfs_compiler::runtime::Evaluator::new(std::rc::Rc::new(module_registry));
+                    rtfs_compiler::runtime::Evaluator::new(
+                        std::rc::Rc::new(module_registry),
+                        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new()))
+                    );
                 Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
             }
             RuntimeType::Ir => {
@@ -244,7 +247,10 @@ fn main() {
                 eprintln!("Warning: Failed to load standard library: {:?}", e);
             }
             let mut evaluator =
-                rtfs_compiler::runtime::Evaluator::new(std::rc::Rc::new(module_registry));
+                rtfs_compiler::runtime::Evaluator::new(
+                    std::rc::Rc::new(module_registry),
+                    std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new()))
+                );
 
             match evaluator.eval_toplevel(&parsed_items) {
                 Ok(value) => {

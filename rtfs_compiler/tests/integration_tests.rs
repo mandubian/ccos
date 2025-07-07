@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
