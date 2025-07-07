@@ -31,6 +31,7 @@ fn main() {
         fn_symbol: "math/complex",
         arg_type_fingerprint: 0x12345678,
         runtime_context_hash: 0xABCDEF01,
+        semantic_hash: None,
         metadata: None,
     };
     
@@ -48,6 +49,7 @@ fn main() {
         fn_symbol: "unknown/function",
         arg_type_fingerprint: 0x12345678,
         runtime_context_hash: 0xABCDEF01,
+        semantic_hash: None,
         metadata: None,
     };
     
@@ -65,6 +67,7 @@ fn main() {
         fn_symbol: "unknown/function",
         arg_type_fingerprint: 0x12345678,
         runtime_context_hash: 0xABCDEF01,
+        semantic_hash: None,
         metadata: None,
     };
     
@@ -82,6 +85,7 @@ fn main() {
         fn_symbol: "unknown/function",
         arg_type_fingerprint: 0x87654321, // Different fingerprint
         runtime_context_hash: 0xABCDEF01,
+        semantic_hash: None,
         metadata: None,
     };
     

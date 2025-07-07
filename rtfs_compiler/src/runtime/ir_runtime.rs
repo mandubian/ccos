@@ -14,6 +14,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use crate::ccos::delegation_l4::L4AwareDelegationEngine;
+use crate::ccos::caching::l4_content_addressable::L4CacheClient;
+use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 
 /// A `RuntimeStrategy` that uses the `IrRuntime`.
 /// It owns both the runtime and the module registry, breaking the dependency cycle.
@@ -28,7 +31,10 @@ impl IrStrategy {
     pub fn new(mut module_registry: ModuleRegistry) -> Self {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
-        let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
+        let inner = crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new());
+        let l4_client = L4CacheClient::new();
+        let wrapped = L4AwareDelegationEngine::new(l4_client, inner);
+        let delegation_engine: Arc<dyn crate::ccos::delegation::DelegationEngine> = Arc::new(wrapped);
         Self {
             runtime: IrRuntime::new(delegation_engine.clone()),
             module_registry,
@@ -441,6 +447,7 @@ impl IrRuntime {
                         fn_symbol,
                         arg_type_fingerprint: 0, // TODO: hash argument types
                         runtime_context_hash: 0, // TODO: hash runtime context
+                        semantic_hash: None,
                         metadata: None,
                     };
                     match self.delegation_engine.decide(&ctx) {
@@ -449,6 +456,23 @@ impl IrRuntime {
                         }
                         ExecTarget::LocalModel(id) | ExecTarget::RemoteModel(id) => {
                             return self.execute_model_call(&id, args, env);
+                        }
+                        ExecTarget::L4CacheHit { storage_pointer, .. } => {
+                            if let Some(cache) = module_registry.l4_cache() {
+                                if let Some(_blob) = cache.get_blob(&storage_pointer) {
+                                    let executor = WasmExecutor::new();
+                                    return executor.execute_module(&_blob, fn_symbol, args);
+                                } else {
+                                    return Err(RuntimeError::Generic(format!(
+                                        "L4 cache blob '{}' not found",
+                                        storage_pointer
+                                    )));
+                                }
+                            } else {
+                                return Err(RuntimeError::Generic(
+                                    "Module registry has no attached L4 cache".to_string(),
+                                ));
+                            }
                         }
                     }
                 }

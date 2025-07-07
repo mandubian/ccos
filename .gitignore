@@ -36,3 +36,4 @@ coverage/
 *.bak
 *.old
 .aider*
+models

@@ -340,7 +340,8 @@ mod tests {
     fn test_key_generation() {
         assert_eq!(keygen::composite_key(&["a", "b", "c"]), "a::b::c");
         assert_eq!(keygen::delegation_key("agent1", "task1"), "agent1::task1");
-        assert_eq!(keygen::inference_key("model1", "hash123"), "model1::hash123");
+        let expected = format!("model1::{}", keygen::hash_input("hash123"));
+        assert_eq!(keygen::inference_key("model1", "hash123"), expected);
         assert_eq!(keygen::semantic_key("emb123"), "semantic:emb123");
         assert_eq!(keygen::content_addressable_key("bc123"), "rtfs:bc123");
     }

@@ -198,3 +198,18 @@ policy decision.
 - `rtfs_compiler/src/parser/special_forms.rs` – delegation metadata parsing.
 - `rtfs_compiler/src/runtime/evaluator.rs` – complete evaluator integration.
 - `rtfs_compiler/src/runtime/ir_runtime.rs` – complete IR runtime integration.
+
+---
+
+## 9 Advanced Architecture: Multi-Layered Cognitive Caching
+
+To evolve the CCOS from a reactive system to a proactive, learning architecture, we have specified a multi-layered caching strategy that is deeply integrated into the RTFS 2.0 language and the Arbiter's cognitive loop. This transforms caching from a simple performance optimization into a core feature of the system's intelligence.
+
+Each layer has a detailed implementation specification:
+
+-   [**L1 Delegation Cache**](./caching/L1_DELEGATION_CACHE.md): High-speed memoization of `(Agent, Task) -> Plan` decisions.
+-   [**L2 Inference Cache**](./caching/L2_INFERENCE_CACHE.md): Hybrid in-memory/persistent storage for expensive LLM inference results.
+-   [**L3 Semantic Cache**](./caching/L3_SEMANTIC_CACHE.md): AI-driven vector search for finding semantically equivalent (but not identical) past inferences.
+-   [**L4 Content-Addressable RTFS**](./caching/L4_CONTENT_ADDRESSABLE_RTFS.md): The most fundamental layer, which caches and reuses compiled RTFS bytecode directly.
+
+This advanced architecture supersedes the original plan for a simple LRU cache (Milestone M4), providing a much more ambitious and powerful path forward for system-wide learning and performance optimization.

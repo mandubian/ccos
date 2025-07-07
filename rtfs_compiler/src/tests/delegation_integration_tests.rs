@@ -99,6 +99,8 @@ fn test_delegation_engine_policy() {
         fn_symbol: "math/add",
         arg_type_fingerprint: 0,
         runtime_context_hash: 0,
+        semantic_hash: None,
+        metadata: None,
     };
     assert_eq!(delegation_engine.decide(&ctx), ExecTarget::LocalModel("echo-model".to_string()));
     
@@ -106,6 +108,8 @@ fn test_delegation_engine_policy() {
         fn_symbol: "http/get",
         arg_type_fingerprint: 0,
         runtime_context_hash: 0,
+        semantic_hash: None,
+        metadata: None,
     };
     assert_eq!(delegation_engine.decide(&ctx), ExecTarget::RemoteModel("arbiter-remote".to_string()));
     
@@ -114,6 +118,8 @@ fn test_delegation_engine_policy() {
         fn_symbol: "unknown/fn",
         arg_type_fingerprint: 0,
         runtime_context_hash: 0,
+        semantic_hash: None,
+        metadata: None,
     };
     assert_eq!(delegation_engine.decide(&ctx), ExecTarget::LocalPure);
 } 

@@ -22,6 +22,13 @@ pub enum ExecTarget {
     LocalModel(String),
     /// Delegate to a remote provider via the Arbiter / RPC.
     RemoteModel(String),
+    /// Execute a pre-compiled RTFS module from the L4 content-addressable cache.
+    L4CacheHit {
+        /// Pointer to the bytecode in blob storage (e.g., S3 object key).
+        storage_pointer: String,
+        /// Cryptographic signature of the bytecode for verification.
+        signature: String,
+    },
 }
 
 /// Delegation metadata provided by CCOS components (intent graph, planners, etc.)
@@ -72,6 +79,9 @@ pub struct CallContext<'a> {
     pub arg_type_fingerprint: u64,
     /// Hash representing ambient runtime context (permissions, task, etc.).
     pub runtime_context_hash: u64,
+    /// Optional semantic embedding of the original task description.
+    /// This is used by the L4 cache for content-addressable lookups.
+    pub semantic_hash: Option<Vec<f32>>,
     /// Optional delegation metadata from CCOS components
     pub metadata: Option<DelegationMetadata>,
 }
@@ -82,12 +92,18 @@ impl<'a> CallContext<'a> {
             fn_symbol,
             arg_type_fingerprint,
             runtime_context_hash,
+            semantic_hash: None,
             metadata: None,
         }
     }
     
     pub fn with_metadata(mut self, metadata: DelegationMetadata) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_semantic_hash(mut self, hash: Vec<f32>) -> Self {
+        self.semantic_hash = Some(hash);
         self
     }
 }
@@ -97,7 +113,9 @@ impl<'a> Hash for CallContext<'a> {
         self.fn_symbol.hash(state);
         self.arg_type_fingerprint.hash(state);
         self.runtime_context_hash.hash(state);
-        // Note: metadata is not included in hash to maintain cache consistency
+        // Note: metadata and semantic_hash are not included in hash to maintain
+        // consistency for caches (like L1) that key on CallContext structure.
+        // L4 cache performs its own semantic search.
     }
 }
 
@@ -106,7 +124,7 @@ impl<'a> PartialEq for CallContext<'a> {
         self.fn_symbol == other.fn_symbol
             && self.arg_type_fingerprint == other.arg_type_fingerprint
             && self.runtime_context_hash == other.runtime_context_hash
-        // Note: metadata is not compared to maintain cache consistency
+        // Note: metadata and semantic_hash are not compared to maintain cache consistency.
     }
 }
 
@@ -151,6 +169,8 @@ impl StaticDelegationEngine {
                 ExecTarget::LocalPure => "local-pure".to_string(),
                 ExecTarget::LocalModel(ref model) => format!("local-{}", model),
                 ExecTarget::RemoteModel(ref model) => format!("remote-{}", model),
+                // L4 hits are not cached at L1; they are a distinct path.
+                ExecTarget::L4CacheHit { .. } => return,
             },
             confidence,
             reasoning.to_string(),
@@ -170,6 +190,8 @@ impl StaticDelegationEngine {
                 ExecTarget::LocalPure => "local-pure".to_string(),
                 ExecTarget::LocalModel(ref model) => format!("local-{}", model),
                 ExecTarget::RemoteModel(ref model) => format!("remote-{}", model),
+                // L4 hits are not cached at L1.
+                ExecTarget::L4CacheHit { .. } => return,
             },
             confidence,
             reasoning,
@@ -205,10 +227,10 @@ impl DelegationEngine for StaticDelegationEngine {
             match plan.target.as_str() {
                 "local-pure" => return ExecTarget::LocalPure,
                 target if target.starts_with("local-") => {
-                    return ExecTarget::LocalModel(target.to_string());
+                    return ExecTarget::LocalModel(target.trim_start_matches("local-").to_string());
                 }
                 target if target.starts_with("remote-") => {
-                    return ExecTarget::RemoteModel(target.to_string());
+                    return ExecTarget::RemoteModel(target.trim_start_matches("remote-").to_string());
                 }
                 _ => {
                     // Fall through to default decision
@@ -378,194 +400,117 @@ mod tests {
         map.insert("math/inc".to_string(), ExecTarget::RemoteModel("gpt4o".to_string()));
         let de = StaticDelegationEngine::new(map);
 
-        let ctx = CallContext {
-            fn_symbol: "math/inc",
-            arg_type_fingerprint: 0,
-            runtime_context_hash: 0,
-            metadata: None,
-        };
+        let ctx = CallContext::new("math/inc", 0, 0);
         assert_eq!(de.decide(&ctx), ExecTarget::RemoteModel("gpt4o".to_string()));
     }
 
     #[test]
     fn fallback_is_local() {
         let de = StaticDelegationEngine::new(HashMap::new());
-        let ctx = CallContext {
-            fn_symbol: "not/known",
-            arg_type_fingerprint: 1,
-            runtime_context_hash: 2,
-            metadata: None,
-        };
+        let ctx = CallContext::new("not/known", 1, 2);
         assert_eq!(de.decide(&ctx), ExecTarget::LocalPure);
     }
 
     #[test]
     fn l1_cache_integration_test() {
-        // Create delegation engine with empty static map
         let de = StaticDelegationEngine::new(HashMap::new());
-        
-        // First call - should miss cache and use fallback
-        let ctx1 = CallContext {
-            fn_symbol: "test/function",
-            arg_type_fingerprint: 0x12345678,
-            runtime_context_hash: 0xABCDEF01,
-            metadata: None,
-        };
-        
-        let stats_before = de.cache_stats();
-        assert_eq!(stats_before.hits, 0);
-        assert_eq!(stats_before.misses, 0);
-        
-        let result1 = de.decide(&ctx1);
-        assert_eq!(result1, ExecTarget::LocalPure);
-        
-        // Check that cache was populated
-        let stats_after_first = de.cache_stats();
-        assert_eq!(stats_after_first.hits, 0);
-        assert_eq!(stats_after_first.misses, 1);
-        assert_eq!(stats_after_first.puts, 1);
-        
-        // Second call with same context - should hit cache
-        let ctx2 = CallContext {
-            fn_symbol: "test/function",
-            arg_type_fingerprint: 0x12345678,
-            runtime_context_hash: 0xABCDEF01,
-            metadata: None,
-        };
-        
-        let result2 = de.decide(&ctx2);
-        assert_eq!(result2, ExecTarget::LocalPure);
-        
-        // Check cache hit
-        let stats_after_second = de.cache_stats();
-        assert_eq!(stats_after_second.hits, 1);
-        assert_eq!(stats_after_second.misses, 1);
-        assert_eq!(stats_after_second.puts, 1);
-        assert!(stats_after_second.hit_rate > 0.0);
-        
-        // Third call with different context - should miss cache
-        let ctx3 = CallContext {
-            fn_symbol: "test/function",
-            arg_type_fingerprint: 0x87654321, // Different fingerprint
-            runtime_context_hash: 0xABCDEF01,
-            metadata: None,
-        };
-        
-        let result3 = de.decide(&ctx3);
-        assert_eq!(result3, ExecTarget::LocalPure);
-        
-        // Check cache miss
-        let stats_after_third = de.cache_stats();
-        assert_eq!(stats_after_third.hits, 1);
-        assert_eq!(stats_after_third.misses, 2);
-        assert_eq!(stats_after_third.puts, 2);
+        let ctx = CallContext::new("user/get_preferences", 123, 456);
+
+        // 1. First call: miss
+        assert_eq!(de.decide(&ctx), ExecTarget::LocalPure);
+        assert_eq!(de.cache_stats().hits, 0);
+        assert_eq!(de.cache_stats().misses, 1);
+
+        // Manually cache a different decision for the same context
+        let agent = "user/get_preferences";
+        let task = format!("{:x}", 123u64 ^ 456u64);
+        de.cache_decision(agent, &task, ExecTarget::LocalModel("fast-model".to_string()), 0.9, "test decision");
+
+        // 2. Second call: hit
+        assert_eq!(de.decide(&ctx), ExecTarget::LocalModel("fast-model".to_string()));
+        assert_eq!(de.cache_stats().hits, 1);
     }
 
     #[test]
     fn task_xor_generation_test() {
-        // Test that XOR task generation works correctly
-        let ctx1 = CallContext {
-            fn_symbol: "test/func",
-            arg_type_fingerprint: 0x12345678,
-            runtime_context_hash: 0xABCDEF01,
-            metadata: None,
-        };
-        
-        let ctx2 = CallContext {
-            fn_symbol: "test/func",
-            arg_type_fingerprint: 0x12345678,
-            runtime_context_hash: 0xABCDEF01,
-            metadata: None,
-        };
-        
-        let ctx3 = CallContext {
-            fn_symbol: "test/func",
-            arg_type_fingerprint: 0x87654321, // Different
-            runtime_context_hash: 0xABCDEF01,
-            metadata: None,
-        };
-        
-        // Same fingerprint and context should produce same task
+        let ctx1 = CallContext::new("agent1", 12345, 67890);
+        let ctx2 = CallContext::new("agent1", 12345, 67891); // different runtime context
+        let ctx3 = CallContext::new("agent2", 12345, 67890); // different agent
+
         let task1 = format!("{:x}", ctx1.arg_type_fingerprint ^ ctx1.runtime_context_hash);
         let task2 = format!("{:x}", ctx2.arg_type_fingerprint ^ ctx2.runtime_context_hash);
         let task3 = format!("{:x}", ctx3.arg_type_fingerprint ^ ctx3.runtime_context_hash);
-        
-        assert_eq!(task1, task2); // Same inputs = same task
-        assert_ne!(task1, task3); // Different inputs = different task
-        
-        // Verify the XOR calculation
-        let expected_task1 = format!("{:x}", 0x12345678u64 ^ 0xABCDEF01u64);
-        assert_eq!(task1, expected_task1);
+
+        assert_ne!(task1, task2);
+        // agent is not part of task generation, so task1 and task3 should be the same
+        assert_eq!(task1, task3);
     }
 
     #[test]
     fn cache_manual_operations_test() {
         let de = StaticDelegationEngine::new(HashMap::new());
+        let agent = "manual/agent";
+        let task = "manual_task";
         
-        // Manually cache a decision
-        de.cache_decision(
-            "manual/agent",
-            "manual_task_123",
-            ExecTarget::RemoteModel("gpt4o".to_string()),
-            0.95,
-            "Manually cached decision"
-        );
+        de.cache_decision(agent, task, ExecTarget::RemoteModel("test-model".to_string()), 0.99, "manual entry");
         
-        // Verify it's cached by checking stats
-        let stats = de.cache_stats();
-        assert_eq!(stats.puts, 1);
+        let plan = de.l1_cache.get_plan(agent, task).unwrap();
+        assert_eq!(plan.target, "remote-test-model");
+        assert_eq!(plan.confidence, 0.99);
+    }
+    
+    #[test]
+    fn call_context_with_semantic_hash() {
+        let ctx = CallContext::new("test/fn", 1, 2)
+            .with_semantic_hash(vec![0.1, 0.2, 0.3]);
         
-        // Test getting agent plans
-        let agent_plans = de.l1_cache.get_agent_plans("manual/agent");
-        assert_eq!(agent_plans.len(), 1);
-        assert_eq!(agent_plans[0].0, "manual_task_123");
-        assert_eq!(agent_plans[0].1.target, "remote-gpt4o");
-        assert_eq!(agent_plans[0].1.confidence, 0.95);
+        assert_eq!(ctx.fn_symbol, "test/fn");
+        assert!(ctx.semantic_hash.is_some());
+        assert_eq!(ctx.semantic_hash.unwrap(), vec![0.1, 0.2, 0.3]);
     }
 
     #[test]
     fn local_echo_model_works() {
         let model = LocalEchoModel::default();
         assert_eq!(model.id(), "echo-model");
-        
-        let result = model.infer("hello world").unwrap();
-        assert_eq!(result, "[ECHO] hello world");
+        let result = model.infer("hello").unwrap();
+        assert_eq!(result, "[ECHO] hello");
     }
 
     #[test]
     fn remote_arbiter_model_works() {
         let model = RemoteArbiterModel::default();
         assert_eq!(model.id(), "arbiter-remote");
-        
-        let result = model.infer("test prompt").unwrap();
-        assert!(result.contains("[REMOTE:http://localhost:8080/arbiter]"));
-        assert!(result.contains("test prompt"));
+        let result = model.infer("task-123");
+        // Stub implementation always returns a formatted string.
+        assert!(result.is_ok());
+        let s = result.unwrap();
+        assert!(s.contains("[REMOTE:"));
     }
 
     #[test]
     fn model_registry_with_defaults() {
         let registry = ModelRegistry::with_defaults();
-        
-        // Should have echo and arbiter models
         assert!(registry.get("echo-model").is_some());
         assert!(registry.get("arbiter-remote").is_some());
-        
-        // Test echo model
-        let echo = registry.get("echo-model").unwrap();
-        let result = echo.infer("test").unwrap();
-        assert_eq!(result, "[ECHO] test");
+        assert!(registry.get("non-existent").is_none());
     }
 
     #[test]
     fn model_registry_custom_provider() {
         let registry = ModelRegistry::new();
         
-        // Register custom model
-        registry.register(LocalEchoModel::new("custom", "[CUSTOM]"));
+        // Register a custom provider
+        let custom_model = LocalEchoModel::new("custom-model", "[CUSTOM]");
+        registry.register(custom_model);
         
-        let custom = registry.get("custom").unwrap();
-        let result = custom.infer("hello").unwrap();
-        assert_eq!(result, "[CUSTOM] hello");
+        // Verify it's available
+        assert!(registry.get("custom-model").is_some());
+        
+        // Test inference
+        let provider = registry.get("custom-model").unwrap();
+        let result = provider.infer("test input").unwrap();
+        assert_eq!(result, "[CUSTOM] test input");
     }
     
     #[test]

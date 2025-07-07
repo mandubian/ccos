@@ -17,6 +17,9 @@ use std::rc::Rc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
 use std::sync::Arc;
 use crate::ccos::delegation::StaticDelegationEngine;
+use crate::ccos::delegation_l4::L4AwareDelegationEngine;
+use crate::ccos::caching::l4_content_addressable::L4CacheClient;
+use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 
 #[derive(Clone, Debug)]
 pub struct Evaluator {
@@ -353,6 +356,7 @@ impl Evaluator {
                         fn_symbol,
                         arg_type_fingerprint: 0, // TODO: hash argument types
                         runtime_context_hash: 0, // TODO: hash runtime context
+                        semantic_hash: None,
                         metadata: None,
                     };
                     match self.delegation_engine.decide(&ctx) {
@@ -361,6 +365,23 @@ impl Evaluator {
                         }
                         ExecTarget::LocalModel(id) | ExecTarget::RemoteModel(id) => {
                             return self.execute_model_call(&id, args, env);
+                        }
+                        ExecTarget::L4CacheHit { storage_pointer, .. } => {
+                            if let Some(cache) = self.module_registry.l4_cache() {
+                                if let Some(_blob) = cache.get_blob(&storage_pointer) {
+                                    let executor = WasmExecutor::new();
+                                    return executor.execute_module(&_blob, fn_symbol, args);
+                                } else {
+                                    return Err(RuntimeError::Generic(format!(
+                                        "L4 cache blob '{}' not found",
+                                        storage_pointer
+                                    )));
+                                }
+                            } else {
+                                return Err(RuntimeError::Generic(
+                                    "Module registry has no attached L4 cache".to_string(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -1557,7 +1578,10 @@ impl Evaluator {
 
 impl Default for Evaluator {
     fn default() -> Self {
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let inner = StaticDelegationEngine::new(HashMap::new());
+        let l4_client = L4CacheClient::new();
+        let wrapped = L4AwareDelegationEngine::new(l4_client, inner);
+        let de: Arc<dyn DelegationEngine> = Arc::new(wrapped);
         Self::new(Rc::new(ModuleRegistry::new()), de)
     }
 }
