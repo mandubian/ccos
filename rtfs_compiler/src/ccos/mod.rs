@@ -12,6 +12,7 @@ pub mod caching;
 pub mod causal_chain;
 pub mod context_horizon;
 pub mod delegation;
+pub mod delegation_l4;
 pub mod intent_graph;
 pub mod local_models;
 pub mod loaders;

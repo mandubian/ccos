@@ -224,15 +224,12 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 
 - [x] **Delegation Engine (DE) Integration** ✅ **COMPLETED**
   - [x] DelegationEngine skeleton (`ExecTarget`, `CallContext`, `StaticDelegationEngine`) merged into `ccos::delegation` 📦
-  - [x] Metadata plumbing – carry optional `^:delegation` hint from parser → AST → IR ✅
-  - [x] Evaluator wrapper uses `DelegationEngine::decide` for each function node ✅
-  - [x] IR runtime integration – both AST and IR runtimes wired to DelegationEngine ✅
-  - [x] Function name resolution – `find_function_name` methods in both environments ✅
-  - [x] Delegation hint conversion – `DelegationHint::to_exec_target()` implemented ✅
-  - [ ] Criterion micro-benchmarks (pure evaluator vs evaluator+DE) – overhead < 0.2 ms / 1 M calls
-  - [ ] `ModelProvider` registry with `LocalEchoModel` stub
-  - [ ] `RemoteModel` path via Arbiter RPC prototype (gRPC/HTTP TBD)
-  - [ ] Decision caching with LRU (≤ 64 K entries) & metrics (`delegation_cache_size`, `cache_hit_rate`)
+  - [x] **Advanced Caching Architecture:** A multi-layered caching strategy has been implemented to enhance performance and reduce costs.
+    - [x] ~~Decision caching with LRU (≤ 64 K entries)~~ (Superseded by the more advanced multi-layer architecture below).
+    - [x] **L1 Delegation Cache:** ✅ **IMPLEMENTED** - High-speed cache for `(Agent, Task) -> Plan` decisions with LRU eviction and TTL support. See [L1 Spec](./caching/L1_DELEGATION_CACHE.md).
+    - [x] **L2 Inference Cache:** ✅ **IMPLEMENTED** - Hybrid cache for memoizing LLM inference calls with confidence tracking and model versioning. See [L2 Spec](./caching/L2_INFERENCE_CACHE.md).
+    - [x] **L3 Semantic Cache:** ✅ **IMPLEMENTED** - Vector-based cache for finding semantically equivalent inferences using cosine similarity. See [L3 Spec](./caching/L3_SEMANTIC_CACHE.md).
+    - [x] **L4 Content-Addressable RTFS:** 🔄 **PENDING** - Caches compiled RTFS bytecode for direct reuse. See [L4 Spec](./caching/L4_CONTENT_ADDRESSABLE_RTFS.md).
 
 ### Phase 7: Advanced Features 🔄 PENDING
 
@@ -377,6 +374,10 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 8. **Standard Library Enhancements**: Complete stdlib with map, task_coordination, and optimized arithmetic functions
 9. **Test Consolidation**: Comprehensive test suite organized by domain with all tests passing
 10. **Delegation Engine Integration**: Complete integration of DelegationEngine with both AST and IR runtimes
+11. **Multi-Layered Caching System**: Complete implementation of L1, L2, and L3 caches with comprehensive demos and tests
+    - **L1 Delegation Cache**: High-speed `(Agent, Task) -> Plan` caching with LRU eviction and TTL
+    - **L2 Inference Cache**: LLM inference result caching with confidence tracking and model versioning
+    - **L3 Semantic Cache**: Vector-based semantic similarity detection with cosine similarity and configurable thresholds
 
 ### 🚨 **CRITICAL UNIMPLEMENTED FUNCTIONS TRACKING** - Implementation Roadmap
 
@@ -475,7 +476,7 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 
 ### 🔄 Next Steps
 
-1. **Object Builders**: Implement fluent APIs for creating RTFS 2.0 objects
+1. **L4 Content-Addressable Cache**: Implement the final layer of the caching hierarchy for compiled RTFS bytecode
 2. **Runtime Integration**: Add execution support for RTFS 2.0 objects
 3. **Advanced Tooling**: Develop interactive tools for RTFS 2.0 development
 4. **Unimplemented Functions**: Address critical unimplemented functions (see above)
@@ -488,14 +489,14 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 - **Phase 4**: 100% Complete ✅
 - **Phase 5**: 100% Complete ✅
 - **Phase 5.5**: 100% Complete ✅
-- **Phase 6**: 25% Complete 🟡
+- **Phase 6**: 75% Complete 🟡
 - **Phase 7**: 0% Complete 🔄
 - **Phase 8**: 0% Complete 🔄
 - **Phase 9**: 0% Complete 🔄
 - **Phase 10**: 0% Complete 🔄
 - **Phase 11**: 0% Complete 🔄
 
-**Progress:** 45%
+**Progress:** 55%
 
 ---
 
@@ -594,7 +595,7 @@ The RTFS 2.0 migration has made significant progress with the core infrastructur
 - [ ] Address remaining warnings and dead code
 - [ ] Further runtime and IR migration
 
-**Progress:** 45%
+**Progress:** 55%
 
 ---
 

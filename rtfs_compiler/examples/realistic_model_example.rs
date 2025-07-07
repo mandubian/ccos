@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create model registry with realistic model
     let registry = ModelRegistry::new();
-    let realistic_model = LocalLlamaModel::new("realistic-llama", &model_path, None, None);
+    let realistic_model = LocalLlamaModel::new("realistic-llama", &model_path, None);
     registry.register(realistic_model);
     
     // Set up delegation engine to use realistic model for specific functions

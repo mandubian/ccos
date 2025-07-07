@@ -11,6 +11,7 @@ pub mod parser;
 pub mod parser_error_reporter;
 pub mod runtime;
 pub mod validator;
+pub mod bytecode;
 
 // Test modules
 #[cfg(test)]

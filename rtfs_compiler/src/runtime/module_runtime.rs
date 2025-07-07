@@ -12,6 +12,8 @@ use crate::ir::core::{IrNode, IrType};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::{IrEnvironment, IrRuntime, RuntimeError, Value};
 use crate::ccos::delegation::StaticDelegationEngine;
+use sha2::{Sha256, Digest};
+use crate::ccos::caching::l4_content_addressable::L4CacheClient;
 
 /// Module registry that manages all loaded modules
 #[derive(Debug, Clone)]
@@ -27,6 +29,12 @@ pub struct ModuleRegistry {
 
     /// Currently loading modules (for circular dependency detection)
     loading_stack: RefCell<Vec<String>>,
+
+    /// Optional L4 cache client for content-addressable bytecode reuse
+    l4_cache: Option<Arc<L4CacheClient>>,
+
+    /// Optional bytecode backend for compiling modules
+    bytecode_backend: Option<Arc<dyn crate::bytecode::BytecodeBackend>>,
 }
 
 /// A compiled module with its metadata and runtime environment
@@ -129,7 +137,31 @@ impl ModuleRegistry {
             module_environments: RefCell::new(HashMap::new()),
             module_paths: vec![PathBuf::from(".")],
             loading_stack: RefCell::new(Vec::new()),
+            l4_cache: None,
+            bytecode_backend: None,
         }
+    }
+
+    /// Attach an L4 cache client; returns self for chaining
+    pub fn with_l4_cache(mut self, cache: Arc<L4CacheClient>) -> Self {
+        self.l4_cache = Some(cache);
+        self
+    }
+
+    /// Accessor for the optional L4 cache
+    pub fn l4_cache(&self) -> Option<&Arc<L4CacheClient>> {
+        self.l4_cache.as_ref()
+    }
+
+    /// Attach a bytecode backend; returns self for chaining
+    pub fn with_bytecode_backend(mut self, backend: Arc<dyn crate::bytecode::BytecodeBackend>) -> Self {
+        self.bytecode_backend = Some(backend);
+        self
+    }
+
+    /// Accessor for the optional bytecode backend
+    pub fn bytecode_backend(&self) -> Option<&Arc<dyn crate::bytecode::BytecodeBackend>> {
+        self.bytecode_backend.as_ref()
     }
 
     /// Add a module search path
@@ -284,6 +316,25 @@ impl ModuleRegistry {
         self.module_environments
             .borrow_mut()
             .insert(module_name.to_string(), compiled_module.namespace.clone());
+
+        // ----- L4 cache publishing prototype -----
+        if let (Some(cache), Some(backend)) = (&self.l4_cache, &self.bytecode_backend) {
+            use crate::ccos::caching::l4_content_addressable::RtfsModuleMetadata;
+            // Compile IR to bytecode via backend
+            let bytecode = backend.compile_module(&compiled_module.ir_node);
+
+            // Interface hash = SHA256(sorted export names)::hex
+            let mut export_names: Vec<String> = compiled_module.exports.borrow().keys().cloned().collect();
+            export_names.sort();
+            let joined = export_names.join("::");
+            let mut hasher = Sha256::new();
+            hasher.update(joined.as_bytes());
+            let interface_hash = format!("{:x}", hasher.finalize());
+            // Semantic embedding unavailable here; leave empty.
+            let metadata = RtfsModuleMetadata::new(Vec::<f32>::new(), interface_hash, String::new());
+            // Ignore errors in the prototype.
+            let _ = cache.publish_module(bytecode, metadata);
+        }
 
         Ok(compiled_module)
     }

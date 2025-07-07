@@ -3,12 +3,13 @@
 
 use crate::ast::{Keyword, Literal, MapKey};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 /// Unique identifier for IR nodes (for scope resolution and linking)
 pub type NodeId = u64;
 
 /// Source location information for error reporting
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
@@ -16,7 +17,7 @@ pub struct SourceLocation {
 }
 
 /// IR Type system - represents resolved types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IrType {
     // Primitive types
     Int,
@@ -55,7 +56,7 @@ pub enum IrType {
     TypeRef(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrMapTypeEntry {
     pub key: Keyword,
     pub value_type: IrType,
@@ -63,14 +64,14 @@ pub struct IrMapTypeEntry {
 }
 
 /// Map entry for literal map construction
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrMapEntry {
     pub key: IrNode,
     pub value: IrNode,
 }
 
 /// Core IR Node structure
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IrNode {
     // Program structure
     Program {
@@ -297,7 +298,7 @@ pub enum IrNode {
 }
 
 /// Captured variable information for closures
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrCapture {
     pub name: String,
     pub binding_id: NodeId,
@@ -305,7 +306,7 @@ pub struct IrCapture {
 }
 
 /// Let binding in IR
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrLetBinding {
     pub pattern: IrNode, // Can be VariableBinding or destructuring pattern
     pub type_annotation: Option<IrType>,
@@ -313,7 +314,7 @@ pub struct IrLetBinding {
 }
 
 /// Match clause in IR
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrMatchClause {
     pub pattern: IrPattern,
     pub guard: Option<IrNode>,
@@ -321,7 +322,7 @@ pub struct IrMatchClause {
 }
 
 /// Pattern matching patterns
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IrPattern {
     Literal(Literal),
     Variable(String),
@@ -337,14 +338,14 @@ pub enum IrPattern {
     Type(IrType),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrMapPatternEntry {
     pub key: MapKey,
     pub pattern: IrPattern,
 }
 
 /// Catch clause in try-catch
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrCatchClause {
     pub error_pattern: IrPattern,
     pub binding: Option<String>,
@@ -352,7 +353,7 @@ pub struct IrCatchClause {
 }
 
 /// Parallel binding
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IrParallelBinding {
     pub binding: IrNode,
     pub init_expr: IrNode,
