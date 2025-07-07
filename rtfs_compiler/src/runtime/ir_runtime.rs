@@ -441,6 +441,7 @@ impl IrRuntime {
                         fn_symbol,
                         arg_type_fingerprint: 0, // TODO: hash argument types
                         runtime_context_hash: 0, // TODO: hash runtime context
+                        metadata: None,
                     };
                     match self.delegation_engine.decide(&ctx) {
                         ExecTarget::LocalPure => {

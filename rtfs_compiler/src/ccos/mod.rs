@@ -8,10 +8,12 @@
 //! - Subconscious: Background analysis and wisdom distillation
 
 pub mod arbiter;
+pub mod caching;
 pub mod causal_chain;
 pub mod context_horizon;
 pub mod delegation;
 pub mod intent_graph;
+pub mod local_models;
 pub mod loaders;
 pub mod subconscious;
 pub mod task_context;

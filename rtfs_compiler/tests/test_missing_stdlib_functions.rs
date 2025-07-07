@@ -9,7 +9,7 @@ use rtfs_compiler::runtime::values::Value;
 fn test_missing_stdlib_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");
