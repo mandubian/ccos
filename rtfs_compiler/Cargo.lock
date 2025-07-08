@@ -2023,11 +2023,13 @@ dependencies = [
 name = "rtfs_compiler"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bincode",
  "chrono",
  "clap",
  "dashmap",
  "flate2",
+ "futures",
  "indexmap",
  "itertools 0.12.1",
  "lazy_static",

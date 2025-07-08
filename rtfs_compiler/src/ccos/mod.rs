@@ -8,6 +8,8 @@
 //! - Subconscious: Background analysis and wisdom distillation
 
 pub mod arbiter;
+pub mod arbiter_engine;
+pub mod delegating_arbiter;
 pub mod caching;
 pub mod causal_chain;
 pub mod context_horizon;
@@ -341,6 +343,8 @@ impl CCOSRuntime {
             .map(|cv| &cv.value)
     }
 }
+
+pub use delegating_arbiter::DelegatingArbiter;
 
 #[cfg(test)]
 mod tests {
