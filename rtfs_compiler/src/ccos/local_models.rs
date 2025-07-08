@@ -8,6 +8,8 @@ use llama_cpp::{LlamaModel, LlamaParams, SessionParams, standard_sampler::Standa
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use futures::executor::block_on;
+use tokio::task;
 
 /// Realistic local model provider using llama-cpp
 pub struct LocalLlamaModel {
@@ -40,7 +42,8 @@ impl LocalLlamaModel {
                 return Err(format!("Model file not found: {}", self.model_path).into());
             }
 
-            // Load the model
+            // Load the model (once per process)
+            println!("[LocalLlamaModel] 🔄 Loading model from '{}'. This should appear only once.", self.model_path);
             let model = LlamaModel::load_from_file(&self.model_path, LlamaParams::default())?;
             *model_guard = Some(model);
         }
@@ -66,6 +69,38 @@ impl LocalLlamaModel {
 
         Self::new("rtfs-llama", &model_path, Some(params))
     }
+
+    /// Core async inference logic shared by both sync entrypoints.
+    async fn infer_async(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Ensure model is loaded
+        self.ensure_loaded().await?;
+
+        // Get the model
+        let model_guard = self.model.lock().await;
+        let model = model_guard.as_ref().ok_or("Model not loaded")?;
+
+        // Create a session
+        let mut session = model.create_session(SessionParams::default())?;
+
+        // Format the prompt for RTFS function calls
+        let formatted_prompt = format!(
+            "You are an RTFS function execution assistant. Given the following function arguments, provide a concise response that would be the result of executing the function.\n\nArguments: {}\n\nResponse:",
+            prompt
+        );
+
+        // Advance context with the prompt
+        session.advance_context(&formatted_prompt)?;
+
+        // Generate response
+        let mut response = String::new();
+        let completions = session.start_completing_with(StandardSampler::default(), 256)?;
+        let mut string_completions = completions.into_strings();
+        for completion in string_completions {
+            response.push_str(&completion);
+        }
+
+        Ok(response)
+    }
 }
 
 impl ModelProvider for LocalLlamaModel {
@@ -74,42 +109,14 @@ impl ModelProvider for LocalLlamaModel {
     }
 
     fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Use tokio runtime for async operations
-        let rt = tokio::runtime::Runtime::new()?;
-        
-        rt.block_on(async {
-            // Ensure model is loaded
-            self.ensure_loaded().await?;
-            
-            // Get the model
-            let model_guard = self.model.lock().await;
-            let model = model_guard.as_ref()
-                .ok_or("Model not loaded")?;
-
-            // Create a session
-            let mut session = model.create_session(SessionParams::default())?;
-            
-            // Format the prompt for RTFS function calls
-            let formatted_prompt = format!(
-                "You are an RTFS function execution assistant. Given the following function arguments, provide a concise response that would be the result of executing the function.\n\nArguments: {}\n\nResponse:",
-                prompt
-            );
-
-            // Advance context with the prompt
-            session.advance_context(&formatted_prompt)?;
-
-            // Generate response
-            let mut response = String::new();
-            let completions = session.start_completing_with(StandardSampler::default(), 256)?;
-            let mut string_completions = completions.into_strings();
-            
-            // Collect the response
-            for completion in string_completions {
-                response.push_str(&completion);
+        // If we're already inside a Tokio runtime, reuse it; otherwise create one.
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => task::block_in_place(|| block_on(self.infer_async(prompt))),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(self.infer_async(prompt))
             }
-            
-            Ok(response)
-        })
+        }
     }
 }
 

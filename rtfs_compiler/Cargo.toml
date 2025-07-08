@@ -67,6 +67,11 @@ flate2 = "1.0"
 # Bincode dependency
 bincode = "1.3"
 
+# Async-trait dependency
+async-trait = "0.1"
+
+futures = "0.3"
+
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 wat = "1.0"

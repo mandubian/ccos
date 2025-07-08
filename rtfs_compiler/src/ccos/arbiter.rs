@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use super::arbiter_engine::ArbiterEngine;
+use async_trait::async_trait;
 
 /// Expected data type for user prompt response
 #[derive(Debug, Clone)]
@@ -258,6 +260,11 @@ impl Arbiter {
     /// Execute a plan and track the execution
     pub async fn execute_plan(&self, plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
         // ------------------------------------------------------------------
+        // Logging: show plan & context being executed
+        // ------------------------------------------------------------------
+        println!("[Arbiter] ⏩ Executing Plan '{}' (id={}) linked to intents: {:?}", plan.name, plan.plan_id, plan.intent_ids);
+
+        // ------------------------------------------------------------------
         // Build execution environment with stdlib and inject capability wrappers
         // ------------------------------------------------------------------
         let mut env: Environment = StandardLibrary::create_global_environment();
@@ -278,6 +285,7 @@ impl Arbiter {
 
         let result = match plan.name.as_str() {
             "sentiment_analysis_pipeline" => {
+                println!("[Arbiter] ▶ Simulating execution path: sentiment_analysis_pipeline");
                 // Simulate sentiment analysis execution
                 ExecutionResult {
                     success: true,
@@ -303,6 +311,7 @@ impl Arbiter {
                 }
             }
             "performance_optimization_plan" => {
+                println!("[Arbiter] ▶ Simulating execution path: performance_optimization_plan");
                 // Simulate performance optimization execution
                 ExecutionResult {
                     success: true,
@@ -331,6 +340,7 @@ impl Arbiter {
                 }
             }
             "learning_extraction_plan" => {
+                println!("[Arbiter] ▶ Simulating execution path: learning_extraction_plan");
                 // Simulate learning extraction execution
                 ExecutionResult {
                     success: true,
@@ -360,6 +370,7 @@ impl Arbiter {
             }
             _ => {
                 // Generic execution result
+                println!("[Arbiter] ▶ Executing generic plan path");
                 ExecutionResult {
                     success: true,
                     value: Value::String("Generic execution completed".to_string()),
@@ -658,5 +669,35 @@ mod tests {
 
         let insights = arbiter.get_learning_insights().unwrap();
         assert!(insights.contains_key("average_success_rate"));
+    }
+}
+
+#[async_trait(?Send)]
+impl ArbiterEngine for Arbiter {
+    async fn natural_language_to_intent(
+        &self,
+        natural_language: &str,
+        context: Option<std::collections::HashMap<String, Value>>,
+    ) -> Result<Intent, RuntimeError> {
+        // Reuse internal method
+        self.natural_language_to_intent(natural_language, context)
+            .await
+    }
+
+    async fn intent_to_plan(&self, intent: &Intent) -> Result<Plan, RuntimeError> {
+        self.intent_to_plan(intent).await
+    }
+
+    async fn execute_plan(&self, plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
+        self.execute_plan(plan).await
+    }
+
+    async fn learn_from_execution(
+        &self,
+        intent: &Intent,
+        plan: &Plan,
+        result: &ExecutionResult,
+    ) -> Result<(), RuntimeError> {
+        self.learn_from_execution(intent, plan, result).await
     }
 }
