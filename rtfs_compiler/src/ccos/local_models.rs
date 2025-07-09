@@ -4,6 +4,7 @@
 //! quantized LLMs that can run on GPU with llama-cpp.
 
 use crate::ccos::delegation::ModelProvider;
+#[cfg(feature = "cuda")]
 use llama_cpp::{LlamaModel, LlamaParams, SessionParams, standard_sampler::StandardSampler};
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +16,10 @@ use tokio::task;
 pub struct LocalLlamaModel {
     id: &'static str,
     model_path: String,
+    #[cfg(feature = "cuda")]
     model: Arc<Mutex<Option<LlamaModel>>>,
+    #[cfg(not(feature = "cuda"))]
+    model: Arc<Mutex<Option<()>>>,
 }
 
 impl LocalLlamaModel {
@@ -23,29 +27,41 @@ impl LocalLlamaModel {
     pub fn new(
         id: &'static str,
         model_path: &str,
-        _params: Option<LlamaParams>,
+        #[cfg(feature = "cuda")] _params: Option<LlamaParams>,
+        #[cfg(not(feature = "cuda"))] _params: Option<()>,
     ) -> Self {
         Self {
             id,
             model_path: model_path.to_string(),
+            #[cfg(feature = "cuda")]
+            model: Arc::new(Mutex::new(None)),
+            #[cfg(not(feature = "cuda"))]
             model: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Initialize the model (lazy loading)
     async fn ensure_loaded(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut model_guard = self.model.lock().await;
-        
-        if model_guard.is_none() {
-            // Check if model file exists
-            if !Path::new(&self.model_path).exists() {
-                return Err(format!("Model file not found: {}", self.model_path).into());
-            }
+        #[cfg(feature = "cuda")]
+        {
+            let mut model_guard = self.model.lock().await;
+            
+            if model_guard.is_none() {
+                // Check if model file exists
+                if !Path::new(&self.model_path).exists() {
+                    return Err(format!("Model file not found: {}", self.model_path).into());
+                }
 
-            // Load the model (once per process)
-            println!("[LocalLlamaModel] 🔄 Loading model from '{}'. This should appear only once.", self.model_path);
-            let model = LlamaModel::load_from_file(&self.model_path, LlamaParams::default())?;
-            *model_guard = Some(model);
+                // Load the model (once per process)
+                println!("[LocalLlamaModel] 🔄 Loading model from '{}'. This should appear only once.", self.model_path);
+                let model = LlamaModel::load_from_file(&self.model_path, LlamaParams::default())?;
+                *model_guard = Some(model);
+            }
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            return Err("CUDA feature not enabled. Enable with --features cuda".into());
         }
 
         Ok(())
@@ -62,7 +78,10 @@ impl LocalLlamaModel {
 
     /// Create a model optimized for RTFS function calls
     pub fn rtfs_optimized() -> Self {
+        #[cfg(feature = "cuda")]
         let params = LlamaParams::default();
+        #[cfg(not(feature = "cuda"))]
+        let params = ();
 
         let model_path = std::env::var("RTFS_LOCAL_MODEL_PATH")
             .unwrap_or_else(|_| "models/phi-2.gguf".to_string());
@@ -72,34 +91,42 @@ impl LocalLlamaModel {
 
     /// Core async inference logic shared by both sync entrypoints.
     async fn infer_async(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Ensure model is loaded
-        self.ensure_loaded().await?;
+        #[cfg(feature = "cuda")]
+        {
+            // Ensure model is loaded
+            self.ensure_loaded().await?;
 
-        // Get the model
-        let model_guard = self.model.lock().await;
-        let model = model_guard.as_ref().ok_or("Model not loaded")?;
+            // Get the model
+            let model_guard = self.model.lock().await;
+            let model = model_guard.as_ref().ok_or("Model not loaded")?;
 
-        // Create a session
-        let mut session = model.create_session(SessionParams::default())?;
+            // Create a session
+            let mut session = model.create_session(SessionParams::default())?;
 
-        // Format the prompt for RTFS function calls
-        let formatted_prompt = format!(
-            "You are an RTFS function execution assistant. Given the following function arguments, provide a concise response that would be the result of executing the function.\n\nArguments: {}\n\nResponse:",
-            prompt
-        );
+            // Format the prompt for RTFS function calls
+            let formatted_prompt = format!(
+                "You are an RTFS function execution assistant. Given the following function arguments, provide a concise response that would be the result of executing the function.\n\nArguments: {}\n\nResponse:",
+                prompt
+            );
 
-        // Advance context with the prompt
-        session.advance_context(&formatted_prompt)?;
+            // Advance context with the prompt
+            session.advance_context(&formatted_prompt)?;
 
-        // Generate response
-        let mut response = String::new();
-        let completions = session.start_completing_with(StandardSampler::default(), 256)?;
-        let mut string_completions = completions.into_strings();
-        for completion in string_completions {
-            response.push_str(&completion);
+            // Generate response
+            let mut response = String::new();
+            let completions = session.start_completing_with(StandardSampler::default(), 256)?;
+            let mut string_completions = completions.into_strings();
+            for completion in string_completions {
+                response.push_str(&completion);
+            }
+
+            Ok(response)
         }
 
-        Ok(response)
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err("CUDA feature not enabled. Enable with --features cuda".into())
+        }
     }
 }
 
