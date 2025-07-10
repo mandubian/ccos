@@ -21,26 +21,28 @@ pub fn intent_from_rtfs(rtfs_intent: &IntentDefinition) -> Result<Intent, Runtim
 
     // Parse properties
     for property in &rtfs_intent.properties {
-        match property.key.0.as_str() {
-            ":goal" => {
+        // Normalise key by stripping any leading ':' for comparison
+        let key_norm = property.key.0.trim_start_matches(':');
+        match key_norm {
+            "goal" => {
                 intent.goal = expression_to_string(&property.value)?;
             }
-            ":constraints" => {
+            "constraints" => {
                 intent.constraints = expression_to_map(&property.value)?;
             }
-            ":preferences" => {
+            "preferences" => {
                 intent.preferences = expression_to_map(&property.value)?;
             }
-            ":success-criteria" => {
+            "success-criteria" => {
                 intent.success_criteria = Some(expression_to_value(&property.value)?);
             }
-            ":emotional-tone" => {
+            "emotional-tone" => {
                 intent.emotional_tone = Some(expression_to_string(&property.value)?);
             }
-            ":parent-intent" => {
+            "parent-intent" => {
                 intent.parent_intent = Some(expression_to_string(&property.value)?);
             }
-            ":id" => {
+            "id" | "intent-id" => {
                 intent.intent_id = expression_to_string(&property.value)?;
             }
             _ => {
