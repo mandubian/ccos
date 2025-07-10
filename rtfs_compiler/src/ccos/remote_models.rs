@@ -29,9 +29,9 @@ impl RemoteModelConfig {
             api_key,
             base_url: None,
             model_name,
-            max_tokens: Some(1000),
+            max_tokens: None,
             temperature: Some(0.7),
-            timeout_seconds: 30,
+            timeout_seconds: 120,
         }
     }
 
