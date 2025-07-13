@@ -408,7 +408,7 @@ COMMON PATTERNS:
     let delegation = Arc::new(StaticDelegationEngine::new(static_map));
 
     // Evaluator (we won't actually evaluate the generated intent here, but set up for future)
-    let mut evaluator = Evaluator::new(Rc::new(ModuleRegistry::new()), delegation);
+    let mut evaluator = Evaluator::new(Rc::new(ModuleRegistry::new()), delegation, rtfs_compiler::runtime::security::RuntimeContext::pure());
     evaluator.model_registry = Arc::new(registry);
 
     // ---------------------------------------------------------------------

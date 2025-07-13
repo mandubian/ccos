@@ -162,7 +162,7 @@ mod function_tests {
         // Load stdlib to get map and other builtin functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure());
         println!("Symbols in environment: {:?}", evaluator.env.symbol_names());
         println!(
             "Map lookupable: {:?}",
@@ -183,7 +183,7 @@ mod function_tests {
         let parsed = parser::parse(input).expect("Failed to parse");
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure());
         evaluator.eval_toplevel(&parsed)
     }
 }

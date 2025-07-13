@@ -7,12 +7,13 @@ use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::Evaluator;
 use crate::runtime::{IrEnvironment, IrRuntime};
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Nil,
     Boolean(bool),
@@ -27,12 +28,14 @@ pub enum Value {
     Vector(Vec<Value>),
     List(Vec<Value>),
     Map(HashMap<MapKey, Value>),
+    #[serde(skip_serializing, skip_deserializing)]
     Function(Function),
+    #[serde(skip_serializing, skip_deserializing)]
     FunctionPlaceholder(Rc<RefCell<Value>>),
     Error(ErrorValue),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrorValue {
     pub message: String,
     pub stack_trace: Option<Vec<String>>,

@@ -37,7 +37,7 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     let de: Arc<dyn DelegationEngine> = Arc::new(l4_de);
 
     // 5. Create evaluator with empty env, but register a placeholder `add` so lookup succeeds.
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure());
     let symbol_add = Symbol("add".to_string());
     // Create a dummy closure that won't actually be executed when delegation takes L4 path.
     let dummy_closure = Function::new_closure(
@@ -74,7 +74,7 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
     let inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
 
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure());
 
     let code = "(do (defn add [x y] nil) (add 1 2))";
     let expr = parse_expression(code).unwrap();

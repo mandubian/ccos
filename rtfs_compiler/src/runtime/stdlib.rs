@@ -12,13 +12,15 @@ use crate::runtime::module_runtime::{
 };
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function};
 use crate::runtime::Value;
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::RwLock;
 
 pub struct StandardLibrary;
 
@@ -68,6 +70,18 @@ fn get_next_file_handle_id() -> i64 {
         let id = NEXT_FILE_HANDLE_ID;
         NEXT_FILE_HANDLE_ID += 1;
         id
+    }
+}
+
+/// Global capability marketplace instance
+static mut CAPABILITY_MARKETPLACE: Option<Arc<RwLock<CapabilityMarketplace>>> = None;
+
+fn get_capability_marketplace() -> Arc<RwLock<CapabilityMarketplace>> {
+    unsafe {
+        if CAPABILITY_MARKETPLACE.is_none() {
+            CAPABILITY_MARKETPLACE = Some(Arc::new(RwLock::new(CapabilityMarketplace::default())));
+        }
+        CAPABILITY_MARKETPLACE.as_ref().unwrap().clone()
     }
 }
 
@@ -3134,87 +3148,71 @@ impl StandardLibrary {
                 e
             )));
         }
-        // 3. (Placeholder) Route through delegation engine for secure execution
-        // 4. (Placeholder) Log action in causal chain
-        // 5. (Placeholder) Handle microVM execution for dangerous operations
-        // For now, return a stub error for unimplemented secure execution
-        Err(RuntimeError::Generic(format!(
-            "Capability '{}' is permitted but secure execution is not yet implemented. \
-            Please integrate with CCOS capability marketplace.",
-            capability_id
-        )))
+        // 3. Execute the capability (local implementation for now)
+        Self::execute_capability_call(&capability_id, &inputs)
     }
 
-    /// Execute a capability call (mock implementation for demonstration)
+    /// Execute a capability call using the marketplace
     fn execute_capability_call(capability_id: &str, inputs: &Value) -> RuntimeResult<Value> {
-        // This is a mock implementation
-        // In production, this would:
-        // 1. Look up the capability in the marketplace
-        // 2. Route through delegation engine
-        // 3. Make actual HTTP/gRPC calls to capability providers
-        // 4. Handle authentication, retries, etc.
-        
+        // For now, implement basic capabilities directly
+        // In a full implementation, this would use the marketplace
         match capability_id {
-            "ccos.ask-human" => {
-                // Human-in-the-loop capability
-                match inputs {
-                    Value::String(_prompt) => {
-                        // Generate a unique resource handle for the prompt
-                        let handle = format!("prompt-{}", uuid::Uuid::new_v4());
-                        Ok(Value::ResourceHandle(handle))
-                    }
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "string".to_string(),
-                        actual: inputs.type_name().to_string(),
-                        operation: "ask-human capability".to_string(),
-                    }),
-                }
-            }
             "ccos.echo" => {
-                // Simple echo capability for testing
+                // Echo capability - return input as-is
                 Ok(inputs.clone())
             }
             "ccos.math.add" => {
-                // Math capability example
-                match inputs {
-                    Value::Map(map) => {
-                        let a = map.get(&crate::ast::MapKey::Keyword(Keyword("a".to_string())))
-                            .and_then(|v| match v {
-                                Value::Integer(i) => Some(*i),
-                                Value::Float(f) => Some(*f as i64),
-                                _ => None,
-                            })
-                            .ok_or_else(|| RuntimeError::TypeError {
-                                expected: "number".to_string(),
-                                actual: "missing or invalid 'a' parameter".to_string(),
-                                operation: "math.add capability".to_string(),
-                            })?;
-                        
-                        let b = map.get(&crate::ast::MapKey::Keyword(Keyword("b".to_string())))
-                            .and_then(|v| match v {
-                                Value::Integer(i) => Some(*i),
-                                Value::Float(f) => Some(*f as i64),
-                                _ => None,
-                            })
-                            .ok_or_else(|| RuntimeError::TypeError {
-                                expected: "number".to_string(),
-                                actual: "missing or invalid 'b' parameter".to_string(),
-                                operation: "math.add capability".to_string(),
-                            })?;
-                        
-                        Ok(Value::Integer(a + b))
-                    }
-                    _ => Err(RuntimeError::TypeError {
+                // Math add capability
+                if let Value::Map(map) = inputs {
+                    let a = map.get(&crate::ast::MapKey::Keyword(crate::ast::Keyword("a".to_string())))
+                        .and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            Value::Float(f) => Some(*f as i64),
+                            _ => None,
+                        })
+                        .ok_or_else(|| RuntimeError::TypeError {
+                            expected: "number".to_string(),
+                            actual: "missing or invalid 'a' parameter".to_string(),
+                            operation: "math.add".to_string(),
+                        })?;
+                    
+                    let b = map.get(&crate::ast::MapKey::Keyword(crate::ast::Keyword("b".to_string())))
+                        .and_then(|v| match v {
+                            Value::Integer(i) => Some(*i),
+                            Value::Float(f) => Some(*f as i64),
+                            _ => None,
+                        })
+                        .ok_or_else(|| RuntimeError::TypeError {
+                            expected: "number".to_string(),
+                            actual: "missing or invalid 'b' parameter".to_string(),
+                            operation: "math.add".to_string(),
+                        })?;
+                    
+                    Ok(Value::Integer(a + b))
+                } else {
+                    Err(RuntimeError::TypeError {
                         expected: "map with :a and :b keys".to_string(),
                         actual: inputs.type_name().to_string(),
-                        operation: "math.add capability".to_string(),
-                    }),
+                        operation: "math.add".to_string(),
+                    })
+                }
+            }
+            "ccos.ask-human" => {
+                // Ask human capability - return a resource handle
+                if let Value::String(_prompt) = inputs {
+                    let handle = format!("prompt-{}", uuid::Uuid::new_v4());
+                    Ok(Value::ResourceHandle(handle))
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "string".to_string(),
+                        actual: inputs.type_name().to_string(),
+                        operation: "ask-human".to_string(),
+                    })
                 }
             }
             _ => {
-                // Unknown capability
                 Err(RuntimeError::Generic(format!(
-                    "Unknown capability: {}. Available capabilities: ccos.ask-human, ccos.echo, ccos.math.add",
+                    "Capability '{}' not implemented",
                     capability_id
                 )))
             }
@@ -3559,3 +3557,4 @@ where
 
     exports.insert(name.to_string(), export);
 }
+

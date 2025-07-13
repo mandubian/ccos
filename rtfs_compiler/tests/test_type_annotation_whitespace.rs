@@ -11,7 +11,7 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {
 
     println!("   Parsed {} successfully", test_name); // Test AST runtime
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = runtime::evaluator::Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
     let ast_result = match evaluator.evaluate(&parsed) {
         Ok(value) => {
             println!("   ✓ AST runtime executed: {:?}", value);

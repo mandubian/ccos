@@ -10,7 +10,7 @@ fn test_mutual_recursion_pattern() {
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
@@ -31,7 +31,7 @@ fn test_nested_recursion_pattern() {
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Should return a countdown vector [5, 4, 3, 2, 1]
@@ -44,7 +44,7 @@ fn test_higher_order_recursion_pattern() {
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Should return squares: [1, 4, 9, 16, 25]
@@ -57,7 +57,7 @@ fn test_three_way_recursion_pattern() {
     
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Should return cycle results
