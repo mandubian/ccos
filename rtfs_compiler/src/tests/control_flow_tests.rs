@@ -46,7 +46,7 @@ mod control_flow_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get arithmetic functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())));
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())), crate::runtime::security::RuntimeContext::pure());
 
         // Evaluate all top-level forms in sequence using the evaluator's environment
         let result = evaluator.eval_toplevel(&parsed);

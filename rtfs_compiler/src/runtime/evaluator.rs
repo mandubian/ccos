@@ -9,16 +9,14 @@ use crate::ast::{
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::stdlib::StandardLibrary;
 use crate::runtime::values::{Arity, Function, Value};
+use crate::runtime::security::RuntimeContext;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
 use std::sync::Arc;
 use crate::ccos::delegation::StaticDelegationEngine;
-use crate::ccos::delegation_l4::L4AwareDelegationEngine;
-use crate::ccos::caching::l4_content_addressable::L4CacheClient;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 
 #[derive(Clone, Debug)]
@@ -30,6 +28,8 @@ pub struct Evaluator {
     task_context: Option<Value>,
     pub delegation_engine: Arc<dyn DelegationEngine>,
     pub model_registry: Arc<ModelRegistry>,
+    /// Security context for capability execution
+    pub security_context: RuntimeContext,
 }
 
 // Helper function to check if two values are in equivalent
@@ -48,34 +48,59 @@ fn values_equivalent(a: &Value, b: &Value) -> bool {
 }
 
 impl Evaluator {
-    /// Create a new evaluator with standard library loaded and default agent discovery
-    pub fn new(module_registry: Rc<ModuleRegistry>, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
-        let env = StandardLibrary::create_global_environment();
+    /// Create a new evaluator with secure environment and default security context
+    pub fn new(
+        module_registry: Rc<ModuleRegistry>, 
+        delegation_engine: Arc<dyn DelegationEngine>,
+        security_context: RuntimeContext,
+    ) -> Self {
+        let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
 
         Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
-            max_recursion_depth: 1000, // Default max recursion depth
+            max_recursion_depth: 1000,
             task_context: None,
             delegation_engine,
             model_registry,
+            security_context,
         }
     }
-    pub fn new_with_task_context(module_registry: Rc<ModuleRegistry>, task_context: Value, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
-        let env = StandardLibrary::create_global_environment();
+
+    /// Create a new evaluator with task context and security
+    pub fn new_with_task_context(
+        module_registry: Rc<ModuleRegistry>, 
+        task_context: Value,
+        delegation_engine: Arc<dyn DelegationEngine>,
+        security_context: RuntimeContext,
+    ) -> Self {
+        let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
 
         Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
-            max_recursion_depth: 1000, // Default max recursion depth
+            max_recursion_depth: 1000,
             task_context: Some(task_context),
             delegation_engine,
             model_registry,
+            security_context,
         }
+    }
+
+    /// Create a new evaluator with default security context (pure)
+    pub fn new_with_defaults(
+        module_registry: Rc<ModuleRegistry>, 
+        delegation_engine: Arc<dyn DelegationEngine>,
+    ) -> Self {
+        Self::new(
+            module_registry,
+            delegation_engine,
+            RuntimeContext::pure(),
+        )
     }
 
     /// Set the task context for the evaluator
@@ -1574,14 +1599,72 @@ impl Evaluator {
         }
         Ok(Value::Vector(result))
     }
+
+    /// Check if a capability is allowed in the current security context
+    pub fn check_capability_permission(&self, capability_id: &str) -> Result<(), RuntimeError> {
+        if !self.security_context.is_capability_allowed(capability_id) {
+            return Err(RuntimeError::Generic(format!(
+                "Capability '{}' not allowed in current security context", 
+                capability_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Check if a capability requires microVM execution
+    pub fn requires_microvm(&self, capability_id: &str) -> bool {
+        self.security_context.requires_microvm(capability_id)
+    }
+
+    /// Get the current security context
+    pub fn security_context(&self) -> &RuntimeContext {
+        &self.security_context
+    }
+
+    /// Create a new evaluator with updated security context
+    pub fn with_security_context(&self, security_context: RuntimeContext) -> Self {
+        Self {
+            module_registry: self.module_registry.clone(),
+            env: self.env.clone(),
+            recursion_depth: 0,
+            max_recursion_depth: self.max_recursion_depth,
+            task_context: self.task_context.clone(),
+            delegation_engine: self.delegation_engine.clone(),
+            model_registry: self.model_registry.clone(),
+            security_context,
+        }
+    }
+
+    pub fn with_environment(
+        module_registry: Rc<ModuleRegistry>,
+        env: Environment,
+        delegation_engine: Arc<dyn DelegationEngine>,
+        security_context: RuntimeContext,
+    ) -> Self {
+        Self {
+            module_registry,
+            env,
+            recursion_depth: 0,
+            max_recursion_depth: 1000,
+            task_context: None,
+            delegation_engine,
+            model_registry: Arc::new(ModelRegistry::with_defaults()),
+            security_context,
+        }
+    }
 }
 
 impl Default for Evaluator {
     fn default() -> Self {
-        let inner = StaticDelegationEngine::new(HashMap::new());
-        let l4_client = L4CacheClient::new();
-        let wrapped = L4AwareDelegationEngine::new(l4_client, inner);
-        let de: Arc<dyn DelegationEngine> = Arc::new(wrapped);
-        Self::new(Rc::new(ModuleRegistry::new()), de)
+        let module_registry = Rc::new(ModuleRegistry::new());
+        let static_map = std::collections::HashMap::new();
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
+        let security_context = RuntimeContext::pure();
+        
+        Self::new(
+            module_registry,
+            delegation_engine,
+            security_context,
+        )
     }
 }

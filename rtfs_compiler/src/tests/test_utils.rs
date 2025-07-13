@@ -24,7 +24,7 @@ pub fn create_test_module_registry() -> ModuleRegistry {
 pub fn create_test_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    Evaluator::new(Rc::new(module_registry), de)
+    Evaluator::new(Rc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure())
 }
 
 /// Creates a new IR runtime.

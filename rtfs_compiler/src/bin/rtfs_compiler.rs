@@ -115,7 +115,8 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 let evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::rc::Rc::new(module_registry),
-                        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new()))
+                        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+                        rtfs_compiler::runtime::security::RuntimeContext::pure(),
                     );
                 Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
             }
@@ -249,7 +250,8 @@ fn main() {
             let mut evaluator =
                 rtfs_compiler::runtime::Evaluator::new(
                     std::rc::Rc::new(module_registry),
-                    std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new()))
+                    std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+                    rtfs_compiler::runtime::security::RuntimeContext::pure(),
                 );
 
             match evaluator.eval_toplevel(&parsed_items) {

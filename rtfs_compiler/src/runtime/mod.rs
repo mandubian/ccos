@@ -4,6 +4,7 @@
 pub mod capability;
 pub mod capability_registry;
 pub mod capability_provider;
+pub mod capability_marketplace;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
@@ -27,6 +28,7 @@ pub use values::{Function, Value};
 use crate::ast::Expression;
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
+use crate::runtime::security::{RuntimeContext, SecurityPolicies};
 use std::rc::Rc;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
@@ -65,7 +67,8 @@ impl Runtime {
 
     pub fn new_with_tree_walking_strategy(module_registry: Rc<ModuleRegistry>) -> Self {
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let evaluator = Evaluator::new(module_registry, de);
+        let security_context = RuntimeContext::pure();
+        let evaluator = Evaluator::new(module_registry, de, security_context);
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
     }
@@ -74,7 +77,8 @@ impl Runtime {
         let parsed = parser::parse(input).expect("Failed to parse input");
         let module_registry = ModuleRegistry::new();
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+        let security_context = RuntimeContext::pure();
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context);
         evaluator.eval_toplevel(&parsed)
     }
 
@@ -83,7 +87,8 @@ impl Runtime {
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+        let security_context = RuntimeContext::pure();
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context);
         evaluator.eval_toplevel(&parsed)
     }
 }
@@ -120,7 +125,8 @@ impl IrWithFallbackStrategy {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         let ir_strategy = IrStrategy::new(module_registry.clone());
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let evaluator = Evaluator::new(Rc::new(module_registry), de);
+        let security_context = RuntimeContext::pure();
+        let evaluator = Evaluator::new(Rc::new(module_registry), de, security_context);
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {

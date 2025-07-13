@@ -38,7 +38,7 @@ fn test_l4_cache_compressed_rtfs_roundtrip() -> RuntimeResult<()> {
     let inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
 
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de);
+    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure());
 
     // Manually retrieve, decompress, parse, and evaluate the defn to populate env
     let compressed_blob = cache.get_blob(&blob_hash).expect("blob exists");

@@ -82,9 +82,11 @@ impl Default for ReplContext {
 impl RtfsRepl {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
-            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
-                module_registry.clone(),
-            ), Arc::new(StaticDelegationEngine::new(HashMap::new())))))),
+            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
+                Rc::new(module_registry.clone()),
+                Arc::new(StaticDelegationEngine::new(HashMap::new())),
+                crate::runtime::security::RuntimeContext::pure(),
+            )))),
             module_registry,
             context: ReplContext::default(),
             history: Vec::new(),
@@ -99,6 +101,7 @@ impl RtfsRepl {
             RuntimeStrategyValue::Ast => Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Rc::new(module_registry.clone()),
                 Arc::new(StaticDelegationEngine::new(HashMap::new())),
+                crate::runtime::security::RuntimeContext::pure(),
             ))),
             RuntimeStrategyValue::Ir => Box::new(crate::runtime::ir_runtime::IrStrategy::new(module_registry.clone())),
             RuntimeStrategyValue::IrWithFallback => {
@@ -208,6 +211,7 @@ impl RtfsRepl {
                 self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                     Rc::new(self.module_registry.clone()),
                     Arc::new(StaticDelegationEngine::new(HashMap::new())),
+                    crate::runtime::security::RuntimeContext::pure(),
                 ))));
                 println!("🔄 Switched to AST runtime");
             }
@@ -479,9 +483,11 @@ impl RtfsTestFramework {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         Self {
             tests: Vec::new(),
-                          runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(Rc::new(
-                module_registry.clone(),
-              ), Arc::new(StaticDelegationEngine::new(HashMap::new())))))),
+                          runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
+                Rc::new(module_registry.clone()),
+                Arc::new(StaticDelegationEngine::new(HashMap::new())),
+                crate::runtime::security::RuntimeContext::pure(),
+            )))),
             module_registry,
         }
     }

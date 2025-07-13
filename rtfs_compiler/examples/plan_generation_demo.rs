@@ -11,8 +11,10 @@
 use rtfs_compiler::ccos::delegation::{ExecTarget, ModelRegistry, StaticDelegationEngine, ModelProvider};
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
+use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::runtime::security::{RuntimeContext, SecurityPolicies};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -129,9 +131,163 @@ fn generate_plan_from_scratch(
     Ok(())
 }
 
+/// Test the capability system with different security contexts
+fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n🧪 Testing Capability System");
+    println!("=============================");
+    
+    // Create evaluator with different security contexts
+    let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+    
+    // Test 1: Pure security context (no capabilities allowed)
+    println!("\n1️⃣ Testing Pure Security Context");
+    let pure_context = RuntimeContext::pure();
+    let stdlib_env = StandardLibrary::create_global_environment();
+    let mut evaluator = Evaluator::with_environment(
+        Rc::new(ModuleRegistry::new()), 
+        stdlib_env,
+        delegation.clone(),
+        pure_context,
+    );
+    
+    // Try to call a capability - should fail
+    let pure_expr = match &parser::parse("(call :ccos.echo \"Hello World\")")?[0] {
+        TopLevel::Expression(expr) => expr.clone(),
+        _ => return Err("Expected an expression".into()),
+    };
+    let pure_result = evaluator.eval_expr(
+        &pure_expr,
+        &mut evaluator.env.clone(),
+    );
+    
+    match pure_result {
+        Ok(_) => println!("❌ Pure context incorrectly allowed capability call"),
+        Err(e) => println!("✅ Pure context correctly blocked capability: {}", e),
+    }
+    
+    // Test 2: Controlled security context (specific capabilities allowed)
+    println!("\n2️⃣ Testing Controlled Security Context");
+    let controlled_context = SecurityPolicies::data_processing();
+    let stdlib_env = StandardLibrary::create_global_environment();
+    let mut evaluator = Evaluator::with_environment(
+        Rc::new(ModuleRegistry::new()), 
+        stdlib_env,
+        delegation.clone(),
+        controlled_context,
+    );
+    
+    // Try to call allowed capability
+    let controlled_expr = match &parser::parse("(call :ccos.echo \"Hello World\")")?[0] {
+        TopLevel::Expression(expr) => expr.clone(),
+        _ => return Err("Expected an expression".into()),
+    };
+    let controlled_result = evaluator.eval_expr(
+        &controlled_expr,
+        &mut evaluator.env.clone(),
+    );
+    
+    match controlled_result {
+        Ok(result) => println!("✅ Controlled context allowed capability call: {:?}", result),
+        Err(e) => println!("❌ Controlled context incorrectly blocked capability: {}", e),
+    }
+    
+    // Test 3: Full security context (all capabilities allowed)
+    println!("\n3️⃣ Testing Full Security Context");
+    let full_context = RuntimeContext::full();
+    let stdlib_env = StandardLibrary::create_global_environment();
+    let mut evaluator = Evaluator::with_environment(
+        Rc::new(ModuleRegistry::new()), 
+        stdlib_env,
+        delegation.clone(),
+        full_context,
+    );
+    
+    // Try to call various capabilities
+    let capabilities_to_test = [
+        "ccos.echo",
+        "ccos.math.add",
+        "ccos.ask-human",
+    ];
+    
+    for capability in &capabilities_to_test {
+        let test_expr = format!("(call :{} {:?})", capability, "test input");
+        let expr = match &parser::parse(&test_expr)?[0] {
+            TopLevel::Expression(expr) => expr.clone(),
+            _ => return Err("Expected an expression".into()),
+        };
+        let result = evaluator.eval_expr(
+            &expr,
+            &mut evaluator.env.clone(),
+        );
+        match result {
+            Ok(value) => println!("✅ Full context allowed {}: {:?}", capability, value),
+            Err(e) => println!("❌ Full context failed for {}: {}", capability, e),
+        }
+    }
+    
+    // Test 4: Math capability with structured input
+    println!("\n4️⃣ Testing Math Capability");
+    let math_context = RuntimeContext::full();
+    let stdlib_env = StandardLibrary::create_global_environment();
+    let mut evaluator = Evaluator::with_environment(
+        Rc::new(ModuleRegistry::new()), 
+        stdlib_env,
+        delegation.clone(),
+        math_context,
+    );
+    
+    let math_expr = match &parser::parse("(call :ccos.math.add {:a 10 :b 20})")?[0] {
+        TopLevel::Expression(expr) => expr.clone(),
+        _ => return Err("Expected an expression".into()),
+    };
+    let math_result = evaluator.eval_expr(
+        &math_expr,
+        &mut evaluator.env.clone(),
+    );
+    
+    match math_result {
+        Ok(value) => println!("✅ Math capability result: {:?}", value),
+        Err(e) => println!("❌ Math capability failed: {}", e),
+    }
+    
+    // Test 5: Plan with capability calls
+    println!("\n5️⃣ Testing Plan with Capability Calls");
+    let plan_rtfs = r#"
+    (plan test-capability-plan
+      :description "Test plan that uses various capabilities"
+      :intent-id "test-intent"
+      :steps [
+        (call :ccos.echo "Step 1: Echo test")
+        (let [result (call :ccos.math.add {:a 5 :b 3})]
+          (call :ccos.echo (str "Step 2: Math result is " result)))
+        (call :ccos.echo "Step 3: Plan completed")
+      ])
+    "#;
+    
+    let plan_ast = parser::parse(plan_rtfs)?;
+    let stdlib_env = StandardLibrary::create_global_environment();
+    let mut evaluator = Evaluator::with_environment(
+        Rc::new(ModuleRegistry::new()), 
+        stdlib_env,
+        delegation.clone(),
+        RuntimeContext::full(),
+    );
+    
+    // Evaluate the plan
+    let plan_result = evaluator.eval_toplevel(&plan_ast);
+    match plan_result {
+        Ok(metadata) => println!("✅ Plan evaluated successfully. Metadata: {:?}", metadata),
+        Err(e) => println!("❌ Plan evaluation failed: {}", e),
+    }
+    
+    Ok(())
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🧪 RTFS Plan Generation Demo\n===============================\n");
+
+    // Test capability system first
+    test_capability_system()?;
 
     // Verify API key
     let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
@@ -163,13 +319,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // - :description - A string explaining the plan's strategy.
 //
 // AVAILABLE CAPABILITIES (Functions you can use in :steps):
+// - (call :capability-id inputs) -> any : Call a capability with inputs
+// - (call :capability-id inputs options) -> any : Call a capability with inputs and options
+//
+// COMMON CAPABILITIES:
+// - :ccos.echo - Echo input back (for testing)
+// - :ccos.math.add - Add two numbers {:a number :b number}
+// - :ccos.ask-human - Ask human for input (returns resource handle)
+// - :ccos.io.log - Log a message
+// - :ccos.data.parse-json - Parse JSON string
+// - :ccos.network.http-fetch - Make HTTP request
+//
+// LEGACY FUNCTIONS (still available):
 // - (http/get url) -> map : Makes an HTTP GET request.
 // - (json/parse text) -> any : Parses a JSON string.
 // - (map/get map key) -> any : Gets a value from a map.
 // - (string/format "template" arg1) -> string : Formats a string.
 // - (console/log message) : Prints a message.
-// - (sentiment/analyze text) -> string : Returns 'positive', 'negative', or 'neutral'.
-// - (validate/email email-string) -> bool : Validates an email format.
 "#;
 
     const FEW_SHOTS: &str = r#"### Example 1: Simple Greeting Plan
@@ -185,24 +351,24 @@ GENERATED RTFS PLAN:
   :description "A simple plan to log a greeting to the console for a fixed name."
   :intent-id "intent-greet-bob"
   :steps [
-    (console/log (string/format "Hello, {}!" "Bob"))
+    (call :ccos.io.log (string/format "Hello, {}!" "Bob"))
   ])
 
-### Example 2: Sentiment Analysis Plan
+### Example 2: Math Calculation Plan
 INPUT INTENT:
-(intent analyze-comment-sentiment
-  :goal "Analyze the sentiment of a user's comment"
-  :original-request "What is the sentiment of 'I love this product!'?"
-  :constraints { :comment "I love this product!" }
-  :intent-id "intent-sentiment-1")
+(intent calculate-sum
+  :goal "Calculate the sum of two numbers"
+  :original-request "What is 15 + 27?"
+  :constraints { :a 15 :b 27 }
+  :intent-id "intent-calc-sum-1")
 
 GENERATED RTFS PLAN:
-(plan analyze-sentiment-plan
-  :description "Uses the sentiment/analyze capability to determine the sentiment of a given text and logs the result."
-  :intent-id "intent-sentiment-1"
+(plan calculate-sum-plan
+  :description "Uses the math capability to add two numbers and logs the result."
+  :intent-id "intent-calc-sum-1"
   :steps [
-    (let [sentiment (sentiment/analyze "I love this product!")]
-      (console/log (string/format "The sentiment is: {}" sentiment)))
+    (let [result (call :ccos.math.add {:a 15 :b 27})]
+      (call :ccos.io.log (string/format "The sum is: {}" result)))
   ])
 
 ### Example 3: Data Fetch and Process Plan
@@ -211,7 +377,6 @@ INPUT INTENT:
   :goal "Fetch user data for user ID 1 and extract their email"
   :original-request "Get the email for user 1"
   :constraints { :user-id 1 }
-  :success-criteria (fn [result] (validate/email result))
   :intent-id "intent-fetch-email-1")
 
 GENERATED RTFS PLAN:
@@ -219,10 +384,10 @@ GENERATED RTFS PLAN:
   :description "Fetches user data from a public API, parses the JSON response, and extracts the email field."
   :intent-id "intent-fetch-email-1"
   :steps [
-    (let [response (http/get "https://jsonplaceholder.typicode.com/users/1")]
-      (let [user-data (json/parse (:body response))]
+    (let [response (call :ccos.network.http-fetch "https://jsonplaceholder.typicode.com/users/1")]
+      (let [user-data (call :ccos.data.parse-json (:body response))]
         (let [email (map/get user-data "email")]
-          (console/log (string/format "User email is: {}" email))
+          (call :ccos.io.log (string/format "User email is: {}" email))
           email))) ; Return the email as the final result
   ])
 "#;
@@ -247,7 +412,13 @@ GENERATED RTFS PLAN:
     );
     registry.register(hunyuan);
     let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut evaluator = Evaluator::new(Rc::new(ModuleRegistry::new()), delegation);
+    let stdlib_env = StandardLibrary::create_global_environment();
+    let mut evaluator = Evaluator::with_environment(
+        Rc::new(ModuleRegistry::new()), 
+        stdlib_env,
+        delegation,
+        RuntimeContext::full(),
+    );
     evaluator.model_registry = Arc::new(registry);
 
     let provider = evaluator

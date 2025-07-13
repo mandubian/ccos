@@ -132,6 +132,9 @@ impl SecurityPolicies {
             "ccos.data.parse-json".to_string(),
             "ccos.data.serialize-json".to_string(),
             "ccos.network.http-fetch".to_string(),
+            "ccos.echo".to_string(),
+            "ccos.math.add".to_string(),
+            "ccos.ask-human".to_string(),
         ])
     }
     
@@ -164,6 +167,18 @@ impl SecurityPolicies {
         ctx.max_memory_usage = Some(32 * 1024 * 1024); // 32MB
         
         ctx
+    }
+    
+    /// Policy for testing capabilities (includes all test capabilities)
+    pub fn test_capabilities() -> RuntimeContext {
+        RuntimeContext::controlled(vec![
+            "ccos.echo".to_string(),
+            "ccos.math.add".to_string(),
+            "ccos.ask-human".to_string(),
+            "ccos.io.log".to_string(),
+            "ccos.data.parse-json".to_string(),
+            "ccos.data.serialize-json".to_string(),
+        ])
     }
 }
 

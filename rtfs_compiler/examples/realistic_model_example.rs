@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Create evaluator
     let module_registry = Rc::new(ModuleRegistry::new());
-    let mut evaluator = Evaluator::new(module_registry, de);
+    let mut evaluator = Evaluator::new(module_registry, de, rtfs_compiler::runtime::security::RuntimeContext::pure());
     
     // Test cases
     let test_cases = vec![

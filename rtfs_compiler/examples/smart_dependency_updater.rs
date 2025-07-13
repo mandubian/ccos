@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let de = Arc::new(StaticDelegationEngine::new(static_map));
     
     let module_registry = Rc::new(ModuleRegistry::new());
-    let mut evaluator = Evaluator::new(module_registry, de);
+    let mut evaluator = Evaluator::new(module_registry, de, rtfs_compiler::runtime::security::RuntimeContext::pure());
     let planner = Planner;
 
     // --- 2. Create a dummy Cargo.toml for the demo ---
