@@ -1,6 +1,6 @@
 // --- Whitespace and Comments ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT    = _{ ";;" ~ (!"\n" ~ ANY)* }
+COMMENT    = _{ (";" | ";;") ~ (!"\n" ~ ANY)* | "#|" ~ (!"|#" ~ ANY)* ~ "|#" }
 
 // --- Terminal Characters ---
 COLON = @{ ":" }
@@ -8,13 +8,7 @@ AMPERSAND = @{ "&" }
 
 // --- Grammar Entry Point ---
 // Note: task_definition is removed in favor of RTFS 2.0 objects.
-program = { SOI ~ (object_definition | module_definition | expression)* ~ EOI }
-
-// --- RTFS 2.0 Core Object Definitions ---
-object_definition = { intent_definition | plan_definition | action_definition | capability_definition | resource_definition }
-
-// A property is a keyword-value pair used inside object definitions.
-property = { keyword ~ expression }
+program = { SOI ~ (module_definition | expression)* ~ EOI }
 
 // --- Core Recursive Rule ---
 // Order matters for precedence (e.g., special forms before general lists)
@@ -233,7 +227,7 @@ module_keyword = @{ "module" }
 import_keyword = @{ "import" }
 
 // Keywords for special forms
-fn_keyword = @{ "fn" }
+fn_keyword = @{ "fn" | "λ" }
 def_keyword = @{ "def" }
 defn_keyword = @{ "defn" }
 // let_keyword is already defined
@@ -259,28 +253,6 @@ export_option     =  { "(" ~ exports_keyword ~ WHITESPACE* ~ export_symbols_vec 
 definition        = _{ def_expr | defn_expr | import_definition }
 import_definition =  { "(" ~ import_keyword ~ (symbol | namespaced_identifier) ~ (import_option* ) ~ ")" } // Allow multiple flat import options
 import_option      = { ":as" ~ symbol | ":only" ~ "[" ~ symbol+ ~ "]" } // Normal rule, singular
-
-// --- RTFS 2.0 Core Object Definitions ---
-
-// Intent Object Definition
-intent_keyword = @{ "intent" }
-intent_definition = { "(" ~ intent_keyword ~ symbol ~ property* ~ ")" }
-
-// Plan Object Definition
-plan_keyword = @{ "plan" }
-plan_definition = { "(" ~ plan_keyword ~ symbol ~ property* ~ ")" }
-
-// Action Object Definition
-action_keyword = @{ "action" }
-action_definition = { "(" ~ action_keyword ~ symbol ~ property* ~ ")" }
-
-// Capability Object Definition
-capability_keyword = @{ "capability" }
-capability_definition = { "(" ~ capability_keyword ~ symbol ~ property* ~ ")" }
-
-// Resource Object Definition
-resource_keyword = @{ "resource" }
-resource_definition = { "(" ~ resource_keyword ~ symbol ~ property* ~ ")" }
 
 // --- Resource Reference Syntax ---
 resource_ref_keyword = @{ "resource:ref" }

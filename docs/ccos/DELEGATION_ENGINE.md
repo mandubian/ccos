@@ -16,9 +16,22 @@ execution targets:
 | `LocalModel(id)`  | Invoke an **on-device** model provider (tiny LLM, rules). |
 | `RemoteModel(id)` | Delegate via Arbiter RPC to a remote model service.       |
 
+**Important**: "Model" here refers to ANY intelligent decision-making component, not just LLMs. This includes:
+- **Tiny local LLMs** (50MB Phi-3-mini, Llama 3.1 8B quantized)
+- **Rule-based classifiers** (sentiment analysis, intent classification)
+- **Specialized AI models** (vision, audio, code generation)
+- **Remote LLM services** (GPT-4, Claude, Gemini via Arbiter)
+- **Hybrid decision trees** (fast local rules + remote fallback)
+
 Because the decision can be deterministic (static policies) or stochastic
 (large-scale LLM reasoning), the DE is _pluggable_. The evaluator only sees a
 trait object and never bakes in any policy.
+
+**Key Benefits**:
+- **Privacy**: Keep sensitive data on-device with local models
+- **Performance**: Route simple tasks to fast local execution
+- **Cost**: Use expensive remote models only when necessary
+- **Reliability**: Fallback to local execution when remote services fail
 
 ---
 
@@ -27,16 +40,37 @@ trait object and never bakes in any policy.
 ### 2.1 `ExecTarget`
 
 Rust enum describing the selected destination. The string **id** lets us map to
-a concrete `ModelProvider` at runtime ("phi-mini", "gpt4o", "sentiment-rules").
+a concrete `ModelProvider` at runtime:
+
+```rust
+pub enum ExecTarget {
+    LocalPure,                    // Direct RTFS evaluator
+    LocalModel(String),           // "phi-mini", "sentiment-rules", "code-classifier"
+    RemoteModel(String),          // "gpt4o", "claude-opus", "gemini-pro"
+    L4CacheHit { storage_pointer: String, confidence: f64 },
+}
+```
+
+**Examples**:
+- `LocalModel("phi-mini")` → 50MB quantized Phi-3-mini running in-process
+- `LocalModel("sentiment-rules")` → Fast rule-based sentiment classifier
+- `RemoteModel("gpt4o")` → GPT-4 Omni via OpenAI API through Arbiter
+- `RemoteModel("claude-opus")` → Claude 3.5 Sonnet via Anthropic API
 
 ### 2.2 `CallContext`
 
 Light-weight, hashable struct carrying the _minimum_ information required to
 make a routing decision:
 
-- `fn_symbol`: fully-qualified RTFS symbol (e.g. `http/get-json`).
-- `arg_type_fingerprint`: 64-bit hash of argument _types_ (not values).
-- `runtime_context_hash`: hash of ambient context (permissions, tenant, etc.).
+```rust
+pub struct CallContext<'a> {
+    pub fn_symbol: &'a str,           // "http/get-json", "analyze-sentiment"
+    pub arg_type_fingerprint: u64,   // Hash of argument types
+    pub runtime_context_hash: u64,   // Permissions, tenant, task context
+    pub semantic_hash: Option<u64>,  // Content-based hash for semantic caching
+    pub metadata: Option<&'a DelegationMetadata>,
+}
+```
 
 ### 2.3 `DelegationEngine` trait
 
@@ -51,9 +85,11 @@ _Must be pure_ so the evaluator can safely memoise results.
 ### 2.4 `ModelProvider` trait & Registry
 
 ```rust
-trait ModelProvider {
-    fn id(&self) -> &'static str;
-    fn infer(&self, prompt: &str) -> Result<String>;
+trait ModelProvider: Send + Sync {
+    fn id(&self) -> &str;
+    fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error>>;
+    fn capabilities(&self) -> &[&str];  // ["text-generation", "classification", etc.]
+    fn cost_per_call(&self) -> f64;     // For cost-based routing
 }
 ```
 
@@ -61,28 +97,43 @@ Both in-process and remote models implement the same interface. The global
 `ModelRegistry` resolves the string id from `ExecTarget::LocalModel` /
 `RemoteModel` to an actual provider.
 
+**Provider Examples**:
+- `LocalPhiModel` → Runs Phi-3-mini via candle-transformers
+- `LocalRulesModel` → Fast rule-based classification
+- `RemoteOpenAIModel` → Proxies to OpenAI API via Arbiter
+- `RemoteAnthropicModel` → Proxies to Anthropic API via Arbiter
+
 ### 2.5 Delegation-hint metadata (`^:delegation`)
 
 While the `DelegationEngine` decides _dynamically_ at runtime, authors can
 embed an _authoritative_ or _suggested_ target directly in the source code.
 
 ```clojure
-(defn http-get                     ; simple wrapper around stdlib
-  ^:delegation :remote "gpt4o"    ; ← always go to powerful remote model
-  [url]
-  (http/get-json url))
+(defn analyze-complex-document        ; Requires powerful reasoning
+  ^:delegation :remote "gpt4o"       ; ← Always use GPT-4 Omni
+  [document]
+  (analyze-document-structure document))
 
-;; Local tiny-LLM example
+;; Local tiny-LLM example for simple classification
 (defn classify-sentiment
   ^:delegation :local-model "phi-mini"
   [text]
-  (tiny/llm-classify text))
+  (classify-text-sentiment text))
+
+;; Fast rule-based classification
+(defn detect-spam
+  ^:delegation :local-model "spam-rules"
+  [email]
+  (spam-classifier email))
 
 ;; Explicitly force pure evaluator (default, shown for completeness)
-(fn ^:delegation :local [x] (+ x 1))
+(defn add-numbers
+  ^:delegation :local
+  [x y]
+  (+ x y))
 ```
 
-At compile time the parser stores this information as
+At compile time the parser stores this information as:
 
 ```rust
 ast::DelegationHint::LocalPure             // :local (or omitted)
@@ -96,22 +147,66 @@ If a hint is present the evaluator _bypasses_ the `DelegationEngine` for that
 call, guaranteeing the author's intent. Otherwise it falls back to the DE's
 policy decision.
 
----
-
 ## 3 Execution Flow
 
-1. Evaluator builds a `CallContext` for the function node.
-2. It calls `DelegationEngine::decide(ctx)`.
-3. Depending on the returned `ExecTarget`:
-   - **LocalPure** → run the existing evaluator logic.
-   - **LocalModel(id)** → look up provider in `ModelRegistry` and run `infer`.
-   - **RemoteModel(id)** → use provider stub that performs an RPC to Arbiter.
-4. Result propagates back to the evaluator – identical signature regardless of
-   path, maximising composability.
+1. **Context Building**: Evaluator builds a `CallContext` for the function node.
+2. **Delegation Decision**: 
+   - Check for `^:delegation` hint first (author override)
+   - If no hint, call `DelegationEngine::decide(ctx)`
+3. **Execution Routing**: Depending on the returned `ExecTarget`:
+   - **LocalPure** → run the existing evaluator logic
+   - **LocalModel(id)** → look up provider in `ModelRegistry` and run `infer`
+   - **RemoteModel(id)** → use provider stub that performs an RPC to Arbiter
+4. **Result Propagation**: Result propagates back to the evaluator – identical signature regardless of path, maximising composability.
 
-![DE flow](placeholder)
+### Decision Flow Diagram
 
----
+```
+┌─────────────────┐
+│ Function Call   │
+│ (analyze-text)  │
+└─────┬───────────┘
+      │
+      ▼
+┌─────────────────┐
+│ Check for       │
+│ ^:delegation    │
+│ hint            │
+└─────┬───────────┘
+      │
+      ▼
+┌─────────────────┐    Yes   ┌─────────────────┐
+│ Hint present?   │─────────▶│ Use hint target │
+└─────┬───────────┘          └─────┬───────────┘
+      │ No                         │
+      ▼                            │
+┌─────────────────┐                │
+│ Build           │                │
+│ CallContext     │                │
+└─────┬───────────┘                │
+      │                            │
+      ▼                            │
+┌─────────────────┐                │
+│ DelegationEngine│                │
+│ .decide(ctx)    │                │
+└─────┬───────────┘                │
+      │                            │
+      ▼                            │
+┌─────────────────┐                │
+│ Route to        │◀───────────────┘
+│ ExecTarget      │
+└─────┬───────────┘
+      │
+      ▼
+┌─────────────────────────────────────┐
+│         Execute Function            │
+├─────────────────────────────────────┤
+│ LocalPure     │ Direct evaluator    │
+│ LocalModel    │ On-device provider  │
+│ RemoteModel   │ Remote via Arbiter  │
+│ L4CacheHit    │ Cached bytecode     │
+└─────────────────────────────────────┘
+```
 
 ## 4 Implementation Phases
 
@@ -148,8 +243,6 @@ policy decision.
 - **Policy engine**: No configuration loading or dynamic policies
 - **Async ticket system**: No async execution support
 
----
-
 ## 5 Design Rationale
 
 - **Safety** – DE lives _outside_ deterministic evaluator, so crashes or heavy
@@ -160,36 +253,89 @@ policy decision.
   implementation at startup without recompiling evaluator.
 - **Performance** – static fast-path & caching keep overhead < 100 ns per call
   in common loops.
-
----
+- **Multi-model flexibility** – Support for any intelligent component, not just LLMs
 
 ## 6 Next Steps
 
-### Immediate Priorities (M3)
-1. **Create `LocalEchoModel` provider for testing**
-2. **Implement `RemoteArbiterModel` stub**
-3. **Wire up `ModelRegistry` in evaluator**
-4. **Add criterion micro-benchmarks for performance validation**
+### 🔥 **IMMEDIATE PRIORITY: Implement `call` Function**
+
+The most critical next step is implementing the `call` function that bridges RTFS plans with the CCOS capability system:
+
+#### 6.1 `call` Function Implementation
+```rtfs
+;; Function signature
+(call :capability-id inputs) -> outputs
+
+;; Example usage in a plan
+(plan analyze-data-plan
+  :intent-id "intent-123"
+  :program (do
+    ;; Step 1: Fetch data using capability
+    (let [data (call :com.acme.db:v1.0:fetch-data 
+                     {:query "SELECT * FROM sales" 
+                      :format :json})]
+      ;; Step 2: Analyze data using AI capability  
+      (let [analysis (call :com.openai:v1.0:analyze-data
+                           {:data data
+                            :analysis-type :quarterly-summary})]
+        ;; Return analysis result
+        analysis))))
+```
+
+#### 6.2 Implementation Requirements
+- **Action Generation**: Each `call` creates an Action object in the causal chain
+- **Provenance Tracking**: Link actions to plan/intent hierarchy
+- **Schema Validation**: Validate inputs/outputs against capability schemas
+- **Error Handling**: Graceful failures with fallback mechanisms
+- **Performance Tracking**: Record execution time, cost, and resource usage
+
+#### 6.3 Integration Points
+- **Runtime Integration**: Wire into both AST evaluator and IR runtime
+- **Causal Chain**: Append signed actions to immutable ledger
+- **Delegation Engine**: Route capability calls through delegation decisions
+- **Demo Integration**: Extend plan generation demo to test real capability calls
+
+### Subsequent Priorities (M3)
+
+#### 6.4 Model Provider Implementation
+1. **Create Model Provider Registry**
+   - `LocalEchoModel` provider for testing
+   - `RemoteArbiterModel` stub for remote delegation
+   - Basic `ModelRegistry` implementation
+
+2. **Add Performance Benchmarks**
+   - Criterion micro-benchmarks for delegation overhead
+   - Validate < 0.2ms per 1M calls performance target
 
 ### Medium-term Goals (M4)
-1. **Replace HashMap cache with proper LRU implementation**
-2. **Add metrics and observability**
-3. **Implement policy loading from configuration**
+1. **Implement Real Model Providers**
+   - `LocalPhiModel` using candle-transformers
+   - `LocalRulesModel` for rule-based classification
+   - Remote provider implementations
+
+2. **Advanced Caching**
+   - Replace HashMap with LRU cache
+   - Add metrics and observability
+   - Implement semantic caching (L3)
 
 ### Long-term Vision (M5)
-1. **Build async ticket system for remote execution**
-2. **Implement fallback logic for failed model calls**
-3. **Add comprehensive monitoring and alerting**
+1. **Policy Engine**
+   - Configuration loading from `delegation.toml`
+   - Cost-based routing policies
+   - Privacy and compliance rules
 
----
+2. **Async Execution**
+   - Async ticket system for remote calls
+   - Fallback logic for failed model calls
+   - Comprehensive monitoring and alerting
 
 ## 7 Open Questions
 
 1. **Policy engine** – do we need per-tenant or per-capability rules?
 2. **Sandboxing** – should on-device models run in WASM for memory isolation?
 3. **Durability** – store async tickets in message queue (NATS, RabbitMQ)?
-
----
+4. **Model management** – how to handle model loading/unloading for resource management?
+5. **Hybrid strategies** – how to implement local-first with remote fallback?
 
 ## 8 References
 
@@ -198,8 +344,6 @@ policy decision.
 - `rtfs_compiler/src/parser/special_forms.rs` – delegation metadata parsing.
 - `rtfs_compiler/src/runtime/evaluator.rs` – complete evaluator integration.
 - `rtfs_compiler/src/runtime/ir_runtime.rs` – complete IR runtime integration.
-
----
 
 ## 9 Advanced Architecture: Multi-Layered Cognitive Caching
 

@@ -2,13 +2,17 @@
 // This module contains the evaluator, standard library, and runtime value system
 
 pub mod capability;
+pub mod capability_registry;
+pub mod capability_provider;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
 pub mod ir_runtime;
 pub mod module_runtime;
 pub mod stdlib;
+pub mod secure_stdlib;
 pub mod values;
+pub mod security;
 
 #[cfg(test)]
 mod stdlib_tests;

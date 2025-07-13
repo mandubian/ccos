@@ -85,6 +85,7 @@ impl StandardLibrary {
         Self::load_type_predicate_functions(&mut env);
         Self::load_tool_functions(&mut env);
         Self::load_agent_functions(&mut env);
+        Self::load_capability_functions(&mut env);
         // Self::load_task_functions(&mut env);
 
         env
@@ -985,6 +986,19 @@ impl StandardLibrary {
                 name: "current-timestamp-ms".to_string(),
                 arity: Arity::Fixed(0),
                 func: Rc::new(Self::current_timestamp_ms),
+            })),
+        );
+    }
+
+    /// Load capability functions (call, etc.)
+    fn load_capability_functions(env: &mut Environment) {
+        // The main capability invocation function
+        env.define(
+            &Symbol("call".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "call".to_string(),
+                arity: Arity::Range(2, 3), // (call :capability-id inputs) or (call :capability-id inputs options)
+                func: Rc::new(Self::call_capability),
             })),
         );
     }
@@ -3060,6 +3074,141 @@ impl StandardLibrary {
         // runtime to manage the pending prompt lifecycle.
 
         Ok(Value::ResourceHandle(ticket_id))
+    }
+
+    /// Implementation of the `call` function - SECURE VERSION
+    /// Usage: (call :capability-id inputs) -> outputs
+    /// Usage: (call :capability-id inputs options) -> outputs
+    /// 
+    /// This function now routes to the CCOS capability system for secure execution
+    fn call_capability(
+        args: Vec<Value>,
+        _evaluator: &Evaluator,
+        _env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        
+        if args.len() < 2 || args.len() > 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "call".to_string(),
+                expected: "2 or 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // Extract capability-id (must be a keyword)
+        let capability_id = match &args[0] {
+            Value::Keyword(k) => k.0.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "keyword".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "call capability-id".to_string(),
+                });
+            }
+        };
+
+        // Extract inputs
+        let inputs = args[1].clone();
+
+        // Extract options (if provided)
+        let _options = if args.len() == 3 {
+            Some(args[2].clone())
+        } else {
+            None
+        };
+
+        // ⚠️ SECURITY BOUNDARY: This is where we transition from RTFS to CCOS
+        // TODO: Implement proper security checks:
+        // 1. Validate capability permissions
+        // 2. Check execution context/sandbox requirements
+        // 3. Route through delegation engine for secure execution
+        // 4. Log action in causal chain
+        // 5. Handle microVM execution for dangerous operations
+        
+        // For now, reject all capabilities and suggest proper CCOS integration
+        Err(RuntimeError::Generic(format!(
+            "Capability '{}' requires CCOS runtime integration. \
+            Direct capability calls from RTFS are disabled for security. \
+            Please use CCOS capability marketplace for secure execution.",
+            capability_id
+        )))
+    }
+
+    /// Execute a capability call (mock implementation for demonstration)
+    fn execute_capability_call(capability_id: &str, inputs: &Value) -> RuntimeResult<Value> {
+        // This is a mock implementation
+        // In production, this would:
+        // 1. Look up the capability in the marketplace
+        // 2. Route through delegation engine
+        // 3. Make actual HTTP/gRPC calls to capability providers
+        // 4. Handle authentication, retries, etc.
+        
+        match capability_id {
+            "ccos.ask-human" => {
+                // Human-in-the-loop capability
+                match inputs {
+                    Value::String(_prompt) => {
+                        // Generate a unique resource handle for the prompt
+                        let handle = format!("prompt-{}", uuid::Uuid::new_v4());
+                        Ok(Value::ResourceHandle(handle))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "string".to_string(),
+                        actual: inputs.type_name().to_string(),
+                        operation: "ask-human capability".to_string(),
+                    }),
+                }
+            }
+            "ccos.echo" => {
+                // Simple echo capability for testing
+                Ok(inputs.clone())
+            }
+            "ccos.math.add" => {
+                // Math capability example
+                match inputs {
+                    Value::Map(map) => {
+                        let a = map.get(&crate::ast::MapKey::Keyword(Keyword("a".to_string())))
+                            .and_then(|v| match v {
+                                Value::Integer(i) => Some(*i),
+                                Value::Float(f) => Some(*f as i64),
+                                _ => None,
+                            })
+                            .ok_or_else(|| RuntimeError::TypeError {
+                                expected: "number".to_string(),
+                                actual: "missing or invalid 'a' parameter".to_string(),
+                                operation: "math.add capability".to_string(),
+                            })?;
+                        
+                        let b = map.get(&crate::ast::MapKey::Keyword(Keyword("b".to_string())))
+                            .and_then(|v| match v {
+                                Value::Integer(i) => Some(*i),
+                                Value::Float(f) => Some(*f as i64),
+                                _ => None,
+                            })
+                            .ok_or_else(|| RuntimeError::TypeError {
+                                expected: "number".to_string(),
+                                actual: "missing or invalid 'b' parameter".to_string(),
+                                operation: "math.add capability".to_string(),
+                            })?;
+                        
+                        Ok(Value::Integer(a + b))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "map with :a and :b keys".to_string(),
+                        actual: inputs.type_name().to_string(),
+                        operation: "math.add capability".to_string(),
+                    }),
+                }
+            }
+            _ => {
+                // Unknown capability
+                Err(RuntimeError::Generic(format!(
+                    "Unknown capability: {}. Available capabilities: ccos.ask-human, ccos.echo, ccos.math.add",
+                    capability_id
+                )))
+            }
+        }
     }
 }
 

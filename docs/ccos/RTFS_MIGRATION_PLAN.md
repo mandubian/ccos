@@ -231,6 +231,26 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
     - [x] **L3 Semantic Cache:** ✅ **IMPLEMENTED** - Vector-based cache for finding semantically equivalent inferences using cosine similarity. See [L3 Spec](./caching/L3_SEMANTIC_CACHE.md).
     - [x] **L4 Content-Addressable RTFS:** 🔄 **PENDING** - Caches compiled RTFS bytecode for direct reuse. See [L4 Spec](./caching/L4_CONTENT_ADDRESSABLE_RTFS.md).
 
+- [ ] **Capability Call Function Implementation** 🔄 **NEXT PRIORITY**
+  - [ ] Implement `call` function for capability invocation
+    - [ ] Function signature: `(call :capability-id inputs) -> outputs`
+    - [ ] Generate Action objects in causal chain for each capability call
+    - [ ] Integration with plan execution flow
+    - [ ] Capability resolution from global capability registry
+    - [ ] Input/output schema validation
+    - [ ] Error handling and fallback mechanisms
+  - [ ] Causal Chain Integration
+    - [ ] Action object creation with plan/intent provenance
+    - [ ] Cryptographic signing of actions
+    - [ ] Immutable action ledger append
+    - [ ] Performance and cost tracking
+    - [ ] Resource handle management
+  - [ ] Demo Integration
+    - [ ] Extend plan generation demo to test `call` function
+    - [ ] Mock capability providers for testing
+    - [ ] Example plans with capability calls
+    - [ ] Validation of causal chain generation
+
 ### Phase 7: Advanced Features 🔄 PENDING
 
 - [ ] **Object Serialization**

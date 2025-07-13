@@ -154,53 +154,10 @@ impl ParserError {
                             ),
                         );
                     }
-                    Rule::object_definition => {
-                        hints.push(ErrorHint::new("Expected an RTFS 2.0 object definition")
-                            .with_suggestion("Try defining an intent, plan, action, capability, resource, or module"));
-                    }
-                    Rule::intent_definition => {
-                        hints.push(
-                            ErrorHint::new("Expected an intent definition")
-                                .with_suggestion("Try: intent my-intent { name: \"my-intent\" }"),
-                        );
-                    }
-                    Rule::plan_definition => {
-                        hints.push(
-                            ErrorHint::new("Expected a plan definition")
-                                .with_suggestion("Try: plan my-plan { name: \"my-plan\" }"),
-                        );
-                    }
-                    Rule::action_definition => {
-                        hints.push(
-                            ErrorHint::new("Expected an action definition")
-                                .with_suggestion("Try: action my-action { name: \"my-action\" }"),
-                        );
-                    }
-                    Rule::capability_definition => {
-                        hints.push(
-                            ErrorHint::new("Expected a capability definition").with_suggestion(
-                                "Try: capability my-capability { name: \"my-capability\" }",
-                            ),
-                        );
-                    }
-                    Rule::resource_definition => {
-                        hints.push(
-                            ErrorHint::new("Expected a resource definition").with_suggestion(
-                                "Try: resource my-resource { name: \"my-resource\" }",
-                            ),
-                        );
-                    }
                     Rule::module_definition => {
                         hints.push(
                             ErrorHint::new("Expected a module definition")
-                                .with_suggestion("Try: module my-module { name: \"my-module\" }"),
-                        );
-                    }
-                    Rule::property => {
-                        hints.push(
-                            ErrorHint::new("Expected a property definition").with_suggestion(
-                                "Properties are key-value pairs like name: \"value\"",
-                            ),
+                                .with_suggestion("Try: (module my-module ...)"),
                         );
                     }
                     _ => {
@@ -219,40 +176,10 @@ impl ParserError {
         // Add context-specific hints based on the current line
         if !current_line.is_empty() {
             let trimmed = current_line.trim();
-            if trimmed.starts_with("intent") && !trimmed.contains("{") {
+            if trimmed.starts_with("module") && !trimmed.starts_with("(") {
                 hints.push(
-                    ErrorHint::new("Intent definitions need a body")
-                        .with_suggestion("Add opening brace: intent my-intent {"),
-                );
-            } else if trimmed.starts_with("plan") && !trimmed.contains("{") {
-                hints.push(
-                    ErrorHint::new("Plan definitions need a body")
-                        .with_suggestion("Add opening brace: plan my-plan {"),
-                );
-            } else if trimmed.starts_with("action") && !trimmed.contains("{") {
-                hints.push(
-                    ErrorHint::new("Action definitions need a body")
-                        .with_suggestion("Add opening brace: action my-action {"),
-                );
-            } else if trimmed.starts_with("capability") && !trimmed.contains("{") {
-                hints.push(
-                    ErrorHint::new("Capability definitions need a body")
-                        .with_suggestion("Add opening brace: capability my-capability {"),
-                );
-            } else if trimmed.starts_with("resource") && !trimmed.contains("{") {
-                hints.push(
-                    ErrorHint::new("Resource definitions need a body")
-                        .with_suggestion("Add opening brace: resource my-resource {"),
-                );
-            } else if trimmed.starts_with("module") && !trimmed.contains("{") {
-                hints.push(
-                    ErrorHint::new("Module definitions need a body")
-                        .with_suggestion("Add opening brace: module my-module {"),
-                );
-            } else if trimmed.contains(":") && !trimmed.contains("\"") && !trimmed.contains("}") {
-                hints.push(
-                    ErrorHint::new("Property values need to be quoted strings or other literals")
-                        .with_suggestion("Try: name: \"value\" or name: 42"),
+                    ErrorHint::new("Module definitions must be enclosed in parentheses")
+                        .with_suggestion("Try: (module my-module ...)"),
                 );
             } else if trimmed.starts_with("//") {
                 hints.push(
