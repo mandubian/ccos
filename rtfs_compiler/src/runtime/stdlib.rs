@@ -3083,7 +3083,7 @@ impl StandardLibrary {
     /// This function now routes to the CCOS capability system for secure execution
     fn call_capability(
         args: Vec<Value>,
-        _evaluator: &Evaluator,
+        evaluator: &Evaluator,
         _env: &mut Environment,
     ) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -3118,19 +3118,29 @@ impl StandardLibrary {
             None
         };
 
-        // ⚠️ SECURITY BOUNDARY: This is where we transition from RTFS to CCOS
-        // TODO: Implement proper security checks:
+        // SECURITY BOUNDARY: Enforce security context checks
+        let ctx = &evaluator.security_context;
         // 1. Validate capability permissions
-        // 2. Check execution context/sandbox requirements
-        // 3. Route through delegation engine for secure execution
-        // 4. Log action in causal chain
-        // 5. Handle microVM execution for dangerous operations
-        
-        // For now, reject all capabilities and suggest proper CCOS integration
+        if !ctx.is_capability_allowed(&capability_id) {
+            return Err(RuntimeError::Generic(format!(
+                "Security violation: Capability '{}' is not allowed in the current security context.",
+                capability_id
+            )));
+        }
+        // 2. Validate context (resource limits, etc.)
+        if let Err(e) = crate::runtime::security::SecurityValidator::validate(ctx) {
+            return Err(RuntimeError::Generic(format!(
+                "Security context validation failed: {}",
+                e
+            )));
+        }
+        // 3. (Placeholder) Route through delegation engine for secure execution
+        // 4. (Placeholder) Log action in causal chain
+        // 5. (Placeholder) Handle microVM execution for dangerous operations
+        // For now, return a stub error for unimplemented secure execution
         Err(RuntimeError::Generic(format!(
-            "Capability '{}' requires CCOS runtime integration. \
-            Direct capability calls from RTFS are disabled for security. \
-            Please use CCOS capability marketplace for secure execution.",
+            "Capability '{}' is permitted but secure execution is not yet implemented. \
+            Please integrate with CCOS capability marketplace.",
             capability_id
         )))
     }
