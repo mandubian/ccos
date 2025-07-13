@@ -1,8 +1,8 @@
 use crate::ast::{
-    ActionDefinition, CapabilityDefinition, ImportDefinition, IntentDefinition, ModuleDefinition,
-    ModuleLevelDefinition, PlanDefinition, Property, ResourceDefinition, Symbol, TopLevel,
+    ImportDefinition, ModuleDefinition,
+    ModuleLevelDefinition, Symbol, TopLevel,
 };
-use crate::parser::common::{build_keyword, build_symbol, next_significant};
+use crate::parser::common::{build_symbol, next_significant};
 use crate::parser::errors::{invalid_input_error, pair_to_source_span, PestParseError};
 use crate::parser::expressions::build_expression;
 use crate::parser::Rule;
@@ -35,23 +35,6 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         | Rule::task_context_access
         | Rule::identifier
         | Rule::namespaced_identifier => build_expression(pair).map(TopLevel::Expression),
-        Rule::object_definition => {
-            // object_definition contains intent_definition | plan_definition | etc.
-            let inner_pair =
-                pair.clone()
-                    .into_inner()
-                    .next()
-                    .ok_or_else(|| PestParseError::CustomError {
-                        message: "object_definition should contain one object type".to_string(),
-                        span: Some(pair_to_source_span(&pair)),
-                    })?;
-            build_ast(inner_pair)
-        }
-        Rule::intent_definition => build_intent_definition(pair).map(TopLevel::Intent),
-        Rule::plan_definition => build_plan_definition(pair).map(TopLevel::Plan),
-        Rule::action_definition => build_action_definition(pair).map(TopLevel::Action),
-        Rule::capability_definition => build_capability_definition(pair).map(TopLevel::Capability),
-        Rule::resource_definition => build_resource_definition(pair).map(TopLevel::Resource),
         Rule::module_definition => build_module_definition(pair).map(TopLevel::Module),
         Rule::import_definition => Err(PestParseError::CustomError {
             message: "Import definition found outside of a module context".to_string(),
@@ -69,75 +52,8 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
 
     return toplevel_result;
 }
+
 // --- Top-Level Builders ---
-
-fn build_property(pair: Pair<Rule>) -> Result<Property, PestParseError> {
-    let mut inner = pair.clone().into_inner();
-    let key_pair = next_significant(&mut inner)
-        .ok_or_else(|| invalid_input_error("Missing keyword in property", &pair))?;
-    let value_pair = next_significant(&mut inner)
-        .ok_or_else(|| invalid_input_error("Missing expression in property", &key_pair))?;
-
-    let key = build_keyword(key_pair)?;
-    let value = build_expression(value_pair)?;
-
-    Ok(Property { key, value })
-}
-
-fn build_core_object_properties(
-    pair: &Pair<Rule>,
-    mut inner: Pairs<Rule>,
-) -> Result<(Symbol, Vec<Property>), PestParseError> {
-    let name_pair = next_significant(&mut inner).ok_or_else(|| {
-        invalid_input_error(
-            "Missing name/versioned_type for core object definition",
-            pair,
-        )
-    })?;
-    let name = build_symbol(name_pair)?;
-
-    let properties = inner
-        .filter(|p| p.as_rule() == Rule::property)
-        .map(build_property)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok((name, properties))
-}
-
-fn build_intent_definition(pair: Pair<Rule>) -> Result<IntentDefinition, PestParseError> {
-    let mut inner = pair.clone().into_inner();
-    let _ = next_significant(&mut inner); // Skip "intent" keyword
-    let (name, properties) = build_core_object_properties(&pair, inner)?;
-    Ok(IntentDefinition { name, properties })
-}
-
-fn build_plan_definition(pair: Pair<Rule>) -> Result<PlanDefinition, PestParseError> {
-    let mut inner = pair.clone().into_inner();
-    let _ = next_significant(&mut inner); // Skip "plan" keyword
-    let (name, properties) = build_core_object_properties(&pair, inner)?;
-    Ok(PlanDefinition { name, properties })
-}
-
-fn build_action_definition(pair: Pair<Rule>) -> Result<ActionDefinition, PestParseError> {
-    let mut inner = pair.clone().into_inner();
-    let _ = next_significant(&mut inner); // Skip "action" keyword
-    let (name, properties) = build_core_object_properties(&pair, inner)?;
-    Ok(ActionDefinition { name, properties })
-}
-
-fn build_capability_definition(pair: Pair<Rule>) -> Result<CapabilityDefinition, PestParseError> {
-    let mut inner = pair.clone().into_inner();
-    let _ = next_significant(&mut inner); // Skip "capability" keyword
-    let (name, properties) = build_core_object_properties(&pair, inner)?;
-    Ok(CapabilityDefinition { name, properties })
-}
-
-fn build_resource_definition(pair: Pair<Rule>) -> Result<ResourceDefinition, PestParseError> {
-    let mut inner = pair.clone().into_inner();
-    let _ = next_significant(&mut inner); // Skip "resource" keyword
-    let (name, properties) = build_core_object_properties(&pair, inner)?;
-    Ok(ResourceDefinition { name, properties })
-}
 
 fn build_export_option(
     parent_pair: &Pair<Rule>,

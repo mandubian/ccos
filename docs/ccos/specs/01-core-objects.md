@@ -63,39 +63,40 @@ RTFS 2.0 introduces five first-class object types that replace the monolithic `T
   :created-at "2025-06-23T10:35:00Z",
   :created-by :arbiter,
   :intent-ids ["intent-uuid-12345"],
-  :strategy :parallel-analysis,
+  :input-schema {
+    :sales-quarter [:required :string "Q[1-4]-\\d{4}"]
+  },
+  :output-schema {
+    :executive-summary [:required :document]
+    :key-metrics [:required :map]
+  },
+  :strategy :scripted-execution,
   :estimated-cost 18.50,
   :estimated-duration 1800, ; seconds
-  :program {
-    :steps [
-      {
-        :step-id "step-1",
-        :action :fetch-data,
-        :capability :com.acme.db:v1.0:sales-query,
-        :params {
-          :query "SELECT * FROM sales WHERE quarter = 'Q2-2025'",
-          :format :csv
-        },
-        :expected-output :resource
-      },
-      {
-        :step-id "step-2", 
-        :action :analyze-data,
-        :capability :com.openai:v1.0:data-analysis,
-        :depends-on ["step-1"],
-        :params {
-          :data (resource:ref "step-1.output"),
-          :analysis-type :quarterly-summary,
-          :output-format :executive-brief
-        },
-        :expected-output :document
-      }
-    ]
-  },
+  :program (do
+    ;; This is now an executable RTFS program.
+    ;; The 'call' function is special: it invokes a capability and logs an Action.
+    
+    ;; Step 1: Fetch data and bind the output resource to a variable.
+    (let [sales_data (call :com.acme.db:v1.0:sales-query 
+                           {:query "SELECT * FROM sales WHERE quarter = 'Q2-2025'",
+                            :format :csv})]
+      
+      ;; Step 2: Analyze the data using the resource from the previous step.
+      (let [summary_document (call :com.openai:v1.0:data-analysis
+                                   {:data sales_data,
+                                    :analysis-type :quarterly-summary,
+                                    :output-format :executive-brief})]
+        
+        ;; The final expression of the 'do' block is the plan's result.
+        summary_document
+      )
+    )
+  ),
   :status :ready,
   :execution-context {
-    :arbiter-reasoning "Chose parallel analysis strategy due to tight deadline constraint",
-    :alternative-strategies [:sequential-deep-dive, :ai-only-analysis],
+    :arbiter-reasoning "Generated a scripted plan for maximum flexibility.",
+    :alternative-strategies [:declarative-dag, :sequential-steps],
     :risk-assessment :low
   }
 )
@@ -103,9 +104,9 @@ RTFS 2.0 introduces five first-class object types that replace the monolithic `T
 
 **Key Properties**:
 - **Transient but Archivable**: Executed once, then archived for audit
-- **Executable**: Contains concrete steps with capability references
+- **Executable Script**: Contains a full RTFS program, allowing for control flow, variables, and complex logic.
 - **Metadata Rich**: Includes cost estimates, reasoning, alternatives
-- **Dependency-Aware**: Steps can depend on other steps' outputs
+- **Implicit Dependencies**: Data dependencies are handled naturally by variable scope (`let`).
 
 ### 3. Action Object
 

@@ -154,9 +154,7 @@ pub enum Function {
     Builtin(BuiltinFunction),
     BuiltinWithContext(BuiltinFunctionWithContext),
     Closure(Rc<Closure>),
-    IrLambda(Rc<IrLambda>),
     Native(BuiltinFunction),
-    Rtfs(Rc<Closure>),
     Ir(Rc<IrLambda>),
 }
 
@@ -196,9 +194,7 @@ impl fmt::Debug for Function {
             Function::Builtin(_) => write!(f, "BuiltinFunction"),
             Function::BuiltinWithContext(_) => write!(f, "BuiltinFunctionWithContext"),
             Function::Closure(_) => write!(f, "Closure"),
-            Function::IrLambda(_) => write!(f, "IrLambda"),
             Function::Native(_) => write!(f, "NativeFunction"),
-            Function::Rtfs(_) => write!(f, "RtfsFunction"),
             Function::Ir(_) => write!(f, "IrFunction"),
         }
     }
@@ -213,8 +209,6 @@ impl PartialEq for Function {
                 a.name == b.name && a.arity == b.arity
             }
             (Function::Closure(a), Function::Closure(b)) => Rc::ptr_eq(a, b),
-            (Function::Rtfs(a), Function::Rtfs(b)) => Rc::ptr_eq(a, b),
-            (Function::IrLambda(a), Function::IrLambda(b)) => Rc::ptr_eq(a, b),
             (Function::Ir(a), Function::Ir(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }

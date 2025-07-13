@@ -156,6 +156,10 @@ pub struct Plan {
     /// Symbolic name for the plan (RTFS symbol or friendly label)
     pub name: String,
     pub plan_id: PlanId,
+    /// Formal definition of the data this plan requires to run.
+    pub input_schema: Option<Value>, // RTFS Schema
+    /// Formal definition of the data this plan is guaranteed to produce.
+    pub output_schema: Option<Value>, // RTFS Schema
     pub language: PlanLanguage,
     pub body: PlanBody,
     pub intent_ids: Vec<IntentId>,
@@ -180,6 +184,8 @@ impl Plan {
         Self {
             plan_id: format!("plan-{}", Uuid::new_v4()),
             name: String::new(),
+            input_schema: None,
+            output_schema: None,
             language,
             body,
             intent_ids,
@@ -640,6 +646,8 @@ mod tests {
         assert_eq!(plan.name, "");
         assert_eq!(plan.intent_ids, vec!["intent-1"]);
         assert!(plan.executed_at.is_none());
+        assert!(plan.input_schema.is_none());
+        assert!(plan.output_schema.is_none());
     }
 
     #[test]

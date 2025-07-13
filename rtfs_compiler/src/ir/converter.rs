@@ -900,6 +900,15 @@ impl<'a> IrConverter<'a> {
                     return_type: Box::new(IrType::Any),
                 },
             ),
+            // Capability system functions
+            (
+                "call",
+                IrType::Function {
+                    param_types: vec![IrType::Keyword, IrType::Any],
+                    variadic_param_type: Some(Box::new(IrType::Any)),
+                    return_type: Box::new(IrType::Any),
+                },
+            ),
         ];
 
         for (name, func_type) in builtins {

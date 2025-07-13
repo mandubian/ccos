@@ -1,0 +1,7 @@
+(plan analyze-comment-sentiment-plan
+  :description "Analyzes the sentiment of a user's comment using the sentiment/analyze capability, then constructs and returns a map containing the :sentiment key with the result."
+  :intent-id "intent-fetch-email-1"
+  :steps [
+    (let [comment-sentiment (sentiment/analyze comment)]
+      (map :sentiment comment-sentiment))
+  ])
