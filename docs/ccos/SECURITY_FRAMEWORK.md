@@ -793,21 +793,42 @@ let delegation_context = CallContext::new(function_name, args_hash, runtime_hash
 let target = delegation_engine.decide(&delegation_context);
 ```
 
-#### **3. Remote RTFS Plan Step Execution** ⚠️
+#### **3. Remote RTFS Plan Step Execution** ✅ **ARCHITECTURAL INSIGHT**
 
-**Current Status**: **NOT IMPLEMENTED** - The system has architectural support but lacks implementation:
+**Current Status**: **CAN BE IMPLEMENTED AS CAPABILITY** - Remote RTFS execution should be implemented as just another capability provider in the marketplace:
 
 - ✅ **Delegation Hints**: AST supports `DelegationHint::RemoteModel(String)`
-- ✅ **Remote Model Stubs**: `RemoteArbiterModel` provides interface
-- ❌ **Remote Plan Execution**: No actual remote RTFS plan step execution
-- ❌ **Arbiter Federation**: Basic workflow defined but not implemented
-- ❌ **Remote Task Protocol**: No standardized RTFS task delegation protocol
+- ✅ **Capability Infrastructure**: All capability provider patterns already exist
+- ✅ **Security Integration**: Inherits existing security context validation
+- ✅ **Unified Interface**: Uses same `(call :remote-rtfs.execute plan-step)` pattern
 
-**Missing Components**:
-1. **Remote Plan Step Serialization**: Converting RTFS plan steps to network-transmittable format
-2. **Remote Execution Protocol**: HTTP/RPC protocol for sending plan steps to remote RTFS instances
-3. **Remote Security Context**: Propagating security context across remote calls
-4. **Remote Result Integration**: Merging remote execution results into local causal chain
+**Implementation Approach**:
+```rust
+// Remote RTFS as a capability provider
+pub struct RemoteRTFSCapability {
+    pub endpoint: String,
+    pub timeout_ms: u64,
+    pub auth_token: Option<String>,
+}
+
+impl CapabilityProvider {
+    RemoteRTFS(RemoteRTFSCapability), // Add to existing enum
+}
+
+// Usage in RTFS code
+(call :remote-rtfs.execute {
+    :plan-step plan-step-data
+    :security-context security-context
+    :endpoint "https://remote-rtfs.example.com/execute"
+})
+```
+
+**Benefits of Capability Approach**:
+1. **Reuses Security Model**: No separate remote security protocols needed
+2. **Unified Discovery**: Remote RTFS instances discoverable through marketplace
+3. **Consistent Interface**: Same `call` function for all remote execution
+4. **Inherent Load Balancing**: Multiple remote RTFS providers can be registered
+5. **Standard Error Handling**: Uses existing capability error patterns
 
 ### **🔐 Security Integration with Arbiter**
 
@@ -843,32 +864,30 @@ let target = arbiter.select_optimal_provider(secure_providers)?;
 ### **🌐 Global Function Mesh Integration**
 
 #### **Future Remote Execution Vision**
-The Arbiter system will eventually support full remote RTFS plan step execution through the Global Function Mesh:
+The Arbiter system can leverage remote RTFS execution through the existing capability marketplace:
 
 ```rust
-// Future implementation concept
+// Remote RTFS execution as a capability
 impl Arbiter {
     async fn execute_remote_plan_step(&self, 
         step: &PlanStep, 
-        remote_endpoint: &str,
+        remote_capability_id: &str,
         security_context: &SecurityContext
     ) -> Result<ExecutionResult, RuntimeError> {
-        // 1. Serialize plan step with security context
-        let remote_request = RemoteRTFSRequest {
-            step: step.clone(),
-            security_context: security_context.clone(),
-            caller_identity: self.identity.clone(),
-        };
+        // 1. Serialize plan step as RTFS value
+        let remote_request = Value::Map(vec![
+            ("plan-step".to_string(), step.to_rtfs_value()),
+            ("security-context".to_string(), security_context.to_rtfs_value()),
+            ("caller-identity".to_string(), Value::String(self.identity.clone())),
+        ]);
         
-        // 2. Send to remote RTFS instance
-        let response = self.remote_client
-            .execute_rtfs_step(remote_endpoint, remote_request)
+        // 2. Execute through capability marketplace (just like any other capability)
+        let result = self.capability_marketplace
+            .execute_capability(remote_capability_id, &remote_request)
             .await?;
         
-        // 3. Validate response and merge into causal chain
-        self.causal_chain.merge_remote_result(response)?;
-        
-        Ok(response.result)
+        // 3. Result integration happens automatically through causal chain
+        Ok(ExecutionResult::from_rtfs_value(result)?)
     }
 }
 ```
@@ -946,15 +965,15 @@ I have analyzed the complete CCOS architecture and documented how the Arbiter sy
 
 ### **⚠️ Critical Missing Components**
 
-#### **1. Remote RTFS Plan Step Execution** - **NOT IMPLEMENTED**
+#### **1. Remote RTFS Plan Step Execution** - **IMPLEMENT AS CAPABILITY**
 - **Current**: Only delegation hints and stub remote models exist
-- **Missing**: Actual remote RTFS plan step execution protocol
-- **Impact**: Cannot delegate parts of RTFS plans to remote RTFS instances
+- **New Approach**: Implement as `RemoteRTFSCapability` in marketplace
+- **Impact**: Leverages existing security model and capability infrastructure
 - **Required**: 
-  - Remote plan step serialization protocol
-  - Remote RTFS instance communication (HTTP/RPC)
-  - Distributed security context management
-  - Remote execution result merging
+  - `RemoteRTFSCapability` provider implementation
+  - Plan step serialization to RTFS values
+  - HTTP/RPC capability execution (reuses existing patterns)
+  - Security context propagation (automatic through capability model)
 
 #### **2. Arbiter Federation** - **ARCHITECTURAL STUB**
 - **Current**: Basic workflow defined in `ARBITER_FEDERATION.md`
@@ -970,11 +989,11 @@ I have analyzed the complete CCOS architecture and documented how the Arbiter sy
 
 ### **🔄 Next Steps Implementation Priority**
 
-1. **Immediate Priority**: Remote capability execution through marketplace
-2. **Phase 1**: Remote RTFS plan step execution protocol
-3. **Phase 2**: Arbiter federation implementation
-4. **Phase 3**: Global function mesh integration
+1. **Immediate Priority**: Remote RTFS execution as capability provider
+2. **Phase 1**: `RemoteRTFSCapability` implementation in marketplace
+3. **Phase 2**: Arbiter federation using remote RTFS capabilities
+4. **Phase 3**: Global function mesh integration with remote RTFS discovery
 
-The architecture is well-designed with clear integration points, but remote RTFS execution is the key missing component for distributed plan step delegation.
+The architecture insight that **remote RTFS execution should be implemented as just another capability** dramatically simplifies the implementation while maintaining all security and architectural benefits.
 
 ---

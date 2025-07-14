@@ -365,23 +365,24 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - [ ] Global Function Mesh V1
   - [ ] Language of Intent implementation
 
-- [ ] **Remote RTFS Plan Step Execution** ⚠️ **CRITICAL MISSING COMPONENT**
-  - [ ] **Remote Plan Step Serialization**: Convert RTFS plan steps to network format
-    - [ ] PlanStep serialization with security context
-    - [ ] Remote execution request/response protocol
-    - [ ] Error handling for remote execution failures
-  - [ ] **Remote RTFS Instance Communication**
-    - [ ] HTTP/RPC protocol for remote RTFS calls
-    - [ ] Authentication and authorization for remote instances
-    - [ ] Load balancing and failover mechanisms
-  - [ ] **Distributed Security Context Management**
-    - [ ] Security context propagation across remote calls
-    - [ ] Remote permission validation
-    - [ ] Audit trail for remote executions
-  - [ ] **Remote Result Integration**
-    - [ ] Merging remote execution results into local causal chain
-    - [ ] Conflict resolution for distributed state
-    - [ ] Performance tracking for remote executions
+- [ ] **Remote RTFS Plan Step Execution** ✅ **SIMPLIFIED APPROACH**
+  - [ ] **RemoteRTFSCapability Provider Implementation**
+    - [ ] HTTP/RPC capability for remote RTFS execution
+    - [ ] Plan step serialization to RTFS values
+    - [ ] Security context propagation through capability model
+    - [ ] Error handling using existing capability patterns
+  - [ ] **Marketplace Integration**
+    - [ ] Register remote RTFS instances as capabilities
+    - [ ] Discovery mechanism for remote RTFS providers
+    - [ ] Load balancing across multiple remote instances
+  - [ ] **Delegation Engine Integration**
+    - [ ] Route plan steps to remote RTFS capabilities
+    - [ ] Decision caching for remote execution choices
+    - [ ] Fallback mechanisms for remote failures
+  - [ ] **Usage Pattern Implementation**
+    - [ ] `(call :remote-rtfs.execute plan-step)` syntax
+    - [ ] Automatic result integration through causal chain
+    - [ ] Performance monitoring and cost tracking
 
 - [ ] **Arbiter Federation Implementation**
   - [ ] **Multi-Arbiter Consensus Protocols**
@@ -401,27 +402,28 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
 
 **Implementation Steps**:
 
-1. **Remote Capability Execution** (Foundation)
-   - Complete HTTP/MCP/A2A capability provider implementations
-   - Implement security context propagation to remote capabilities
-   - Add remote execution monitoring and error handling
+1. **Remote RTFS Capability Implementation** (Foundation)
+   - Implement `RemoteRTFSCapability` provider in marketplace
+   - Add plan step serialization to/from RTFS values
+   - Create HTTP/RPC client for remote RTFS communication
+   - Integrate with existing security context validation
 
-2. **Remote RTFS Protocol Design**
-   - Define `RemoteRTFSRequest` and `RemoteRTFSResponse` structures
-   - Implement plan step serialization with security context
-   - Create remote RTFS instance discovery and routing
+2. **Marketplace Integration** (Discovery & Routing)
+   - Register remote RTFS instances as discoverable capabilities
+   - Implement load balancing and failover for remote providers
+   - Add cost tracking and performance monitoring
 
-3. **Distributed Security Implementation**
-   - Extend SecurityContext for remote execution validation
-   - Implement remote permission checking
-   - Add distributed audit trail capabilities
+3. **Delegation Engine Integration** (Intelligent Routing)
+   - Route plan steps to remote RTFS capabilities through delegation engine
+   - Implement decision caching for remote execution choices
+   - Add fallback mechanisms for remote failures
 
-4. **Arbiter Federation Framework**
-   - Implement basic multi-arbiter communication
+4. **Arbiter Federation Framework** (Advanced Features)
+   - Implement multi-arbiter communication using remote RTFS capabilities
    - Add specialized arbiter role implementations
-   - Create consensus and voting mechanisms
+   - Create consensus and voting mechanisms using remote execution
 
-**Current Status**: Basic Arbiter implementation exists with local plan execution. Remote execution capabilities are architectural stubs requiring full implementation.
+**Current Status**: Basic Arbiter implementation exists with local plan execution. Remote execution will be implemented as capability providers, dramatically simplifying the architecture while maintaining all security and performance benefits.
 
 ---
 
@@ -637,15 +639,15 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - ❌ Language of Intent implementation
 - **Priority**: **MEDIUM** - Advanced Arbiter feature
 
-#### **Remote RTFS Plan Step Execution** ⚠️ **CRITICAL MISSING COMPONENT**
-- **Status**: Not started
-- **Impact**: Cannot execute RTFS plan steps on remote instances
+#### **Remote RTFS Plan Step Execution** ✅ **SIMPLIFIED AS CAPABILITY**
+- **Status**: Will be implemented as `RemoteRTFSCapability` provider
+- **Impact**: Leverages existing capability infrastructure and security model
 - **Components**:
-  - ❌ Remote Plan Step Serialization
-  - ❌ Remote RTFS Instance Communication
-  - ❌ Distributed Security Context Management
-  - ❌ Remote Result Integration
-- **Priority**: **HIGH** - Critical feature for remote execution
+  - ❌ `RemoteRTFSCapability` provider implementation
+  - ❌ Plan step serialization to RTFS values
+  - ❌ HTTP/RPC capability execution
+  - ❌ Marketplace integration for remote RTFS discovery
+- **Priority**: **HIGH** - Simplified approach using existing patterns
 
 #### **Arbiter Federation Implementation** ⚠️ **PENDING**
 - **Status**: Not started
