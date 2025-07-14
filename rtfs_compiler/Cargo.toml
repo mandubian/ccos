@@ -23,10 +23,6 @@ name = "rtfs-repl"
 path = "src/bin/rtfs_repl.rs"
 required-features = ["repl"]
 
-[[example]]
-name = "test_capability_system"
-path = "test_capability_system.rs"
-
 [dependencies]
 # Parser dependencies
 pest = { version = "2.7", optional = true }

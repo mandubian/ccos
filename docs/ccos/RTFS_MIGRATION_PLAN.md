@@ -318,7 +318,7 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - [ ] Property inheritance rules
   - [ ] Object lifecycle management
 
-- [ ] **Advanced Validation**
+  - [ ] **Advanced Validation**
   - [ ] Cross-object validation rules
   - [ ] Custom validation functions
   - [ ] Validation rule composition
@@ -347,12 +347,13 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - [ ] Context-aware execution
   - [ ] Context persistence and retrieval
 
-### Phase 9: Arbiter Implementation 🔄 PENDING
+### Phase 9: Arbiter Implementation 🔄 **PENDING**
+
+**Focus**: Implement the complete Arbiter orchestration system with remote execution capabilities
 
 - [ ] **Proto-Arbiter (ArbiterV1)**
-
   - [ ] LLM execution bridge (`(llm-execute)`)
-  - [ ] Dynamic capability resolution
+  - [ ] Dynamic capability resolution through marketplace
   - [ ] Agent registry integration
   - [ ] Task delegation system
   - [ ] RTFS Task Protocol implementation
@@ -364,426 +365,383 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - [ ] Global Function Mesh V1
   - [ ] Language of Intent implementation
 
+- [ ] **Remote RTFS Plan Step Execution** ⚠️ **CRITICAL MISSING COMPONENT**
+  - [ ] **Remote Plan Step Serialization**: Convert RTFS plan steps to network format
+    - [ ] PlanStep serialization with security context
+    - [ ] Remote execution request/response protocol
+    - [ ] Error handling for remote execution failures
+  - [ ] **Remote RTFS Instance Communication**
+    - [ ] HTTP/RPC protocol for remote RTFS calls
+    - [ ] Authentication and authorization for remote instances
+    - [ ] Load balancing and failover mechanisms
+  - [ ] **Distributed Security Context Management**
+    - [ ] Security context propagation across remote calls
+    - [ ] Remote permission validation
+    - [ ] Audit trail for remote executions
+  - [ ] **Remote Result Integration**
+    - [ ] Merging remote execution results into local causal chain
+    - [ ] Conflict resolution for distributed state
+    - [ ] Performance tracking for remote executions
+
+- [ ] **Arbiter Federation Implementation**
+  - [ ] **Multi-Arbiter Consensus Protocols**
+    - [ ] Voting mechanisms for plan approval
+    - [ ] Conflict resolution between specialized arbiters
+    - [ ] Quorum requirements for critical decisions
+  - [ ] **Specialized Arbiter Roles**
+    - [ ] Logic Arbiter (constraint satisfaction, optimization)
+    - [ ] Creativity Arbiter (brainstorming, alternative generation)
+    - [ ] Strategy Arbiter (long-term planning, trade-off analysis)
+    - [ ] Ethics Arbiter (policy compliance, risk assessment)
+  - [ ] **Federated Decision Making**
+    - [ ] Inter-arbiter communication protocol using RTFS objects
+    - [ ] Debate and critique workflows
+    - [ ] Dissenting opinion recording
+    - [ ] Final decision recording in causal chain
+
+**Implementation Steps**:
+
+1. **Remote Capability Execution** (Foundation)
+   - Complete HTTP/MCP/A2A capability provider implementations
+   - Implement security context propagation to remote capabilities
+   - Add remote execution monitoring and error handling
+
+2. **Remote RTFS Protocol Design**
+   - Define `RemoteRTFSRequest` and `RemoteRTFSResponse` structures
+   - Implement plan step serialization with security context
+   - Create remote RTFS instance discovery and routing
+
+3. **Distributed Security Implementation**
+   - Extend SecurityContext for remote execution validation
+   - Implement remote permission checking
+   - Add distributed audit trail capabilities
+
+4. **Arbiter Federation Framework**
+   - Implement basic multi-arbiter communication
+   - Add specialized arbiter role implementations
+   - Create consensus and voting mechanisms
+
+**Current Status**: Basic Arbiter implementation exists with local plan execution. Remote execution capabilities are architectural stubs requiring full implementation.
+
+---
+
 ### Phase 10: Cognitive Features 🔄 PENDING
 
-- [ ] **Constitutional Framework**
+**Focus**: Implement advanced cognitive features including federation, ethics, and reflection capabilities
 
-  - [ ] Ethical governance rules
-  - [ ] Pre-flight validation system
-  - [ ] Safety constraint enforcement
-  - [ ] Audit trail implementation
+- [ ] **Federation of Minds Implementation**
+  - [ ] **Specialized Arbiter Roles**
+    - [ ] Logic Arbiter (deterministic reasoning, constraint satisfaction)
+    - [ ] Creativity Arbiter (brainstorming, generative synthesis)
+    - [ ] Strategy Arbiter (long-term planning, trade-off analysis)
+    - [ ] Ethics Arbiter (policy compliance, risk assessment)
+  - [ ] **Meta-Arbiter Routing**
+    - [ ] Task classification and routing to appropriate specialist
+    - [ ] Load balancing across specialized arbiters
+    - [ ] Failure handling and fallback mechanisms
+  - [ ] **Inter-Arbiter Communication**
+    - [ ] RTFS-based message protocol (`:ccos.fed:v0.debate-msg`)
+    - [ ] Proposal, critique, and vote workflows
+    - [ ] Consensus algorithms and quorum requirements
 
-- [ ] **Subconscious System**
+- [ ] **Ethical Governance Framework**
+  - [ ] **Constitutional Framework**
+    - [ ] Hard-coded RTFS rules as system "constitution"
+    - [ ] Pre-flight checks before plan execution
+    - [ ] Violation detection and execution halt mechanisms
+  - [ ] **Digital Ethics Committee**
+    - [ ] Multi-signature approval for constitutional amendments
+    - [ ] Trusted human group designation and management
+    - [ ] Amendment proposal and review process
+  - [ ] **Policy Compliance System**
+    - [ ] Real-time policy checking during execution
+    - [ ] Risk assessment for proposed actions
+    - [ ] Audit trail for ethical decisions
 
-  - [ ] Offline analysis engine
-  - [ ] Pattern recognition and reporting
-  - [ ] Performance optimization suggestions
-  - [ ] What-if simulation capabilities
+- [ ] **Subconscious Reflection Loop**
+  - [ ] **The Analyst (Subconscious V1)**
+    - [ ] Offline analysis of Causal Chain ledger
+    - [ ] Identification of expensive functions and unreliable agents
+    - [ ] Pattern recognition and failure analysis
+    - [ ] Insight generation and reporting
+  - [ ] **The Optimizer (Subconscious V2)**
+    - [ ] What-if simulations on past events
+    - [ ] Strategy optimization and suggestion generation
+    - [ ] Performance improvement recommendations
+    - [ ] Provably better strategy identification
 
-- [ ] **Federation of Minds**
-  - [ ] Specialized arbiters (Logic, Creative, etc.)
-  - [ ] Meta-arbiter routing system
-  - [ ] Task specialization and delegation
-  - [ ] Inter-arbiter communication
+- [ ] **Causal Chain of Thought Enhancement**
+  - [ ] **Pre-Execution Auditing**
+    - [ ] Plan validation against ethical constraints
+    - [ ] Risk assessment before execution
+    - [ ] Resource requirement analysis
+    - [ ] Cost-benefit evaluation
+  - [ ] **Thought Process Recording**
+    - [ ] Decision reasoning capture
+    - [ ] Alternative consideration logging
+    - [ ] Confidence level tracking
+    - [ ] Uncertainty acknowledgment
 
 ### Phase 11: Living Architecture 🔄 PENDING
 
-- [ ] **Self-Healing Systems**
+**Focus**: Implement self-modifying, adaptive, and symbiotic architecture features
 
-  - [ ] Automatic code generation and optimization
-  - [ ] Hot-swap capability for runtime improvements
-  - [ ] Self-modifying RTFS code
-  - [ ] Performance monitoring and auto-tuning
+- [ ] **Self-Healing Runtimes**
+  - [ ] **Code Generation Capabilities**
+    - [ ] Subconscious generation of optimized RTFS code
+    - [ ] Native Rust code generation for performance-critical functions
+    - [ ] Compilation and testing of generated code
+    - [ ] Hot-swap proposals with human approval
+  - [ ] **Runtime Optimization**
+    - [ ] Performance monitoring and bottleneck detection
+    - [ ] Automatic optimization suggestions
+    - [ ] A/B testing of optimization strategies
+    - [ ] Rollback mechanisms for failed optimizations
 
 - [ ] **Living Intent Graph**
+  - [ ] **Interactive Collaboration**
+    - [ ] Real-time dialogue for intent refinement
+    - [ ] Co-creation of intent graph structures
+    - [ ] User preference learning and adaptation
+    - [ ] Intent evolution tracking
+  - [ ] **Dynamic Graph Management**
+    - [ ] Automatic inference of new intent relationships
+    - [ ] Conflict detection and resolution
+    - [ ] Priority adjustment based on user feedback
+    - [ ] Graph pruning and archival
 
-  - [ ] Interactive intent refinement
-  - [ ] User-arbiter dialogue system
-  - [ ] Collaborative goal setting
-  - [ ] Intent evolution tracking
-
-- [ ] **Digital Ethics Committee**
-
-  - [ ] Multi-signature approval system
-  - [ ] Constitutional amendment process
-  - [ ] Ethics framework governance
-  - [ ] Human oversight mechanisms
-
-- [ ] **Empathetic Symbiote**
-
-  - [ ] Multi-modal user interface
-  - [ ] Ambient interaction capabilities
-  - [ ] Cognitive partnership features
-  - [ ] Personalized experience adaptation
-
-- [ ] **Immune System**
-
-  - [ ] Trust verification (ZK proofs)
-  - [ ] Pathogen detection & quarantine
-  - [ ] Security patch broadcast ("vaccine")
+- [ ] **Immune System Implementation**
+  - [ ] **Security Protocols**
+    - [ ] Cryptographic signature verification for agents
+    - [ ] Agent behavior monitoring and anomaly detection
+    - [ ] Reputation system for capability providers
+    - [ ] Automatic quarantine of misbehaving agents
+  - [ ] **Threat Detection**
+    - [ ] Pattern recognition for security threats
+    - [ ] Behavioral analysis of system interactions
+    - [ ] Proactive threat mitigation
+    - [ ] Incident response automation
 
 - [ ] **Resource Homeostasis (Metabolism)**
+  - [ ] **Resource Management**
+    - [ ] Automatic resource allocation and balancing
+    - [ ] Performance optimization for resource usage
+    - [ ] Predictive resource planning
+    - [ ] Resource conflict resolution
+  - [ ] **System Health Monitoring**
+    - [ ] Performance metrics collection and analysis
+    - [ ] System stress testing and capacity planning
+    - [ ] Automatic scaling and load balancing
+    - [ ] Health check automation
 
-  - [ ] Resource budgeting rules
-  - [ ] Off-peak compute foraging
-  - [ ] Idle-capability credit trading
+- [ ] **Persona and Memory Continuity**
+  - [ ] **User Profile Development**
+    - [ ] Interaction history storage and analysis
+    - [ ] Preference learning and prediction
+    - [ ] Personalized experience adaptation
+    - [ ] Identity continuity across sessions
+  - [ ] **Memory Management**
+    - [ ] Long-term memory storage and retrieval
+    - [ ] Memory consolidation and summarization
+    - [ ] Contextual memory activation
+    - [ ] Memory-based decision making
 
-- [ ] **Persona & Memory Continuity**
-  - [ ] Persona object schema
-  - [ ] Identity versioning
-  - [ ] Preference & memory storage
-
-## Current Status
-
-### ✅ Completed Features
-
-1. **RTFS 2.0 Core Specifications**: All object types defined with comprehensive schemas
-2. **Parser Support**: Full parsing of RTFS 2.0 syntax including objects, resource references, and task context access
-3. **Schema Validation**: Complete validation framework for all RTFS 2.0 objects
-4. **Binary Tools**: Both `rtfs_compiler` and `rtfs_repl` fully support RTFS 2.0 with validation
-5. **Enhanced Error Reporting**: Comprehensive error reporting system with context-aware messages and RTFS 2.0 specific hints
-6. **Object Builder APIs**: Complete fluent APIs for all RTFS 2.0 objects with validation and RTFS generation
-7. **Higher-Order Function Support**: Full runtime support for higher-order functions with hybrid evaluator approach
-8. **Standard Library Enhancements**: Complete stdlib with map, task_coordination, and optimized arithmetic functions
-9. **Test Consolidation**: Comprehensive test suite organized by domain with all tests passing
-10. **Delegation Engine Integration**: Complete integration of DelegationEngine with both AST and IR runtimes
-11. **Multi-Layered Caching System**: Complete implementation of L1, L2, and L3 caches with comprehensive demos and tests
-    - **L1 Delegation Cache**: High-speed `(Agent, Task) -> Plan` caching with LRU eviction and TTL
-    - **L2 Inference Cache**: LLM inference result caching with confidence tracking and model versioning
-    - **L3 Semantic Cache**: Vector-based semantic similarity detection with cosine similarity and configurable thresholds
-12. **Capability System**: ✅ **NEW** - Complete capability marketplace with security integration
-13. **Security Framework**: ✅ **NEW** - Comprehensive security context and permission system
-
-### 🚨 **CRITICAL UNIMPLEMENTED FUNCTIONS TRACKING** - Implementation Roadmap
-
-**Status:** 📋 **TRACKING REQUIRED** - Comprehensive list of unimplemented functions and TODO items
-
-**Why Important:** While major migration phases are completed, there are still critical unimplemented functions that need to be addressed for full language completeness. These are tracked in `rtfs_compiler/TODO_IMPLEMENTATION_TRACKER.md`.
-
-#### **🔴 HIGH PRIORITY UNIMPLEMENTED FUNCTIONS (Core Functionality)**
-
-1. **Pattern Matching in Functions** (`src/runtime/evaluator.rs` lines 712, 758)
-
-   - `unimplemented!()` in `eval_fn` and `eval_defn` for complex pattern matching
-   - Complex match pattern matching not yet implemented (line 1211)
-   - Complex catch pattern matching not yet implemented (line 1229)
-
-2. **IR Node Execution** (`src/runtime/ir_runtime.rs` line 172)
-
-   - Generic "Execution for IR node is not yet implemented" for multiple IR node types
-   - Critical for IR runtime completeness
-
-3. **Expression Conversion** (`src/runtime/values.rs` line 234)
-
-   - `unimplemented!()` in `From<Expression>` implementation
-   - Missing conversion for non-literal expressions
-
-4. **Type Coercion** (`src/runtime/evaluator.rs` line 1241)
-   - TODO: Implement actual type coercion logic in `coerce_value_to_type`
-
-#### **🟡 MEDIUM PRIORITY UNIMPLEMENTED FUNCTIONS (Standard Library)**
-
-1. **File Operations** (`src/runtime/stdlib.rs` lines 1997-2020)
-
-   - JSON parsing not implemented (lines 1983-1999)
-   - JSON serialization not implemented (lines 1990-1992)
-   - File operations not implemented (read-file, write-file, append-file, delete-file)
-
-2. **HTTP Operations** (`src/runtime/stdlib.rs` lines 2048-2050)
-
-   - HTTP operations not implemented
-
-3. **Agent System Functions** (`src/runtime/stdlib.rs` lines 2076-2144)
-   - Agent discovery not implemented
-   - Task coordination not implemented
-   - Agent discovery and assessment not implemented
-   - System baseline establishment not implemented
-
-#### **🟢 LOW PRIORITY UNIMPLEMENTED FEATURES (Advanced)**
-
-1. **IR Converter Enhancements** (`src/ir/converter.rs`)
-
-   - Source location tracking (lines 825, 830, 840, 895, 904)
-   - Specific type support for timestamp, UUID, resource handle (lines 861-863)
-   - Capture analysis implementation (lines 1058, 1324)
-   - Pattern handling improvements (lines 1260, 1289, 1594)
-
-2. **Parser Features** (`src/parser/`)
-
-   - Import definition parsing (line 213 in toplevel.rs)
-   - Docstring parsing (line 225 in toplevel.rs)
-   - Generic expression building (line 104 in expressions.rs)
-
-3. **Language Features**
-   - Quasiquote/unquote syntax support (integration_tests.rs lines 1588-1599)
-   - Destructuring with default values (ast.rs line 76)
-
-#### **📋 IMPLEMENTATION STRATEGY**
-
-**Phase 1: Core Functionality (High Priority)**
-
-1. Fix pattern matching in functions (evaluator.rs lines 712, 758)
-2. Implement missing IR node execution (ir_runtime.rs line 172)
-3. Complete expression conversion (values.rs line 234)
-4. Implement type coercion logic (evaluator.rs line 1241)
-
-**Phase 2: Standard Library (Medium Priority)**
-
-1. Implement file operations (read-file, write-file, etc.)
-2. Add JSON parsing and serialization
-3. Implement HTTP operations
-4. Complete agent system functions
-
-**Phase 3: Advanced Features (Low Priority)**
-
-1. Add source location tracking throughout IR converter
-2. Implement capture analysis for closures
-3. Add quasiquote/unquote syntax support
-4. Enhance parser with import and docstring support
-
-**📊 Progress Tracking:**
-
-- **Total Unimplemented Items:** 25+ critical functions and features
-- **High Priority:** 4 core functionality items
-- **Medium Priority:** 8 standard library items
-- **Low Priority:** 13+ advanced features
-- **Status:** All items tracked in `TODO_IMPLEMENTATION_TRACKER.md`
-
-### 🔄 Next Steps
-
-1. **L4 Content-Addressable Cache**: Implement the final layer of the caching hierarchy for compiled RTFS bytecode
-2. **Runtime Integration**: Add execution support for RTFS 2.0 objects
-3. **Advanced Tooling**: Develop interactive tools for RTFS 2.0 development
-4. **Unimplemented Functions**: Address critical unimplemented functions (see above)
-
-### 📊 Migration Progress
-
-- **Phase 1**: 100% Complete ✅
-- **Phase 2**: 100% Complete ✅
-- **Phase 3**: 100% Complete ✅
-- **Phase 4**: 100% Complete ✅
-- **Phase 5**: 100% Complete ✅
-- **Phase 5.5**: 100% Complete ✅
-- **Phase 6**: 75% Complete 🟡
-- **Phase 6.5**: 75% Complete 🟡 (Capability System Framework)
-- **Phase 7**: 0% Complete 🔄
-- **Phase 8**: 0% Complete 🔄
-- **Phase 9**: 0% Complete 🔄
-- **Phase 10**: 0% Complete 🔄
-- **Phase 11**: 0% Complete 🔄
-
-**Progress:** 55%
+- [ ] **Empathetic Symbiote Interface**
+  - [ ] **Multi-Modal Interface**
+    - [ ] Voice, text, and gesture recognition
+    - [ ] Emotional state detection and response
+    - [ ] Contextual interface adaptation
+    - [ ] Ambient computing integration
+  - [ ] **Cognitive Partnership**
+    - [ ] Proactive assistance and suggestions
+    - [ ] Collaborative problem-solving
+    - [ ] Emotional support and empathy
+    - [ ] Trust building and maintenance
 
 ---
 
-_Last updated: July 2025 – capability logging & plan lifecycle integration_
+# Unimplemented Functions Tracking
 
-## Testing Strategy
+### Phase 6: Runtime Integration
 
-### Unit Tests
-
-- [x] Parser tests for all RTFS 2.0 syntax
-- [x] Schema validation tests
-- [x] AST structure tests
-- [x] Binary tool tests
-
-### Integration Tests
-
-- [x] End-to-end parsing and validation
-- [x] Binary tool integration
-- [x] Backward compatibility tests
-
-### Performance Tests
-
-- [ ] Parser performance with large RTFS 2.0 files
-- [ ] Validation performance benchmarks
-- [ ] Runtime performance comparisons
-
-## Backward Compatibility
-
-### RTFS 1.0 Support
-
-- ✅ All existing RTFS 1.0 expressions continue to work
-- ✅ Parser maintains backward compatibility
-- ✅ Runtime supports both 1.0 and 2.0 code
-- ✅ Gradual migration path available
-
-### Migration Tools
-
-- [ ] RTFS 1.0 to 2.0 migration script
-- [ ] Compatibility checker
-- [ ] Automated refactoring tools
-
-## Documentation
-
-### Updated Documentation
-
-- [x] RTFS 2.0 specification documents
-- [x] Migration guide
-- [x] API documentation updates
-- [x] Binary tool documentation
-
-### Examples and Tutorials
-
-- [x] RTFS 2.0 object examples
-- [x] Migration examples
-- [x] Best practices guide
-- [x] Interactive tutorials
-
-## Current Status Summary
-
-### ✅ **COMPLETED MAJOR FEATURES**
-
-1. **RTFS 2.0 Core Language**: Complete language implementation with objects, properties, and validation
-2. **Parser and AST**: Full parsing support for RTFS 2.0 syntax with error reporting
-3. **Runtime System**: Complete runtime with higher-order functions and standard library
-4. **Object Builders**: Comprehensive builder APIs for all RTFS 2.0 objects
-5. **Capability System Framework**: ✅ **NEW** - Complete capability marketplace framework with security integration (hardcoded implementations)
-6. **Security Framework**: ✅ **NEW** - Comprehensive security context and permission system
-
-### 🔄 **IN PROGRESS**
-
-1. **Marketplace Integration**: Connect call function to actual marketplace instead of hardcoded implementations
-2. **Advanced Capability Features**: MCP, A2A, and plugin system implementation
-3. **LLM Integration**: Natural language to RTFS conversion tools
-4. **Enhanced Development Tools**: Templates, wizards, and validation tools
-
-### 📋 **PLANNED**
-
-1. **Production Features**: Versioning, monitoring, and load balancing
-2. **Advanced Security**: Implement MicroVM isolation and audit logging
-3. **CCOS Foundation Integration**: Integrate with Intent Graph and Causal Chain
-
-## Testing Status
-
-### ✅ **COMPREHENSIVE TESTING COMPLETED**
-
-- [x] **Language Features**: All RTFS 2.0 language features tested
-- [x] **Parser**: Complete parser testing with error cases
-- [x] **Runtime**: Full runtime testing including higher-order functions
-- [x] **Object Builders**: All builder APIs tested with validation
-- [x] **Capability System**: ✅ **NEW** - Complete capability system testing
-- [x] **Security Framework**: ✅ **NEW** - Security context and permission testing
-
-### Test Results Summary
-
-```
-🧪 RTFS Capability System Test
-===============================
-
-1️⃣ Testing Pure Security Context
-✅ Pure context correctly blocked capability
-
-2️⃣ Testing Controlled Security Context  
-✅ Controlled context allowed capability call: String("Hello World")
-
-3️⃣ Testing Full Security Context
-✅ Full context allowed ccos.echo: String("test input")
-✅ Full context allowed ccos.math.add: Integer(30)
-✅ Full context allowed ccos.ask-human: ResourceHandle("prompt-uuid")
-
-4️⃣ Testing Plan Execution with Capabilities
-❌ Plan evaluation failed: Undefined symbol: plan
-```
-
-## Migration Benefits
-
-### 1. **Enhanced Security**
-- Comprehensive security framework with multiple levels
-- Fine-grained capability permissions
-- Automatic security validation
-- Context-aware security policies
-
-### 2. **Extensible Capability System**
-- Dynamic capability registration and discovery
-- Multiple capability types (Local, HTTP, MCP, A2A, Plugin)
-- Type-safe capability execution
-- Integrated with RTFS security system
-
-### 3. **Improved Developer Experience**
-- Object builders for easy RTFS 2.0 object creation
-- Comprehensive error reporting and validation
-- Higher-order function support
-- Integrated testing and validation
-
-### 4. **Production Readiness**
-- Comprehensive test coverage
-- Security framework integration
-- Error handling and validation
-- Extensible architecture for future features
-
-## Next Steps
-
-### Immediate Priorities
-
-1. **Complete Advanced Capability Features**: Finish MCP, A2A, and plugin integration
-2. **LLM Integration**: Implement natural language to RTFS conversion
-3. **Enhanced Development Tools**: Create templates and wizards
-
-### Medium-term Goals
-
-1. **Production Features**: Add versioning, monitoring, and load balancing
-2. **Advanced Security**: Implement MicroVM isolation and audit logging
-3. **CCOS Foundation Integration**: Integrate with Intent Graph and Causal Chain
-
-### Long-term Vision
-
-1. **Full CCOS Integration**: Complete integration with cognitive substrate
-2. **Enterprise Features**: Advanced security, compliance, and monitoring
-3. **Ecosystem Development**: Plugin marketplace and community tools
-
-## Conclusion
-
-The RTFS 2.0 migration has made significant progress with the core infrastructure, parser support, schema validation, and binary tools now fully functional. The capability system and security framework are now complete and production-ready. The next phase focuses on advanced capability features and CCOS foundation integration to provide a complete cognitive computing platform.
-
-## Completed Tasks
-
-- [x] Vision, roadmap, and RTFS 2.0 specs reviewed
-- [x] Parser and AST updated for RTFS 2.0 syntax (object definitions, resource refs, task context, agent discovery)
-- [x] Parser tests for RTFS 2.0 passing
-- [x] Schema validation implemented and tested
-- [x] Enhanced error reporting system (location, code snippet, hints)
-- [x] Binaries updated for RTFS 2.0 parsing, validation, error reporting
-- [x] Builder modules implemented for RTFS 2.0 objects:
-  - [x] IntentBuilder (fluent API, validation, RTFS generation, NL parsing)
-  - [x] PlanBuilder (fluent API, validation, RTFS generation)
-  - [x] ActionBuilder (fluent API, validation, RTFS generation)
-  - [x] CapabilityBuilder (fluent API, validation, RTFS generation)
-  - [x] ResourceBuilder (fluent API, validation, RTFS generation)
-  - [x] ModuleBuilder (fluent API, validation, RTFS generation)
-- [x] All builder modules tested and passing (string type errors and property count issues fixed)
-- [x] Higher-order function support implemented with hybrid evaluator approach
-- [x] Standard library enhanced with map, task_coordination, and optimized arithmetic functions
-- [x] Test consolidation into domain-specific files with all tests passing
-- [x] Performance optimization showing user-defined functions can be faster than builtins
-- [x] Delegation Engine integration completed:
-  - [x] Evaluator wired to DelegationEngine for function call decisions
-  - [x] IR runtime wired to DelegationEngine for IR function execution
-  - [x] Function name resolution implemented in both environments
-  - [x] Delegation hint conversion from AST to ExecTarget
-  - [x] All runtime constructors updated to include delegation engine parameter
-  - [x] Integration tests passing for both AST and IR delegation paths
-- [x] **Capability System Framework**: Complete marketplace framework with security integration and testing (hardcoded implementations)
-- [x] **Security Framework**: Comprehensive security context and permission system
-
-## In Progress / Next Steps
-
-- [ ] Model Provider implementation (LocalEchoModel, RemoteArbiterModel)
-- [ ] Delegation engine performance benchmarks
-- [ ] LLM integration and builder usage examples
-- [ ] Documentation polish and code comments
-- [ ] Address remaining warnings and dead code
-- [ ] Further runtime and IR migration
-- [ ] Marketplace integration (connect call function to actual marketplace)
-- [ ] Advanced capability features (MCP, A2A, plugins)
-- [ ] CCOS foundation integration
-
-**Progress:** 55%
+#### **Object Runtime Support** ⚠️ **PARTIAL IMPLEMENTATION**
+- **Status**: Basic framework exists but missing key components
+- **Impact**: Cannot execute RTFS 2.0 objects beyond basic capability calls
+- **Components**:
+  - ❌ Intent execution engine
+  - ❌ Action execution with parameter binding
+  - ❌ Resource management and access control
+  - ❌ Module loading and dependency resolution
+  - ❌ Task context implementation
+- **Priority**: **MEDIUM** - RTFS 2.0 feature completion
 
 ---
 
-**Migration Status:** 🟡 **Phase 6.5 Partially Complete** - Capability system framework is complete with hardcoded implementations; marketplace integration is the next priority.
+### Phase 8: CCOS Foundation
+
+#### **Intent Graph Implementation** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Intent graph features not available
+- **Components**:
+  - ❌ Intent object persistence and graph storage
+  - ❌ Parent-child intent relationships
+  - ❌ Intent lifecycle management (active, archived, completed)
+  - ❌ Intent Graph visualization and navigation
+  - ❌ Intent Graph virtualization for large-scale graphs
+- **Priority**: **HIGH** - Core CCOS feature
+
+#### **Causal Chain Implementation** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Causal chain features not available
+- **Components**:
+  - ❌ Action object immutable ledger
+  - ❌ Cryptographic signing of actions
+  - ❌ Complete provenance tracking
+  - ❌ Performance metrics collection
+  - ❌ Causal Chain distillation and summarization
+- **Priority**: **HIGH** - Core CCOS feature
+
+#### **Task Context System** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Task context features not available
+- **Components**:
+  - ❌ Task context access implementation (`@context-key`)
+  - ❌ Context propagation across actions
+  - ❌ Context-aware execution
+  - ❌ Context persistence and retrieval
+- **Priority**: **MEDIUM** - CCOS feature
 
 ---
 
-_Last updated: July 2025 – capability logging & plan lifecycle integration_
+### Phase 9: Arbiter Implementation
+
+#### **Proto-Arbiter (ArbiterV1)** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Basic Arbiter functionality not available
+- **Components**:
+  - ❌ LLM execution bridge (`(llm-execute)`)
+  - ❌ Dynamic capability resolution through marketplace
+  - ❌ Agent registry integration
+  - ❌ Task delegation system
+  - ❌ RTFS Task Protocol implementation
+- **Priority**: **HIGH** - Core Arbiter feature
+
+#### **Intent-Aware Arbiter (ArbiterV2)** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Advanced Arbiter functionality not available
+- **Components**:
+  - ❌ Capability marketplace integration
+  - ❌ Economic decision making
+  - ❌ Intent-based provider selection
+  - ❌ Global Function Mesh V1
+  - ❌ Language of Intent implementation
+- **Priority**: **MEDIUM** - Advanced Arbiter feature
+
+#### **Remote RTFS Plan Step Execution** ⚠️ **CRITICAL MISSING COMPONENT**
+- **Status**: Not started
+- **Impact**: Cannot execute RTFS plan steps on remote instances
+- **Components**:
+  - ❌ Remote Plan Step Serialization
+  - ❌ Remote RTFS Instance Communication
+  - ❌ Distributed Security Context Management
+  - ❌ Remote Result Integration
+- **Priority**: **HIGH** - Critical feature for remote execution
+
+#### **Arbiter Federation Implementation** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Federation features not available
+- **Components**:
+  - ❌ Multi-Arbiter Consensus Protocols
+  - ❌ Specialized Arbiter Roles
+  - ❌ Federated Decision Making
+- **Priority**: **MEDIUM** - Federation feature
+
+---
+
+### Phase 10: Cognitive Features
+
+#### **Federation of Minds Implementation** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Federation of Minds features not available
+- **Components**:
+  - ❌ Specialized Arbiter Roles
+  - ❌ Meta-Arbiter Routing
+  - ❌ Inter-Arbiter Communication
+- **Priority**: **MEDIUM** - Cognitive feature
+
+#### **Ethical Governance Framework** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Ethical governance features not available
+- **Components**:
+  - ❌ Constitutional Framework
+  - ❌ Digital Ethics Committee
+  - ❌ Policy Compliance System
+- **Priority**: **MEDIUM** - Cognitive feature
+
+#### **Subconscious Reflection Loop** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Subconscious reflection features not available
+- **Components**:
+  - ❌ The Analyst (Subconscious V1)
+  - ❌ The Optimizer (Subconscious V2)
+- **Priority**: **LOW** - Cognitive feature
+
+#### **Causal Chain of Thought Enhancement** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Thought process enhancement features not available
+- **Components**:
+  - ❌ Pre-Execution Auditing
+  - ❌ Thought Process Recording
+- **Priority**: **LOW** - Cognitive feature
+
+---
+
+### Phase 11: Living Architecture
+
+#### **Self-Healing Runtimes** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Self-healing runtime features not available
+- **Components**:
+  - ❌ Code Generation Capabilities
+  - ❌ Runtime Optimization
+- **Priority**: **LOW** - Advanced feature
+
+#### **Living Intent Graph** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Living intent graph features not available
+- **Components**:
+  - ❌ Interactive Collaboration
+  - ❌ Dynamic Graph Management
+- **Priority**: **LOW** - Advanced feature
+
+#### **Immune System Implementation** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Immune system features not available
+- **Components**:
+  - ❌ Security Protocols
+  - ❌ Threat Detection
+- **Priority**: **LOW** - Advanced feature
+
+#### **Resource Homeostasis (Metabolism)** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Resource homeostasis features not available
+- **Components**:
+  - ❌ Resource Management
+  - ❌ System Health Monitoring
+- **Priority**: **LOW** - Advanced feature
+
+#### **Persona and Memory Continuity** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Persona and memory continuity features not available
+- **Components**:
+  - ❌ User Profile Development
+  - ❌ Memory Management
+- **Priority**: **LOW** - Advanced feature
+
+#### **Empathetic Symbiote Interface** ⚠️ **PENDING**
+- **Status**: Not started
+- **Impact**: Empathetic symbiote interface features not available
+- **Components**:
+  - ❌ Multi-Modal Interface
+  - ❌ Cognitive Partnership
+- **Priority**: **LOW** - Advanced feature

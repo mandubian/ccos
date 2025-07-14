@@ -94,6 +94,9 @@ pub enum RuntimeError {
         data: Option<Value>,
     },
     
+    /// Unknown capability error
+    UnknownCapability(String),
+    
     /// Invalid program structure (for IR runtime)
     InvalidProgram(String),
     
@@ -194,6 +197,9 @@ impl fmt::Display for RuntimeError {
 
             RuntimeError::ApplicationError { error_type, message, .. } => {
                 write!(f, "Application error ({}): {}", error_type.0, message)
+            },
+            RuntimeError::UnknownCapability(capability) => {
+                write!(f, "Unknown capability: {}", capability)
             },
             RuntimeError::InvalidProgram(msg) => {
                 write!(f, "Invalid program: {}", msg)

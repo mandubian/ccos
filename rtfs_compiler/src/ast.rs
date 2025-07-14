@@ -1,3 +1,6 @@
+use crate::runtime::values::{Arity, Function, Value};
+use crate::runtime::error::RuntimeError;
+use std::cell::RefCell;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -556,6 +559,47 @@ impl DelegationHint {
             DelegationHint::LocalPure => ExecTarget::LocalPure,
             DelegationHint::LocalModel(id) => ExecTarget::LocalModel(id.to_string()),
             DelegationHint::RemoteModel(id) => ExecTarget::RemoteModel(id.to_string()),
+        }
+    }
+}
+
+impl TryFrom<Value> for Expression {
+    type Error = RuntimeError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Symbol(s) => Ok(Expression::Symbol(s)),
+            Value::Keyword(k) => Ok(Expression::Literal(Literal::Keyword(k))),
+            Value::Integer(i) => Ok(Expression::Literal(Literal::Integer(i))),
+            Value::Float(f) => Ok(Expression::Literal(Literal::Float(f))),
+            Value::String(s) => Ok(Expression::Literal(Literal::String(s))),
+            Value::Boolean(b) => Ok(Expression::Literal(Literal::Boolean(b))),
+            Value::Nil => Ok(Expression::Literal(Literal::Nil)),
+            Value::Timestamp(t) => Ok(Expression::Literal(Literal::Timestamp(t))),
+            Value::Uuid(u) => Ok(Expression::Literal(Literal::Uuid(u))),
+            Value::ResourceHandle(r) => Ok(Expression::Literal(Literal::ResourceHandle(r))),
+            Value::Vector(v) => {
+                let mut exprs = Vec::new();
+                for item in v {
+                    exprs.push(Expression::try_from(item)?);
+                }
+                Ok(Expression::Vector(exprs))
+            }
+            Value::List(l) => {
+                let mut exprs = Vec::new();
+                for item in l {
+                    exprs.push(Expression::try_from(item)?);
+                }
+                Ok(Expression::List(exprs))
+            }
+            Value::Map(m) => {
+                let mut map = HashMap::new();
+                for (k, v) in m {
+                    map.insert(k, Expression::try_from(v)?);
+                }
+                Ok(Expression::Map(map))
+            }
+            _ => Err(RuntimeError::new(&format!("Cannot convert {} to an expression", value.type_name()))),
         }
     }
 }

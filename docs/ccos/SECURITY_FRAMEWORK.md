@@ -6,6 +6,254 @@
 
 This document outlines the comprehensive security framework for the CCOS Capability Architecture, ensuring safe execution of dangerous operations while maintaining system integrity.
 
+---
+
+## Architecture
+
+### **🔗 Component Relationships**
+
+The security framework integrates with three key components in a layered architecture:
+
+```
+ModuleRegistry 
+    ↓ (contains all functions: pure + impure)
+Environment 
+    ↓ (runtime execution context: secure by default)
+SecurityContext
+    ↓ (controls capability permissions)
+```
+
+### **🛡️ Three-Layer Security Model**
+
+1. **Environment Layer** (First Defense)
+   - Only contains pure functions by default (`SecureStandardLibrary`)
+   - No dangerous operations like file I/O, network, system calls
+   - Created via `SecureStandardLibrary::create_secure_environment()`
+
+2. **ModuleRegistry Layer** (Function Repository)
+   - Contains all functions (pure + impure) via `StandardLibrary::load_stdlib()`
+   - Functions tagged with security requirements
+   - Used for module system and advanced function resolution
+
+3. **SecurityContext Layer** (Permission Control)
+   - Controls which capabilities can be invoked via `call` function
+   - Three levels: `Pure`, `Controlled`, `Full`, `Sandboxed`
+   - Applied at runtime during capability execution
+
+### **🔄 Data Flow Architecture**
+
+**Step 1: Module Loading**
+- `StandardLibrary::load_stdlib()` creates a "stdlib" module in `ModuleRegistry`
+- This module contains all built-in functions (pure + impure)
+- Functions are stored as `ModuleExport` objects with metadata
+
+**Step 2: Environment Creation**
+- `Evaluator::new()` creates a **secure environment** by default
+- Environment contains **only pure functions** (arithmetic, string, collections, etc.)
+- The evaluator also holds a reference to the `ModuleRegistry`
+
+**Step 3: Function Resolution**
+- Pure functions: resolved directly from `Environment` (fast path)
+- Capability calls: go through `call` function → `SecurityContext` validation
+- Module functions: resolved via `ModuleRegistry` (when needed)
+
+### **🔧 Implementation Details**
+
+```rust
+// 1. Evaluator Creation
+let evaluator = Evaluator::new(
+    module_registry,      // Has ALL functions
+    delegation_engine,
+    security_context      // Controls permissions
+);
+
+// 2. Environment is SECURE by default
+let env = SecureStandardLibrary::create_secure_environment();
+// Contains only: +, -, *, /, =, <, >, str, map, filter, etc.
+// Missing: file I/O, HTTP, system calls
+
+// 3. SecurityContext controls capability access
+match security_context.security_level {
+    SecurityLevel::Pure => false,      // No capabilities
+    SecurityLevel::Controlled => check_allowed_list,
+    SecurityLevel::Full => true,       // All capabilities
+}
+```
+
+### **📊 Function Resolution Priority**
+
+1. **Environment** (local scope) → secure pure functions
+2. **ModuleRegistry** (global scope) → all functions + modules  
+3. **SecurityContext** → capability permission validation
+4. **Capability System** → actual dangerous operation execution
+
+### **🎯 Security Benefits**
+
+- **Defense in Depth**: Multiple security layers prevent bypassing
+- **Secure by Default**: Environment starts with only safe functions
+- **Fine-grained Control**: Per-capability permission management
+- **Performance**: Fast path for pure functions, controlled path for capabilities
+- **Modularity**: Clean separation of concerns between layers
+
+### **🏪 Capability Marketplace Integration**
+
+The security architecture integrates seamlessly with the Capability Marketplace:
+
+#### **Extended Architecture Flow**
+```
+ModuleRegistry 
+    ↓ (contains functions + capability metadata)
+Environment 
+    ↓ (runtime execution context + call function)
+SecurityContext
+    ↓ (capability permission validation)
+CapabilityMarketplace
+    ↓ (capability discovery, registration, execution)
+CapabilityProviders
+    ↓ (actual capability implementations)
+```
+
+#### **Capability Execution Flow**
+1. **RTFS Code**: `(call :ccos.echo "hello")`
+2. **Environment**: Resolves `call` function from stdlib
+3. **SecurityContext**: Validates `:ccos.echo` is allowed
+4. **Marketplace**: Looks up capability by ID
+5. **Provider**: Executes capability (Local, HTTP, MCP, A2A, Plugin)
+6. **Result**: Returns value to RTFS runtime
+
+#### **Provider Types & Integration**
+
+```rust
+// Capability providers integrate with security framework
+pub enum CapabilityProvider {
+    Local(LocalCapability),     // In-process execution
+    Http(HttpCapability),       // Remote HTTP APIs
+    MCP(MCPCapability),         // Model Context Protocol
+    A2A(A2ACapability),         // Agent-to-Agent communication
+    Plugin(PluginCapability),   // Dynamic plugins
+}
+
+// Each provider type respects security boundaries
+impl CapabilityProvider {
+    fn execute_capability(&self, id: &str, inputs: &Value, context: &SecurityContext) -> Result<Value> {
+        // Security validation happens here
+        if !context.is_capability_allowed(id) {
+            return Err(SecurityViolation(format!("Capability '{}' not allowed", id)));
+        }
+        
+        // Execute based on provider type
+        match self {
+            Local(local) => local.handler(inputs),
+            Http(http) => http.execute_remote(inputs),
+            // ... other providers
+        }
+    }
+}
+```
+
+### **🌐 Global Function Mesh Relationship**
+
+The Global Function Mesh concept represents the next evolution of the capability system:
+
+#### **Current Architecture** (Implemented)
+```
+Environment → SecurityContext → CapabilityMarketplace → CapabilityProviders
+```
+
+#### **Future Architecture** (Global Function Mesh)
+```
+Environment → SecurityContext → GlobalFunctionMesh → CapabilityMarketplace → CapabilityProviders
+                                        ↓
+                                DecentralizedRegistry
+                                (DNS for Functions)
+```
+
+#### **Global Function Mesh Integration**
+
+```rust
+// Future: Global Function Mesh as capability resolver
+pub struct GlobalFunctionMesh {
+    /// Local capability marketplace
+    local_marketplace: CapabilityMarketplace,
+    /// Decentralized registry for function discovery
+    registry: DecentralizedRegistry,
+    /// Cache for resolved capabilities
+    resolution_cache: Arc<RwLock<HashMap<String, CapabilityDescriptor>>>,
+}
+
+impl GlobalFunctionMesh {
+    /// Resolve a capability name to one or more providers
+    pub async fn resolve_capability(&self, func_name: &str) -> Result<Vec<CapabilityProvider>> {
+        // 1. Check local marketplace first
+        if let Some(local) = self.local_marketplace.get_capability(func_name).await {
+            return Ok(vec![local.provider]);
+        }
+        
+        // 2. Query decentralized registry
+        let record = self.registry.lookup(func_name).await?;
+        
+        // 3. Return multiple providers with load balancing
+        Ok(record.providers.iter()
+            .map(|p| p.to_capability_provider())
+            .collect())
+    }
+}
+```
+
+#### **Function Mesh Benefits**
+
+1. **Universal Naming**: `image-processing/sharpen` resolves globally
+2. **Provider Choice**: Multiple providers for same function
+3. **Load Balancing**: Automatic failover and performance optimization
+4. **Versioning**: Support for multiple versions of same function
+5. **Decentralization**: No single point of failure
+
+#### **Security Integration with Function Mesh**
+
+```rust
+// Security context extended for global functions
+impl SecurityContext {
+    /// Check if a global function is allowed
+    pub fn is_global_function_allowed(&self, func_name: &str, provider: &str) -> bool {
+        match self.security_level {
+            SecurityLevel::Pure => false,
+            SecurityLevel::Controlled => {
+                // Check both function and provider permissions
+                self.allowed_functions.contains(func_name) &&
+                self.allowed_providers.contains(provider)
+            },
+            SecurityLevel::Full => true,
+        }
+    }
+}
+```
+
+### **🔮 Future Architecture Vision**
+
+The complete architecture will eventually look like:
+
+```
+RTFS Code: (call :image-processing/sharpen {:image data})
+    ↓
+Environment: call function resolution
+    ↓
+SecurityContext: validate function + provider permissions
+    ↓
+GlobalFunctionMesh: resolve "image-processing/sharpen" → multiple providers
+    ↓
+CapabilityMarketplace: select best provider based on SLA/cost
+    ↓
+CapabilityProvider: execute on chosen provider (Local/HTTP/MCP/A2A/Plugin)
+    ↓
+Result: return processed image
+```
+
+This architecture provides:
+- **Security**: Multi-layer defense with fine-grained control
+- **Scalability**: Global function resolution and load balancing
+- **Flexibility**: Multiple provider types and decentralized registry
+- **Performance**: Caching and optimized execution paths
+
 ## Implementation Status
 
 ### ✅ **IMPLEMENTED FEATURES**
@@ -96,6 +344,54 @@ impl RuntimeContext {
     }
 }
 ```
+
+### **🚀 Architecture in Practice**
+
+Here's how the three-layer security model works in practice:
+
+```rust
+// 1. Setup: Create components
+let module_registry = ModuleRegistry::new();
+let security_context = RuntimeContext::controlled(vec!["ccos.echo".to_string()]);
+
+// 2. Module Loading: Load all functions into registry
+StandardLibrary::load_stdlib(&module_registry)?;
+// Registry now contains: +, -, *, call, tool.http-fetch, etc.
+
+// 3. Evaluator Creation: Gets secure environment by default
+let evaluator = Evaluator::new(module_registry, delegation_engine, security_context);
+// Environment contains only: +, -, *, map, filter, str, etc.
+// Missing: tool.http-fetch, call (available via registry)
+
+// 4. Code Execution Examples:
+// ✅ Pure function: resolved directly from Environment
+let result = evaluator.eval("(+ 1 2 3)");  // Fast path → Environment
+
+// ✅ Capability call: goes through SecurityContext validation
+let result = evaluator.eval("(call :ccos.echo \"hello\")");  
+// Flow: Environment → call function → SecurityContext → allowed → execute
+
+// ❌ Denied capability: blocked by SecurityContext
+let result = evaluator.eval("(call :ccos.file.read \"secret.txt\")");
+// Flow: Environment → call function → SecurityContext → denied → error
+```
+
+### **🔐 Security Context Relationships**
+
+#### **ModuleRegistry ↔ Environment**
+- `ModuleRegistry` stores **complete function catalog** (all functions)
+- `Environment` provides **runtime execution context** (secure subset)
+- `load_stdlib()` bridges them by creating modules from environment functions
+
+#### **Environment ↔ SecurityContext**
+- `Environment` contains **available functions** (what can be called)
+- `SecurityContext` controls **callable capabilities** (what is allowed)
+- Security is enforced during capability invocation, not function loading
+
+#### **ModuleRegistry ↔ SecurityContext**
+- `ModuleRegistry` provides **function metadata** (what exists)
+- `SecurityContext` determines **execution permissions** (what can run)
+- Module system enables **compartmentalized security** per module
 
 ### Security Policies
 
@@ -372,6 +668,23 @@ The security framework addresses these potential threats:
 - Configurable security settings
 - Policy validation and testing
 
+### **📋 Architecture Summary**
+
+The current security framework implements a robust three-layer architecture:
+
+1. **Layer 1 - Environment**: Secure by default with only pure functions
+2. **Layer 2 - ModuleRegistry**: Complete function catalog with metadata
+3. **Layer 3 - SecurityContext**: Fine-grained capability permission control
+
+**Key Implementation Benefits:**
+- ✅ **Secure by Default**: Environment starts with only safe functions
+- ✅ **Defense in Depth**: Multiple layers prevent security bypassing
+- ✅ **Performance Optimized**: Fast path for pure functions, controlled path for capabilities
+- ✅ **Granular Control**: Per-capability permission management
+- ✅ **Modular Design**: Clean separation of concerns between components
+
+**Current Status:** All core components are implemented and tested. The architecture provides a solid foundation for secure execution of RTFS code with capabilities.
+
 ## Future Enhancements
 
 ### Phase 2: Advanced Security Features
@@ -425,3 +738,243 @@ pub enum SecurityError {
 ---
 
 **Implementation Status:** ✅ **Production Ready** - Core security framework is functional and tested.
+
+## **🏛️ Arbiter Integration Architecture**
+
+### **Complete CCOS Runtime Integration**
+
+The Arbiter system sits as the orchestration layer above the three-layer security model, managing all aspects of intent processing, plan execution, and delegation decisions:
+
+```
+Natural Language Intent
+    ↓
+🧠 Arbiter (Intent Analysis & Plan Generation)
+    ↓ (via DelegatingArbiter)
+Intent Graph + Plan Creation
+    ↓
+🛡️ Security Framework (Three-Layer Model)
+    ├── ModuleRegistry (function repository)
+    ├── Environment (secure execution context)
+    └── SecurityContext (permission control)
+    ↓
+🔄 Delegation Engine (Execution Routing)
+    ├── LocalPure (RTFS evaluator)
+    ├── LocalModel (on-device AI)
+    └── RemoteModel (remote capabilities)
+    ↓
+🌐 Capability Marketplace & Global Function Mesh
+    ├── Local Capabilities
+    ├── HTTP Capabilities
+    ├── MCP Capabilities
+    ├── A2A Capabilities
+    └── Plugin Capabilities
+    ↓
+📊 Causal Chain (Audit & Learning)
+```
+
+### **🧠 Arbiter System Components**
+
+#### **1. Intent Processing Pipeline**
+- **Natural Language → Intent**: `DelegatingArbiter::natural_language_to_intent()`
+- **Intent → Plan**: `DelegatingArbiter::intent_to_plan()` 
+- **Plan Execution**: `Arbiter::execute_plan()` with security context validation
+- **Result Learning**: `Arbiter::learn_from_execution()` for continuous improvement
+
+#### **2. Delegation Decision Flow**
+```rust
+// Arbiter makes delegation decisions through SecurityContext
+let security_context = SecurityContext::new(SecurityLevel::Controlled);
+let delegation_context = CallContext::new(function_name, args_hash, runtime_hash)
+    .with_metadata(DelegationMetadata::new()
+        .with_source("arbiter")
+        .with_confidence(0.9)
+        .with_reasoning("Intent analysis suggests remote execution for complex NLP task"));
+
+let target = delegation_engine.decide(&delegation_context);
+```
+
+#### **3. Remote RTFS Plan Step Execution** ⚠️
+
+**Current Status**: **NOT IMPLEMENTED** - The system has architectural support but lacks implementation:
+
+- ✅ **Delegation Hints**: AST supports `DelegationHint::RemoteModel(String)`
+- ✅ **Remote Model Stubs**: `RemoteArbiterModel` provides interface
+- ❌ **Remote Plan Execution**: No actual remote RTFS plan step execution
+- ❌ **Arbiter Federation**: Basic workflow defined but not implemented
+- ❌ **Remote Task Protocol**: No standardized RTFS task delegation protocol
+
+**Missing Components**:
+1. **Remote Plan Step Serialization**: Converting RTFS plan steps to network-transmittable format
+2. **Remote Execution Protocol**: HTTP/RPC protocol for sending plan steps to remote RTFS instances
+3. **Remote Security Context**: Propagating security context across remote calls
+4. **Remote Result Integration**: Merging remote execution results into local causal chain
+
+### **🔐 Security Integration with Arbiter**
+
+#### **Permission-Based Delegation**
+```rust
+// Arbiter checks security permissions before delegation
+if !security_context.can_delegate_to_remote(&capability_id) {
+    return Err(SecurityError::DelegationNotPermitted);
+}
+
+// Security context influences delegation decisions
+let delegation_metadata = DelegationMetadata::new()
+    .with_context("security_level", security_context.level().to_string())
+    .with_context("permitted_capabilities", permitted_caps.join(","))
+    .with_source("security-arbiter");
+```
+
+#### **Capability Marketplace Integration**
+```rust
+// Arbiter discovers and selects capabilities through marketplace
+let marketplace = CapabilityMarketplace::new(security_context);
+let providers = marketplace.discover_capabilities(&capability_request)?;
+
+// Filter by security constraints
+let secure_providers = providers.into_iter()
+    .filter(|p| security_context.can_use_provider(&p.id))
+    .collect();
+
+// Delegate to best provider
+let target = arbiter.select_optimal_provider(secure_providers)?;
+```
+
+### **🌐 Global Function Mesh Integration**
+
+#### **Future Remote Execution Vision**
+The Arbiter system will eventually support full remote RTFS plan step execution through the Global Function Mesh:
+
+```rust
+// Future implementation concept
+impl Arbiter {
+    async fn execute_remote_plan_step(&self, 
+        step: &PlanStep, 
+        remote_endpoint: &str,
+        security_context: &SecurityContext
+    ) -> Result<ExecutionResult, RuntimeError> {
+        // 1. Serialize plan step with security context
+        let remote_request = RemoteRTFSRequest {
+            step: step.clone(),
+            security_context: security_context.clone(),
+            caller_identity: self.identity.clone(),
+        };
+        
+        // 2. Send to remote RTFS instance
+        let response = self.remote_client
+            .execute_rtfs_step(remote_endpoint, remote_request)
+            .await?;
+        
+        // 3. Validate response and merge into causal chain
+        self.causal_chain.merge_remote_result(response)?;
+        
+        Ok(response.result)
+    }
+}
+```
+
+### **📊 Causal Chain Integration**
+
+Every Arbiter decision and execution is recorded in the Causal Chain:
+
+```rust
+// Arbiter actions are fully auditable
+let action = causal_chain.create_action(intent.clone())?;
+causal_chain.record_delegation_decision(
+    &action,
+    &delegation_decision,
+    &security_context
+)?;
+causal_chain.record_execution_result(&action, &result)?;
+```
+
+### **🔄 Implementation Roadmap**
+
+#### **Phase 1: Local Arbiter** ✅ **COMPLETED**
+- [x] Basic Arbiter implementation with intent processing
+- [x] DelegatingArbiter with model integration
+- [x] Security context validation during plan execution
+- [x] Capability marketplace integration
+
+#### **Phase 2: Remote Capabilities** 🔄 **IN PROGRESS**
+- [ ] Remote capability execution through marketplace
+- [ ] HTTP/MCP/A2A capability providers
+- [ ] Security context propagation to remote capabilities
+- [ ] Remote capability result integration
+
+#### **Phase 3: Remote RTFS Execution** 🔄 **PENDING**
+- [ ] Remote plan step serialization protocol
+- [ ] Remote RTFS instance communication
+- [ ] Distributed security context management
+- [ ] Remote execution result merging
+
+#### **Phase 4: Arbiter Federation** 🔄 **PENDING**
+- [ ] Multi-arbiter consensus protocols
+- [ ] Specialized arbiter roles (Logic, Creativity, Ethics, Strategy)
+- [ ] Federated decision making with audit trails
+- [ ] Global function mesh integration
+
+---
+
+## **📋 Summary: Complete CCOS Architecture Integration**
+
+### **🎯 Analysis Results**
+
+I have analyzed the complete CCOS architecture and documented how the Arbiter system integrates with the security framework, capability marketplace, and global function mesh. Here are the key findings:
+
+### **✅ Current Implementation Status**
+1. **Three-Layer Security Model**: ✅ **FULLY IMPLEMENTED**
+   - ModuleRegistry → Environment → SecurityContext integration
+   - Capability permission validation and security context propagation
+   - Multi-level security (Pure, Controlled, Full, Sandboxed)
+
+2. **Capability Marketplace**: ✅ **FRAMEWORK COMPLETE**
+   - Local, HTTP, MCP, A2A, Plugin capability providers
+   - Security integration with permission checking
+   - Marketplace discovery and execution framework
+
+3. **Basic Arbiter System**: ✅ **IMPLEMENTED**
+   - Intent processing (Natural Language → Intent → Plan)
+   - DelegatingArbiter with LLM integration
+   - Plan execution with security context validation
+   - Causal chain integration for audit trails
+
+4. **Delegation Engine**: ✅ **IMPLEMENTED**
+   - Local/Remote execution routing
+   - Multi-layer caching (L1, L2, L3)
+   - Metadata-driven decision making
+
+### **⚠️ Critical Missing Components**
+
+#### **1. Remote RTFS Plan Step Execution** - **NOT IMPLEMENTED**
+- **Current**: Only delegation hints and stub remote models exist
+- **Missing**: Actual remote RTFS plan step execution protocol
+- **Impact**: Cannot delegate parts of RTFS plans to remote RTFS instances
+- **Required**: 
+  - Remote plan step serialization protocol
+  - Remote RTFS instance communication (HTTP/RPC)
+  - Distributed security context management
+  - Remote execution result merging
+
+#### **2. Arbiter Federation** - **ARCHITECTURAL STUB**
+- **Current**: Basic workflow defined in `ARBITER_FEDERATION.md`
+- **Missing**: Multi-arbiter consensus implementation
+- **Impact**: Cannot leverage specialized arbiters for complex decisions
+- **Required**: Inter-arbiter communication, voting mechanisms, specialized roles
+
+#### **3. Global Function Mesh** - **FUTURE VISION**
+- **Current**: Architecture documented, integration planned
+- **Missing**: Decentralized function resolution implementation
+- **Impact**: Cannot access global function capabilities
+- **Required**: DecentralizedRegistry, global capability discovery
+
+### **🔄 Next Steps Implementation Priority**
+
+1. **Immediate Priority**: Remote capability execution through marketplace
+2. **Phase 1**: Remote RTFS plan step execution protocol
+3. **Phase 2**: Arbiter federation implementation
+4. **Phase 3**: Global function mesh integration
+
+The architecture is well-designed with clear integration points, but remote RTFS execution is the key missing component for distributed plan step delegation.
+
+---
