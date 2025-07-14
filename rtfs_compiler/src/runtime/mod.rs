@@ -1,3 +1,7 @@
+pub mod rtfs_streaming_syntax;
+pub use rtfs_streaming_syntax::{
+    RtfsStreamingSyntaxExecutor, RtfsStreamingExpression, StreamReference, ProcessingLogic, StreamOptions, StreamSchema, ValidationRule, ErrorHandlingStrategy, BackpressureStrategy, MultiplexStrategy
+};
 // Runtime system for RTFS
 // This module contains the evaluator, standard library, and runtime value system
 
