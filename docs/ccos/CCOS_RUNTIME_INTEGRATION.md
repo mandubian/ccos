@@ -13,8 +13,7 @@ The CCOS modules integrate with the RTFS runtime to provide cognitive capabiliti
 ```mermaid
 graph TD
     A[RTFS Runtime] --> B[CCOSRuntime]
-    B --> C[Intent Graph]fplan
-    
+    B --> C[Intent Graph]
     B --> D[Causal Chain]
     B --> E[Task Context]
     B --> F[Context Horizon]
