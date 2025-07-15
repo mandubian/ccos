@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 /// Immutable ledger storage
+#[derive(Debug)]
 pub struct ImmutableLedger {
     // In a full implementation, this would be append-only file storage
     actions: Vec<Action>,
@@ -150,6 +151,7 @@ impl ImmutableLedger {
 }
 
 /// Indices for fast lookup
+#[derive(Debug)]
 pub struct LedgerIndices {
     intent_actions: HashMap<IntentId, Vec<ActionId>>,
     plan_actions: HashMap<PlanId, Vec<ActionId>>,
@@ -204,6 +206,7 @@ impl LedgerIndices {
 }
 
 /// Cryptographic signing for actions
+#[derive(Debug)]
 pub struct CryptographicSigning {
     // In a full implementation, this would use proper PKI
     signing_key: String,
@@ -237,6 +240,7 @@ impl CryptographicSigning {
 }
 
 /// Provenance tracking
+#[derive(Debug)]
 pub struct ProvenanceTracker {
     action_provenance: HashMap<ActionId, ActionProvenance>,
 }
@@ -312,6 +316,7 @@ pub enum SecurityLevel {
 }
 
 /// Performance metrics tracking
+#[derive(Debug)]
 pub struct PerformanceMetrics {
     capability_metrics: HashMap<CapabilityId, CapabilityMetrics>,
     function_metrics: HashMap<String, FunctionMetrics>,
@@ -446,6 +451,7 @@ impl FunctionMetrics {
 }
 
 /// Cost tracking
+#[derive(Debug)]
 pub struct CostTracker {
     pub total_cost: f64,
     pub cost_by_intent: HashMap<IntentId, f64>,
@@ -493,6 +499,7 @@ impl CostTracker {
 }
 
 /// Main Causal Chain implementation
+#[derive(Debug)]
 pub struct CausalChain {
     ledger: ImmutableLedger,
     signing: CryptographicSigning,

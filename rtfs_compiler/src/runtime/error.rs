@@ -97,6 +97,13 @@ pub enum RuntimeError {
     /// Unknown capability error
     UnknownCapability(String),
     
+    /// Security violation error
+    SecurityViolation {
+        operation: String,
+        capability: String,
+        context: String,
+    },
+    
     /// Invalid program structure (for IR runtime)
     InvalidProgram(String),
     
@@ -200,6 +207,9 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::UnknownCapability(capability) => {
                 write!(f, "Unknown capability: {}", capability)
+            },
+            RuntimeError::SecurityViolation { operation, capability, context } => {
+                write!(f, "Security violation: {} operation on capability '{}' not allowed in context: {}", operation, capability, context)
             },
             RuntimeError::InvalidProgram(msg) => {
                 write!(f, "Invalid program: {}", msg)

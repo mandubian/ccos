@@ -1,3 +1,9 @@
+impl MapKey {
+    /// Public constructor for string map keys
+    pub fn string(s: &str) -> Self {
+        MapKey::String(s.to_string())
+    }
+}
 use crate::runtime::values::{Arity, Function, Value};
 use crate::runtime::error::RuntimeError;
 use std::cell::RefCell;
