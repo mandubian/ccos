@@ -11,6 +11,7 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::{Arity, Function, Value};
 use crate::runtime::security::RuntimeContext;
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -18,6 +19,7 @@ use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRe
 use std::sync::Arc;
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
+use crate::ccos::causal_chain::CausalChain;
 
 #[derive(Clone, Debug)]
 pub struct Evaluator {
@@ -30,6 +32,10 @@ pub struct Evaluator {
     pub model_registry: Arc<ModelRegistry>,
     /// Security context for capability execution
     pub security_context: RuntimeContext,
+    /// Capability marketplace for CCOS capability execution
+    pub capability_marketplace: Arc<CapabilityMarketplace>,
+    /// Causal chain for tracking actions and provenance
+    pub causal_chain: Arc<RefCell<CausalChain>>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -56,6 +62,8 @@ impl Evaluator {
     ) -> Self {
         let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
+        let capability_marketplace = Arc::new(CapabilityMarketplace::default());
+        let causal_chain = Arc::new(RefCell::new(CausalChain::new().unwrap()));
 
         Evaluator {
             module_registry,
@@ -66,6 +74,8 @@ impl Evaluator {
             delegation_engine,
             model_registry,
             security_context,
+            capability_marketplace,
+            causal_chain,
         }
     }
 
@@ -78,6 +88,8 @@ impl Evaluator {
     ) -> Self {
         let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
+        let capability_marketplace = Arc::new(CapabilityMarketplace::default());
+        let causal_chain = Arc::new(RefCell::new(CausalChain::new().unwrap()));
 
         Evaluator {
             module_registry,
@@ -88,6 +100,8 @@ impl Evaluator {
             delegation_engine,
             model_registry,
             security_context,
+            capability_marketplace,
+            causal_chain,
         }
     }
 
@@ -821,11 +835,29 @@ impl Evaluator {
         parallel_expr: &ParallelExpr,
         env: &mut Environment,
     ) -> RuntimeResult<Value> {
+        // TODO: ARCHITECTURAL NOTE - True parallel execution requires Arc<T> migration
+        // Current implementation: Sequential execution with parallel semantics
+        // This maintains correctness while preparing for future parallelism
+        
         let mut results = HashMap::new();
+        
+        // Process each binding in isolation to simulate parallel execution
+        // Each binding gets its own environment clone to avoid interference
         for binding in &parallel_expr.bindings {
-            let value = self.eval_expr(&binding.expression, env)?;
-            results.insert(MapKey::Keyword(Keyword(binding.symbol.0.clone())), value);
+            // Clone environment for each binding to simulate parallel isolation
+            let mut isolated_env = env.clone();
+            
+            // Evaluate expression in isolated environment
+            let value = self.eval_expr(&binding.expression, &mut isolated_env)?;
+            
+            // Store result with symbol key
+            results.insert(
+                MapKey::Keyword(Keyword(binding.symbol.0.clone())), 
+                value
+            );
         }
+        
+        // Return results as a map (parallel bindings produce a map of results)
         Ok(Value::Map(results))
     }
 
@@ -1632,6 +1664,8 @@ impl Evaluator {
             delegation_engine: self.delegation_engine.clone(),
             model_registry: self.model_registry.clone(),
             security_context,
+            capability_marketplace: self.capability_marketplace.clone(),
+            causal_chain: self.causal_chain.clone(),
         }
     }
 
@@ -1650,6 +1684,8 @@ impl Evaluator {
             delegation_engine,
             model_registry: Arc::new(ModelRegistry::with_defaults()),
             security_context,
+            capability_marketplace: Arc::new(CapabilityMarketplace::default()),
+            causal_chain: Arc::new(RefCell::new(CausalChain::new().unwrap())),
         }
     }
 }

@@ -273,6 +273,15 @@ pub struct CapabilityMarketplace {
     discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
 }
 
+impl std::fmt::Debug for CapabilityMarketplace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CapabilityMarketplace")
+            .field("capabilities", &"<HashMap<String, CapabilityImpl>>")
+            .field("discovery_agents", &format!("{} discovery agents", self.discovery_agents.len()))
+            .finish()
+    }
+}
+
 impl CapabilityMarketplace {
     /// Create a new capability marketplace
     pub fn new() -> Self {

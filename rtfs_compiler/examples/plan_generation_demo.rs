@@ -151,7 +151,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     );
     
     // Try to call a capability - should fail
-    let pure_expr = match &parser::parse("(call :ccos.echo \"Hello World\")")?[0] {
+    let pure_expr = match &parser::parse("(call \"ccos.echo\" \"Hello World\")")?[0] {
         TopLevel::Expression(expr) => expr.clone(),
         _ => return Err("Expected an expression".into()),
     };
@@ -177,7 +177,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     );
     
     // Try to call allowed capability
-    let controlled_expr = match &parser::parse("(call :ccos.echo \"Hello World\")")?[0] {
+    let controlled_expr = match &parser::parse("(call \"ccos.echo\" \"Hello World\")")?[0] {
         TopLevel::Expression(expr) => expr.clone(),
         _ => return Err("Expected an expression".into()),
     };
@@ -210,7 +210,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     ];
     
     for capability in &capabilities_to_test {
-        let test_expr = format!("(call :{} {:?})", capability, "test input");
+        let test_expr = format!("(call \"{}\" \"test input\")", capability);
         let expr = match &parser::parse(&test_expr)?[0] {
             TopLevel::Expression(expr) => expr.clone(),
             _ => return Err("Expected an expression".into()),
@@ -236,7 +236,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         math_context,
     );
     
-    let math_expr = match &parser::parse("(call :ccos.math.add {:a 10 :b 20})")?[0] {
+    let math_expr = match &parser::parse("(call \"ccos.math.add\" {:a 10 :b 20})")?[0] {
         TopLevel::Expression(expr) => expr.clone(),
         _ => return Err("Expected an expression".into()),
     };
@@ -257,10 +257,10 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
       :description "Test plan that uses various capabilities"
       :intent-id "test-intent"
       :steps [
-        (call :ccos.echo "Step 1: Echo test")
-        (let [result (call :ccos.math.add {:a 5 :b 3})]
-          (call :ccos.echo (str "Step 2: Math result is " result)))
-        (call :ccos.echo "Step 3: Plan completed")
+        (call "ccos.echo" "Step 1: Echo test")
+        (let [result (call "ccos.math.add" {:a 5 :b 3})]
+          (call "ccos.echo" (str "Step 2: Math result is " result)))
+        (call "ccos.echo" "Step 3: Plan completed")
       ])
     "#;
     
@@ -406,9 +406,13 @@ GENERATED RTFS PLAN:
 
     // --- Set up evaluator and model provider ---
     let registry = ModelRegistry::new();
+    // let model_id = "openrouter-hunyuan-a13b-instruct"; // previous model id
+    let model_id = "openrouter-hunyuan-a13b-instruct";
+    // let model_name = "tencent/hunyuan-a13b-instruct:free"; // previous model name
+    let model_name = "moonshotai/kimi-k2:free";
     let hunyuan = CustomOpenRouterModel::new(
-        "openrouter-hunyuan-a13b-instruct",
-        "tencent/hunyuan-a13b-instruct:free",
+        model_id,
+        model_name,
     );
     registry.register(hunyuan);
     let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
@@ -423,7 +427,7 @@ GENERATED RTFS PLAN:
 
     let provider = evaluator
         .model_registry
-        .get("openrouter-hunyuan-a13b-instruct")
+        .get(model_id)
         .expect("provider registered");
 
     // --- Call LLM and process response ---

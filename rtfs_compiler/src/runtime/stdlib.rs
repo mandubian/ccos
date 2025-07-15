@@ -18,6 +18,10 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use std::sync::Arc;
+use crate::ccos::types::{Action, ExecutionResult};
+use uuid::Uuid;
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};
@@ -233,7 +237,7 @@ impl StandardLibrary {
     /// for RTFS to interact with the broader CCOS environment.
     fn call_capability(
         args: Vec<Value>,
-        _evaluator: &Evaluator,
+        evaluator: &Evaluator,
         _env: &mut Environment,
     ) -> RuntimeResult<Value> {
         if args.is_empty() {
@@ -255,40 +259,69 @@ impl StandardLibrary {
             }
         };
 
-        let capability_args = args[1..].to_vec();
-
-        // This is a placeholder for a real capability dispatch mechanism.
-        // In a real CCOS, this would involve looking up the capability
-        // in a registry and invoking it.
-        match capability_name.as_str() {
-            "ccos.echo" => {
-                if capability_args.len() != 1 {
-                    return Err(RuntimeError::ArityMismatch {
-                        function: "ccos.echo".to_string(),
-                        expected: "1".to_string(),
-                        actual: capability_args.len(),
-                    });
-                }
-                Ok(capability_args[0].clone())
-            }
-            "ccos.math.add" => {
-                let mut sum = 0;
-                for arg in capability_args {
-                    match arg {
-                        Value::Integer(n) => sum += n,
-                        _ => {
-                            return Err(RuntimeError::TypeError {
-                                expected: "integer".to_string(),
-                                actual: arg.type_name().to_string(),
-                                operation: "ccos.math.add".to_string(),
-                            })
-                        }
-                    }
-                }
-                Ok(Value::Integer(sum))
-            }
-            _ => Err(RuntimeError::UnknownCapability(capability_name.to_string())),
+        // Check if the capability is allowed in the current security context
+        if !evaluator.security_context.is_capability_allowed(capability_name) {
+            return Err(RuntimeError::SecurityViolation {
+                operation: "call".to_string(),
+                capability: capability_name.clone(),
+                context: format!("{:?}", evaluator.security_context),
+            });
         }
+
+        let capability_args = if args.len() > 1 {
+            // Create a list of arguments for the capability
+            Value::List(args[1..].to_vec())
+        } else {
+            Value::List(vec![])
+        };
+
+        // Create Action for causal chain tracking
+        let plan_id = format!("plan-{}", Uuid::new_v4());
+        let intent_id = format!("intent-{}", Uuid::new_v4());
+        let mut action = Action::new_capability(
+            plan_id.clone(),
+            intent_id.clone(),
+            capability_name.clone(),
+            args[1..].to_vec(),
+        );
+
+        // Use the marketplace to execute the capability
+        // We need to handle async execution in sync context
+        let marketplace = evaluator.capability_marketplace.clone();
+        let capability_name = capability_name.clone();
+        
+        // Execute the capability using a simple blocking async executor
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create async runtime: {}", e)))?;
+        
+        let result = rt.block_on(async {
+            // First, ensure default capabilities are registered
+            let _ = register_default_capabilities(&marketplace).await;
+            
+            // Execute the capability
+            marketplace.execute_capability(&capability_name, &capability_args).await
+        });
+
+        // Record the result in the causal chain
+        let mut causal_chain = evaluator.causal_chain.borrow_mut();
+        
+        // Convert the result to ExecutionResult
+        let execution_result = ExecutionResult {
+            success: result.is_ok(),
+            value: result.as_ref().unwrap_or(&Value::Nil).clone(),
+            metadata: HashMap::new(),
+        };
+
+        // Update action with capability_id
+        action.capability_id = Some(capability_name.clone());
+        
+        // Record the complete action with its result
+        if let Err(e) = causal_chain.record_result(action, execution_result) {
+            // Log error but don't fail the capability execution
+            eprintln!("Warning: Failed to record action result in causal chain: {:?}", e);
+        }
+
+        result
     }
 
     /// `(plan "plan-name" step1 step2 ...)`
@@ -335,6 +368,70 @@ impl StandardLibrary {
 
         Ok(last_result)
     }
+}
+
+/// Register default capabilities in the marketplace
+async fn register_default_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
+    // Register ccos.echo capability
+    marketplace.register_local_capability(
+        "ccos.echo".to_string(),
+        "Echo Capability".to_string(),
+        "Echoes the input value back".to_string(),
+        Arc::new(|input| {
+            match input {
+                Value::List(args) => {
+                    if args.len() == 1 {
+                        Ok(args[0].clone())
+                    } else {
+                        Err(RuntimeError::ArityMismatch {
+                            function: "ccos.echo".to_string(),
+                            expected: "1".to_string(),
+                            actual: args.len(),
+                        })
+                    }
+                }
+                _ => Err(RuntimeError::TypeError {
+                    expected: "list".to_string(),
+                    actual: input.type_name().to_string(),
+                    operation: "ccos.echo".to_string(),
+                })
+            }
+        }),
+    ).await.map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.echo: {:?}", e)))?;
+
+    // Register ccos.math.add capability
+    marketplace.register_local_capability(
+        "ccos.math.add".to_string(),
+        "Math Add Capability".to_string(),
+        "Adds numeric values".to_string(),
+        Arc::new(|input| {
+            match input {
+                Value::List(args) => {
+                    let mut sum = 0;
+                    for arg in args {
+                        match arg {
+                            Value::Integer(n) => sum += n,
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "integer".to_string(),
+                                    actual: arg.type_name().to_string(),
+                                    operation: "ccos.math.add".to_string(),
+                                })
+                            }
+                        }
+                    }
+                    Ok(Value::Integer(sum))
+                }
+                _ => Err(RuntimeError::TypeError {
+                    expected: "list".to_string(),
+                    actual: input.type_name().to_string(),
+                    operation: "ccos.math.add".to_string(),
+                })
+            }
+        }),
+    ).await.map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
+
+    Ok(())
 }
 
 /// Load the standard library into a module registry
