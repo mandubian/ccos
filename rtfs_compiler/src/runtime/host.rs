@@ -46,6 +46,16 @@ impl RuntimeHost {
             execution_context: RefCell::new(None),
         }
     }
+
+    /// Public wrapper to set the execution context before running RTFS code.
+    pub fn prepare_execution(&self, plan_id: String, intent_ids: Vec<String>) {
+        self.set_execution_context(plan_id, intent_ids);
+    }
+
+    /// Public wrapper to clear the execution context after running RTFS code.
+    pub fn cleanup_execution(&self) {
+        self.clear_execution_context();
+    }
 }
 
 impl std::fmt::Debug for RuntimeHost {

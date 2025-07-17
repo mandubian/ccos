@@ -340,12 +340,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // - :ccos.data.parse-json - Parse JSON string
 // - :ccos.network.http-fetch - Make HTTP request
 //
-// LEGACY FUNCTIONS (still available):
-// - (http/get url) -> map : Makes an HTTP GET request.
-// - (json/parse text) -> any : Parses a JSON string.
-// - (map/get map key) -> any : Gets a value from a map.
-// - (string/format "template" arg1) -> string : Formats a string.
-// - (console/log message) : Prints a message.
+// RTFS STANDARD LIBRARY FUNCTIONS:
+// - (get map key) -> any : Gets a value from a map or vector
+// - (get map key default) -> any : Gets a value with default fallback
+// - (get-in data path) -> any : Gets nested value from path vector
+// - (str arg1 arg2 ...) -> string : Concatenates arguments as string
+// - (+ a b ...) -> number : Adds numbers
+// - (count collection) -> integer : Counts elements in collection
+// - (map fn collection) -> vector : Maps function over collection
+// - (filter fn collection) -> vector : Filters collection with predicate
 "#;
 
     const FEW_SHOTS: &str = r#"### Example 1: Simple Greeting Plan
@@ -361,7 +364,7 @@ GENERATED RTFS PLAN:
   :description "A simple plan to log a greeting to the console for a fixed name."
   :intent-id "intent-greet-bob"
   :steps [
-    (call :ccos.io.log (string/format "Hello, {}!" "Bob"))
+    (call :ccos.io.log (str "Hello, " "Bob" "!"))
   ])
 
 ### Example 2: Math Calculation Plan
@@ -378,7 +381,7 @@ GENERATED RTFS PLAN:
   :intent-id "intent-calc-sum-1"
   :steps [
     (let [result (call :ccos.math.add {:a 15 :b 27})]
-      (call :ccos.io.log (string/format "The sum is: {}" result)))
+      (call :ccos.io.log (str "The sum is: " result)))
   ])
 
 ### Example 3: Data Fetch and Process Plan
@@ -395,9 +398,9 @@ GENERATED RTFS PLAN:
   :intent-id "intent-fetch-email-1"
   :steps [
     (let [response (call :ccos.network.http-fetch "https://jsonplaceholder.typicode.com/users/1")]
-      (let [user-data (call :ccos.data.parse-json (:body response))]
-        (let [email (map/get user-data "email")]
-          (call :ccos.io.log (string/format "User email is: {}" email))
+      (let [user-data (call :ccos.data.parse-json (get response :body))]
+        (let [email (get user-data "email")]
+          (call :ccos.io.log (str "User email is: " email))
           email))) ; Return the email as the final result
   ])
 "#;
@@ -417,7 +420,7 @@ GENERATED RTFS PLAN:
     // --- Set up evaluator and model provider ---
     let registry = ModelRegistry::new();
     // let model_id = "openrouter-hunyuan-a13b-instruct"; // previous model id
-    let model_id = "openrouter-hunyuan-a13b-instruct";
+    let model_id = "moonshotai/kimi-k2:free";
     // let model_name = "tencent/hunyuan-a13b-instruct:free"; // previous model name
     let model_name = "moonshotai/kimi-k2:free";
     let hunyuan = CustomOpenRouterModel::new(

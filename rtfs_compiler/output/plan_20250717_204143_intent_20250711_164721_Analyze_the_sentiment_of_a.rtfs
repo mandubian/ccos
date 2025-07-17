@@ -1,0 +1,13 @@
+(plan analyze-comment-sentiment-plan
+  :description "Analyzes the sentiment of a user-provided comment by first asking the human for input, then using a sentiment analysis capability to determine if it's positive, negative, or neutral, and returns a properly formatted map."
+  :intent-id "analyze-comment-sentiment"
+  :steps [
+    (let [comment (call :ccos.ask-human "Please enter a comment to analyze (max 1000 characters):")]
+      (let [sentiment-result (call :ccos.ai.sentiment-analyze {:text comment})]
+        (let [sentiment (cond
+                          (>= (get sentiment-result :score) 0.5) "positive"
+                          (<= (get sentiment-result :score) -0.5) "negative"
+                          :else "neutral")]
+          (call :ccos.io.log (str "Sentiment analysis complete: " sentiment))
+          {:sentiment sentiment})))
+  ])

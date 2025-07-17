@@ -1,0 +1,18 @@
+(plan analyze-comment-sentiment-plan
+  :description "Analyzes the sentiment of a user-provided comment using a sentiment analysis service and returns a properly formatted map with :sentiment key."
+  :intent-id "analyze-comment-sentiment"
+  :steps [
+    (let [comment (call :ccos.ask-human "Please enter your comment for sentiment analysis (max 1000 characters):")]
+      (let [sentiment-result (call :ccos.network.http-fetch "https://api.sentiment-analyzer.example.com/analyze" 
+                                   {:method "POST"
+                                    :headers {"Content-Type" "application/json"}
+                                    :body (string/format "{\"text\":\"{}\"}" comment)})]
+        (let [parsed-result (call :ccos.data.parse-json (:body sentiment-result))]
+          (let [sentiment-value (map/get parsed-result "sentiment")]
+            (let [standardized-sentiment (cond 
+                                          (or (= sentiment-value "positive") (= sentiment-value "pos")) "positive"
+                                          (or (= sentiment-value "negative") (= sentiment-value "neg")) "negative"
+                                          :else "neutral")]
+              (call :ccos.io.log (string/format "Sentiment analysis complete. Result: {}" standardized-sentiment))
+              {:sentiment standardized-sentiment}))))) ; Return map with :sentiment key as required
+  ])

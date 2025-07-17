@@ -118,13 +118,13 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 let host = std::rc::Rc::new(RuntimeHost::new(
                     Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
                     std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-                    rtfs_compiler::runtime::security::RuntimeContext::pure(),
+                    rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));
                 let evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::rc::Rc::new(module_registry),
                         std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
-                        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+                        rtfs_compiler::runtime::security::RuntimeContext::full(),
                         host,
                     );
                 Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
@@ -259,18 +259,22 @@ fn main() {
                 let host = std::rc::Rc::new(RuntimeHost::new(
                     Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
                     std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-                    rtfs_compiler::runtime::security::RuntimeContext::pure(),
+                    rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));
                 let mut evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::rc::Rc::new(module_registry),
                         std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
-                        rtfs_compiler::runtime::security::RuntimeContext::pure(),
-                        host,
+                        rtfs_compiler::runtime::security::RuntimeContext::full(),
+                        host.clone(),
                     );
+
+            // Set execution context for capability calls
+            host.prepare_execution("demo-plan".to_string(), vec!["demo-intent".to_string()]);
 
             match evaluator.eval_toplevel(&parsed_items) {
                 Ok(value) => {
+                    host.cleanup_execution();
                     let exec_time = exec_start.elapsed();
                     if args.verbose {
                         println!("✅ Execution completed in {:?}", exec_time);
@@ -279,6 +283,7 @@ fn main() {
                     all_results.push(value);
                 }
                 Err(e) => {
+                    host.cleanup_execution();
                     eprintln!("❌ Runtime error: {:?}", e);
                     std::process::exit(1);
                 }

@@ -1,0 +1,9 @@
+(let [comment (call "ccos.ask-human" "Please enter a comment to analyze (max 1000 characters):")]
+  (let [sentiment-result (call "ccos.ai.sentiment-analyze" {:text comment})]
+    (let [sentiment (if (>= (get sentiment-result :score) 0.5)
+                      "positive"
+                      (if (<= (get sentiment-result :score) -0.5)
+                        "negative"
+                        "neutral"))]
+      (call "ccos.io.log" (str "Sentiment analysis complete: " sentiment))
+      {:sentiment sentiment})))

@@ -440,11 +440,22 @@ impl CapabilityRegistry {
         }
         
         match &args[0] {
-            Value::String(_s) => {
-                // Generate ticket id
-                let ticket_id = format!("prompt-{}", uuid::Uuid::new_v4());
-                // TODO: Integrate with Arbiter::issue_user_prompt
-                Ok(Value::ResourceHandle(ticket_id))
+            Value::String(prompt) => {
+                // Display the prompt to the user
+                print!("{}: ", prompt);
+                std::io::Write::flush(&mut std::io::stdout()).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to flush stdout: {}", e))
+                })?;
+                
+                // Read user input
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to read user input: {}", e))
+                })?;
+                
+                // Trim whitespace and return the input
+                let user_response = input.trim().to_string();
+                Ok(Value::String(user_response))
             },
             _ => {
                 return Err(RuntimeError::TypeError {
