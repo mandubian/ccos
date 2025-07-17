@@ -54,7 +54,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Create evaluator
     let module_registry = Rc::new(ModuleRegistry::new());
-    let mut evaluator = Evaluator::new(module_registry, de, rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let mut evaluator = Evaluator::new(
+        module_registry,
+        de,
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
     
     // Test cases
     let test_cases = vec![

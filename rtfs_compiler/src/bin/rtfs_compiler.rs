@@ -5,6 +5,9 @@ use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
+use std::sync::Arc;
+use std::cell::RefCell;
+use rtfs_compiler::runtime::host::RuntimeHost;
 
 // Import the RTFS compiler modules
 // Note: We need to reference the parent crate since this is a binary
@@ -112,11 +115,17 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
+                let host = std::rc::Rc::new(RuntimeHost::new(
+                    Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+                    std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+                    rtfs_compiler::runtime::security::RuntimeContext::pure(),
+                ));
                 let evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::rc::Rc::new(module_registry),
                         std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
                         rtfs_compiler::runtime::security::RuntimeContext::pure(),
+                        host,
                     );
                 Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
             }
@@ -247,12 +256,18 @@ fn main() {
             if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                 eprintln!("Warning: Failed to load standard library: {:?}", e);
             }
-            let mut evaluator =
-                rtfs_compiler::runtime::Evaluator::new(
-                    std::rc::Rc::new(module_registry),
-                    std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+                let host = std::rc::Rc::new(RuntimeHost::new(
+                    Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+                    std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                     rtfs_compiler::runtime::security::RuntimeContext::pure(),
-                );
+                ));
+                let mut evaluator =
+                    rtfs_compiler::runtime::Evaluator::new(
+                        std::rc::Rc::new(module_registry),
+                        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+                        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+                        host,
+                    );
 
             match evaluator.eval_toplevel(&parsed_items) {
                 Ok(value) => {

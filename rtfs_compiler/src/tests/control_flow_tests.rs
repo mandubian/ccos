@@ -46,7 +46,15 @@ mod control_flow_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get arithmetic functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())), crate::runtime::security::RuntimeContext::pure());
+        let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new());
+        let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);
 
         // Evaluate all top-level forms in sequence using the evaluator's environment
         let result = evaluator.eval_toplevel(&parsed);

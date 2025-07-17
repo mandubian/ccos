@@ -12,7 +12,7 @@
 //! - Tooling functions (file I/O, HTTP, etc.)
 //! - CCOS capability functions
 
-use crate::ast::{Expression, Symbol};
+use crate::ast::Symbol;
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::evaluator::Evaluator;
@@ -113,16 +113,6 @@ impl StandardLibrary {
                 name: "call".to_string(),
                 arity: Arity::Variadic(1),
                 func: Rc::new(Self::call_capability),
-            })),
-        );
-
-        // `plan` for executing a sequence of steps
-        env.define(
-            &Symbol("plan".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "plan".to_string(),
-                arity: Arity::Variadic(1),
-                func: Rc::new(Self::plan_function),
             })),
         );
     }
@@ -259,119 +249,16 @@ impl StandardLibrary {
             }
         };
 
-        // Check if the capability is allowed in the current security context
-        if !evaluator.security_context.is_capability_allowed(capability_name) {
-            return Err(RuntimeError::SecurityViolation {
-                operation: "call".to_string(),
-                capability: capability_name.clone(),
-                context: format!("{:?}", evaluator.security_context),
-            });
-        }
+        let capability_args = &args[1..];
 
-        let capability_args = if args.len() > 1 {
-            // Create a list of arguments for the capability
-            Value::List(args[1..].to_vec())
-        } else {
-            Value::List(vec![])
-        };
-
-        // Create Action for causal chain tracking
-        let plan_id = format!("plan-{}", Uuid::new_v4());
-        let intent_id = format!("intent-{}", Uuid::new_v4());
-        let mut action = Action::new_capability(
-            plan_id.clone(),
-            intent_id.clone(),
-            capability_name.clone(),
-            args[1..].to_vec(),
-        );
-
-        // Use the marketplace to execute the capability
-        // We need to handle async execution in sync context
-        let marketplace = evaluator.capability_marketplace.clone();
-        let capability_name = capability_name.clone();
-        
-        // Execute the capability using a simple blocking async executor
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create async runtime: {}", e)))?;
-        
-        let result = rt.block_on(async {
-            // First, ensure default capabilities are registered
-            let _ = register_default_capabilities(&marketplace).await;
-            
-            // Execute the capability
-            marketplace.execute_capability(&capability_name, &capability_args).await
-        });
-
-        // Record the result in the causal chain
-        let mut causal_chain = evaluator.causal_chain.borrow_mut();
-        
-        // Convert the result to ExecutionResult
-        let execution_result = ExecutionResult {
-            success: result.is_ok(),
-            value: result.as_ref().unwrap_or(&Value::Nil).clone(),
-            metadata: HashMap::new(),
-        };
-
-        // Update action with capability_id
-        action.capability_id = Some(capability_name.clone());
-        
-        // Record the complete action with its result
-        if let Err(e) = causal_chain.record_result(action, execution_result) {
-            // Log error but don't fail the capability execution
-            eprintln!("Warning: Failed to record action result in causal chain: {:?}", e);
-        }
-
-        result
+        // Delegate the actual capability execution to the host
+        evaluator.host.execute_capability(capability_name, capability_args)
     }
 
-    /// `(plan "plan-name" step1 step2 ...)`
-    /// 
-    /// Executes a sequence of expressions (a "plan"). This is a powerful
-    /// orchestration primitive.
-    fn plan_function(
-        args: Vec<Value>,
-        evaluator: &Evaluator,
-        env: &mut Environment,
-    ) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "plan".to_string(),
-                expected: "at least 1".to_string(),
-                actual: 0,
-            });
-        }
-
-        // The first argument could be a name or description for the plan.
-        // We currently ignore it, but it's good practice to have it.
-        let _plan_name = match &args[0] {
-            Value::String(s) => s,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "string (plan name)".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "plan".to_string(),
-                })
-            }
-        };
-
-        let steps = &args[1..];
-        let mut last_result = Value::Nil;
-
-        for step in steps {
-            // Convert the Value back into an Expression to be evaluated.
-            // This is a simplification. A more robust implementation might
-            // expect the steps to be quoted lists from the start.
-            let expr = Expression::try_from(step.clone())
-                .map_err(|e| RuntimeError::Generic(format!("Failed to convert value to expression: {:?}", e)))?;
-            last_result = evaluator.eval_expr(&expr, env)?;
-        }
-
-        Ok(last_result)
-    }
 }
 
 /// Register default capabilities in the marketplace
-async fn register_default_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
+pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
     // Register ccos.echo capability
     marketplace.register_local_capability(
         "ccos.echo".to_string(),

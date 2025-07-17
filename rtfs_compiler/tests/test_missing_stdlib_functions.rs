@@ -1,5 +1,6 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use std::rc::Rc;
+use std::sync::Arc;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::parser::parse_expression;
@@ -9,7 +10,12 @@ use rtfs_compiler::runtime::values::Value;
 fn test_missing_stdlib_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");

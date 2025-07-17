@@ -8,10 +8,10 @@ use crate::ast::{
 };
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::host_interface::HostInterface;
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::{Arity, Function, Value};
 use crate::runtime::security::RuntimeContext;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -19,7 +19,6 @@ use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRe
 use std::sync::Arc;
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
-use crate::ccos::causal_chain::CausalChain;
 
 #[derive(Clone, Debug)]
 pub struct Evaluator {
@@ -32,10 +31,8 @@ pub struct Evaluator {
     pub model_registry: Arc<ModelRegistry>,
     /// Security context for capability execution
     pub security_context: RuntimeContext,
-    /// Capability marketplace for CCOS capability execution
-    pub capability_marketplace: Arc<CapabilityMarketplace>,
-    /// Causal chain for tracking actions and provenance
-    pub causal_chain: Arc<RefCell<CausalChain>>,
+    /// Host interface for CCOS interactions
+    pub host: Rc<dyn HostInterface>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -59,11 +56,10 @@ impl Evaluator {
         module_registry: Rc<ModuleRegistry>, 
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
+        host: Rc<dyn HostInterface>,
     ) -> Self {
         let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
-        let capability_marketplace = Arc::new(CapabilityMarketplace::default());
-        let causal_chain = Arc::new(RefCell::new(CausalChain::new().unwrap()));
 
         Evaluator {
             module_registry,
@@ -74,8 +70,7 @@ impl Evaluator {
             delegation_engine,
             model_registry,
             security_context,
-            capability_marketplace,
-            causal_chain,
+            host,
         }
     }
 
@@ -85,11 +80,10 @@ impl Evaluator {
         task_context: Value,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
+        host: Rc<dyn HostInterface>,
     ) -> Self {
         let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
-        let capability_marketplace = Arc::new(CapabilityMarketplace::default());
-        let causal_chain = Arc::new(RefCell::new(CausalChain::new().unwrap()));
 
         Evaluator {
             module_registry,
@@ -100,8 +94,7 @@ impl Evaluator {
             delegation_engine,
             model_registry,
             security_context,
-            capability_marketplace,
-            causal_chain,
+            host,
         }
     }
 
@@ -109,11 +102,13 @@ impl Evaluator {
     pub fn new_with_defaults(
         module_registry: Rc<ModuleRegistry>, 
         delegation_engine: Arc<dyn DelegationEngine>,
+        host: Rc<dyn HostInterface>,
     ) -> Self {
         Self::new(
             module_registry,
             delegation_engine,
             RuntimeContext::pure(),
+            host,
         )
     }
 
@@ -1664,8 +1659,7 @@ impl Evaluator {
             delegation_engine: self.delegation_engine.clone(),
             model_registry: self.model_registry.clone(),
             security_context,
-            capability_marketplace: self.capability_marketplace.clone(),
-            causal_chain: self.causal_chain.clone(),
+            host: self.host.clone(),
         }
     }
 
@@ -1674,6 +1668,7 @@ impl Evaluator {
         env: Environment,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
+        host: Rc<dyn HostInterface>,
     ) -> Self {
         Self {
             module_registry,
@@ -1684,8 +1679,7 @@ impl Evaluator {
             delegation_engine,
             model_registry: Arc::new(ModelRegistry::with_defaults()),
             security_context,
-            capability_marketplace: Arc::new(CapabilityMarketplace::default()),
-            causal_chain: Arc::new(RefCell::new(CausalChain::new().unwrap())),
+            host,
         }
     }
 }
@@ -1697,10 +1691,23 @@ impl Default for Evaluator {
         let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();
         
+        // Create a minimal host interface for default case
+        // This should be replaced with a proper host in production
+        use crate::runtime::host::RuntimeHost;
+        use crate::runtime::capability_marketplace::CapabilityMarketplace;
+        use crate::ccos::causal_chain::CausalChain;
+        
+        let capability_marketplace = Arc::new(CapabilityMarketplace::default());
+        let causal_chain = Rc::new(RefCell::new(CausalChain::new().unwrap()));
+        let host_security_context = RuntimeContext::pure();
+        let runtime_host = RuntimeHost::new(capability_marketplace, causal_chain, host_security_context);
+        let host = Rc::new(runtime_host);
+        
         Self::new(
             module_registry,
             delegation_engine,
             security_context,
+            host,
         )
     }
 }
