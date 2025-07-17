@@ -9,6 +9,7 @@ pub mod capability;
 pub mod capability_registry;
 pub mod capability_provider;
 pub mod capability_marketplace;
+pub mod ccos_environment;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
@@ -30,6 +31,7 @@ pub use evaluator::Evaluator;
 pub use ir_runtime::IrRuntime;
 pub use module_runtime::{Module, ModuleRegistry};
 pub use values::{Function, Value};
+pub use ccos_environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory};
 
 use crate::ast::Expression;
 use crate::parser;

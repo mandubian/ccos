@@ -1,5 +1,6 @@
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
+use crate::runtime::capability_registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -271,6 +272,7 @@ impl StreamCapabilityImpl {
 pub struct CapabilityMarketplace {
     capabilities: Arc<RwLock<HashMap<String, CapabilityImpl>>>,
     discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
+    registry: CapabilityRegistry,
 }
 
 impl std::fmt::Debug for CapabilityMarketplace {
@@ -288,6 +290,7 @@ impl CapabilityMarketplace {
         Self {
             capabilities: Arc::new(RwLock::new(HashMap::new())),
             discovery_agents: Vec::new(),
+            registry: CapabilityRegistry::new(),
         }
     }
 
@@ -551,39 +554,54 @@ impl CapabilityMarketplace {
 
     /// Execute a capability
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
-        let capability = self.get_capability(id).await
-            .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", id)))?;
-
-        match &capability.provider {
-            CapabilityProvider::Local(local) => {
-                // Execute local capability synchronously
-                return (local.handler)(inputs);
-            }
-            CapabilityProvider::Http(http) => {
-                // Execute HTTP capability asynchronously
-                return self.execute_http_capability(http, inputs).await;
-            }
-            CapabilityProvider::MCP(mcp) => {
-                // Execute MCP capability asynchronously
-                return self.execute_mcp_capability(mcp, inputs).await;
-            }
-            CapabilityProvider::A2A(a2a) => {
-                // Execute A2A capability asynchronously
-                return self.execute_a2a_capability(a2a, inputs).await;
-            }
-            CapabilityProvider::Plugin(plugin) => {
-                // Execute plugin capability
-                return self.execute_plugin_capability(plugin, inputs).await;
-            }
-            CapabilityProvider::RemoteRTFS(remote) => {
-                // Execute remote RTFS capability asynchronously
-                return execute_remote_rtfs_capability(remote, inputs).await;
-            }
-            CapabilityProvider::Stream(stream) => {
-                // Execute streaming capability
-                return self.execute_stream_capability(stream, inputs).await;
-            }
+        // First try to find capability in the marketplace
+        if let Some(capability) = self.get_capability(id).await {
+            return match &capability.provider {
+                CapabilityProvider::Local(local) => {
+                    // Execute local capability synchronously
+                    (local.handler)(inputs)
+                }
+                CapabilityProvider::Http(http) => {
+                    // Execute HTTP capability asynchronously
+                    self.execute_http_capability(http, inputs).await
+                }
+                CapabilityProvider::MCP(mcp) => {
+                    // Execute MCP capability asynchronously
+                    self.execute_mcp_capability(mcp, inputs).await
+                }
+                CapabilityProvider::A2A(a2a) => {
+                    // Execute A2A capability asynchronously
+                    self.execute_a2a_capability(a2a, inputs).await
+                }
+                CapabilityProvider::Plugin(plugin) => {
+                    // Execute plugin capability
+                    self.execute_plugin_capability(plugin, inputs).await
+                }
+                CapabilityProvider::RemoteRTFS(remote) => {
+                    // Execute remote RTFS capability asynchronously
+                    execute_remote_rtfs_capability(remote, inputs).await
+                }
+                CapabilityProvider::Stream(stream) => {
+                    // Execute streaming capability
+                    self.execute_stream_capability(stream, inputs).await
+                }
+            };
         }
+
+        // Fallback to capability registry
+        if let Some(capability) = self.registry.get_capability(id) {
+            // Convert the Value::List inputs to Vec<Value> for registry capability
+            let args = match inputs {
+                Value::List(list) => list.iter().cloned().collect(),
+                Value::Vector(vec) => vec.clone(),
+                single_value => vec![single_value.clone()],
+            };
+            
+            return (capability.func)(args);
+        }
+
+        // Capability not found anywhere
+        Err(RuntimeError::Generic(format!("Capability '{}' not found", id)))
     }
 
     /// Execute HTTP capability
@@ -811,6 +829,7 @@ impl Clone for CapabilityMarketplace {
         Self {
             capabilities: Arc::clone(&self.capabilities),
             discovery_agents: Vec::new(), // Discovery agents are not cloned
+            registry: CapabilityRegistry::new(), // Create new registry for clone
         }
     }
 }

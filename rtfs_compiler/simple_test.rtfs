@@ -1,0 +1,4 @@
+;; Simple test with mock capabilities
+(let [result1 (call "test.echo" "Hello World!")
+      result2 (call "test.simple" "Simple test")]
+  (str "Results: " result1 " and " result2))

@@ -58,7 +58,7 @@ impl Evaluator {
         security_context: RuntimeContext,
         host: Rc<dyn HostInterface>,
     ) -> Self {
-        let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
+        let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
 
         Evaluator {
@@ -82,7 +82,7 @@ impl Evaluator {
         security_context: RuntimeContext,
         host: Rc<dyn HostInterface>,
     ) -> Self {
-        let env = crate::runtime::secure_stdlib::SecureStandardLibrary::create_secure_environment();
+        let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
 
         Evaluator {
