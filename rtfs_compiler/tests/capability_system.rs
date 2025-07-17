@@ -11,6 +11,8 @@ use rtfs_compiler::ast::TopLevel;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use rtfs_compiler::runtime::host::RuntimeHost;
+use std::cell::RefCell;
 
 #[test]
 fn test_pure_context() {
@@ -22,6 +24,11 @@ fn test_pure_context() {
         stdlib_env,
         delegation,
         pure_context,
+        Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+            Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+            Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+            rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        )),
     );
     let pure_expr = match &parser::parse("(call \"ccos.echo\" \"Hello World\")").expect("parse")[0] {
         TopLevel::Expression(expr) => expr.clone(),
@@ -44,6 +51,11 @@ fn test_controlled_context() {
         stdlib_env,
         delegation,
         controlled_context,
+        Rc::new(RuntimeHost::new(
+            Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+            Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+            rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        )),
     );
     let controlled_expr = match &parser::parse("(call \"ccos.echo\" \"Hello World\")").expect("parse")[0] {
         TopLevel::Expression(expr) => expr.clone(),
@@ -67,6 +79,11 @@ fn test_full_context() {
         stdlib_env,
         delegation,
         full_context,
+        Rc::new(RuntimeHost::new(
+            Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+            Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+            rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        )),
     );
     let capabilities_to_test = [
         ("ccos.echo", "\"test input\""),
@@ -97,6 +114,11 @@ fn test_plan_execution() {
         stdlib_env,
         delegation,
         full_context,
+        Rc::new(RuntimeHost::new(
+            Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+            Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+            rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        )),
     );
     let plan_rtfs = r#"
     (plan "test-capability-plan"

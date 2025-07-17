@@ -117,7 +117,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create evaluator
     let module_registry = Rc::new(ModuleRegistry::new());
-    let mut evaluator = Evaluator::new(module_registry, delegation_engine, rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let mut evaluator = Evaluator::new(
+        module_registry,
+        delegation_engine,
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
 
     // Inject the custom model registry so the evaluator can find our providers
     evaluator.model_registry = Arc::clone(&registry_arc);

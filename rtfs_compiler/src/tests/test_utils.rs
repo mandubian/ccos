@@ -24,7 +24,15 @@ pub fn create_test_module_registry() -> ModuleRegistry {
 pub fn create_test_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    Evaluator::new(Rc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure())
+    let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new());
+    let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = crate::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
+        capability_marketplace,
+        causal_chain,
+        security_context.clone(),
+    ));
+    Evaluator::new(Rc::new(module_registry), de, security_context, host)
 }
 
 /// Creates a new IR runtime.

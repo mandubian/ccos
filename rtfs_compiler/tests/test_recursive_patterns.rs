@@ -1,3 +1,8 @@
+use rtfs_compiler::runtime::host::RuntimeHost;
+use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::runtime::security::RuntimeContext;
+use std::cell::RefCell;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use std::rc::Rc;
 // Test for recursive function patterns
@@ -10,7 +15,17 @@ fn test_mutual_recursion_pattern() {
 
     let parsed = parser::parse(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(RuntimeHost::new(
+        std::sync::Arc::new(CapabilityMarketplace::default()),
+        Rc::new(RefCell::new(CausalChain::new().unwrap())),
+        RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(
+        module_registry,
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
     let result = if let TopLevel::Expression(expr) = &parsed[0] {
         evaluator
             .evaluate(expr)
@@ -37,7 +52,17 @@ fn test_nested_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(RuntimeHost::new(
+        std::sync::Arc::new(CapabilityMarketplace::default()),
+        Rc::new(RefCell::new(CausalChain::new().unwrap())),
+        RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(
+        module_registry,
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
@@ -52,7 +77,17 @@ fn test_higher_order_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(RuntimeHost::new(
+        std::sync::Arc::new(CapabilityMarketplace::default()),
+        Rc::new(RefCell::new(CausalChain::new().unwrap())),
+        RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(
+        module_registry,
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
@@ -67,7 +102,17 @@ fn test_three_way_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(RuntimeHost::new(
+        std::sync::Arc::new(CapabilityMarketplace::default()),
+        Rc::new(RefCell::new(CausalChain::new().unwrap())),
+        RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(
+        module_registry,
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");

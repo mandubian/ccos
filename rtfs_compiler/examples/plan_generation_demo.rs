@@ -143,11 +143,17 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n1️⃣ Testing Pure Security Context");
     let pure_context = RuntimeContext::pure();
     let stdlib_env = StandardLibrary::create_global_environment();
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()), 
+        Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         pure_context,
+        host.clone(),
     );
     
     // Try to call a capability - should fail
@@ -170,10 +176,11 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let controlled_context = SecurityPolicies::data_processing();
     let stdlib_env = StandardLibrary::create_global_environment();
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()), 
+        Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         controlled_context,
+        host.clone(),
     );
     
     // Try to call allowed capability
@@ -196,10 +203,11 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let full_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()), 
+        Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         full_context,
+        host.clone(),
     );
     
     // Try to call various capabilities
@@ -230,10 +238,11 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let math_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()), 
+        Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         math_context,
+        host.clone(),
     );
     
     let math_expr = match &parser::parse("(call \"ccos.math.add\" {:a 10 :b 20})")?[0] {
@@ -267,10 +276,11 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let plan_ast = parser::parse(plan_rtfs)?;
     let stdlib_env = StandardLibrary::create_global_environment();
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()), 
+        Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         RuntimeContext::full(),
+        host,
     );
     
     // Evaluate the plan
@@ -417,11 +427,17 @@ GENERATED RTFS PLAN:
     registry.register(hunyuan);
     let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::full(),
+    ));
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()), 
+        Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation,
         RuntimeContext::full(),
+        host,
     );
     evaluator.model_registry = Arc::new(registry);
 

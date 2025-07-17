@@ -1,5 +1,6 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use std::rc::Rc;
+use std::sync::Arc;
 // Simple test for basic recursion functionality
 use rtfs_compiler::*;
 use rtfs_compiler::runtime::evaluator::Evaluator;
@@ -18,7 +19,12 @@ fn test_simple_mutual_recursion() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
@@ -43,7 +49,12 @@ fn test_simple_factorial() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Expected: 120 (5!)

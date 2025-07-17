@@ -7,10 +7,15 @@ use crate::runtime::{
     IrRuntime, IrWithFallbackStrategy, Runtime, RuntimeStrategy, RuntimeStrategyValue,
     TreeWalkingStrategy,
 };
+use crate::runtime::host::RuntimeHost;
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::causal_chain::CausalChain;
+use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::io::{self, Write};
-use crate::ccos::delegation::StaticDelegationEngine;
 use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]
@@ -45,7 +50,6 @@ impl RuntimeStrategy for IrStrategy {
 use crate::ast::Expression;
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::module_runtime::ModuleRegistry;
-use std::rc::Rc;
 
 /// RTFS Read-Eval-Print Loop (REPL) interface
 pub struct RtfsRepl {
@@ -81,11 +85,25 @@ impl Default for ReplContext {
 
 impl RtfsRepl {
     pub fn new(module_registry: ModuleRegistry) -> Self {
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+        let causal_chain = Rc::new(RefCell::new(
+            CausalChain::new().expect("Failed to create causal chain")
+        ));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        
+        let host = Rc::new(RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        
         Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Rc::new(module_registry.clone()),
-                Arc::new(StaticDelegationEngine::new(HashMap::new())),
-                crate::runtime::security::RuntimeContext::pure(),
+                delegation_engine,
+                security_context,
+                host,
             )))),
             module_registry,
             context: ReplContext::default(),
@@ -98,11 +116,27 @@ impl RtfsRepl {
         module_registry: ModuleRegistry,
     ) -> Self {
         let runtime_strategy: Box<dyn RuntimeStrategy> = match strategy {
-            RuntimeStrategyValue::Ast => Box::new(TreeWalkingStrategy::new(Evaluator::new(
-                Rc::new(module_registry.clone()),
-                Arc::new(StaticDelegationEngine::new(HashMap::new())),
-                crate::runtime::security::RuntimeContext::pure(),
-            ))),
+            RuntimeStrategyValue::Ast => {
+                let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+                let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+                let causal_chain = Rc::new(RefCell::new(
+                    CausalChain::new().expect("Failed to create causal chain")
+                ));
+                let security_context = crate::runtime::security::RuntimeContext::pure();
+                
+                let host = Rc::new(RuntimeHost::new(
+                    capability_marketplace,
+                    causal_chain,
+                    security_context.clone(),
+                ));
+                
+                Box::new(TreeWalkingStrategy::new(Evaluator::new(
+                    Rc::new(module_registry.clone()),
+                    delegation_engine,
+                    security_context,
+                    host,
+                )))
+            },
             RuntimeStrategyValue::Ir => Box::new(crate::runtime::ir_runtime::IrStrategy::new(module_registry.clone())),
             RuntimeStrategyValue::IrWithFallback => {
                 Box::new(IrWithFallbackStrategy::new(module_registry.clone()))
@@ -208,10 +242,24 @@ impl RtfsRepl {
             }
             ":runtime-ast" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::Ast;
+                let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+                let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+                let causal_chain = Rc::new(RefCell::new(
+                    CausalChain::new().expect("Failed to create causal chain")
+                ));
+                let security_context = crate::runtime::security::RuntimeContext::pure();
+                
+                let host = Rc::new(RuntimeHost::new(
+                    capability_marketplace,
+                    causal_chain,
+                    security_context.clone(),
+                ));
+                
                 self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                     Rc::new(self.module_registry.clone()),
-                    Arc::new(StaticDelegationEngine::new(HashMap::new())),
-                    crate::runtime::security::RuntimeContext::pure(),
+                    delegation_engine,
+                    security_context,
+                    host,
                 ))));
                 println!("🔄 Switched to AST runtime");
             }
@@ -481,12 +529,26 @@ pub enum TestExpectation {
 
 impl RtfsTestFramework {
     pub fn new(module_registry: ModuleRegistry) -> Self {
+        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+        let causal_chain = Rc::new(RefCell::new(
+            CausalChain::new().expect("Failed to create causal chain")
+        ));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        
+        let host = Rc::new(RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        
         Self {
             tests: Vec::new(),
-                          runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
+            runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Rc::new(module_registry.clone()),
-                Arc::new(StaticDelegationEngine::new(HashMap::new())),
-                crate::runtime::security::RuntimeContext::pure(),
+                delegation_engine,
+                security_context,
+                host,
             )))),
             module_registry,
         }

@@ -1,6 +1,7 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::*;
 use std::rc::Rc;
+use std::sync::Arc;
 
 fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {
     // Parse the code
@@ -11,7 +12,12 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {
 
     println!("   Parsed {} successfully", test_name); // Test AST runtime
     let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let ast_result = match evaluator.evaluate(&parsed) {
         Ok(value) => {
             println!("   ✓ AST runtime executed: {:?}", value);

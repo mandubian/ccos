@@ -12,6 +12,8 @@ pub mod capability_marketplace;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
+pub mod host;
+pub mod host_interface;
 pub mod ir_runtime;
 pub mod module_runtime;
 pub mod stdlib;
@@ -33,10 +35,14 @@ use crate::ast::Expression;
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
 use crate::runtime::security::{RuntimeContext, SecurityPolicies};
+use crate::runtime::host::RuntimeHost;
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::causal_chain::CausalChain;
 use std::rc::Rc;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::cell::RefCell;
 
 #[derive(Clone, Debug, Copy)]
 pub enum RuntimeStrategyValue {
@@ -72,7 +78,18 @@ impl Runtime {
     pub fn new_with_tree_walking_strategy(module_registry: Rc<ModuleRegistry>) -> Self {
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-        let evaluator = Evaluator::new(module_registry, de, security_context);
+        
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+        let causal_chain = Rc::new(RefCell::new(
+            CausalChain::new().expect("Failed to create causal chain")
+        ));
+        let host = Rc::new(RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        
+        let evaluator = Evaluator::new(module_registry, de, security_context, host);
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
     }
@@ -82,7 +99,18 @@ impl Runtime {
         let module_registry = ModuleRegistry::new();
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context);
+        
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+        let causal_chain = Rc::new(RefCell::new(
+            CausalChain::new().expect("Failed to create causal chain")
+        ));
+        let host = Rc::new(RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context, host);
         evaluator.eval_toplevel(&parsed)
     }
 
@@ -92,7 +120,18 @@ impl Runtime {
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context);
+        
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+        let causal_chain = Rc::new(RefCell::new(
+            CausalChain::new().expect("Failed to create causal chain")
+        ));
+        let host = Rc::new(RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        
+        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context, host);
         evaluator.eval_toplevel(&parsed)
     }
 }
@@ -130,7 +169,18 @@ impl IrWithFallbackStrategy {
         let ir_strategy = IrStrategy::new(module_registry.clone());
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-        let evaluator = Evaluator::new(Rc::new(module_registry), de, security_context);
+        
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new());
+        let causal_chain = Rc::new(RefCell::new(
+            CausalChain::new().expect("Failed to create causal chain")
+        ));
+        let host = Rc::new(RuntimeHost::new(
+            capability_marketplace,
+            causal_chain,
+            security_context.clone(),
+        ));
+        
+        let evaluator = Evaluator::new(Rc::new(module_registry), de, security_context, host);
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {

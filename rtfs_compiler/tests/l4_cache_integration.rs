@@ -1,12 +1,16 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use rtfs_compiler::bytecode::WasmBackend;
 use rtfs_compiler::ccos::caching::l4_content_addressable::{L4CacheClient, RtfsModuleMetadata};
+use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
 use rtfs_compiler::ccos::delegation_l4::L4AwareDelegationEngine;
+use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry, Value, RuntimeResult};
 use rtfs_compiler::runtime::environment::Environment;
+use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::values::{Function};
 use rtfs_compiler::ast::{Literal, Symbol, Expression};
 use wat::parse_str;
@@ -37,7 +41,12 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     let de: Arc<dyn DelegationEngine> = Arc::new(l4_de);
 
     // 5. Create evaluator with empty env, but register a placeholder `add` so lookup succeeds.
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let symbol_add = Symbol("add".to_string());
     // Create a dummy closure that won't actually be executed when delegation takes L4 path.
     let dummy_closure = Function::new_closure(
@@ -74,7 +83,12 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
     let inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
 
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure());
+    let host = Rc::new(RuntimeHost::new(
+        Arc::new(CapabilityMarketplace::default()),
+        Rc::new(RefCell::new(CausalChain::new().unwrap())),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    ));
+    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     let code = "(do (defn add [x y] nil) (add 1 2))";
     let expr = parse_expression(code).unwrap();
