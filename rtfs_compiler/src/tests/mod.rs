@@ -11,3 +11,4 @@ pub mod object_tests;
 pub mod primitives_tests;
 pub mod rtfs2_tests;
 pub mod test_utils;
+pub mod test_helpers;
