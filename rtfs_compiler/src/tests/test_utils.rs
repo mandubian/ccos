@@ -1,6 +1,7 @@
 // rtfs_compiler/src/tests/test_utils.rs
 // This file will contain common utilities for setting up test environments.
 
+use crate::agent::registry;
 use crate::ir::converter::IrConverter;
 use crate::parser;
 use crate::runtime::{
@@ -24,7 +25,8 @@ pub fn create_test_module_registry() -> ModuleRegistry {
 pub fn create_test_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new());
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = crate::runtime::security::RuntimeContext::pure();
     let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(

@@ -1,12 +1,18 @@
 # Capability Marketplace
 
-**Status:** ✅ **IMPLEMENTED** – v1.0 (Functional)
+**Status:** ✅ **REFACTORED** – v2.0 (Two-Component Architecture)
 
 ---
 
 ## Overview
 
-The RTFS Capability Marketplace provides a dynamic system for registering, discovering, and executing capabilities through a unified interface. It supports local, HTTP, MCP, A2A, and plugin-based capabilities with comprehensive security controls.
+The RTFS Capability system is built on a two-component architecture designed for security, extensibility, and clear separation of concerns:
+
+1.  **Capability Marketplace**: The high-level entry point for discovering and executing non-sandboxed, remote, or complex capabilities. It handles capabilities that require asynchronous operations, I/O, or interaction with external systems (e.g., HTTP APIs, Streaming services).
+
+2.  **Capability Registry**: The low-level engine for executing sandboxed, built-in, and security-sensitive capabilities. It is designed for synchronous, fast, and secure operations that do not require I/O.
+
+The `CapabilityMarketplace` orchestrates capability execution. It handles remote capabilities directly and delegates the execution of local, built-in capabilities to the `CapabilityRegistry`. This design ensures that sensitive operations are handled in a controlled environment while providing a flexible mechanism for extending the system with new remote functionalities.
 
 ## Core Architecture
 
@@ -14,29 +20,71 @@ The RTFS Capability Marketplace provides a dynamic system for registering, disco
 
 | Type | Description | Status |
 |------|-------------|---------|
-| **Local** | Built-in capabilities executed in-process | ✅ Implemented |
-| **HTTP** | Remote capabilities via HTTP APIs | ✅ Implemented |
+| **Local** | Built-in capabilities executed by the `CapabilityRegistry` | ✅ Implemented |
+| **HTTP** | Remote capabilities via HTTP APIs, executed by the `Marketplace` | ✅ Implemented |
+| **Stream** | Streaming capabilities for continuous data flow | ✅ Implemented |
 | **MCP** | Model Context Protocol capabilities | 🔄 Planned |
 | **A2A** | Agent-to-Agent communication | 🔄 Planned |
-| **Plugin** | Dynamic plugin-based capabilities | 🔄 Planned |
 
 ### Core Components
 
+The `CapabilityMarketplace` manages manifests that describe how to execute a capability.
+
 ```rust
-/// The capability marketplace that manages all available capabilities
+/// The capability marketplace that manages all available high-level capabilities.
 pub struct CapabilityMarketplace {
-    capabilities: Arc<RwLock<HashMap<String, CapabilityImpl>>>,
-    discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
+    /// A shared reference to the low-level capability registry.
+    registry: Arc<RwLock<CapabilityRegistry>>,
+    /// The collection of registered capability manifests.
+    capabilities: Arc<RwLock<HashMap<String, CapabilityManifest>>>,
+    // ... other fields
 }
 
-/// Individual capability implementation
-pub struct CapabilityImpl {
+/// Describes a capability and how to execute it.
+#[derive(Debug, Clone)]
+pub struct CapabilityManifest {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub provider: CapabilityProvider,
-    pub local: bool,
-    pub endpoint: Option<String>,
+    /// The specific provider type that implements the capability.
+    pub provider_type: ProviderType,
+}
+
+/// Enum defining the different types of capability providers.
+#[derive(Clone, Debug)]
+pub enum ProviderType {
+    /// A local capability, executed by the `CapabilityRegistry`.
+    Local,
+    /// A remote capability accessed over HTTP.
+    Http(HttpCapability),
+    /// A streaming capability.
+    Stream(StreamCapabilityImpl),
+    /// A capability that communicates using the Model Context Protocol (MCP).
+    MCP(MCPCapability),
+    /// A capability for agent-to-agent (A2A) communication.
+    A2A(A2ACapability),
+}
+
+/// Configuration for an HTTP-based remote capability.
+#[derive(Debug, Clone)]
+pub struct HttpCapability {
+    pub base_url: String,
+    pub auth_token: Option<String>,
+    pub timeout_ms: u64,
+}
+
+/// Configuration for a capability that uses the Model Context Protocol (MCP).
+#[derive(Debug, Clone)]
+pub struct MCPCapability {
+    pub server_url: String,
+    pub tool_name: String,
+}
+
+/// Configuration for an agent-to-agent (A2A) communication capability.
+#[derive(Debug, Clone)]
+pub struct A2ACapability {
+    pub agent_id: String,
+    pub endpoint: String,
 }
 ```
 

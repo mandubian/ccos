@@ -1,10 +1,14 @@
+// ...existing code...
+// ...existing code...
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
 use crate::runtime::capability_registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
+use bincode::de;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use async_trait::async_trait;
 
 /// Progress token for tracking long-running operations (MCP-style)
 pub type ProgressToken = String;
@@ -52,51 +56,57 @@ pub struct BidirectionalConfig {
 /// Duplex stream channels
 #[derive(Debug, Clone)]
 pub struct DuplexChannels {
-    /// Input channel configuration
-    pub input_channel: StreamChannelConfig,
-    /// Output channel configuration  
-    pub output_channel: StreamChannelConfig,
+    pub input_channel: String,
+    pub output_channel: String,
 }
 
-/// Stream channel configuration
-#[derive(Debug, Clone)]
-pub struct StreamChannelConfig {
-    /// Channel buffer size
-    pub buffer_size: usize,
-    /// Channel-specific metadata
-    pub metadata: HashMap<String, String>,
+/// Callback function for stream events
+pub type StreamCallback = Arc<dyn Fn(Value) -> RuntimeResult<()> + Send + Sync>;
+
+/// Callbacks for stream events
+#[derive(Clone)]
+pub struct StreamCallbacks {
+    pub on_connected: Option<StreamCallback>,
+    pub on_disconnected: Option<StreamCallback>,
+    pub on_data_received: Option<StreamCallback>,
+    pub on_error: Option<StreamCallback>,
 }
 
-/// Enhanced stream item for bidirectional operations
-#[derive(Debug, Clone)]
-pub struct StreamItem {
-    pub data: Value,
-    pub sequence: u64,
-    pub timestamp: u64,
-    pub metadata: HashMap<String, String>,
-    /// Direction indicator for bidirectional streams
-    pub direction: StreamDirection,
-    /// Correlation ID for request/response patterns
-    pub correlation_id: Option<String>,
+impl std::fmt::Debug for StreamCallbacks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamCallbacks")
+         .field("on_connected", &self.on_connected.is_some())
+         .field("on_disconnected", &self.on_disconnected.is_some())
+         .field("on_data_received", &self.on_data_received.is_some())
+         .field("on_error", &self.on_error.is_some())
+         .finish()
+    }
 }
 
-/// Stream direction for bidirectional operations
-#[derive(Debug, Clone)]
-pub enum StreamDirection {
-    /// Data flowing into the stream
-    Inbound,
-    /// Data flowing out of the stream
-    Outbound,
-    /// Bidirectional data (both directions)
-    Bidirectional,
+impl Default for StreamCallbacks {
+    fn default() -> Self {
+        Self {
+            on_connected: None,
+            on_disconnected: None,
+            on_data_received: None,
+            on_error: None,
+        }
+    }
 }
 
-/// Streaming capability metadata
+
+/// Configuration for streaming capabilities
 #[derive(Debug, Clone)]
-pub struct StreamingCapabilityMetadata {
-    pub id: String,
-    pub name: String,
-    pub description: String,
+pub struct StreamConfig {
+    pub callbacks: Option<StreamCallbacks>,
+    pub auto_reconnect: bool,
+    pub max_retries: u32,
+}
+
+/// Streaming capability implementation details
+#[derive(Clone)]
+pub struct StreamCapabilityImpl {
+    pub provider: StreamingProvider,
     pub stream_type: StreamType,
     pub input_schema: Option<String>, // JSON schema for input validation
     pub output_schema: Option<String>, // JSON schema for output validation
@@ -110,20 +120,35 @@ pub struct StreamingCapabilityMetadata {
     pub stream_config: Option<StreamConfig>,
 }
 
+impl std::fmt::Debug for StreamCapabilityImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamCapabilityImpl")
+         .field("stream_type", &self.stream_type)
+         .field("input_schema", &self.input_schema)
+         .field("output_schema", &self.output_schema)
+         .field("supports_progress", &self.supports_progress)
+         .field("supports_cancellation", &self.supports_cancellation)
+         .field("bidirectional_config", &self.bidirectional_config)
+         .field("duplex_config", &self.duplex_config)
+         .field("stream_config", &self.stream_config)
+         .finish()
+    }
+}
+
 /// Represents a capability implementation
 #[derive(Debug, Clone)]
-pub struct CapabilityImpl {
+pub struct CapabilityManifest {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub provider: CapabilityProvider,
+    pub provider_type: ProviderType,
     pub local: bool,
     pub endpoint: Option<String>,
 }
 
 /// Different types of capability providers
 #[derive(Debug, Clone)]
-pub enum CapabilityProvider {
+pub enum ProviderType {
     /// Local implementation (built-in)
     Local(LocalCapability),
     /// Remote HTTP API
@@ -156,9 +181,7 @@ pub struct LocalCapability {
 
 impl std::fmt::Debug for LocalCapability {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalCapability")
-            .field("handler", &"<function>")
-            .finish()
+        f.debug_struct("LocalCapability").finish()
     }
 }
 
@@ -191,106 +214,48 @@ pub struct PluginCapability {
     pub function_name: String,
 }
 
-/// Streaming providers for different transport mechanisms
+/// Handle for managing a stream
 #[derive(Debug, Clone)]
-pub enum StreamingProvider {
-    /// Local in-memory streams using channels
-    Local {
-        buffer_size: usize,
-    },
-    /// WebSocket-based streaming
-    WebSocket {
-        url: String,
-        protocols: Vec<String>,
-    },
-    /// Server-Sent Events (SSE) streaming
-    ServerSentEvents {
-        url: String,
-        headers: HashMap<String, String>,
-    },
-    /// HTTP chunked transfer streaming
-    Http {
-        url: String,
-        method: String,
-        headers: HashMap<String, String>,
-    },
+pub struct StreamHandle {
+    pub stream_id: String,
+    pub stop_tx: mpsc::Sender<()>,
 }
 
-/// Unified stream capability trait - the core abstraction
-#[async_trait::async_trait]
-pub trait StreamCapability: Send + Sync {
-    /// Start streaming - returns a receiver for stream items (channel-based, default)
-    async fn start_stream(&self, params: &Value) -> RuntimeResult<mpsc::Receiver<StreamItem>>;
-    
-    /// Start streaming with enhanced configuration and optional callbacks
+/// Trait for streaming capability providers
+#[async_trait]
+pub trait StreamingCapability {
+    /// Start a stream
+    fn start_stream(&self, params: &Value) -> RuntimeResult<StreamHandle>;
+    /// Stop a stream
+    fn stop_stream(&self, handle: &StreamHandle) -> RuntimeResult<()>;
+    /// Start a stream with extended configuration
     async fn start_stream_with_config(&self, params: &Value, config: &StreamConfig) -> RuntimeResult<StreamHandle>;
-    
-    /// Send item to stream (for sinks, transforms, and bidirectional streams)
-    async fn send_item(&self, item: &StreamItem) -> RuntimeResult<()>;
-    
-    /// Start bidirectional stream - returns both sender and receiver (channel-based, default)
-    async fn start_bidirectional_stream(&self, params: &Value) -> RuntimeResult<(mpsc::Sender<StreamItem>, mpsc::Receiver<StreamItem>)>;
-    
-    /// Start bidirectional stream with enhanced configuration and optional callbacks
+    /// Send data to a stream
+    async fn send_to_stream(&self, handle: &StreamHandle, data: &Value) -> RuntimeResult<()>;
+    /// Start a bidirectional stream
+    fn start_bidirectional_stream(&self, params: &Value) -> RuntimeResult<StreamHandle>;
+    /// Start a bidirectional stream with extended configuration
     async fn start_bidirectional_stream_with_config(&self, params: &Value, config: &StreamConfig) -> RuntimeResult<StreamHandle>;
-    
-    /// Start duplex stream - returns separate channels for input and output
-    async fn start_duplex_stream(&self, params: &Value) -> RuntimeResult<DuplexStreamChannels>;
-    
-    /// Get current stream progress (optional)
-    async fn get_progress(&self, token: &ProgressToken) -> RuntimeResult<Option<ProgressNotification>>;
-    
-    /// Cancel stream operation (optional)
-    async fn cancel(&self, token: &ProgressToken) -> RuntimeResult<()>;
 }
 
-/// Duplex stream channels result
-#[derive(Debug)]
-pub struct DuplexStreamChannels {
-    /// Input channel (for sending data to the stream)
-    pub input_sender: mpsc::Sender<StreamItem>,
-    /// Output channel (for receiving data from the stream)
-    pub output_receiver: mpsc::Receiver<StreamItem>,
-    /// Optional feedback channel (for flow control or acknowledgments)
-    pub feedback_receiver: Option<mpsc::Receiver<StreamItem>>,
-}
-
-/// Stream capability implementation
-#[derive(Debug, Clone)]
-pub struct StreamCapabilityImpl {
-    pub metadata: StreamingCapabilityMetadata,
-    pub provider: StreamingProvider,
-}
-
-impl StreamCapabilityImpl {
-    pub fn new(metadata: StreamingCapabilityMetadata, provider: StreamingProvider) -> Self {
-        Self { metadata, provider }
-    }
-}
+/// Type alias for a thread-safe, shareable streaming capability provider
+pub type StreamingProvider = Arc<dyn StreamingCapability + Send + Sync>;
 
 /// The capability marketplace that manages all available capabilities
 pub struct CapabilityMarketplace {
-    capabilities: Arc<RwLock<HashMap<String, CapabilityImpl>>>,
+    capabilities: Arc<RwLock<HashMap<String, CapabilityManifest>>>,
     discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
-    registry: CapabilityRegistry,
-}
-
-impl std::fmt::Debug for CapabilityMarketplace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CapabilityMarketplace")
-            .field("capabilities", &"<HashMap<String, CapabilityImpl>>")
-            .field("discovery_agents", &format!("{} discovery agents", self.discovery_agents.len()))
-            .finish()
-    }
+    // Add a field for the capability registry
+    capability_registry: Arc<RwLock<CapabilityRegistry>>,
 }
 
 impl CapabilityMarketplace {
     /// Create a new capability marketplace
-    pub fn new() -> Self {
+    pub fn new(capability_registry: Arc<RwLock<CapabilityRegistry>>) -> Self {
         Self {
             capabilities: Arc::new(RwLock::new(HashMap::new())),
             discovery_agents: Vec::new(),
-            registry: CapabilityRegistry::new(),
+            capability_registry,
         }
     }
 
@@ -302,11 +267,11 @@ impl CapabilityMarketplace {
         description: String,
         handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
     ) -> Result<(), RuntimeError> {
-        let capability = CapabilityImpl {
+        let capability = CapabilityManifest {
             id: id.clone(),
             name,
             description,
-            provider: CapabilityProvider::Local(LocalCapability { handler }),
+            provider_type: ProviderType::Local(LocalCapability { handler }),
             local: true,
             endpoint: None,
         };
@@ -325,11 +290,11 @@ impl CapabilityMarketplace {
         base_url: String,
         auth_token: Option<String>,
     ) -> Result<(), RuntimeError> {
-        let capability = CapabilityImpl {
+        let capability = CapabilityManifest {
             id: id.clone(),
             name,
             description,
-            provider: CapabilityProvider::Http(HttpCapability {
+            provider_type: ProviderType::Http(HttpCapability {
                 base_url,
                 auth_token,
                 timeout_ms: 5000,
@@ -354,11 +319,11 @@ impl CapabilityMarketplace {
         timeout_ms: u64,
     ) -> Result<(), RuntimeError> {
         let endpoint_clone = endpoint.clone();
-        let capability = CapabilityImpl {
+        let capability = CapabilityManifest {
             id: id.clone(),
             name,
             description,
-            provider: CapabilityProvider::RemoteRTFS(RemoteRTFSCapability {
+            provider_type: ProviderType::RemoteRTFS(RemoteRTFSCapability {
                 endpoint,
                 timeout_ms,
                 auth_token,
@@ -381,10 +346,8 @@ impl CapabilityMarketplace {
         stream_type: StreamType,
         provider: StreamingProvider,
     ) -> Result<(), RuntimeError> {
-        let metadata = StreamingCapabilityMetadata {
-            id: id.clone(),
-            name,
-            description,
+        let stream_impl = StreamCapabilityImpl {
+            provider,
             stream_type,
             input_schema: None,
             output_schema: None,
@@ -395,12 +358,11 @@ impl CapabilityMarketplace {
             stream_config: None,
         };
         
-        // Create unified capability that handles streaming
-        let capability = CapabilityImpl {
+        let capability = CapabilityManifest {
             id: id.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            provider: CapabilityProvider::Stream(StreamCapabilityImpl::new(metadata, provider)),
+            name,
+            description,
+            provider_type: ProviderType::Stream(stream_impl),
             local: false,
             endpoint: None,
         };
@@ -419,10 +381,8 @@ impl CapabilityMarketplace {
         provider: StreamingProvider,
         config: BidirectionalConfig,
     ) -> Result<(), RuntimeError> {
-        let metadata = StreamingCapabilityMetadata {
-            id: id.clone(),
-            name,
-            description,
+        let stream_impl = StreamCapabilityImpl {
+            provider,
             stream_type: StreamType::Bidirectional,
             input_schema: None,
             output_schema: None,
@@ -433,11 +393,11 @@ impl CapabilityMarketplace {
             stream_config: None,
         };
         
-        let capability = CapabilityImpl {
+        let capability = CapabilityManifest {
             id: id.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            provider: CapabilityProvider::Stream(StreamCapabilityImpl::new(metadata, provider)),
+            name,
+            description,
+            provider_type: ProviderType::Stream(stream_impl),
             local: false,
             endpoint: None,
         };
@@ -456,10 +416,8 @@ impl CapabilityMarketplace {
         provider: StreamingProvider,
         duplex_config: DuplexChannels,
     ) -> Result<(), RuntimeError> {
-        let metadata = StreamingCapabilityMetadata {
-            id: id.clone(),
-            name,
-            description,
+        let stream_impl = StreamCapabilityImpl {
+            provider,
             stream_type: StreamType::Duplex,
             input_schema: None,
             output_schema: None,
@@ -470,11 +428,11 @@ impl CapabilityMarketplace {
             stream_config: None,
         };
         
-        let capability = CapabilityImpl {
+        let capability = CapabilityManifest {
             id: id.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            provider: CapabilityProvider::Stream(StreamCapabilityImpl::new(metadata, provider)),
+            name,
+            description,
+            provider_type: ProviderType::Stream(stream_impl),
             local: false,
             endpoint: None,
         };
@@ -484,148 +442,136 @@ impl CapabilityMarketplace {
         Ok(())
     }
 
-    /// Start a bidirectional stream - convenience method
-    pub async fn start_bidirectional_stream(
-        &self,
-        capability_id: &str,
-        _params: &Value,
-    ) -> RuntimeResult<(mpsc::Sender<StreamItem>, mpsc::Receiver<StreamItem>)> {
-        let capability = self.get_capability(capability_id).await
-            .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))?;
-        
-        if let CapabilityProvider::Stream(stream_impl) = &capability.provider {
-            if !matches!(stream_impl.metadata.stream_type, StreamType::Bidirectional) {
-                return Err(RuntimeError::Generic(format!("Capability '{}' is not bidirectional", capability_id)));
+    /// Execute a capability by its ID
+    pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
+        let capability = self.get_capability(id).await
+            .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", id)))?;
+
+        match &capability.provider_type {
+            ProviderType::Local(local) => {
+                // Execute local capability synchronously
+                (local.handler)(inputs)
             }
-            
-            // Create bidirectional channels
-            let (input_tx, _input_rx) = mpsc::channel::<StreamItem>(100);
-            let (_output_tx, output_rx) = mpsc::channel::<StreamItem>(100);
-            
-            // TODO: In a real implementation, this would start the actual stream processing
-            // For now, we return the channels
-            Ok((input_tx, output_rx))
-        } else {
-            Err(RuntimeError::Generic(format!("Capability '{}' is not a stream capability", capability_id)))
+            ProviderType::Http(http) => {
+                // Execute HTTP capability asynchronously
+                self.execute_http_capability(http, inputs).await
+            }
+            ProviderType::MCP(mcp) => {
+                // Execute MCP capability asynchronously
+                self.execute_mcp_capability(mcp, inputs).await
+            }
+            ProviderType::A2A(a2a) => {
+                // Execute A2A capability asynchronously
+                self.execute_a2a_capability(a2a, inputs).await
+            }
+            ProviderType::Plugin(plugin) => {
+                // Execute plugin capability
+                self.execute_plugin_capability(plugin, inputs).await
+            }
+            ProviderType::RemoteRTFS(remote_rtfs) => {
+                // Execute remote RTFS capability
+                self.execute_remote_rtfs_capability(remote_rtfs, inputs).await
+            }
+            ProviderType::Stream(stream) => {
+                // Execute streaming capability
+                self.execute_stream_capability(stream, inputs).await
+            }
         }
     }
 
-    /// Start a duplex stream - convenience method
-    pub async fn start_duplex_stream(
-        &self,
-        capability_id: &str,
-        _params: &Value,
-    ) -> RuntimeResult<DuplexStreamChannels> {
-        let capability = self.get_capability(capability_id).await
-            .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))?;
-        
-        if let CapabilityProvider::Stream(stream_impl) = &capability.provider {
-            if !matches!(stream_impl.metadata.stream_type, StreamType::Duplex) {
-                return Err(RuntimeError::Generic(format!("Capability '{}' is not duplex", capability_id)));
-            }
-            
-            // Create duplex channels
-            let (input_tx, _input_rx) = mpsc::channel::<StreamItem>(100);
-            let (_output_tx, output_rx) = mpsc::channel::<StreamItem>(100);
-            let (_feedback_tx, feedback_rx) = mpsc::channel::<StreamItem>(50);
-            
-            // TODO: In a real implementation, this would start the actual stream processing
-            Ok(DuplexStreamChannels {
-                input_sender: input_tx,
-                output_receiver: output_rx,
-                feedback_receiver: Some(feedback_rx),
-            })
-        } else {
-            Err(RuntimeError::Generic(format!("Capability '{}' is not a stream capability", capability_id)))
-        }
-    }
-
-    /// Get a capability by ID
-    pub async fn get_capability(&self, id: &str) -> Option<CapabilityImpl> {
+    /// Get a capability by its ID
+    pub async fn get_capability(&self, id: &str) -> Option<CapabilityManifest> {
         let capabilities = self.capabilities.read().await;
         capabilities.get(id).cloned()
     }
 
     /// List all available capabilities
-    pub async fn list_capabilities(&self) -> Vec<CapabilityImpl> {
+    pub async fn list_capabilities(&self) -> Vec<CapabilityManifest> {
         let capabilities = self.capabilities.read().await;
         capabilities.values().cloned().collect()
     }
 
-    /// Execute a capability
-    pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
-        // First try to find capability in the marketplace
-        if let Some(capability) = self.get_capability(id).await {
-            return match &capability.provider {
-                CapabilityProvider::Local(local) => {
-                    // Execute local capability synchronously
-                    (local.handler)(inputs)
-                }
-                CapabilityProvider::Http(http) => {
-                    // Execute HTTP capability asynchronously
-                    self.execute_http_capability(http, inputs).await
-                }
-                CapabilityProvider::MCP(mcp) => {
-                    // Execute MCP capability asynchronously
-                    self.execute_mcp_capability(mcp, inputs).await
-                }
-                CapabilityProvider::A2A(a2a) => {
-                    // Execute A2A capability asynchronously
-                    self.execute_a2a_capability(a2a, inputs).await
-                }
-                CapabilityProvider::Plugin(plugin) => {
-                    // Execute plugin capability
-                    self.execute_plugin_capability(plugin, inputs).await
-                }
-                CapabilityProvider::RemoteRTFS(remote) => {
-                    // Execute remote RTFS capability asynchronously
-                    execute_remote_rtfs_capability(remote, inputs).await
-                }
-                CapabilityProvider::Stream(stream) => {
-                    // Execute streaming capability
-                    self.execute_stream_capability(stream, inputs).await
-                }
-            };
-        }
-
-        // Fallback to capability registry
-        if let Some(capability) = self.registry.get_capability(id) {
-            // Convert the Value::List inputs to Vec<Value> for registry capability
-            let args = match inputs {
-                Value::List(list) => list.iter().cloned().collect(),
-                Value::Vector(vec) => vec.clone(),
-                single_value => vec![single_value.clone()],
-            };
-            
-            return (capability.func)(args);
-        }
-
-        // Capability not found anywhere
-        Err(RuntimeError::Generic(format!("Capability '{}' not found", id)))
-    }
-
     /// Execute HTTP capability
     async fn execute_http_capability(&self, http: &HttpCapability, inputs: &Value) -> RuntimeResult<Value> {
-        // Convert RTFS Value to JSON
-        let json_inputs = serde_json::to_value(inputs)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;
+        // For HTTP capabilities, we expect the inputs to be in RTFS format: [url, method, headers, body]
+        // Convert inputs to args format if needed
+        let args = match inputs {
+            Value::List(list) => list.clone(),
+            Value::Vector(vec) => vec.clone(),
+            single_value => vec![single_value.clone()],
+        };
+        
+        // Extract HTTP parameters from args
+        let url = args.get(0).and_then(|v| v.as_string()).unwrap_or(&http.base_url);
+        let method = args.get(1).and_then(|v| v.as_string()).unwrap_or("GET");
+        let default_headers = std::collections::HashMap::new();
+        let headers = args.get(2).and_then(|v| match v {
+            Value::Map(m) => Some(m),
+            _ => None,
+        }).unwrap_or(&default_headers);
+        let body = args.get(3).and_then(|v| v.as_string()).unwrap_or("").to_string();
 
         // Make HTTP request
         let client = reqwest::Client::new();
-        let response = client
-            .post(&http.base_url)
-            .header("Content-Type", "application/json")
-            .json(&json_inputs)
+        let method_enum = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+        let mut req = client.request(method_enum, url);
+        
+        // Add authentication if provided
+        if let Some(token) = &http.auth_token {
+            req = req.bearer_auth(token);
+        }
+        
+        // Add custom headers
+        for (k, v) in headers.iter() {
+            if let crate::ast::MapKey::String(ref key) = k {
+                if let Value::String(ref val) = v {
+                    req = req.header(key, val);
+                }
+            }
+        }
+        
+        // Add body if provided
+        if !body.is_empty() {
+            req = req.body(body);
+        }
+        
+        // Execute request with timeout
+        let response = req
             .timeout(std::time::Duration::from_millis(http.timeout_ms))
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
 
-        let json_response = response.json::<serde_json::Value>().await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse response: {}", e)))?;
+        // Extract response details before consuming
+        let status = response.status().as_u16() as i64;
+        let response_headers = response.headers().clone();
+        let resp_body = response.text().await.unwrap_or_default();
 
-        // Convert JSON back to RTFS Value
-        Self::json_to_rtfs_value(&json_response)
+        // Build response map
+        let mut response_map = std::collections::HashMap::new();
+        response_map.insert(
+            crate::ast::MapKey::String("status".to_string()),
+            Value::Integer(status),
+        );
+        
+        response_map.insert(
+            crate::ast::MapKey::String("body".to_string()),
+            Value::String(resp_body),
+        );
+        
+        let mut headers_map = std::collections::HashMap::new();
+        for (key, value) in response_headers.iter() {
+            headers_map.insert(
+                crate::ast::MapKey::String(key.to_string()),
+                Value::String(value.to_str().unwrap_or("").to_string()),
+            );
+        }
+        response_map.insert(
+            crate::ast::MapKey::String("headers".to_string()),
+            Value::Map(headers_map),
+        );
+
+        Ok(Value::Map(response_map))
     }
 
     /// Execute MCP capability
@@ -646,54 +592,28 @@ impl CapabilityMarketplace {
         Err(RuntimeError::Generic("Plugin capabilities not yet implemented".to_string()))
     }
 
+    /// Execute remote RTFS capability
+    async fn execute_remote_rtfs_capability(&self, _remote_rtfs: &RemoteRTFSCapability, _inputs: &Value) -> RuntimeResult<Value> {
+        // TODO: Implement remote RTFS execution
+        Err(RuntimeError::Generic("Remote RTFS capabilities not yet implemented".to_string()))
+    }
+
     /// Execute streaming capability
-    async fn execute_stream_capability(&self, stream: &StreamCapabilityImpl, inputs: &Value) -> RuntimeResult<Value> {
-        // For now, return a simple acknowledgment that streaming was initiated
-        // In a full implementation, this would start the stream and return a stream handle
-        // The actual streaming would be handled through the start_stream_consumption method
-        match stream.metadata.stream_type {
-            StreamType::Source => {
-                // For source streams, we could return stream metadata or a handle
-                Ok(Value::Map(HashMap::from([
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_type")), Value::String("source".to_string())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_id")), Value::String(stream.metadata.id.clone())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("status")), Value::String("ready".to_string())),
-                ])))
-            }
-            StreamType::Sink => {
-                // For sink streams, we could return acknowledgment of data receipt
-                Ok(Value::Map(HashMap::from([
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_type")), Value::String("sink".to_string())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_id")), Value::String(stream.metadata.id.clone())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("status")), Value::String("received".to_string())),
-                ])))
-            }
-            StreamType::Transform => {
-                // For transform streams, we could return the transformed data
-                Ok(Value::Map(HashMap::from([
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_type")), Value::String("transform".to_string())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_id")), Value::String(stream.metadata.id.clone())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("status")), Value::String("transformed".to_string())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("output")), inputs.clone()),
-                ])))
-            }
-            StreamType::Bidirectional => {
-                // For bidirectional streams, we could return a configuration or handle
-                Ok(Value::Map(HashMap::from([
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_type")), Value::String("bidirectional".to_string())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_id")), Value::String(stream.metadata.id.clone())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("status")), Value::String("initialized".to_string())),
-                ])))
-            }
-            StreamType::Duplex => {
-                // For duplex streams, we could return separate handles for input and output
-                Ok(Value::Map(HashMap::from([
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_type")), Value::String("duplex".to_string())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("stream_id")), Value::String(stream.metadata.id.clone())),
-                    (crate::ast::MapKey::Keyword(crate::ast::Keyword::new("status")), Value::String("ready".to_string())),
-                ])))
-            }
-        }
+    async fn execute_stream_capability(
+        &self,
+        stream_impl: &StreamCapabilityImpl,
+        inputs: &Value,
+    ) -> RuntimeResult<Value> {
+        // For now, we just start the stream. The handle would need to be managed.
+        // This is a simplification. A real implementation would need to return the handle
+        // or manage the stream lifecycle.
+        let handle = stream_impl.provider.start_stream(inputs)?;
+        Ok(Value::String(format!("Stream started with ID: {}", handle.stream_id)))
+    }
+
+    /// Execute a local capability
+    fn execute_local_capability(&self, local: &LocalCapability, inputs: &Value) -> RuntimeResult<Value> {
+        (local.handler)(inputs)
     }
 
     /// Convert JSON value to RTFS Value
@@ -766,20 +686,19 @@ impl CapabilityMarketplace {
         let capability = self.get_capability(capability_id).await
             .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))?;
 
-        if let CapabilityProvider::Stream(stream_impl) = &capability.provider {
-            if config.enable_callbacks {
-                stream_impl.start_stream_with_config(params, config).await
+        if let ProviderType::Stream(stream_impl) = &capability.provider_type {
+            if config.callbacks.is_some() {
+                stream_impl.provider.start_stream_with_config(params, config).await
             } else {
-                // Fall back to channel-only mode
-                let receiver = stream_impl.start_stream(params).await?;
-                Ok(StreamHandle::new_channel_only(capability_id.to_string(), receiver))
+                let handle = stream_impl.provider.start_stream(params)?;
+                Ok(handle)
             }
         } else {
             Err(RuntimeError::Generic(format!("Capability '{}' is not a stream capability", capability_id)))
         }
     }
 
-    /// Start bidirectional stream with enhanced configuration and optional callbacks
+    /// Start a bidirectional stream with enhanced configuration and optional callbacks
     pub async fn start_bidirectional_stream_with_config(
         &self,
         capability_id: &str,
@@ -789,17 +708,15 @@ impl CapabilityMarketplace {
         let capability = self.get_capability(capability_id).await
             .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))?;
 
-        if let CapabilityProvider::Stream(stream_impl) = &capability.provider {
-            if !matches!(stream_impl.metadata.stream_type, StreamType::Bidirectional) {
+        if let ProviderType::Stream(stream_impl) = &capability.provider_type {
+            if !matches!(stream_impl.stream_type, StreamType::Bidirectional) {
                 return Err(RuntimeError::Generic(format!("Capability '{}' is not bidirectional", capability_id)));
             }
-            
-            if config.enable_callbacks {
-                stream_impl.start_bidirectional_stream_with_config(params, config).await
+            if config.callbacks.is_some() {
+                stream_impl.provider.start_bidirectional_stream_with_config(params, config).await
             } else {
-                // Fall back to channel-only mode
-                let (sender, receiver) = stream_impl.start_bidirectional_stream(params).await?;
-                Ok(StreamHandle::new_bidirectional_channel_only(capability_id.to_string(), sender, receiver))
+                let handle = stream_impl.provider.start_bidirectional_stream(params)?;
+                Ok(handle)
             }
         } else {
             Err(RuntimeError::Generic(format!("Capability '{}' is not a stream capability", capability_id)))
@@ -810,466 +727,46 @@ impl CapabilityMarketplace {
 /// Trait for capability discovery agents
 #[async_trait::async_trait]
 pub trait CapabilityDiscovery: Send + Sync {
-    async fn discover(&self) -> Result<Vec<CapabilityImpl>, RuntimeError>;
+    /// Discover capabilities from a source
+    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError>;
 }
 
-/// Default implementation with common local capabilities
-impl Default for CapabilityMarketplace {
-    fn default() -> Self {
-        let marketplace = Self::new();
-        
-        // For now, return an empty marketplace to avoid async issues
-        // Capabilities will be registered when needed
-        marketplace
-    }
-}
-
-impl Clone for CapabilityMarketplace {
-    fn clone(&self) -> Self {
-        Self {
-            capabilities: Arc::clone(&self.capabilities),
-            discovery_agents: Vec::new(), // Discovery agents are not cloned
-            registry: CapabilityRegistry::new(), // Create new registry for clone
-        }
-    }
-}
-
-// Free async function for remote RTFS execution
-pub async fn execute_remote_rtfs_capability(remote: &RemoteRTFSCapability, inputs: &Value) -> RuntimeResult<Value> {
-    // Convert RTFS Value to JSON
-    let json_inputs = serde_json::to_value(inputs)
-        .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;
-
-    // Make HTTP request to remote RTFS endpoint
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(&remote.endpoint)
-        .header("Content-Type", "application/json")
-        .json(&json_inputs)
-        .timeout(std::time::Duration::from_millis(remote.timeout_ms));
-    if let Some(token) = &remote.auth_token {
-        req = req.bearer_auth(token);
-    }
-    let response = req
-        .send()
-        .await
-        .map_err(|e| RuntimeError::Generic(format!("Remote RTFS request failed: {}", e)))?;
-
-    let json_response = response.json::<serde_json::Value>().await
-        .map_err(|e| RuntimeError::Generic(format!("Failed to parse remote RTFS response: {}", e)))?;
-
-    // Convert JSON back to RTFS Value
-    CapabilityMarketplace::json_to_rtfs_value(&json_response)
-}
-
-/// Callback function type for streaming events
-pub type StreamCallback = Arc<dyn Fn(StreamEvent) -> Result<(), RuntimeError> + Send + Sync>;
-
-/// Async callback function type for streaming events
-pub type AsyncStreamCallback = Arc<dyn Fn(StreamEvent) -> futures::future::BoxFuture<'static, Result<(), RuntimeError>> + Send + Sync>;
-
-/// Stream event types that can trigger callbacks
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    /// Stream connection established
-    Connected { stream_id: String, metadata: HashMap<String, String> },
-    /// Stream disconnected
-    Disconnected { stream_id: String, reason: String },
-    /// Data item received
-    DataReceived { stream_id: String, item: StreamItem },
-    /// Data item sent
-    DataSent { stream_id: String, item: StreamItem },
-    /// Stream error occurred
-    Error { stream_id: String, error: String },
-    /// Stream progress update
-    Progress { stream_id: String, progress: ProgressNotification },
-    /// Stream buffer full (backpressure)
-    BackpressureTriggered { stream_id: String, buffer_size: usize },
-    /// Stream buffer available again
-    BackpressureRelieved { stream_id: String, buffer_size: usize },
-}
-
-/// Callback registration for stream events
-#[derive(Clone)]
-pub struct StreamCallbacks {
-    /// Callback for connection events
-    pub on_connected: Option<StreamCallback>,
-    /// Callback for disconnection events
-    pub on_disconnected: Option<StreamCallback>,
-    /// Callback for data received events
-    pub on_data_received: Option<StreamCallback>,
-    /// Callback for data sent events
-    pub on_data_sent: Option<StreamCallback>,
-    /// Callback for error events
-    pub on_error: Option<StreamCallback>,
-    /// Callback for progress events
-    pub on_progress: Option<StreamCallback>,
-    /// Callback for backpressure events
-    pub on_backpressure: Option<StreamCallback>,
-}
-
-impl std::fmt::Debug for StreamCallbacks {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamCallbacks")
-            .field("on_connected", &self.on_connected.as_ref().map(|_| "Some(callback)"))
-            .field("on_disconnected", &self.on_disconnected.as_ref().map(|_| "Some(callback)"))
-            .field("on_data_received", &self.on_data_received.as_ref().map(|_| "Some(callback)"))
-            .field("on_data_sent", &self.on_data_sent.as_ref().map(|_| "Some(callback)"))
-            .field("on_error", &self.on_error.as_ref().map(|_| "Some(callback)"))
-            .field("on_progress", &self.on_progress.as_ref().map(|_| "Some(callback)"))
-            .field("on_backpressure", &self.on_backpressure.as_ref().map(|_| "Some(callback)"))
-            .finish()
-    }
-}
-
-impl Default for StreamCallbacks {
-    fn default() -> Self {
-        Self {
-            on_connected: None,
-            on_disconnected: None,
-            on_data_received: None,
-            on_data_sent: None,
-            on_error: None,
-            on_progress: None,
-            on_backpressure: None,
-        }
-    }
-}
-
-/// Stream configuration with optional callbacks
-#[derive(Clone)]
-pub struct StreamConfig {
-    /// Buffer size for the stream
-    pub buffer_size: usize,
-    /// Enable/disable callbacks (default: false for channels-only mode)
-    pub enable_callbacks: bool,
-    /// Callback handlers (only used if enable_callbacks is true)
-    pub callbacks: StreamCallbacks,
-    /// Custom metadata for the stream
-    pub metadata: HashMap<String, String>,
-}
-
-impl std::fmt::Debug for StreamConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamConfig")
-            .field("buffer_size", &self.buffer_size)
-            .field("enable_callbacks", &self.enable_callbacks)
-            .field("callbacks", &self.callbacks)
-            .field("metadata", &self.metadata)
-            .finish()
-    }
-}
-
-impl Default for StreamConfig {
-    fn default() -> Self {
-        Self {
-            buffer_size: 100,
-            enable_callbacks: false,
-            callbacks: StreamCallbacks::default(),
-            metadata: HashMap::new(),
-        }
-    }
-}
-
-/// Stream handle that provides both channel access and callback management
-#[derive(Debug)]
-pub struct StreamHandle {
-    /// Stream identifier
-    pub stream_id: String,
-    /// Channel receiver (always available)
-    pub receiver: Option<mpsc::Receiver<StreamItem>>,
-    /// Channel sender (for bidirectional streams)
-    pub sender: Option<mpsc::Sender<StreamItem>>,
-    /// Callback configuration
-    pub callbacks: StreamCallbacks,
-    /// Whether callbacks are enabled
-    pub callbacks_enabled: bool,
-}
-
-impl StreamHandle {
-    /// Create a new stream handle with channels only
-    pub fn new_channel_only(stream_id: String, receiver: mpsc::Receiver<StreamItem>) -> Self {
-        Self {
-            stream_id,
-            receiver: Some(receiver),
-            sender: None,
-            callbacks: StreamCallbacks::default(),
-            callbacks_enabled: false,
-        }
-    }
-
-    /// Create a new bidirectional stream handle with channels only
-    pub fn new_bidirectional_channel_only(
-        stream_id: String,
-        sender: mpsc::Sender<StreamItem>,
-        receiver: mpsc::Receiver<StreamItem>,
-    ) -> Self {
-        Self {
-            stream_id,
-            receiver: Some(receiver),
-            sender: Some(sender),
-            callbacks: StreamCallbacks::default(),
-            callbacks_enabled: false,
-        }
-    }
-
-    /// Create a new stream handle with callbacks enabled
-    pub fn new_with_callbacks(
-        stream_id: String,
-        receiver: Option<mpsc::Receiver<StreamItem>>,
-        sender: Option<mpsc::Sender<StreamItem>>,
-        callbacks: StreamCallbacks,
-    ) -> Self {
-        Self {
-            stream_id,
-            receiver,
-            sender,
-            callbacks,
-            callbacks_enabled: true,
-        }
-    }
-
-    /// Send a stream item (for bidirectional streams)
-    pub async fn send(&self, item: StreamItem) -> Result<(), RuntimeError> {
-        if let Some(sender) = &self.sender {
-            // Send through channel
-            sender.send(item.clone()).await.map_err(|e| {
-                RuntimeError::Generic(format!("Failed to send stream item: {}", e))
-            })?;
-
-            // Trigger callback if enabled
-            if self.callbacks_enabled {
-                if let Some(callback) = &self.callbacks.on_data_sent {
-                    callback(StreamEvent::DataSent {
-                        stream_id: self.stream_id.clone(),
-                        item,
-                    })?;
-                }
-            }
-
-            Ok(())
-        } else {
-            Err(RuntimeError::Generic("Stream is not bidirectional".to_string()))
-        }
-    }
-
-    /// Receive a stream item (non-blocking)
-    pub async fn try_recv(&mut self) -> Result<Option<StreamItem>, RuntimeError> {
-        if let Some(receiver) = &mut self.receiver {
-            match receiver.try_recv() {
-                Ok(item) => {
-                    // Trigger callback if enabled
-                    if self.callbacks_enabled {
-                        if let Some(callback) = &self.callbacks.on_data_received {
-                            callback(StreamEvent::DataReceived {
-                                stream_id: self.stream_id.clone(),
-                                item: item.clone(),
-                            })?;
-                        }
-                    }
-                    Ok(Some(item))
-                }
-                Err(mpsc::error::TryRecvError::Empty) => Ok(None),
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    // Trigger disconnection callback if enabled
-                    if self.callbacks_enabled {
-                        if let Some(callback) = &self.callbacks.on_disconnected {
-                            callback(StreamEvent::Disconnected {
-                                stream_id: self.stream_id.clone(),
-                                reason: "Channel disconnected".to_string(),
-                            })?;
-                        }
-                    }
-                    Err(RuntimeError::Generic("Stream channel disconnected".to_string()))
-                }
-            }
-        } else {
-            Err(RuntimeError::Generic("No receiver available".to_string()))
-        }
-    }
-
-    /// Receive a stream item (blocking)
-    pub async fn recv(&mut self) -> Result<StreamItem, RuntimeError> {
-        if let Some(receiver) = &mut self.receiver {
-            match receiver.recv().await {
-                Some(item) => {
-                    // Trigger callback if enabled
-                    if self.callbacks_enabled {
-                        if let Some(callback) = &self.callbacks.on_data_received {
-                            callback(StreamEvent::DataReceived {
-                                stream_id: self.stream_id.clone(),
-                                item: item.clone(),
-                            })?;
-                        }
-                    }
-                    Ok(item)
-                }
-                None => {
-                    // Trigger disconnection callback if enabled
-                    if self.callbacks_enabled {
-                        if let Some(callback) = &self.callbacks.on_disconnected {
-                            callback(StreamEvent::Disconnected {
-                                stream_id: self.stream_id.clone(),
-                                reason: "Channel closed".to_string(),
-                            })?;
-                        }
-                    }
-                    Err(RuntimeError::Generic("Stream channel closed".to_string()))
-                }
-            }
-        } else {
-            Err(RuntimeError::Generic("No receiver available".to_string()))
-        }
-    }
-
-    /// Trigger a custom stream event
-    pub fn trigger_event(&self, event: StreamEvent) -> Result<(), RuntimeError> {
-        if !self.callbacks_enabled {
-            return Ok(());
-        }
-
-        match &event {
-            StreamEvent::Connected { .. } => {
-                if let Some(callback) = &self.callbacks.on_connected {
-                    callback(event)?;
-                }
-            }
-            StreamEvent::Disconnected { .. } => {
-                if let Some(callback) = &self.callbacks.on_disconnected {
-                    callback(event)?;
-                }
-            }
-            StreamEvent::DataReceived { .. } => {
-                if let Some(callback) = &self.callbacks.on_data_received {
-                    callback(event)?;
-                }
-            }
-            StreamEvent::DataSent { .. } => {
-                if let Some(callback) = &self.callbacks.on_data_sent {
-                    callback(event)?;
-                }
-            }
-            StreamEvent::Error { .. } => {
-                if let Some(callback) = &self.callbacks.on_error {
-                    callback(event)?;
-                }
-            }
-            StreamEvent::Progress { .. } => {
-                if let Some(callback) = &self.callbacks.on_progress {
-                    callback(event)?;
-                }
-            }
-            StreamEvent::BackpressureTriggered { .. } | StreamEvent::BackpressureRelieved { .. } => {
-                if let Some(callback) = &self.callbacks.on_backpressure {
-                    callback(event)?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
+/// Example: a simple discovery agent that returns a fixed list of capabilities
+pub struct NoOpCapabilityDiscovery;
 
 #[async_trait::async_trait]
-impl StreamCapability for StreamCapabilityImpl {
-    /// Start streaming - returns a receiver for stream items (channel-based, default)
-    async fn start_stream(&self, _params: &Value) -> RuntimeResult<mpsc::Receiver<StreamItem>> {
-        // Create a channel for stream items
-        let (sender, receiver) = mpsc::channel::<StreamItem>(self.metadata.stream_config.as_ref().map(|c| c.buffer_size).unwrap_or(100));
-        
-        // TODO: In a real implementation, this would start the actual stream based on the provider
-        // For now, we just return the receiver
-        drop(sender); // Close the sender to indicate no more items will be sent
-        
-        Ok(receiver)
+impl CapabilityDiscovery for NoOpCapabilityDiscovery {
+    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+        Ok(vec![])
     }
-    
-    /// Start streaming with enhanced configuration and optional callbacks
-    async fn start_stream_with_config(&self, _params: &Value, config: &StreamConfig) -> RuntimeResult<StreamHandle> {
-        // Create a channel for stream items
-        let (sender, receiver) = mpsc::channel::<StreamItem>(config.buffer_size);
-        
-        // TODO: In a real implementation, this would start the actual stream based on the provider
-        // For now, we just return the handle
-        drop(sender); // Close the sender to indicate no more items will be sent
-        
-        if config.enable_callbacks {
-            Ok(StreamHandle::new_with_callbacks(
-                self.metadata.id.clone(),
-                Some(receiver),
-                None,
-                config.callbacks.clone(),
-            ))
-        } else {
-            Ok(StreamHandle::new_channel_only(self.metadata.id.clone(), receiver))
-        }
-    }
-    
-    /// Send item to stream (for sinks, transforms, and bidirectional streams)
-    async fn send_item(&self, _item: &StreamItem) -> RuntimeResult<()> {
-        // TODO: In a real implementation, this would send the item based on the provider
-        Ok(())
-    }
-    
-    /// Start bidirectional stream - returns both sender and receiver (channel-based, default)
-    async fn start_bidirectional_stream(&self, _params: &Value) -> RuntimeResult<(mpsc::Sender<StreamItem>, mpsc::Receiver<StreamItem>)> {
-        let buffer_size = self.metadata.bidirectional_config.as_ref().map(|c| c.input_buffer_size).unwrap_or(100);
-        
-        // Create bidirectional channels
-        let (sender, receiver) = mpsc::channel::<StreamItem>(buffer_size);
-        
-        // TODO: In a real implementation, this would start the actual bidirectional stream based on the provider
-        
-        Ok((sender, receiver))
-    }
-    
-    /// Start bidirectional stream with enhanced configuration and optional callbacks
-    async fn start_bidirectional_stream_with_config(&self, _params: &Value, config: &StreamConfig) -> RuntimeResult<StreamHandle> {
-        // Create bidirectional channels
-        let (sender, receiver) = mpsc::channel::<StreamItem>(config.buffer_size);
-        
-        // TODO: In a real implementation, this would start the actual bidirectional stream based on the provider
-        
-        if config.enable_callbacks {
-            Ok(StreamHandle::new_with_callbacks(
-                self.metadata.id.clone(),
-                Some(receiver),
-                Some(sender),
-                config.callbacks.clone(),
-            ))
-        } else {
-            Ok(StreamHandle::new_bidirectional_channel_only(self.metadata.id.clone(), sender, receiver))
-        }
-    }
-    
-    /// Start duplex stream - returns separate channels for input and output
-    async fn start_duplex_stream(&self, _params: &Value) -> RuntimeResult<DuplexStreamChannels> {
-        let buffer_size = self.metadata.duplex_config.as_ref()
-            .map(|c| c.input_channel.buffer_size)
-            .unwrap_or(100);
-        
-        // Create duplex channels
-        let (input_tx, _input_rx) = mpsc::channel::<StreamItem>(buffer_size);
-        let (_output_tx, output_rx) = mpsc::channel::<StreamItem>(buffer_size);
-        let (_feedback_tx, feedback_rx) = mpsc::channel::<StreamItem>(50);
-        
-        // TODO: In a real implementation, this would start the actual duplex stream based on the provider
-        
-        Ok(DuplexStreamChannels {
-            input_sender: input_tx,
-            output_receiver: output_rx,
-            feedback_receiver: Some(feedback_rx),
-        })
-    }
-    
-    /// Get current stream progress (optional)
-    async fn get_progress(&self, _token: &ProgressToken) -> RuntimeResult<Option<ProgressNotification>> {
-        // TODO: In a real implementation, this would return actual progress
-        Ok(None)
-    }
-    
-    /// Cancel stream operation (optional)
-    async fn cancel(&self, _token: &ProgressToken) -> RuntimeResult<()> {
-        // TODO: In a real implementation, this would cancel the stream
-        Ok(())
+}
+
+/// Test suite for capability marketplace
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::values::Value;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_register_and_execute_local_capability() {
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry.clone());
+
+        let handler = Arc::new(|inputs: &Value| {
+            Ok(inputs.clone())
+        });
+
+        marketplace.register_local_capability(
+            "test.echo".to_string(),
+            "Test Echo".to_string(),
+            "A simple echo capability".to_string(),
+            handler,
+        ).await.unwrap();
+
+        let inputs = Value::String("Hello".to_string());
+        let result = marketplace.execute_capability("test.echo", &inputs).await.unwrap();
+
+        assert_eq!(result, inputs);
     }
 }

@@ -15,6 +15,7 @@ use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityPolicies};
+use rtfs_compiler::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -143,10 +144,12 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n1️⃣ Testing Pure Security Context");
     let pure_context = RuntimeContext::pure();
     let stdlib_env = StandardLibrary::create_global_environment();
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        capability_marketplace,
         Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        pure_context.clone(),
     ));
     let mut evaluator = Evaluator::with_environment(
         Rc::new(ModuleRegistry::new()),
@@ -161,6 +164,10 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         TopLevel::Expression(expr) => expr.clone(),
         _ => return Err("Expected an expression".into()),
     };
+    
+    // Set execution context for the host
+    HostInterface::set_execution_context(&*host, "test-plan".to_string(), vec!["test-intent".to_string()]);
+    
     let pure_result = evaluator.eval_expr(
         &pure_expr,
         &mut evaluator.env.clone(),
@@ -175,6 +182,14 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n2️⃣ Testing Controlled Security Context");
     let controlled_context = SecurityPolicies::data_processing();
     let stdlib_env = StandardLibrary::create_global_environment();
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        capability_marketplace,
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        controlled_context.clone(),
+    ));
+
     let mut evaluator = Evaluator::with_environment(
         Rc::new(ModuleRegistry::new()),
         stdlib_env,
@@ -188,6 +203,10 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         TopLevel::Expression(expr) => expr.clone(),
         _ => return Err("Expected an expression".into()),
     };
+    
+    // Set execution context for the host
+    HostInterface::set_execution_context(&*host, "test-plan".to_string(), vec!["test-intent".to_string()]);
+    
     let controlled_result = evaluator.eval_expr(
         &controlled_expr,
         &mut evaluator.env.clone(),
@@ -202,6 +221,14 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n3️⃣ Testing Full Security Context");
     let full_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        capability_marketplace,
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        full_context.clone(),
+    ));
+
     let mut evaluator = Evaluator::with_environment(
         Rc::new(ModuleRegistry::new()),
         stdlib_env,
@@ -223,6 +250,10 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
             TopLevel::Expression(expr) => expr.clone(),
             _ => return Err("Expected an expression".into()),
         };
+        
+        // Set execution context for each test
+        HostInterface::set_execution_context(&*host, "test-plan".to_string(), vec!["test-intent".to_string()]);
+        
         let result = evaluator.eval_expr(
             &expr,
             &mut evaluator.env.clone(),
@@ -237,6 +268,14 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n4️⃣ Testing Math Capability");
     let math_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        capability_marketplace,
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        math_context.clone(),
+    ));
+
     let mut evaluator = Evaluator::with_environment(
         Rc::new(ModuleRegistry::new()),
         stdlib_env,
@@ -249,6 +288,10 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         TopLevel::Expression(expr) => expr.clone(),
         _ => return Err("Expected an expression".into()),
     };
+    
+    // Set execution context for math test
+    HostInterface::set_execution_context(&*host, "test-plan".to_string(), vec!["test-intent".to_string()]);
+    
     let math_result = evaluator.eval_expr(
         &math_expr,
         &mut evaluator.env.clone(),
@@ -274,21 +317,56 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     "#;
     
     let plan_ast = parser::parse(plan_rtfs)?;
+    let plan_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        capability_marketplace,
+        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        plan_context.clone(),
+    ));    
     let mut evaluator = Evaluator::with_environment(
         Rc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
-        RuntimeContext::full(),
-        host,
+        plan_context,
+        host.clone(),
     );
     
     // Evaluate the plan
+    // Set execution context for plan evaluation
+    HostInterface::set_execution_context(&*host, "test-capability-plan".to_string(), vec!["test-intent".to_string()]);
+    
     let plan_result = evaluator.eval_toplevel(&plan_ast);
     match plan_result {
         Ok(metadata) => println!("✅ Plan evaluated successfully. Metadata: {:?}", metadata),
         Err(e) => println!("❌ Plan evaluation failed: {}", e),
     }
+    
+    // 6. Validate causal chain contents
+    println!("\n6️⃣ Validating Causal Chain Contents");
+    let causal_chain = host.causal_chain.borrow();
+    let action_count = causal_chain.get_action_count();
+    println!("📊 Causal Chain has {} actions recorded", action_count);
+    
+    // Check for specific actions that should have been recorded
+    for i in 0..action_count {
+        if let Some(action) = causal_chain.get_action_by_index(i) {
+            println!("  🔗 Action {}: {} ({})", i, action.function_name, action.action_id);
+            if let Some(result) = &action.result {
+                println!("    ✅ Result: {:?}", result);
+            }
+        }
+    }
+    
+    if action_count > 0 {
+        println!("✅ Causal chain validation completed - {} actions recorded", action_count);
+    } else {
+        println!("⚠️  No actions were recorded in the causal chain");
+    }
+    
+    drop(causal_chain);
     
     Ok(())
 }
@@ -305,8 +383,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("❌ OPENROUTER_API_KEY not set – the demo will only print the prompt.\n");
     }
 
+    // --- Optionally run a generated plan file ---
+    // Example usage: run_plan_with_full_security_context("output/plan_20250718_102122_test_intent.rtfs")?;
+    // Uncomment and set the correct path to run your generated plan:
+    // run_plan_with_full_security_context("output/plan_20250718_102122_test_intent.rtfs")?;
+
     // --- Get input intent file ---
-    let intent_file_path_str = std::env::args().nth(1).ok_or("Please provide the path to an RTFS intent file.")?;
+    let intent_file_path_str = std::env::args().nth(1).unwrap_or_else(|| {
+        // Create a default test intent if no file is provided
+        let test_intent = r#"
+(intent test-sentiment-analysis
+  :goal "Analyze the sentiment of a given text"
+  :original-request "Analyze the sentiment of 'I love this product!'"
+  :constraints { :text "I love this product!" }
+  :intent-id "intent-test-sentiment")
+"#;
+        
+        // Write test intent to a temp file
+        let temp_file = "/tmp/test_intent.rtfs";
+        std::fs::write(temp_file, test_intent).expect("Failed to write test intent");
+        println!("ℹ️  No intent file provided, using default test intent: {}", temp_file);
+        temp_file.to_string()
+    });
     let intent_file_path = std::path::Path::new(&intent_file_path_str);
     let intent_rtfs = fs::read_to_string(intent_file_path)?;
     
@@ -418,23 +516,27 @@ GENERATED RTFS PLAN:
     }
 
     // --- Set up evaluator and model provider ---
-    let registry = ModelRegistry::new();
+    let model_registry = ModelRegistry::new();
     // let model_id = "openrouter-hunyuan-a13b-instruct"; // previous model id
     let model_id = "moonshotai/kimi-k2:free";
     // let model_name = "tencent/hunyuan-a13b-instruct:free"; // previous model name
     let model_name = "moonshotai/kimi-k2:free";
-    let hunyuan = CustomOpenRouterModel::new(
+    let model = CustomOpenRouterModel::new(
         model_id,
         model_name,
     );
-    registry.register(hunyuan);
+    model_registry.register(model);
+    
     let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        capability_marketplace,
         Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         rtfs_compiler::runtime::security::RuntimeContext::full(),
     ));
+    
     let mut evaluator = Evaluator::with_environment(
         Rc::new(ModuleRegistry::new()),
         stdlib_env,
@@ -442,7 +544,7 @@ GENERATED RTFS PLAN:
         RuntimeContext::full(),
         host,
     );
-    evaluator.model_registry = Arc::new(registry);
+    evaluator.model_registry = Arc::new(model_registry);
 
     let provider = evaluator
         .model_registry
@@ -459,9 +561,54 @@ GENERATED RTFS PLAN:
                     match parser::parse(&plan_block) {
                         Ok(ast) => {
                              println!("\n✅ Plan parsed successfully.");
-                             // For this demo, we just check for valid syntax.
-                             // A real system would build a Plan struct.
                              println!("\nAST: {:#?}", ast);
+
+                             // --- Execute plan steps ---
+                             // Find the top-level plan expression
+                             let plan_expr = ast.iter().find_map(|top| {
+                                 if let TopLevel::Expression(expr) = top {
+                                     Some(expr)
+                                 } else {
+                                     None
+                                 }
+                             });
+                             // Helper to extract :steps property from plan expression
+                             fn extract_steps(expr: &rtfs_compiler::Expression) -> Option<&Vec<rtfs_compiler::Expression>> {
+                                 use rtfs_compiler::Expression::*;
+                                 if let FunctionCall { callee, arguments } = expr {
+                                     // Look for :steps keyword in arguments
+                                     let mut args_iter = arguments.iter();
+                                     while let Some(arg) = args_iter.next() {
+                                         if let Literal(rtfs_compiler::ast::Literal::Keyword(k)) = arg {
+                                             if k.0 == "steps" || k.0 == ":steps" {
+                                                 // Next argument should be the vector
+                                                 if let Some(Vector(vec)) = args_iter.next() {
+                                                     return Some(vec);
+                                                 }
+                                             }
+                                         }
+                                     }
+                                 }
+                                 None
+                             }
+                             if let Some(plan_expr) = plan_expr {
+                                 if let Some(steps_vec) = extract_steps(plan_expr) {
+                                     println!("\n🚀 Executing plan steps:");
+                                     for (i, step_expr) in steps_vec.iter().enumerate() {
+                                         HostInterface::set_execution_context(&*evaluator.host, "generated-plan".to_string(), vec!["generated-intent".to_string()]);
+                                         let result = evaluator.eval_expr(step_expr, &mut evaluator.env.clone());
+                                         match result {
+                                             Ok(val) => println!("  ✅ Step {} result: {:?}", i+1, val),
+                                             Err(e) => println!("  ❌ Step {} error: {}", i+1, e),
+                                         }
+                                     }
+                                 } else {
+                                     println!("⚠️  No :steps property found in plan, cannot execute steps.");
+                                 }
+                             } else {
+                                 println!("⚠️  No top-level plan expression found, cannot execute plan.");
+                             }
+
                              write_plan_to_file(&plan_block, source_filename)?;
                         },
                         Err(e) => {

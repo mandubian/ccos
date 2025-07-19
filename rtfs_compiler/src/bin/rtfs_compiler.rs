@@ -115,8 +115,11 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
+                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+                let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+                
                 let host = std::rc::Rc::new(RuntimeHost::new(
-                    Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+                    capability_marketplace,
                     std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                     rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));
@@ -256,8 +259,9 @@ fn main() {
             if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                 eprintln!("Warning: Failed to load standard library: {:?}", e);
             }
+                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
                 let host = std::rc::Rc::new(RuntimeHost::new(
-                    Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+                    Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry)),
                     std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                     rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));

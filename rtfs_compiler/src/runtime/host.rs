@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 /// Holds the contextual information for a single execution run,
 /// derived from a CCOS `Plan` object.
@@ -30,6 +31,7 @@ pub struct RuntimeHost {
     pub causal_chain: Rc<RefCell<CausalChain>>,
     pub security_context: RuntimeContext,
     execution_context: RefCell<Option<ExecutionContext>>,
+    tokio_runtime: Runtime,
 }
 
 impl RuntimeHost {
@@ -39,11 +41,13 @@ impl RuntimeHost {
         causal_chain: Rc<RefCell<CausalChain>>,
         security_context: RuntimeContext,
     ) -> Self {
+        let tokio_runtime = Runtime::new().expect("Failed to create Tokio runtime");
         Self {
             capability_marketplace,
             causal_chain,
             security_context,
             execution_context: RefCell::new(None),
+            tokio_runtime,
         }
     }
 
@@ -132,11 +136,8 @@ impl HostInterface for RuntimeHost {
         action.capability_id = Some(capability_name.to_string());
 
         // 4. Execute the capability via the marketplace.
-        // We need to handle the async execution in a blocking way for the sync runtime.
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create async runtime: {}", e)))?;
-
-        let result = rt.block_on(async {
+        // We use the pre-initialized Tokio runtime to execute the async code.
+        let result = self.tokio_runtime.block_on(async {
             self.capability_marketplace
                 .execute_capability(capability_name, &capability_args)
                 .await

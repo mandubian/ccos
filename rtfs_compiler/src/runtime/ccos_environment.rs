@@ -103,33 +103,29 @@ pub struct CCOSEnvironment {
 impl CCOSEnvironment {
     /// Create a new CCOS environment with the given configuration
     pub fn new(config: CCOSConfig) -> RuntimeResult<Self> {
+        // Create capability registry
+        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
         // Create capability marketplace with integrated registry
-        let marketplace = Arc::new(CapabilityMarketplace::new());
-        
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
         // Create causal chain for tracking
         let causal_chain = Rc::new(RefCell::new(CausalChain::new()?));
-        
         // Determine runtime context based on security level
         let runtime_context = match config.security_level {
             SecurityLevel::Minimal => RuntimeContext::pure(),
             SecurityLevel::Standard | SecurityLevel::Custom => RuntimeContext::full(),
             SecurityLevel::Paranoid => RuntimeContext::pure(),
         };
-        
         // Create runtime host
         let host = Rc::new(RuntimeHost::new(
             marketplace.clone(),
             causal_chain,
             runtime_context.clone(),
         ));
-        
         // Create module registry and load standard library
         let mut module_registry = crate::runtime::ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
-        
         // Create delegation engine
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        
         // Create evaluator
         let evaluator = Evaluator::new(
             Rc::new(module_registry),
@@ -137,13 +133,12 @@ impl CCOSEnvironment {
             runtime_context,
             host.clone(),
         );
-        
         Ok(Self {
             config,
             host,
             evaluator,
             marketplace,
-            registry: crate::runtime::capability_registry::CapabilityRegistry::new(),
+            registry: crate::runtime::capability_registry::CapabilityRegistry::new(), // This field may be redundant now
         })
     }
     

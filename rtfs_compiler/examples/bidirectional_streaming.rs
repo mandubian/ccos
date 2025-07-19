@@ -1,62 +1,93 @@
-// Example: Bidirectional Streaming in RTFS Capability Marketplace
-// This demonstrates the different streaming patterns supported
+// Example: Simplified Streaming in RTFS Capability Marketplace
+// This demonstrates basic streaming capability registration
 
-use std::collections::HashMap;
+use std::sync::Arc;
 
 // Import the streaming types from the capability marketplace
 use rtfs_compiler::runtime::capability_marketplace::{
-    CapabilityMarketplace, StreamType, StreamingProvider, BidirectionalConfig,
-    StreamItem, StreamDirection
+    CapabilityMarketplace, StreamType, StreamingProvider, StreamingCapability,
+    StreamConfig, StreamHandle
 };
+use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::runtime::error::RuntimeResult;
+use tokio::sync::mpsc;
+use async_trait::async_trait;
+
+// Simple streaming capability implementation for demonstration
+pub struct SimpleStreamCapability {
+    name: String,
+}
+
+impl SimpleStreamCapability {
+    pub fn new(name: String) -> Self {
+        Self { name }
+    }
+}
+
+#[async_trait]
+impl StreamingCapability for SimpleStreamCapability {
+    fn start_stream(&self, _params: &Value) -> RuntimeResult<StreamHandle> {
+        let (_stop_tx, _stop_rx) = mpsc::channel(1);
+        Ok(StreamHandle {
+            stream_id: format!("stream-{}", self.name),
+            stop_tx: _stop_tx,
+        })
+    }
+
+    fn stop_stream(&self, _handle: &StreamHandle) -> RuntimeResult<()> {
+        Ok(())
+    }
+
+    async fn start_stream_with_config(&self, _params: &Value, _config: &StreamConfig) -> RuntimeResult<StreamHandle> {
+        let (_stop_tx, _stop_rx) = mpsc::channel(1);
+        Ok(StreamHandle {
+            stream_id: format!("stream-with-config-{}", self.name),
+            stop_tx: _stop_tx,
+        })
+    }
+
+    async fn send_to_stream(&self, _handle: &StreamHandle, _data: &Value) -> RuntimeResult<()> {
+        Ok(())
+    }
+
+    fn start_bidirectional_stream(&self, _params: &Value) -> RuntimeResult<StreamHandle> {
+        let (_stop_tx, _stop_rx) = mpsc::channel(1);
+        Ok(StreamHandle {
+            stream_id: format!("bidir-stream-{}", self.name),
+            stop_tx: _stop_tx,
+        })
+    }
+
+    async fn start_bidirectional_stream_with_config(&self, _params: &Value, _config: &StreamConfig) -> RuntimeResult<StreamHandle> {
+        let (_stop_tx, _stop_rx) = mpsc::channel(1);
+        Ok(StreamHandle {
+            stream_id: format!("bidir-config-stream-{}", self.name),
+            stop_tx: _stop_tx,
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let marketplace = CapabilityMarketplace::new();
     
-    // Example 1: WebSocket-based bidirectional chat stream
-    println!("🔄 Example 1: Bidirectional Chat Stream");
+    let registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     
-    let chat_config = BidirectionalConfig {
-        input_buffer_size: 100,
-        output_buffer_size: 100,
-        flow_control: true,
-        timeout_ms: 30000,
-    };
+    // Example 1: Register a simple streaming capability
+    println!("🔄 Example 1: Simple Stream Registration");
     
-    marketplace.register_bidirectional_stream_capability(
+    let simple_provider: StreamingProvider = Arc::new(SimpleStreamCapability::new("websocket-chat".to_string()));
+    
+    capability_marketplace.register_streaming_capability(
         "chat.websocket".to_string(),
         "WebSocket Chat".to_string(),
         "Real-time bidirectional chat capability".to_string(),
-        StreamingProvider::WebSocket {
-            url: "ws://localhost:8080/chat".to_string(),
-            protocols: vec!["chat-v1".to_string()],
-        },
-        chat_config,
+        StreamType::Bidirectional,
+        simple_provider,
     ).await?;
-    
-    // Start the bidirectional stream
-    let (sender, _receiver) = marketplace.start_bidirectional_stream(
-        "chat.websocket",
-        &Value::Map(HashMap::new()),
-    ).await?;
-    
-    // Example usage: Send a message
-    let message = StreamItem {
-        data: Value::String("Hello, world!".to_string()),
-        sequence: 1,
-        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
-        metadata: HashMap::new(),
-        direction: StreamDirection::Outbound,
-        correlation_id: Some("msg-001".to_string()),
-    };
-    
-    // In a real implementation, this would send to the WebSocket
-    if let Err(e) = sender.send(message).await {
-        println!("Failed to send message: {}", e);
-    }
-    
-    println!("✅ Bidirectional streaming example completed!");
+
+    println!("✅ Simple streaming capability registered successfully!");
     
     // Example 2: Demonstrate stream patterns
     demonstrate_stream_patterns();

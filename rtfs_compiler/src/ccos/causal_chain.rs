@@ -33,17 +33,12 @@ impl ImmutableLedger {
         // Calculate hash for this action
         let action_hash = self.calculate_action_hash(&action);
 
-        // Verify hash chain integrity
-        if !self.hash_chain.is_empty() {
-            let expected_hash = self.calculate_chain_hash(&action_hash);
-            if expected_hash != action_hash {
-                return Err(RuntimeError::new("Hash chain integrity violation"));
-            }
-        }
+        // Calculate the chain hash (includes previous hash)
+        let chain_hash = self.calculate_chain_hash(&action_hash);
 
         // Append to ledger
         self.actions.push(action.clone());
-        self.hash_chain.push(action_hash);
+        self.hash_chain.push(chain_hash);
 
         // Update indices
         self.indices.index_action(&action)?;
@@ -568,6 +563,16 @@ impl CausalChain {
     /// Get an action by ID
     pub fn get_action(&self, action_id: &ActionId) -> Option<&Action> {
         self.ledger.get_action(action_id)
+    }
+
+    /// Get the total number of actions in the causal chain
+    pub fn get_action_count(&self) -> usize {
+        self.ledger.actions.len()
+    }
+
+    /// Get an action by index
+    pub fn get_action_by_index(&self, index: usize) -> Option<&Action> {
+        self.ledger.actions.get(index)
     }
 
     /// Get all actions for an intent
