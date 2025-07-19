@@ -255,58 +255,64 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
     - [x] Validation of causal chain generation
       - **STATUS**: Causal chain validation now implemented and working correctly. Demo shows proper causal chain initialization and action recording infrastructure.
 
-### Phase 6.5: Capability System Integration ✅ **COMPLETED**
+### Phase 6.5: Capability System Integration 🟡 **PARTIALLY COMPLETED**
 
-- [x] **Core Capability Architecture Framework**
+**Status**: Framework implemented and integration working, but marketplace uses registered capabilities instead of dynamic discovery
+
+- [x] **Core Capability Architecture Framework** ✅ **COMPLETE**
 
   - [x] **Capability Marketplace Structure**: Complete framework with all provider types
     - [x] Local capability execution framework
-    - [x] HTTP capability support framework
+    - [x] HTTP capability support framework  
     - [x] MCP (Model Context Protocol) capability framework (structure only)
     - [x] A2A (Agent-to-Agent) communication framework (structure only)
     - [x] Plugin-based capability system (structure only)
-    - [x] Capability discovery agents framework
+    - [x] RemoteRTFS capability framework (structure only)
+    - [x] Stream capability framework (structure only)
 
-  - [x] **Security Framework Integration**
+  - [x] **Security Framework Integration** ✅ **COMPLETE**
     - [x] Security context framework (Pure, Controlled, Full, Sandboxed)
     - [x] Capability permission system with fine-grained access control
     - [x] Runtime security validation with automatic checks
     - [x] Security policy enforcement with context-aware validation
     - [x] Integration with RTFS security system
 
-  - [x] **RTFS Integration**
+  - [x] **RTFS Integration** ✅ **COMPLETE**
     - [x] `(call :capability-id input)` function in standard library
     - [x] Security boundary enforcement in capability calls
     - [x] Type-safe capability input/output handling
     - [x] Error handling for security violations and capability failures
     - [x] Integration with RTFS plans and expressions
+    - [x] Causal chain integration for complete audit trail
 
-  - [x] **Core Capabilities Implementation (Hardcoded)**
-    - [x] `ccos.echo` - Echo input back capability (hardcoded in stdlib)
-    - [x] `ccos.math.add` - Mathematical addition capability (hardcoded in stdlib)
-    - [x] `ccos.ask-human` - Human interaction capability with resource handles (hardcoded in stdlib)
-    - [x] Extensible capability framework for additional capabilities
+  - [x] **Marketplace Integration** ✅ **COMPLETE**
+    - [x] Connect `call` function to actual marketplace execution engine
+    - [x] Route capability calls through marketplace (`host.execute_capability` → `marketplace.execute_capability`)
+    - [x] Capability registration system (`register_local_capability`)
+    - [x] Capability discovery by ID (`get_capability`, `list_capabilities`)
+    - [x] Multi-provider type support (Local, HTTP, MCP, A2A, Plugin, RemoteRTFS, Stream)
 
-  - [x] **Testing and Validation**
+  - [x] **Core Capabilities Implementation** ✅ **COMPLETE**
+    - [x] `ccos.echo` - Echo input back capability (registered in marketplace via `register_default_capabilities`)
+    - [x] `ccos.math.add` - Mathematical addition capability (registered in marketplace via `register_default_capabilities`)
+    - [x] Extensible capability registration framework
+
+  - [x] **Testing and Validation** ✅ **COMPLETE**
     - [x] Comprehensive test suite for capability system
     - [x] Security context testing (Pure, Controlled, Full)
     - [x] Capability execution testing with various inputs
     - [x] Security violation testing and error handling
-    - [x] Integration testing with RTFS plans
+    - [x] Integration testing with RTFS plans and causal chain
 
-- [x] **Marketplace Integration** ✅ **COMPLETED**
-  - [x] Connect `call` function to actual marketplace instead of hardcoded implementations
-  - [x] Implement marketplace capability registration and discovery
-  - [x] Route capability calls through marketplace execution engine
-  - [x] Add capability metadata and versioning support
-  - [x] Implement capability lifecycle management
-
-- [ ] **Advanced Capability Types Implementation**
-  - [ ] **MCP Integration**: Implement actual MCP client and server communication
-  - [ ] **A2A Communication**: Implement agent-to-agent capability communication
-  - [ ] **Plugin System**: Implement dynamic plugin loading and execution
+- [ ] **Advanced Capability Types Implementation** 🔄 **PENDING**
+  - [ ] **MCP Integration**: Implement actual MCP client and server communication (framework exists)
+  - [ ] **A2A Communication**: Implement agent-to-agent capability communication (framework exists)
+  - [ ] **Plugin System**: Implement dynamic plugin loading and execution (framework exists)
   - [ ] **HTTP Capabilities**: Complete HTTP capability execution (framework exists)
-  - [ ] **Discovery Agents**: Implement automatic capability discovery
+  - [ ] **RemoteRTFS Capabilities**: Implement remote RTFS execution (framework exists)
+  - [ ] **Stream Capabilities**: Implement streaming capability execution (framework exists)
+  - [ ] **Discovery Agents**: Implement automatic capability discovery and registration
+  - [ ] **Dynamic Capability Loading**: Implement runtime capability registration from external sources
 
 ### Phase 7: Advanced Features 🔄 PENDING
 
@@ -611,6 +617,34 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
   - ❌ Module loading and dependency resolution
   - ❌ Task context implementation
 - **Priority**: **MEDIUM** - RTFS 2.0 feature completion
+
+---
+
+### Phase 6.5: Capability System Integration
+
+#### **Advanced Provider Types** ⚠️ **PARTIAL IMPLEMENTATION**
+- **Status**: Framework exists for all provider types, only Local providers fully implemented
+- **Impact**: Advanced capability types (HTTP, MCP, A2A, etc.) have structure but need implementation
+- **Components**: 
+  - [x] Local capability providers (complete with `ccos.echo`, `ccos.math.add`)
+  - [x] HTTP capability implementation (complete with request/response handling)
+  - ❌ MCP capability implementation (`execute_mcp_capability` framework only)  
+  - ❌ A2A capability implementation (`execute_a2a_capability` framework only)
+  - ❌ Plugin capability implementation (`execute_plugin_capability` framework only)
+  - ❌ RemoteRTFS capability implementation (`execute_remote_rtfs_capability` framework only)
+  - ❌ Stream capability implementation (`execute_stream_capability` framework only)
+- **Priority**: **MEDIUM** - Advanced capability types for specialized use cases
+
+#### **Dynamic Capability Discovery** ⚠️ **PENDING**
+- **Status**: Basic registration working, no dynamic discovery
+- **Impact**: Capabilities must be registered at startup, no runtime discovery
+- **Components**:
+  - [x] Manual capability registration (`register_local_capability`)
+  - ❌ Automatic capability discovery agents
+  - ❌ Registry-based capability discovery
+  - ❌ Network-based capability discovery
+  - ❌ Plugin-based capability discovery
+- **Priority**: **LOW** - Enhancement for larger systems
 
 ---
 

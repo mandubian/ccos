@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod ast;
+pub mod capabilities;
 pub mod ccos;
 pub mod development_tooling;
 pub mod error_reporting;
