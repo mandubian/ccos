@@ -1,0 +1,68 @@
+# MicroVM Configuration for RTFS/CCOS
+# This file configures the MicroVM providers and security policies
+
+# Default MicroVM provider to use
+default_provider = "mock"
+
+# Default configuration for all MicroVM executions
+[default_config]
+timeout = "30s"
+memory_limit_mb = 128
+cpu_limit = 0.5
+network_policy = "Denied"
+fs_policy = "None"
+
+# Provider-specific configurations
+[provider_configs]
+
+[provider_configs.mock]
+# Mock provider doesn't need specific configuration
+
+[provider_configs.firecracker]
+kernel_path = "/opt/firecracker/kernel"
+rootfs_path = "/opt/firecracker/rootfs"
+
+[provider_configs.gvisor]
+platform = "ptrace"
+
+[provider_configs.process]
+user = "rtfs-sandbox"
+chroot = "/var/lib/rtfs-sandbox"
+
+# Capability-specific configurations
+[capability_configs]
+
+[capability_configs."ccos.network.http-fetch"]
+timeout = "30s"
+memory_limit_mb = 64
+cpu_limit = 0.3
+network_policy = { AllowList = ["api.github.com", "httpbin.org"] }
+fs_policy = "None"
+
+[capability_configs."ccos.io.open-file"]
+timeout = "10s"
+memory_limit_mb = 32
+cpu_limit = 0.2
+network_policy = "Denied"
+fs_policy = { ReadWrite = ["/tmp/rtfs_sandbox", "/workspace"] }
+
+[capability_configs."ccos.io.read-line"]
+timeout = "10s"
+memory_limit_mb = 32
+cpu_limit = 0.2
+network_policy = "Denied"
+fs_policy = { ReadWrite = ["/tmp/rtfs_sandbox", "/workspace"] }
+
+[capability_configs."ccos.io.write-line"]
+timeout = "10s"
+memory_limit_mb = 32
+cpu_limit = 0.2
+network_policy = "Denied"
+fs_policy = { ReadWrite = ["/tmp/rtfs_sandbox", "/workspace"] }
+
+[capability_configs."ccos.io.close-file"]
+timeout = "10s"
+memory_limit_mb = 32
+cpu_limit = 0.2
+network_policy = "Denied"
+fs_policy = { ReadWrite = ["/tmp/rtfs_sandbox", "/workspace"] }

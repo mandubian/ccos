@@ -392,12 +392,12 @@ COMMON PATTERNS:
     // ---------------------------------------------------------------------
     // Build runtime registry / evaluator with Hunyuan provider
     // ---------------------------------------------------------------------
-    let registry = ModelRegistry::new();
+    let model_registry = ModelRegistry::new();
     let hunyuan = CustomOpenRouterModel::new(
         "openrouter-hunyuan-a13b-instruct",
         "tencent/hunyuan-a13b-instruct:free",
     );
-    registry.register(hunyuan);
+    model_registry.register(hunyuan);
 
     // Delegation engine: always use remote model for our generator function
     let mut static_map = HashMap::new();
@@ -406,10 +406,12 @@ COMMON PATTERNS:
         ExecTarget::RemoteModel("openrouter-hunyuan-a13b-instruct".to_string()),
     );
     let delegation = Arc::new(StaticDelegationEngine::new(static_map));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
 
     // Evaluator (we won't actually evaluate the generated intent here, but set up for future)
     let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::default()),
+        capability_marketplace,
         Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
@@ -419,7 +421,7 @@ COMMON PATTERNS:
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    evaluator.model_registry = Arc::new(registry);
+    evaluator.model_registry = Arc::new(model_registry);
 
     // ---------------------------------------------------------------------
     // Ask user for a request (or use default)

@@ -5,6 +5,7 @@ mod control_flow_tests {
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
+    use crate::runtime::capability_registry::CapabilityRegistry;
     use std::rc::Rc;
     use crate::ccos::delegation::StaticDelegationEngine;
     use std::collections::HashMap;
@@ -46,7 +47,8 @@ mod control_flow_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get arithmetic functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new());
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(

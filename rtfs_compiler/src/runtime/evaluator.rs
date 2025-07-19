@@ -1,11 +1,9 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
 use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{
-    self, CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
     Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
-    WithResourceExpr,
-};
+    WithResourceExpr};
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::host_interface::HostInterface;
@@ -1489,7 +1487,7 @@ impl Evaluator {
     fn eval_task_context(
         &self,
         task_context: &crate::ast::TaskContextAccessExpr,
-        env: &mut Environment,
+        _env: &mut Environment,
     ) -> RuntimeResult<Value> {
         // Access task context field by name
         if let Some(context) = &self.task_context {
@@ -1515,7 +1513,7 @@ impl Evaluator {
         &self,
         model_id: &str,
         args: &[Value],
-        env: &mut Environment,
+        _env: &mut Environment,
     ) -> RuntimeResult<Value> {
         // Convert arguments to a prompt string
         let prompt = self.args_to_prompt(args)?;
@@ -1609,7 +1607,7 @@ impl Evaluator {
                     let mapped_value = (native_func.func)(func_args)?;
                     result.push(mapped_value);
                 }
-                Value::Function(Function::Ir(ir_func)) => {
+                Value::Function(Function::Ir(_ir_func)) => {
                     // TODO: Implement IR function calling
                     return Err(RuntimeError::NotImplemented(
                         "map: IR functions not yet supported".to_string(),
@@ -1695,9 +1693,12 @@ impl Default for Evaluator {
         // This should be replaced with a proper host in production
         use crate::runtime::host::RuntimeHost;
         use crate::runtime::capability_marketplace::CapabilityMarketplace;
+        use crate::runtime::capability_registry::CapabilityRegistry;
         use crate::ccos::causal_chain::CausalChain;
-        
-        let capability_marketplace = Arc::new(CapabilityMarketplace::default());
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
         let causal_chain = Rc::new(RefCell::new(CausalChain::new().unwrap()));
         let host_security_context = RuntimeContext::pure();
         let runtime_host = RuntimeHost::new(capability_marketplace, causal_chain, host_security_context);

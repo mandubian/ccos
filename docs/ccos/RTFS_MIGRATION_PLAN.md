@@ -248,11 +248,12 @@ This document outlines the migration strategy from RTFS 2.0 to RTFS 2.0, focusin
     - **IMPLEMENTATION**: The `call_capability` function in `stdlib.rs` now creates Action objects and logs to causal chain
     - **ARCHITECTURE DECISION**: Keep `(call ...)` blocking for now, add async support later via external module
     - **STATUS**: Complete audit trail for all capability calls now implemented
-  - [ ] Demo Integration
-    - [ ] Extend plan generation demo to test `call` function
-    - [ ] Mock capability providers for testing
-    - [ ] Example plans with capability calls
-    - [ ] Validation of causal chain generation
+  - [x] Demo Integration ✅ **COMPLETED**
+    - [x] Extend plan generation demo to test `call` function
+    - [x] Mock capability providers for testing
+    - [x] Example plans with capability calls
+    - [x] Validation of causal chain generation
+      - **STATUS**: Causal chain validation now implemented and working correctly. Demo shows proper causal chain initialization and action recording infrastructure.
 
 ### Phase 6.5: Capability System Integration ✅ **COMPLETED**
 

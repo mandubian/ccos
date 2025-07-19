@@ -59,7 +59,8 @@ mod collections_tests {
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
         let module_registry = Rc::new(ModuleRegistry::new());
-        let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new());
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
