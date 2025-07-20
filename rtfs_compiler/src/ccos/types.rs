@@ -145,8 +145,8 @@ pub enum PlanLanguage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanBody {
-    Text(String),
-    Bytes(Vec<u8>),
+    Rtfs(String),
+    Wasm(Vec<u8>),
 }
 
 /// Represents a node in the Living Intent Graph
@@ -167,8 +167,6 @@ pub struct Plan {
     pub status: PlanStatus,
     /// If this plan replaces another, keep the parent id for audit
     pub parent_plan_id: Option<PlanId>,
-    /// If aborted, the index (0-based) of the step where execution stopped
-    pub aborted_at_step: Option<u32>,
     pub created_at: u64,
     pub executed_at: Option<u64>,
     pub metadata: HashMap<String, Value>,
@@ -191,7 +189,6 @@ impl Plan {
             intent_ids,
             status: PlanStatus::Running,
             parent_plan_id: None,
-            aborted_at_step: None,
             created_at: now,
             executed_at: None,
             metadata: HashMap::new(),
@@ -212,13 +209,16 @@ impl Plan {
 
     /// Convenience helper for plain RTFS 2.0 source code
     pub fn new_rtfs(rtfs_code: String, intent_ids: Vec<IntentId>) -> Self {
-        Self::new(PlanLanguage::Rtfs20, PlanBody::Text(rtfs_code), intent_ids)
+        Self::new(
+            PlanLanguage::Rtfs20,
+            PlanBody::Rtfs(rtfs_code),
+            intent_ids,
+        )
     }
 
     /// mark as aborted helper
-    pub fn mark_aborted(&mut self, step_index: u32) {
+    pub fn mark_aborted(&mut self) {
         self.status = PlanStatus::Aborted;
-        self.aborted_at_step = Some(step_index);
     }
 
     /// mark completed helper
