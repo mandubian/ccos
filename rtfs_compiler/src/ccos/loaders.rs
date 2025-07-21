@@ -68,7 +68,7 @@ pub fn plan_from_rtfs(rtfs_plan: &PlanDefinition) -> Result<Plan, RuntimeError> 
     let mut plan = Plan::new_named(
         rtfs_plan.name.0.clone(),
         PlanLanguage::Rtfs20,          // Default to RTFS 2.0
-        PlanBody::Text(String::new()), // Will be set from properties
+        PlanBody::Rtfs(String::new()), // Will be set from properties
         Vec::new(),                    // Will be set from properties
     );
 
@@ -77,7 +77,7 @@ pub fn plan_from_rtfs(rtfs_plan: &PlanDefinition) -> Result<Plan, RuntimeError> 
         match property.key.0.as_str() {
             ":body" | ":rtfs-body" => {
                 let body_text = expression_to_string(&property.value)?;
-                plan.body = PlanBody::Text(body_text);
+                plan.body = PlanBody::Rtfs(body_text);
             }
             ":language" => {
                 let language_str = expression_to_string(&property.value)?;
@@ -101,12 +101,12 @@ pub fn plan_from_rtfs(rtfs_plan: &PlanDefinition) -> Result<Plan, RuntimeError> 
 
     // Validate required fields
     match &plan.body {
-        PlanBody::Text(text) if text.is_empty() => {
+        PlanBody::Rtfs(text) if text.is_empty() => {
             return Err(RuntimeError::new(
                 "Plan must have a :body or :rtfs-body property",
             ));
         }
-        PlanBody::Bytes(bytes) if bytes.is_empty() => {
+        PlanBody::Wasm(bytes) if bytes.is_empty() => {
             return Err(RuntimeError::new("Plan must have a non-empty body"));
         }
         _ => {}
