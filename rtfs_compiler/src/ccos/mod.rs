@@ -1,382 +1,159 @@
 //! Cognitive Computing Operating System (CCOS) Foundation
 //!
-//! This module implements the core components of the CCOS architecture:
-//! - Intent Graph: Persistent storage and virtualization of user intents
-//! - Causal Chain: Immutable ledger of all actions and decisions  
-//! - Task Context: Context propagation across execution
-//! - Context Horizon: Management of LLM context window constraints
-//! - Subconscious: Background analysis and wisdom distillation
+//! This module implements the core architectural components of the CCOS, which
+//! orchestrate the process of turning user intent into secure, auditable actions.
 
+// CCOS Architectural Components
 pub mod arbiter;
-pub mod arbiter_engine;
-pub mod delegating_arbiter;
-pub mod caching;
+pub mod governance_kernel;
+pub mod orchestrator;
+
+// CCOS Data Structures
 pub mod causal_chain;
-pub mod context_horizon;
-pub mod delegation;
-pub mod delegation_l4;
-pub mod remote_models;
 pub mod intent_graph;
-pub mod local_models;
-pub mod loaders;
-pub mod subconscious;
-pub mod task_context;
 pub mod types;
 
-use crate::runtime::error::RuntimeError;
-use crate::runtime::values::Value;
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+// Placeholders for future CCOS components
+pub mod context_horizon;
+pub mod subconscious;
+pub mod task_context;
 
-/// The main CCOS runtime that provides cognitive infrastructure
-pub struct CCOSRuntime {
-    pub intent_graph: intent_graph::IntentGraph,
-    pub causal_chain: causal_chain::CausalChain,
-    pub task_context: task_context::TaskContext,
-    pub context_horizon: context_horizon::ContextHorizonManager,
-    pub subconscious: subconscious::SubconsciousV1,
+pub mod loaders;
+
+// --- Core CCOS System ---
+
+use std::sync::{Arc, Mutex};
+
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::security::RuntimeContext;
+
+use self::arbiter::{Arbiter, ArbiterConfig};
+use self::causal_chain::CausalChain;
+use self::governance_kernel::GovernanceKernel;
+use self::intent_graph::IntentGraph;
+use self::orchestrator::Orchestrator;
+use self::types::ExecutionResult;
+
+/// The main CCOS system struct, which initializes and holds all core components.
+/// This is the primary entry point for interacting with the CCOS.
+pub struct CCOS {
+    arbiter: Arc<Arbiter>,
+    governance_kernel: Arc<GovernanceKernel>,
+    // The following components are shared across the system
+    intent_graph: Arc<Mutex<IntentGraph>>,
+    causal_chain: Arc<Mutex<CausalChain>>,
+    capability_marketplace: Arc<CapabilityMarketplace>,
 }
 
-impl CCOSRuntime {
-    /// Create a new CCOS runtime with default configuration
-    pub fn new() -> Result<Self, RuntimeError> {
-        Ok(CCOSRuntime {
-            intent_graph: intent_graph::IntentGraph::new()?,
-            causal_chain: causal_chain::CausalChain::new()?,
-            task_context: task_context::TaskContext::new()?,
-            context_horizon: context_horizon::ContextHorizonManager::new()?,
-            subconscious: subconscious::SubconsciousV1::new()?,
+impl CCOS {
+    /// Creates and initializes a new CCOS instance.
+    pub fn new() -> RuntimeResult<Self> {
+        // 1. Initialize shared, stateful components
+        let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
+        // TODO: The marketplace should be initialized with discovered capabilities.
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
+
+        // 2. Initialize architectural components, injecting dependencies
+        let orchestrator = Arc::new(Orchestrator::new(
+            Arc::clone(&causal_chain),
+            Arc::clone(&intent_graph),
+            Arc::clone(&capability_marketplace),
+        ));
+
+        let governance_kernel = Arc::new(GovernanceKernel::new(orchestrator, Arc::clone(&intent_graph)));
+
+        let arbiter = Arc::new(Arbiter::new(
+            ArbiterConfig::default(),
+            Arc::clone(&intent_graph),
+        ));
+
+        Ok(Self {
+            arbiter,
+            governance_kernel,
+            intent_graph,
+            causal_chain,
+            capability_marketplace,
         })
     }
 
-    /// Execute an RTFS plan with full cognitive context
-    /// This is the main entry point for cognitive execution
-    pub fn execute_with_cognitive_context(
-        &mut self,
-        plan: &types::Plan,
-        user_intent: &str,
-    ) -> Result<Value, RuntimeError> {
-        // 1. Process user intent and store in Intent Graph
-        let intent_id = self.process_user_intent(user_intent)?;
-
-        // 2. Create execution context
-        let context_id = self.create_execution_context(&intent_id)?;
-
-        // 3. Load relevant cognitive context
-        let context = self.load_cognitive_context(&context_id)?;
-
-        // 4. Execute RTFS plan with context
-        let result = self.execute_rtfs_plan(plan, context)?;
-
-        // 5. Update cognitive state
-        self.update_cognitive_state(&intent_id, &context_id, result.clone())?;
-
-        Ok(result)
-    }
-
-    /// Process user intent and store in Intent Graph
-    pub fn process_user_intent(
-        &mut self,
-        user_intent: &str,
-    ) -> Result<types::IntentId, RuntimeError> {
-        // Create or find existing intent
-        let intent = types::Intent::new(user_intent.to_string())
-            .with_metadata("source".to_string(), Value::String("user".to_string()));
-
-        let intent_id = intent.intent_id.clone();
-        self.intent_graph.store_intent(intent)?;
-
-        // Find related intents
-        let related = self.intent_graph.find_relevant_intents(user_intent);
-
-        // Create relationships
-        for related_intent in related {
-            if related_intent.intent_id != intent_id {
-                self.intent_graph.create_edge(
-                    intent_id.clone(),
-                    related_intent.intent_id.clone(),
-                    types::EdgeType::RelatedTo,
-                )?;
-            }
-        }
-
-        Ok(intent_id)
-    }
-
-    /// Create execution context for an intent
-    pub fn create_execution_context(
-        &mut self,
-        intent_id: &types::IntentId,
-    ) -> Result<String, RuntimeError> {
-        // Create task context
-        let context_id = format!("execution_{}", intent_id);
-        self.task_context.push_execution_context(context_id.clone());
-
-        // Load intent information into context
-        if let Some(intent) = self.intent_graph.get_intent(intent_id) {
-            self.task_context
-                .set_context("goal".to_string(), Value::String(intent.goal.clone()))?;
-
-            // Add constraints and preferences
-            for (key, value) in &intent.constraints {
-                self.task_context
-                    .set_context(format!("constraint_{}", key), value.clone())?;
-            }
-
-            for (key, value) in &intent.preferences {
-                self.task_context
-                    .set_context(format!("preference_{}", key), value.clone())?;
-            }
-        }
-
-        Ok(context_id)
-    }
-
-    /// Load cognitive context for execution
-    pub fn load_cognitive_context(&self, context_id: &str) -> Result<types::Context, RuntimeError> {
-        // Load task context
-        let default_goal = Value::String("".to_string());
-        let goal = self
-            .task_context
-            .get_context(&"goal".to_string())
-            .unwrap_or(&default_goal)
-            .as_string()
-            .unwrap_or_default();
-
-        let related_intents = self.intent_graph.find_relevant_intents(&goal);
-
-        // Create execution context
-        let mut execution_context = types::Context::new();
-
-        // Add related intents (virtualized)
-        for intent in related_intents {
-            execution_context.intents.push(intent);
-        }
-
-        // Apply context horizon constraints
-        let task = types::Task {
-            task_id: context_id.to_string(),
-            description: goal.to_string(),
-            metadata: HashMap::new(),
-        };
-
-        let horizon_context = self.context_horizon.load_relevant_context(&task)?;
-
-        // Merge horizon context with execution context
-        execution_context.intents.extend(horizon_context.intents);
-        execution_context.wisdom = horizon_context.wisdom;
-        execution_context.plan = horizon_context.plan;
-
-        Ok(execution_context)
-    }
-
-    /// Execute RTFS plan with cognitive context
-    pub fn execute_rtfs_plan(
-        &mut self,
-        plan: &types::Plan,
-        context: types::Context,
-    ) -> Result<Value, RuntimeError> {
-        // Start causal chain tracking
-        let action = self
-            .causal_chain
-            .create_action(types::Intent::new("RTFS Plan Execution".to_string()))?;
-
-        // Execute each step with context
-        let mut result = Value::Nil;
-
-        // TODO: Integrate with existing RTFS runtime
-        // For now, return a placeholder result
-        // In the full implementation, this would:
-        // 1. Parse the RTFS code in plan.rtfs_code
-        // 2. Execute it with the provided context
-        // 3. Track each function call in the causal chain
-        // 4. Handle delegation decisions (self/local/agent/recursive)
-
-        // Record the execution result
-        let execution_result = types::ExecutionResult {
-            success: true,
-            value: result.clone(),
-            metadata: HashMap::new(),
-        };
-
-        self.causal_chain.record_result(action, execution_result)?;
-
-        Ok(result)
-    }
-
-    /// Update cognitive state after execution
-    pub fn update_cognitive_state(
-        &mut self,
-        intent_id: &types::IntentId,
-        context_id: &str,
-        result: Value,
-    ) -> Result<(), RuntimeError> {
-        // Update intent with result
-        if let Some(mut intent) = self.intent_graph.get_intent(intent_id).cloned() {
-            let execution_result = types::ExecutionResult {
-                success: true,
-                value: result,
-                metadata: HashMap::new(),
-            };
-
-            self.intent_graph.update_intent(intent, &execution_result)?;
-        }
-
-        // Persist context
-        self.task_context.persist_context(context_id.to_string())?;
-
-        Ok(())
-    }
-
-    /// Execute an intent with full CCOS cognitive infrastructure
-    pub fn execute_intent(
-        &mut self,
-        intent: types::Intent,
-    ) -> Result<types::ExecutionResult, RuntimeError> {
-        // 1. Load relevant context (respecting context horizon)
-        let task = types::Task {
-            task_id: intent.intent_id.clone(),
-            description: intent.goal.clone(),
-            metadata: intent.metadata.clone(),
-        };
-        let context = self.context_horizon.load_relevant_context(&task)?;
-
-        // 2. Create causal chain entry
-        let action = self.causal_chain.create_action(intent.clone())?;
-
-        // 3. Execute with context awareness
-        let plan = types::Plan::new_rtfs("".to_string(), vec![intent.intent_id.clone()]);
-        let result = self.execute_rtfs_plan(&plan, context)?;
-
-        // 4. Create execution result
-        let execution_result = types::ExecutionResult {
-            success: true,
-            value: result,
-            metadata: HashMap::new(),
-        };
-
-        // 5. Record in causal chain
-        self.causal_chain
-            .record_result(action, execution_result.clone())?;
-
-        // 6. Update intent graph
-        self.intent_graph.update_intent(intent, &execution_result)?;
-
-        Ok(execution_result)
-    }
-
-    /// Execute a plan with given context and action tracking
-    fn execute_with_context(
+    /// The main entry point for processing a user request.
+    /// This method follows the full CCOS architectural flow:
+    /// 1. The Arbiter converts the request into a Plan.
+    /// 2. The Governance Kernel validates the Plan.
+    /// 3. The Orchestrator executes the validated Plan.
+    pub async fn process_request(
         &self,
-        plan: &types::Plan,
-        context: &types::Context,
-        action: &types::Action,
-    ) -> Result<types::ExecutionResult, RuntimeError> {
-        // TODO: Integrate with existing RTFS runtime
-        // For now, return a placeholder result
-        Ok(types::ExecutionResult {
-            success: true,
-            value: Value::Nil,
-            metadata: HashMap::new(),
-        })
+        natural_language_request: &str,
+        security_context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        // 1. Arbiter: Generate a plan from the natural language request.
+        let proposed_plan = self.arbiter
+            .process_natural_language(natural_language_request, None)
+            .await?;
+
+        // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
+        let result = self.governance_kernel
+            .validate_and_execute(proposed_plan, security_context)
+            .await?;
+
+        Ok(result)
     }
 
-    /// Get execution statistics
-    pub fn get_execution_stats(&self) -> HashMap<String, Value> {
-        let mut stats = HashMap::new();
+    // --- Accessors for external analysis ---
 
-        // Intent Graph stats
-        let intent_counts = self.intent_graph.get_intent_count_by_status();
-        stats.insert(
-            "active_intents".to_string(),
-            Value::Integer(
-                *intent_counts
-                    .get(&types::IntentStatus::Active)
-                    .unwrap_or(&0) as i64,
-            ),
-        );
-        stats.insert(
-            "completed_intents".to_string(),
-            Value::Integer(
-                *intent_counts
-                    .get(&types::IntentStatus::Completed)
-                    .unwrap_or(&0) as i64,
-            ),
-        );
-
-        // Causal Chain stats
-        stats.insert(
-            "total_actions".to_string(),
-            Value::Integer(self.causal_chain.get_all_actions().len() as i64),
-        );
-        stats.insert(
-            "total_cost".to_string(),
-            Value::Float(self.causal_chain.get_total_cost()),
-        );
-
-        // Task Context stats
-        stats.insert(
-            "context_keys".to_string(),
-            Value::Integer(self.task_context.size() as i64),
-        );
-
-        stats
+    pub fn get_intent_graph(&self) -> Arc<Mutex<IntentGraph>> {
+        Arc::clone(&self.intent_graph)
     }
 
-    /// Create a context-aware execution frame
-    pub fn create_execution_frame(&mut self, frame_id: String) -> Result<(), RuntimeError> {
-        self.task_context.push_execution_context(frame_id);
-        Ok(())
-    }
-
-    /// Set context key in current execution frame
-    pub fn set_context_key(&mut self, key: String, value: Value) -> Result<(), RuntimeError> {
-        let context_value = task_context::ContextValue::new(value);
-        self.task_context
-            .set_execution_context(key, context_value)?;
-        Ok(())
-    }
-
-    /// Get context key from current execution frame
-    pub fn get_context_key(&self, key: &str) -> Option<&Value> {
-        self.task_context
-            .resolve_context_key(&key.to_string())
-            .map(|cv| &cv.value)
+    pub fn get_causal_chain(&self) -> Arc<Mutex<CausalChain>> {
+        Arc::clone(&self.causal_chain)
     }
 }
 
-pub use delegating_arbiter::DelegatingArbiter;
+// --- Tests ---
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::security::SecurityLevel;
 
-    #[test]
-    fn test_ccos_runtime_creation() {
-        let runtime = CCOSRuntime::new();
-        assert!(runtime.is_ok());
-    }
+    #[tokio::test]
+    async fn test_ccos_end_to_end_flow() {
+        // This test demonstrates the full architectural flow from a request
+        // to a final (simulated) execution result.
 
-    #[test]
-    fn test_intent_processing() {
-        let mut runtime = CCOSRuntime::new().unwrap();
-        let intent_id = runtime.process_user_intent("Analyze quarterly sales data");
-        assert!(intent_id.is_ok());
-    }
+        // 1. Create the CCOS instance
+        let ccos = CCOS::new().unwrap();
 
-    #[test]
-    fn test_context_creation() {
-        let mut runtime = CCOSRuntime::new().unwrap();
-        let intent_id = runtime.process_user_intent("Test intent").unwrap();
-        let context_id = runtime.create_execution_context(&intent_id);
-        assert!(context_id.is_ok());
-    }
+        // 2. Define a security context for the request
+        let context = RuntimeContext {
+            security_level: SecurityLevel::Controlled,
+            allowed_capabilities: vec![
+                ":data.fetch-user-interactions".to_string(),
+                ":ml.analyze-sentiment".to_string(),
+                ":reporting.generate-sentiment-report".to_string(),
+            ].into_iter().collect(),
+            ..RuntimeContext::pure()
+        };
 
-    #[test]
-    fn test_execution_stats() {
-        let runtime = CCOSRuntime::new().unwrap();
-        let stats = runtime.get_execution_stats();
-        assert!(stats.contains_key("active_intents"));
-        assert!(stats.contains_key("total_actions"));
+        // 3. Process a natural language request
+        let request = "Could you please analyze the sentiment of our recent users?";
+        let result = ccos.process_request(request, &context).await;
+
+        // 4. Assert the outcome
+        assert!(result.is_ok());
+        let execution_result = result.unwrap();
+        assert!(execution_result.success);
+
+        // 5. Verify the Causal Chain for auditability
+        let chain = ccos.get_causal_chain().lock().unwrap();
+        let actions = chain.get_all_actions();
+
+        // We expect a chain of actions: PlanStarted -> StepStarted -> ... -> StepCompleted -> PlanCompleted
+        assert!(actions.len() > 2);
+        assert_eq!(actions.first().unwrap().action_type, types::ActionType::PlanStarted);
+        assert_eq!(actions.last().unwrap().action_type, types::ActionType::PlanCompleted);
     }
 }

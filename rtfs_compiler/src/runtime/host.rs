@@ -1,162 +1,171 @@
-//! `RuntimeHost` - The bridge between the RTFS runtime and the CCOS host environment.
+//! Runtime Host
+//!
+//! The concrete implementation of the `HostInterface` that connects the RTFS runtime
+//! to the CCOS stateful components like the Causal Chain and Capability Marketplace.
 
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::host_interface::HostInterface;
-use crate::runtime::security::RuntimeContext;
-use crate::runtime::values::Value;
-use crate::ccos::causal_chain::CausalChain;
-use crate::ccos::types::{Action, ExecutionResult};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::Arc;
-use tokio::runtime::Runtime;
 
-/// Holds the contextual information for a single execution run,
-/// derived from a CCOS `Plan` object.
-#[derive(Clone, Debug)]
+use crate::runtime::host_interface::HostInterface;
+use crate::runtime::values::Value;
+use crate::runtime::error::{RuntimeResult, RuntimeError};
+use crate::ccos::causal_chain::CausalChain;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::security::RuntimeContext;
+use crate::ccos::types::{Action, ActionType, ExecutionResult};
+
+#[derive(Debug, Clone)]
 struct ExecutionContext {
     plan_id: String,
     intent_ids: Vec<String>,
+    parent_action_id: String,
 }
 
-/// `RuntimeHost` provides the execution context for CCOS capabilities.
-///
-/// This struct encapsulates all the logic for interacting with the CCOS host environment,
-/// including the capability marketplace, causal chain, and security context. It is designed
-/// to be shared between different RTFS runtimes (e.g., the AST evaluator and the IR runtime).
+/// The RuntimeHost is the bridge between the pure RTFS runtime and the stateful CCOS world.
 pub struct RuntimeHost {
-    pub capability_marketplace: Arc<CapabilityMarketplace>,
-    pub causal_chain: Rc<RefCell<CausalChain>>,
-    pub security_context: RuntimeContext,
+    causal_chain: Arc<Mutex<CausalChain>>,
+    capability_marketplace: Arc<CapabilityMarketplace>,
+    security_context: RuntimeContext,
+    // The execution context is stored in a RefCell to allow for interior mutability
+    // during the evaluation of a plan.
     execution_context: RefCell<Option<ExecutionContext>>,
-    tokio_runtime: Runtime,
 }
 
 impl RuntimeHost {
-    /// Creates a new `RuntimeHost`.
     pub fn new(
+        causal_chain: Arc<Mutex<CausalChain>>,
         capability_marketplace: Arc<CapabilityMarketplace>,
-        causal_chain: Rc<RefCell<CausalChain>>,
         security_context: RuntimeContext,
     ) -> Self {
-        let tokio_runtime = Runtime::new().expect("Failed to create Tokio runtime");
         Self {
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context,
             execution_context: RefCell::new(None),
-            tokio_runtime,
         }
     }
 
-    /// Public wrapper to set the execution context before running RTFS code.
-    pub fn prepare_execution(&self, plan_id: String, intent_ids: Vec<String>) {
-        self.set_execution_context(plan_id, intent_ids);
+    /// Sets the context for a new plan execution.
+    pub fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String) {
+        *self.execution_context.borrow_mut() = Some(ExecutionContext {
+            plan_id,
+            intent_ids,
+            parent_action_id,
+        });
     }
 
-    /// Public wrapper to clear the execution context after running RTFS code.
-    pub fn cleanup_execution(&self) {
-        self.clear_execution_context();
+    /// Clears the execution context after a plan has finished.
+    pub fn clear_execution_context(&self) {
+        *self.execution_context.borrow_mut() = None;
+    }
+
+    fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<CausalChain>> {
+        self.causal_chain.lock().map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))
+    }
+
+    fn get_context(&self) -> RuntimeResult<std::cell::Ref<ExecutionContext>> {
+        let context_ref = self.execution_context.borrow();
+        if context_ref.is_none() {
+            return Err(RuntimeError::Generic("FATAL: Host method called without a valid execution context".to_string()));
+        }
+        Ok(std::cell::Ref::map(context_ref, |c| c.as_ref().unwrap()))
+    }
+}
+
+impl HostInterface for RuntimeHost {
+    fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value> {
+        // 1. Security Validation
+        if !self.security_context.is_capability_allowed(name) {
+            return Err(RuntimeError::SecurityViolation {
+                operation: "call".to_string(),
+                capability: name.to_string(),
+                context: format!("{:?}", self.security_context),
+            });
+        }
+
+        let context = self.get_context()?;
+        let capability_args = Value::List(args.to_vec());
+
+        // 2. Create and log the CapabilityCall action
+        let action = Action::new(
+            ActionType::CapabilityCall,
+            context.plan_id.clone(),
+            context.intent_ids.first().cloned().unwrap_or_default(),
+        )
+        .with_parent(Some(context.parent_action_id.clone()))
+        .with_name(name)
+        .with_arguments(&capability_args);
+
+        let action_id = self.get_causal_chain()?.append(action)?;
+
+        // 3. Execute the capability via the marketplace
+        // Note: This is a blocking call to bridge the async marketplace with the sync evaluator.
+        // A production system might use a more sophisticated async bridge.
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e)))?;
+
+        let result = rt.block_on(async {
+            self.capability_marketplace.execute_capability(name, &capability_args).await
+        });
+
+        // 4. Log the result to the Causal Chain
+        let execution_result = match &result {
+            Ok(value) => ExecutionResult { success: true, value: value.clone(), metadata: Default::default() },
+            Err(e) => ExecutionResult { success: false, value: Value::Nil, metadata: Default::default() }.with_error(&e.to_string()),
+        };
+
+        self.get_causal_chain()?.record_result(&action_id, execution_result)?;
+
+        result
+    }
+
+    fn notify_step_started(&self, step_name: &str) -> RuntimeResult<String> {
+        let context = self.get_context()?;
+        let action = Action::new(
+            ActionType::PlanStepStarted,
+            context.plan_id.clone(),
+            context.intent_ids.first().cloned().unwrap_or_default(),
+        )
+        .with_parent(Some(context.parent_action_id.clone()))
+        .with_name(step_name);
+
+        self.get_causal_chain()?.append(action)
+    }
+
+    fn notify_step_completed(&self, step_action_id: &str, result: &ExecutionResult) -> RuntimeResult<()> {
+        let context = self.get_context()?;
+        let action = Action::new(
+            ActionType::PlanStepCompleted,
+            context.plan_id.clone(),
+            context.intent_ids.first().cloned().unwrap_or_default(),
+        )
+        .with_parent(Some(step_action_id.to_string()))
+        .with_result(result.clone());
+
+        self.get_causal_chain()?.append(action)?;
+        Ok(())
+    }
+
+    fn notify_step_failed(&self, step_action_id: &str, error: &str) -> RuntimeResult<()> {
+        let context = self.get_context()?;
+        let action = Action::new(
+            ActionType::PlanStepFailed,
+            context.plan_id.clone(),
+            context.intent_ids.first().cloned().unwrap_or_default(),
+        )
+        .with_parent(Some(step_action_id.to_string()))
+        .with_error(error);
+
+        self.get_causal_chain()?.append(action)?;
+        Ok(())
     }
 }
 
 impl std::fmt::Debug for RuntimeHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeHost")
-            .field("security_context", &self.security_context)
-            .field("execution_context", &self.execution_context)
-            .finish_non_exhaustive()
-    }
-}
-
-impl HostInterface for RuntimeHost {
-    /// Sets the context for the subsequent execution run.
-    fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>) {
-        *self.execution_context.borrow_mut() = Some(ExecutionContext {
-            plan_id,
-            intent_ids,
-        });
-    }
-
-    /// Clears the execution context after a run is complete.
-    fn clear_execution_context(&self) {
-        *self.execution_context.borrow_mut() = None;
-    }
-
-    /// Executes a CCOS capability.
-    ///
-    /// This is the central point for all capability calls from within the RTFS runtime.
-    /// It performs security checks, invokes the capability through the marketplace,
-    /// and records the action and its result in the causal chain using the
-    /// context provided by `set_execution_context`.
-    ///
-    /// # Panics
-    /// Panics if `set_execution_context` was not called before this method.
-    fn execute_capability(
-        &self,
-        capability_name: &str,
-        args: &[Value],
-    ) -> RuntimeResult<Value> {
-        // 1. Check if the capability is allowed in the current security context.
-        if !self.security_context.is_capability_allowed(capability_name) {
-            return Err(RuntimeError::SecurityViolation {
-                operation: "call".to_string(),
-                capability: capability_name.to_string(),
-                context: format!("{:?}", self.security_context),
-            });
-        }
-
-        // 2. Prepare arguments for the capability marketplace.
-        let capability_args = Value::List(args.to_vec());
-
-        // 3. Create an Action for causal chain tracking using the execution context.
-        let context = self.execution_context.borrow();
-        let (plan_id, intent_id) = match &*context {
-            Some(ctx) => (
-                ctx.plan_id.clone(),
-                // For simplicity, we'll use the first intent ID. A more complex
-                // system might need to track which specific intent an action serves.
-                ctx.intent_ids.get(0).cloned().unwrap_or_default(),
-            ),
-            None => {
-                // This is a programming error on the host's part. The host must
-                // set the context before executing any RTFS code that might call capabilities.
-                panic!("FATAL: `execute_capability` called without a valid execution context. The host must call `set_execution_context` before the run.");
-            }
-        };
-
-        let mut action = Action::new_capability(
-            plan_id,
-            intent_id,
-            capability_name.to_string(),
-            args.to_vec(),
-        );
-        action.capability_id = Some(capability_name.to_string());
-
-        // 4. Execute the capability via the marketplace.
-        // We use the pre-initialized Tokio runtime to execute the async code.
-        let result = self.tokio_runtime.block_on(async {
-            self.capability_marketplace
-                .execute_capability(capability_name, &capability_args)
-                .await
-        });
-
-        // 5. Record the result in the causal chain.
-        let execution_result = ExecutionResult {
-            success: result.is_ok(),
-            value: result.as_ref().unwrap_or(&Value::Nil).clone(),
-            metadata: HashMap::new(),
-        };
-
-        if let Err(e) = self.causal_chain.borrow_mut().record_result(action, execution_result) {
-            // Log the error but don't fail the entire capability execution.
-            // In a real-world scenario, this might go to a more robust logging system.
-            eprintln!("Warning: Failed to record action result in causal chain: {:?}", e);
-        }
-
-        // 6. Return the final result of the capability execution.
-        result
+         .field("security_context", &self.security_context)
+         .field("execution_context", &self.execution_context.borrow())
+         .finish()
     }
 }
