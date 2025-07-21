@@ -94,11 +94,20 @@ impl ImmutableLedger {
     }
 
     pub fn verify_integrity(&self) -> Result<bool, RuntimeError> {
+        let mut last_chain_hash: Option<&String> = None;
         for (i, action) in self.actions.iter().enumerate() {
-            let expected_hash = self.calculate_action_hash(action);
-            if i < self.hash_chain.len() && self.hash_chain[i] != expected_hash {
+            let action_hash = self.calculate_action_hash(action);
+            let mut hasher = Sha256::new();
+            if let Some(prev_hash) = last_chain_hash {
+                hasher.update(prev_hash.as_bytes());
+            }
+            hasher.update(action_hash.as_bytes());
+            let expected_chain_hash = format!("{:x}", hasher.finalize());
+
+            if self.hash_chain[i] != expected_chain_hash {
                 return Ok(false);
             }
+            last_chain_hash = Some(&self.hash_chain[i]);
         }
         Ok(true)
     }
