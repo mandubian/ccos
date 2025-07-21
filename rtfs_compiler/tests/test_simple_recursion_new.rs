@@ -19,8 +19,9 @@ fn test_simple_mutual_recursion() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(capability_registry)),
         Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
@@ -49,8 +50,9 @@ fn test_simple_factorial() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
+        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(capability_registry)),
         Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
