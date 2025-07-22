@@ -161,7 +161,7 @@ fn intent_from_function_call(expr: &rtfs_compiler::ast::Expression) -> Option<In
         .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
         .unwrap_or_else(|| original_request.clone());
 
-    let mut intent = Intent::with_name(name, original_request.clone(), goal);
+    let mut intent = Intent::new(goal).with_name(name);
     
     if let Some(expr) = properties.get("constraints") {
         if let Some(m) = map_expr_to_string_value(expr) {
@@ -411,8 +411,8 @@ COMMON PATTERNS:
 
     // Evaluator (we won't actually evaluate the generated intent here, but set up for future)
     let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
     let mut evaluator = Evaluator::new(

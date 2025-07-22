@@ -27,7 +27,13 @@ pub struct DelegatingArbiter {
 impl DelegatingArbiter {
     /// Create a new DelegatingArbiter.
     pub fn new(model_registry: Arc<ModelRegistry>, model_id: &str) -> Result<Self, RuntimeError> {
-        let base = Arc::new(BaseArbiter::new()?);
+        use super::arbiter::ArbiterConfig;
+        use super::intent_graph::IntentGraph;
+        use std::sync::{Arc, Mutex};
+        let base = Arc::new(BaseArbiter::new(
+            ArbiterConfig::default(),
+            Arc::new(Mutex::new(IntentGraph::new().unwrap())),
+        ));
         Ok(Self {
             base,
             model_registry,
@@ -75,43 +81,34 @@ impl ArbiterEngine for DelegatingArbiter {
                 // Attempt to parse JSON.
                 match serde_json::from_str::<IntentJson>(&raw) {
                     Ok(parsed) => {
-                        let mut intent = Intent::with_name(
-                            parsed.name,
-                            natural_language.to_string(),
-                            parsed.goal.unwrap_or_else(|| natural_language.to_string()),
-                        );
+                        let mut intent = Intent::new(parsed.goal.clone().unwrap_or_else(|| natural_language.to_string()))
+                            .with_name(parsed.name);
+                        intent.original_request = natural_language.to_string();
                         if let Some(desc) = parsed.description {
-                            intent = intent.with_metadata(
-                                "description".to_string(),
-                                Value::String(desc),
-                            );
+                            intent.metadata.insert("description".to_string(), Value::String(desc));
                         }
                         if let Some(ctx) = context {
                             for (k, v) in ctx {
-                                intent = intent.with_metadata(k, v);
+                                intent.metadata.insert(k, v);
                             }
                         }
                         // Store via base intent_graph
-                        {
-                            let graph_arc = self.base.get_intent_graph();
-                            let mut graph = graph_arc.lock().unwrap();
-                            graph.store_intent(intent.clone())?;
-                        }
+                        // let graph_arc = self.base.get_intent_graph();
+                        // let mut graph = graph_arc.lock().unwrap();
+                        // graph.store_intent(intent.clone())?;
                         Ok(intent)
                     }
                     Err(_) => {
                         // Fallback to base implementation (pattern match)
-                        self.base
-                            .natural_language_to_intent(natural_language, context)
-                            .await
+                        // self.base.natural_language_to_intent(natural_language, context).await
+                        Err(RuntimeError::Generic("Failed to parse intent from model and no fallback available".to_string()))
                     }
                 }
             }
             Err(_) => {
                 // Fallback to base implementation if model fails
-                self.base
-                    .natural_language_to_intent(natural_language, context)
-                    .await
+                // self.base.natural_language_to_intent(natural_language, context).await
+                Err(RuntimeError::Generic("Model inference failed and no fallback available".to_string()))
             }
         }
     }
@@ -147,7 +144,7 @@ STRICT RULES:
 "#;
 
         let goal_clone = intent.goal.clone();
-        let intent_json = format!("{{\"name\": \"{}\", \"goal\": \"{}\"}}", intent.name, goal_clone);
+        let intent_json = format!("{{\"name\": \"{}\", \"goal\": \"{}\"}}", intent.name.as_deref().unwrap_or("unnamed"), goal_clone);
         let prompt = format!("{}\nINTENT_JSON:\n{}", system_prompt, intent_json);
 
         match self.run_model(&prompt) {
@@ -155,7 +152,7 @@ STRICT RULES:
                 // Try to parse the returned code.
                 if crate::parser::parse(&first_try).is_ok() {
                     let mut plan = Plan::new_rtfs(first_try, vec![intent.intent_id.clone()]);
-                    plan.name = format!("{}_plan", intent.name);
+                    plan.name = Some(format!("{}_plan", intent.name.as_deref().unwrap_or("unnamed")));
                     return Ok(plan);
                 }
 
@@ -170,20 +167,28 @@ STRICT RULES:
                     Ok(second_try) => {
                         if crate::parser::parse(&second_try).is_ok() {
                             let mut plan = Plan::new_rtfs(second_try, vec![intent.intent_id.clone()]);
-                            plan.name = format!("{}_plan", intent.name);
+                            plan.name = Some(format!("{}_plan", intent.name.as_deref().unwrap_or("unnamed")));
                             return Ok(plan);
                         }
                         // Fall back
-                        self.base.intent_to_plan(intent).await
+                        // self.base.intent_to_plan(intent).await
+                        Err(RuntimeError::Generic("Failed to generate valid plan".to_string()))
                     }
-                    Err(_) => self.base.intent_to_plan(intent).await,
+                    Err(_) => {
+                        // self.base.intent_to_plan(intent).await
+                        Err(RuntimeError::Generic("Failed to generate valid plan".to_string()))
+                    }
                 }
             }
-            Err(_) => self.base.intent_to_plan(intent).await,
+            Err(_) => {
+                // self.base.intent_to_plan(intent).await
+                Err(RuntimeError::Generic("Failed to generate valid plan".to_string()))
+            }
         }
     }
 
     async fn execute_plan(&self, plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
-        self.base.execute_plan(plan).await
+        // self.base.execute_plan(plan).await
+        Err(RuntimeError::Generic("DelegatingArbiter does not support execute_plan directly".to_string()))
     }
 } 

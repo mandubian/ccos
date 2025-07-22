@@ -14,7 +14,7 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
 use super::intent_graph::IntentGraph;
-use super::types::{Intent, Plan};
+use super::types::{Intent, Plan, PlanBody};
 
 /// The Arbiter - LLM kernel that converts natural language to structured intents and plans.
 pub struct Arbiter {
@@ -158,7 +158,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(plan.name, Some("analyze_user_sentiment".to_string()));
-        assert!(plan.body.contains(":ml.analyze-sentiment"));
+        if let PlanBody::Text(body_text) = &plan.body {
+            assert!(body_text.contains(":ml.analyze-sentiment"));
+        } else {
+            panic!("Plan body is not textual");
+        }
 
         // Test performance optimization request
         let plan = arbiter
@@ -167,6 +171,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(plan.name, Some("optimize_response_time".to_string()));
-        assert!(plan.body.contains(":monitoring.get-system-metrics"));
+        if let PlanBody::Text(body_text) = &plan.body {
+            assert!(body_text.contains(":monitoring.get-system-metrics"));
+        } else {
+            panic!("Plan body is not textual");
+        }
     }
 }

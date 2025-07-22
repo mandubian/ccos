@@ -3,7 +3,7 @@
 //! This module implements the Causal Chain of Thought - an immutable, verifiable ledger
 //! that records every significant action with its complete audit trail.
 
-use super::types::{Action, ActionId, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
+use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use sha2::{Digest, Sha256};
@@ -29,9 +29,9 @@ impl ImmutableLedger {
         }
     }
 
-    pub fn append_action(&mut self, action: Action) -> Result<(), RuntimeError> {
+    pub fn append_action(&mut self, action: &Action) -> Result<(), RuntimeError> {
         // Calculate hash for this action
-        let action_hash = self.calculate_action_hash(&action);
+        let action_hash = self.calculate_action_hash(action);
 
         // Calculate the chain hash (includes previous hash)
         let chain_hash = self.calculate_chain_hash(&action_hash);
@@ -41,9 +41,14 @@ impl ImmutableLedger {
         self.hash_chain.push(chain_hash);
 
         // Update indices
-        self.indices.index_action(&action)?;
+        self.indices.index_action(action)?;
 
         Ok(())
+    }
+
+    pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
+        self.append_action(action)?;
+        Ok(action.action_id.clone())
     }
 
     pub fn get_action(&self, action_id: &ActionId) -> Option<&Action> {
@@ -119,7 +124,9 @@ impl ImmutableLedger {
         hasher.update(action.action_id.as_bytes());
         hasher.update(action.plan_id.as_bytes());
         hasher.update(action.intent_id.as_bytes());
-        hasher.update(action.function_name.as_bytes());
+        if let Some(function_name) = &action.function_name {
+            hasher.update(function_name.as_bytes());
+        }
         hasher.update(action.timestamp.to_string().as_bytes());
 
         // Hash arguments
@@ -188,19 +195,23 @@ impl LedgerIndices {
             .or_insert_with(Vec::new)
             .push(action.action_id.clone());
 
-        // Index by capability
-        if let Some(capability_id) = &action.capability_id {
-            self.capability_actions
-                .entry(capability_id.clone())
-                .or_insert_with(Vec::new)
-                .push(action.action_id.clone());
+        // Index by capability (stored in function_name for capability calls)
+        if action.action_type == ActionType::CapabilityCall {
+            if let Some(function_name) = &action.function_name {
+                self.capability_actions
+                    .entry(function_name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(action.action_id.clone());
+            }
         }
 
         // Index by function
-        self.function_actions
-            .entry(action.function_name.clone())
-            .or_insert_with(Vec::new)
-            .push(action.action_id.clone());
+        if let Some(function_name) = &action.function_name {
+            self.function_actions
+                .entry(function_name.clone())
+                .or_insert_with(Vec::new)
+                .push(action.action_id.clone());
+        }
 
         // Index by timestamp
         self.timestamp_index.push(action.action_id.clone());
@@ -261,7 +272,7 @@ impl ProvenanceTracker {
             action_id: action.action_id.clone(),
             intent_id: action.intent_id.clone(),
             plan_id: action.plan_id.clone(),
-            capability_id: action.capability_id.clone(),
+            capability_id: action.function_name.clone(),
             execution_context: ExecutionContext::new(),
             data_sources: Vec::new(),
             ethical_rules: Vec::new(),
@@ -337,24 +348,28 @@ impl PerformanceMetrics {
     }
 
     pub fn record_action(&mut self, action: &Action) -> Result<(), RuntimeError> {
-        // Update capability metrics
-        if let Some(capability_id) = &action.capability_id {
-            let metrics = self
-                .capability_metrics
-                .entry(capability_id.clone())
-                .or_insert_with(CapabilityMetrics::new);
-            metrics.record_action(action);
+        // Update capability metrics (for capability calls)
+        if action.action_type == ActionType::CapabilityCall {
+            if let Some(function_name) = &action.function_name {
+                let metrics = self
+                    .capability_metrics
+                    .entry(function_name.clone())
+                    .or_insert_with(CapabilityMetrics::new);
+                metrics.record_action(action);
+            }
         }
 
         // Update function metrics
-        let function_metrics = self
-            .function_metrics
-            .entry(action.function_name.clone())
-            .or_insert_with(FunctionMetrics::new);
-        function_metrics.record_action(action);
+        if let Some(function_name) = &action.function_name {
+            let function_metrics = self
+                .function_metrics
+                .entry(function_name.clone())
+                .or_insert_with(FunctionMetrics::new);
+            function_metrics.record_action(action);
+        }
 
         // Update cost tracking
-        self.cost_tracking.record_cost(action.cost);
+        self.cost_tracking.record_cost(action.cost.unwrap_or(0.0));
 
         Ok(())
     }
@@ -402,14 +417,10 @@ impl CapabilityMetrics {
 
     pub fn record_action(&mut self, action: &Action) {
         self.total_calls += 1;
-        self.total_cost += action.cost;
-        self.total_duration_ms += action.duration_ms;
+        self.total_cost += action.cost.unwrap_or(0.0);
+        self.total_duration_ms += action.duration_ms.unwrap_or(0);
 
-        if action.success {
-            self.successful_calls += 1;
-        } else {
-            self.failed_calls += 1;
-        }
+        // Success/failure tracking removed: Action does not have a success field
 
         self.average_duration_ms = self.total_duration_ms as f64 / self.total_calls as f64;
         self.reliability_score = self.successful_calls as f64 / self.total_calls as f64;
@@ -441,14 +452,10 @@ impl FunctionMetrics {
 
     pub fn record_action(&mut self, action: &Action) {
         self.total_calls += 1;
-        self.total_cost += action.cost;
-        self.total_duration_ms += action.duration_ms;
+        self.total_cost += action.cost.unwrap_or(0.0);
+        self.total_duration_ms += action.duration_ms.unwrap_or(0);
 
-        if action.success {
-            self.successful_calls += 1;
-        } else {
-            self.failed_calls += 1;
-        }
+        // Success/failure tracking removed: Action does not have a success field
 
         self.average_duration_ms = self.total_duration_ms as f64 / self.total_calls as f64;
     }
@@ -478,7 +485,7 @@ impl CostTracker {
     }
 
     pub fn record_action_cost(&mut self, action: &Action) {
-        let cost = action.cost;
+        let cost = action.cost.unwrap_or(0.0);
 
         // Track by intent
         *self
@@ -492,13 +499,7 @@ impl CostTracker {
             .entry(action.plan_id.clone())
             .or_insert(0.0) += cost;
 
-        // Track by capability
-        if let Some(capability_id) = &action.capability_id {
-            *self
-                .cost_by_capability
-                .entry(capability_id.clone())
-                .or_insert(0.0) += cost;
-        }
+        // Track by capability: Action does not have capability_id field, skip
     }
 }
 
@@ -525,11 +526,12 @@ impl CausalChain {
     pub fn create_action(&mut self, intent: Intent) -> Result<Action, RuntimeError> {
         let plan_id = format!("plan-{}", Uuid::new_v4());
         let action = Action::new(
+            ActionType::InternalStep,
             plan_id,
             intent.intent_id.clone(),
-            "execute_intent".to_string(),
-            vec![Value::String(intent.goal.clone())],
-        );
+        )
+        .with_name("execute_intent")
+        .with_args(vec![Value::String(intent.goal.clone())]);
 
         // Track provenance
         self.provenance.track_action(&action, &intent)?;
@@ -544,7 +546,7 @@ impl CausalChain {
         result: ExecutionResult,
     ) -> Result<(), RuntimeError> {
         // Update action with result
-        action = action.with_result(result.value.clone(), result.success);
+        action = action.with_result(result.clone());
 
         // Add metadata from result
         for (key, value) in result.metadata {
@@ -558,7 +560,7 @@ impl CausalChain {
             .insert("signature".to_string(), Value::String(signature));
 
         // Append to ledger
-        self.ledger.append_action(action.clone())?;
+        self.ledger.append_action(&action)?;
 
         // Record metrics
         self.metrics.record_action(&action)?;
@@ -650,7 +652,11 @@ impl CausalChain {
     ) -> Result<Action, RuntimeError> {
         use super::types::ActionType;
         // Create lifecycle action
-        let action = Action::new_lifecycle(plan_id.clone(), intent_id.clone(), action_type.clone());
+        let action = Action::new(
+            action_type,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
 
         // Sign
         let signature = self.signing.sign_action(&action);
@@ -660,7 +666,7 @@ impl CausalChain {
             .insert("signature".to_string(), Value::String(signature));
 
         // Append to ledger & metrics
-        self.ledger.append_action(signed_action.clone())?;
+        self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
 
         Ok(signed_action)
@@ -710,13 +716,13 @@ impl CausalChain {
         use super::types::ActionType;
 
         // Build action
-        let action = Action::new_capability(
+        let action = Action::new(
+            ActionType::CapabilityCall,
             plan_id.clone(),
             intent_id.clone(),
-            function_name.to_string(),
-            args,
         )
-        .with_capability(capability_id.to_string());
+        .with_name(function_name)
+        .with_args(args);
 
         // Sign
         let signature = self.signing.sign_action(&action);
@@ -726,10 +732,14 @@ impl CausalChain {
             .insert("signature".to_string(), Value::String(signature));
 
         // Append ledger and metrics
-        self.ledger.append_action(signed_action.clone())?;
+        self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
 
         Ok(signed_action)
+    }
+
+    pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
+        self.ledger.append(action)
     }
 }
 
@@ -750,7 +760,7 @@ mod tests {
         let intent = Intent::new("Test goal".to_string());
 
         let action = chain.create_action(intent).unwrap();
-        assert_eq!(action.function_name, "execute_intent");
+        assert_eq!(action.function_name.as_ref().unwrap(), "execute_intent");
 
         let result = ExecutionResult {
             success: true,
@@ -758,7 +768,8 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        assert!(chain.record_result(action, result).is_ok());
+        // Clone action to avoid partial move error
+        assert!(chain.record_result(action, result.clone()).is_ok());
     }
 
     #[test]

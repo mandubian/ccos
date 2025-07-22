@@ -64,25 +64,31 @@ pub fn create_runtime_host(security_context: RuntimeContext) -> Rc<RuntimeHost> 
     let marketplace = Arc::new(create_capability_marketplace());
     let causal_chain = create_causal_chain();
     
-    Rc::new(RuntimeHost::new(
-        marketplace,
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         causal_chain,
-        security_context,
-    ))
+        capability_marketplace,
+        security_context.clone(),
+    ));
+    return host;
 }
 
 /// Creates a runtime host with a shared marketplace and security context
 pub fn create_runtime_host_with_marketplace(
-    marketplace: Arc<CapabilityMarketplace>,
+    capability_marketplace: Arc<CapabilityMarketplace>,
     security_context: RuntimeContext,
 ) -> Rc<RuntimeHost> {
-    let causal_chain = create_causal_chain();
     
-    Rc::new(RuntimeHost::new(
-        marketplace,
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         causal_chain,
-        security_context,
-    ))
+        capability_marketplace,
+        security_context.clone(),
+    ));
+    return host;
 }
 
 /// Creates a complete evaluator with the specified security context
@@ -184,11 +190,13 @@ pub fn create_mcp_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
 }
 
 /// Helper to set up execution context for testing (required before running RTFS code with capabilities)
-pub fn setup_execution_context(host: &dyn HostInterface) {
-    host.set_execution_context("test_plan".to_string(), vec!["test_intent".to_string()]);
+pub fn setup_execution_context(host: &mut dyn HostInterface) {
+    // TODO: Implement set_execution_context when HostInterface supports it
+    // host.set_execution_context("test_plan".to_string(), vec!["test_intent".to_string()]);
 }
 
 /// Helper to clean up execution context after testing
 pub fn cleanup_execution_context(host: &dyn HostInterface) {
-    host.clear_execution_context();
+    // TODO: Implement clear_execution_context when HostInterface supports it
+    // host.clear_execution_context();
 }
