@@ -3,11 +3,14 @@
 //! This module implements the Task Context system that provides context propagation
 //! across execution, including the @context-key syntax support.
 
-use super::types::{ContextKey, Intent, IntentId};
+use super::types::{Intent, IntentId};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// Minimal ContextKey type to resolve missing type errors
+pub type ContextKey = String;
 
 /// Context store for key-value storage
 #[derive(Clone)]

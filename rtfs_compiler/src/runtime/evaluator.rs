@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 
@@ -54,6 +54,13 @@ fn values_equivalent(a: &Value, b: &Value) -> bool {
 }
 
 impl Evaluator {
+    fn default_special_forms() -> HashMap<String, SpecialFormHandler> {
+        let mut special_forms: HashMap<String, SpecialFormHandler> = HashMap::new();
+        special_forms.insert("step".to_string(), Self::eval_step_form);
+        // Add other evaluator-level special forms here in the future
+        special_forms
+    }
+
     /// Create a new evaluator with secure environment and default security context
     pub fn new(
         module_registry: Rc<ModuleRegistry>, 
@@ -63,10 +70,6 @@ impl Evaluator {
     ) -> Self {
         let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
-
-        let mut special_forms = HashMap::new();
-        special_forms.insert("step".to_string(), Self::eval_step_form);
-        // Add other evaluator-level special forms here in the future
 
         Evaluator {
             module_registry,
@@ -78,7 +81,7 @@ impl Evaluator {
             model_registry,
             security_context,
             host,
-            special_forms,
+            special_forms: Self::default_special_forms(),
         }
     }
 
@@ -103,6 +106,7 @@ impl Evaluator {
             model_registry,
             security_context,
             host,
+            special_forms: Self::default_special_forms(),
         }
     }
 
@@ -320,7 +324,7 @@ impl Evaluator {
             Expression::Literal(crate::ast::Literal::String(s)) => s.clone(),
             _ => return Err(RuntimeError::InvalidArguments {
                 expected: "a string for the step name".to_string(),
-                actual: args[0].to_string(),
+                actual: format!("{:?}", args[0]),
             }),
         };
 
@@ -1719,6 +1723,7 @@ impl Evaluator {
             model_registry: self.model_registry.clone(),
             security_context,
             host: self.host.clone(),
+            special_forms: Self::default_special_forms(),
         }
     }
 
@@ -1739,6 +1744,7 @@ impl Evaluator {
             model_registry: Arc::new(ModelRegistry::with_defaults()),
             security_context,
             host,
+            special_forms: Self::default_special_forms(),
         }
     }
 }
@@ -1760,11 +1766,14 @@ impl Default for Evaluator {
         use tokio::sync::RwLock;
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
-        let causal_chain = Rc::new(RefCell::new(CausalChain::new().unwrap()));
-        let host_security_context = RuntimeContext::pure();
-        let runtime_host = RuntimeHost::new(capability_marketplace, causal_chain, host_security_context);
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let runtime_host = RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        );
         let host = Rc::new(runtime_host);
-        
+
         Self::new(
             module_registry,
             delegation_engine,

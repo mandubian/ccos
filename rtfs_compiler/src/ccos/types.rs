@@ -62,6 +62,20 @@ pub enum EdgeType {
 
 // --- Plans and Orchestration (SEP-002) ---
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PlanLanguage {
+    Rtfs20,
+    // Future language support - currently unused but keeps the door open
+    #[allow(dead_code)]
+    Wasm,
+    #[allow(dead_code)]
+    Python,
+    #[allow(dead_code)]
+    GraphJson,
+    #[allow(dead_code)]
+    Other(String),
+}
+
 /// Represents the "how" for achieving an Intent. An immutable, archivable script.
 #[derive(Debug, Clone)]
 pub struct Plan {
@@ -69,14 +83,15 @@ pub struct Plan {
     pub name: Option<String>,
     pub intent_ids: Vec<IntentId>,
     pub language: PlanLanguage,
-    pub body: String, // The actual RTFS code
+    pub body: PlanBody, // Flexible body representation
     pub created_at: u64,
     pub metadata: HashMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PlanLanguage {
-    Rtfs20,
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanBody {
+    Text(String),     // RTFS source, Python script, JSON spec
+    Bytes(Vec<u8>),   // compiled WASM, jar, etc.
 }
 
 // --- Causal Chain (SEP-003) ---
@@ -141,6 +156,11 @@ impl Intent {
             metadata: HashMap::new(),
         }
     }
+
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
 }
 
 impl Plan {
@@ -150,10 +170,18 @@ impl Plan {
             name: None,
             intent_ids,
             language: PlanLanguage::Rtfs20,
-            body: rtfs_code,
+            body: PlanBody::Text(rtfs_code),
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             metadata: HashMap::new(),
         }
+    }
+
+    pub fn new_named(name: String, language: PlanLanguage, body: PlanBody, intent_ids: Vec<IntentId>) -> Self {
+        let mut plan = Self::new_rtfs(String::new(), intent_ids);
+        plan.name = Some(name);
+        plan.language = language;
+        plan.body = body;
+        plan
     }
 }
 
@@ -188,6 +216,17 @@ impl Action {
     pub fn with_args(mut self, args: Vec<Value>) -> Self {
         self.arguments = Some(args);
         self
+    }
+
+    pub fn with_arguments(mut self, args: &[Value]) -> Self {
+        self.arguments = Some(args.to_vec());
+        self
+    }
+
+    pub fn new_capability(plan_id: PlanId, intent_id: IntentId, name: &str, args: &[Value]) -> Self {
+        Self::new(ActionType::CapabilityCall, plan_id, intent_id)
+            .with_name(name)
+            .with_arguments(args)
     }
 
     pub fn with_result(mut self, result: ExecutionResult) -> Self {

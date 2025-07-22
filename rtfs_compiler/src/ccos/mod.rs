@@ -7,13 +7,24 @@
 pub mod arbiter;
 pub mod governance_kernel;
 pub mod orchestrator;
+pub mod delegating_arbiter;
+pub mod arbiter_engine;
 
 // CCOS Data Structures
 pub mod causal_chain;
 pub mod intent_graph;
 pub mod types;
 
-// Placeholders for future CCOS components
+// CCOS Delegation and Execution
+pub mod delegation;
+pub mod delegation_l4;
+pub mod remote_models;
+pub mod local_models;
+
+// CCOS Infrastructure
+pub mod caching;
+
+// CCOS Advanced Components
 pub mod context_horizon;
 pub mod subconscious;
 pub mod task_context;
@@ -148,7 +159,8 @@ mod tests {
         assert!(execution_result.success);
 
         // 5. Verify the Causal Chain for auditability
-        let chain = ccos.get_causal_chain().lock().unwrap();
+        let causal_chain_arc = ccos.get_causal_chain();
+        let chain = causal_chain_arc.lock().unwrap();
         let actions = chain.get_all_actions();
 
         // We expect a chain of actions: PlanStarted -> StepStarted -> ... -> StepCompleted -> PlanCompleted

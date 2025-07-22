@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rtfs_compiler::ccos::arbiter_engine::ArbiterEngine;
 use rtfs_compiler::ccos::delegation::{ModelProvider, ModelRegistry};
-use rtfs_compiler::ccos::DelegatingArbiter;
+use rtfs_compiler::ccos::delegating_arbiter::DelegatingArbiter;
 use rtfs_compiler::ccos::types::{Intent, PlanBody};
 
 /// A stub LLM that returns hard-coded JSON or RTFS snippets so that we can unit-test
@@ -37,18 +37,14 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
     let arbiter = DelegatingArbiter::new(registry.clone(), "stub-rtfs").unwrap();
 
     // 3. Create a dummy Intent manually (skip NL phase for simplicity)
-    let intent = Intent::with_name(
-        "stub_intent".to_string(),
-        "dummy request".to_string(),
-        "test goal".to_string(),
-    );
+    let intent = Intent::new("test goal".to_string()).with_name("stub_intent".to_string());
 
     // 4. Ask the arbiter to convert Intent → Plan
     let plan = arbiter.intent_to_plan(&intent).await.unwrap();
 
     // 5. Ensure the plan body is valid RTFS that the parser accepts
     if let PlanBody::Text(code) = &plan.body {
-        assert!(rtfs_compiler::parser::parse(code).is_ok(), "Generated RTFS failed to parse");
+        assert!(rtfs_compiler::parser::parse_expression(code).is_ok(), "Generated RTFS failed to parse");
     } else {
         panic!("Plan body is not textual RTFS");
     }

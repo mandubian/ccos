@@ -19,7 +19,8 @@ use crate::runtime::security::RuntimeContext;
 use super::orchestrator::Orchestrator;
 
 use super::intent_graph::IntentGraph;
-use super::types::{ExecutionResult, Plan, Intent};
+use super::types::{ExecutionResult, Plan, Intent, PlanBody};
+use crate::runtime::error::RuntimeError;
 
 /// Represents the system's constitution, a set of human-authored rules.
 // TODO: This should be loaded from a secure, signed configuration file.
@@ -96,14 +97,18 @@ impl GovernanceKernel {
         const INJECTION_PHRASES: &[&str] = &["ignore all previous instructions", "you are now in developer mode"];
         for phrase in INJECTION_PHRASES {
             if lower_request.contains(phrase) {
-                return Err(RuntimeError::SecurityViolation("Potential prompt injection detected".to_string()));
+                return Err(RuntimeError::Generic("Potential prompt injection detected".to_string()));
             }
         }
 
         // Check for logical inconsistencies between the intent and the plan.
         // Example: If intent is to send an email, the plan shouldn't be deleting files.
-        if intent.goal.contains("email") && plan.body.contains("delete-file") {
-            return Err(RuntimeError::SecurityViolation("Plan action contradicts intent goal".to_string()));
+        if intent.goal.contains("email") {
+            if let PlanBody::Text(body_text) = &plan.body {
+                if body_text.contains("delete-file") {
+                    return Err(RuntimeError::Generic("Plan action contradicts intent goal".to_string()));
+                }
+            }
         }
 
         Ok(())
@@ -111,20 +116,26 @@ impl GovernanceKernel {
 
     /// Wraps the plan's body in a safety harness.
     fn scaffold_plan(&self, mut plan: Plan) -> RuntimeResult<Plan> {
+        // Extract the original body text
+        let original_body = match &plan.body {
+            PlanBody::Text(text) => text.clone(),
+            PlanBody::Bytes(_) => return Err(RuntimeError::Generic("Cannot scaffold binary plan body".to_string())),
+        };
+
         // Wrap the original body in a `(do ...)` block if it isn't already.
-        let original_body = if plan.body.trim().starts_with("(") {
-            plan.body.clone()
+        let wrapped_body = if original_body.trim().starts_with("(") {
+            original_body
         } else {
-            format!("(do {})", plan.body)
+            format!("(do {})", original_body)
         };
 
         // TODO: The resource limits and failure handler should be loaded from the Constitution.
         let scaffolded_body = format!(
             "(with-resource-limits (cpu 1s) (memory 256mb)\n  (on-failure (log-and-revert)\n    {}\n  )\n)",
-            original_body
+            wrapped_body
         );
 
-        plan.body = scaffolded_body;
+        plan.body = PlanBody::Text(scaffolded_body);
         Ok(plan)
     }
 
@@ -132,8 +143,10 @@ impl GovernanceKernel {
     fn validate_against_constitution(&self, plan: &Plan) -> RuntimeResult<()> {
         // TODO: Implement actual validation logic based on loaded constitutional rules.
         // For now, this is a placeholder.
-        if plan.body.contains("launch-nukes") {
-            return Err(RuntimeError::SecurityViolation("Plan violates Constitution: Rule against global thermonuclear war.".to_string()));
+                if let PlanBody::Text(body_text) = &plan.body {
+            if body_text.contains("launch-nukes") {
+                return Err(RuntimeError::Generic("Plan violates Constitution: Rule against global thermonuclear war.".to_string()));
+            }
         }
         Ok(())
     }

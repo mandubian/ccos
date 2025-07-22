@@ -41,10 +41,14 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     let de: Arc<dyn DelegationEngine> = Arc::new(l4_de);
 
     // 5. Create evaluator with empty env, but register a placeholder `add` so lookup succeeds.
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let symbol_add = Symbol("add".to_string());
@@ -83,12 +87,16 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
     let inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
 
-    let host = Rc::new(RuntimeHost::new(
-        Arc::new(CapabilityMarketplace::default()),
-        Rc::new(RefCell::new(CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     let code = "(do (defn add [x y] nil) (add 1 2))";
     let expr = parse_expression(code).unwrap();

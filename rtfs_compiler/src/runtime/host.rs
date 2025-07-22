@@ -10,8 +10,8 @@ use crate::runtime::host_interface::HostInterface;
 use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeResult, RuntimeError};
 use crate::ccos::causal_chain::CausalChain;
-use crate::ccos::capability_marketplace::CapabilityMarketplace;
-use crate::ccos::security::RuntimeContext;
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::security::RuntimeContext;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
 
 #[derive(Debug, Clone)]
@@ -94,9 +94,9 @@ impl HostInterface for RuntimeHost {
         )
         .with_parent(Some(context.parent_action_id.clone()))
         .with_name(name)
-        .with_arguments(&capability_args);
+        .with_arguments(&args);
 
-        let action_id = self.get_causal_chain()?.append(action)?;
+        let action_id = self.get_causal_chain()?.append(&action)?;
 
         // 3. Execute the capability via the marketplace
         // Note: This is a blocking call to bridge the async marketplace with the sync evaluator.
@@ -114,7 +114,7 @@ impl HostInterface for RuntimeHost {
             Err(e) => ExecutionResult { success: false, value: Value::Nil, metadata: Default::default() }.with_error(&e.to_string()),
         };
 
-        self.get_causal_chain()?.record_result(&action_id, execution_result)?;
+        self.get_causal_chain()?.record_result(action, execution_result)?;
 
         result
     }
@@ -129,7 +129,7 @@ impl HostInterface for RuntimeHost {
         .with_parent(Some(context.parent_action_id.clone()))
         .with_name(step_name);
 
-        self.get_causal_chain()?.append(action)
+        self.get_causal_chain()?.append(&action)
     }
 
     fn notify_step_completed(&self, step_action_id: &str, result: &ExecutionResult) -> RuntimeResult<()> {
@@ -142,7 +142,7 @@ impl HostInterface for RuntimeHost {
         .with_parent(Some(step_action_id.to_string()))
         .with_result(result.clone());
 
-        self.get_causal_chain()?.append(action)?;
+        self.get_causal_chain()?.append(&action)?;
         Ok(())
     }
 
@@ -156,7 +156,7 @@ impl HostInterface for RuntimeHost {
         .with_parent(Some(step_action_id.to_string()))
         .with_error(error);
 
-        self.get_causal_chain()?.append(action)?;
+        self.get_causal_chain()?.append(&action)?;
         Ok(())
     }
 }
