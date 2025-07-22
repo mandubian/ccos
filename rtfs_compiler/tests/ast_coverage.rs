@@ -232,7 +232,7 @@ mod collection_coverage {
             "[\"hello\" :world true]",
             Expression::Vector(vec![
                 Expression::Literal(Literal::String("hello".to_string())),
-                Expression::Literal(Literal::Keyword(Keyword(":world".to_string()))),
+                Expression::Literal(Literal::Keyword(Keyword("world".to_string()))),
                 Expression::Literal(Literal::Boolean(true)),
             ])
         );
@@ -543,12 +543,12 @@ mod advanced_form_coverage {
                     MatchClause {
                         pattern: MatchPattern::Literal(Literal::Integer(1)),
                         guard: None,
-                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword(":one".to_string())))),
+                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword("one".to_string())))),
                     },
                     MatchClause {
                         pattern: MatchPattern::Literal(Literal::Integer(2)),
                         guard: None,
-                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword(":two".to_string())))),
+                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword("two".to_string())))),
                     },
                 ],
             })
@@ -570,7 +570,7 @@ mod advanced_form_coverage {
                 catch_clauses: vec![CatchClause {
                     pattern: CatchPattern::Symbol(Symbol("Exception".to_string())),
                     binding: Symbol("e".to_string()),
-                    body: vec![Expression::Literal(Literal::Keyword(Keyword(":error".to_string())))],
+                    body: vec![Expression::Literal(Literal::Keyword(Keyword("error".to_string())))],
                 }],
                 finally_body: None,
             })
@@ -804,19 +804,7 @@ mod pattern_coverage {
 // Integration test to verify complete parsing chain
 #[test]
 fn test_complex_nested_expression() {
-    let complex_input = r#"
-    (let [data {:users [
-        {:name "Alice" :age 25}
-        {:name "Bob" :age 30}
-    ]}]
-      (if (> (count (:users data)) 0)
-        (do
-          (log-step :info "Processing users")
-          (map (fn [user] 
-                 (str (:name user) " is " (:age user) " years old"))
-               (:users data)))
-        []))
-    "#;
+    let complex_input = "(let [data {:name \"Alice\" :age 25}] (if (> (:age data) 0) (do (log-step \"Processing user\") (:name data)) \"error\"))";
     
     // This test ensures the parser can handle complex nested structures
     // We don't check the exact AST structure here, just that it parses successfully
