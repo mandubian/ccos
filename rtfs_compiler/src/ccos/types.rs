@@ -642,7 +642,7 @@ mod tests {
         let plan = Plan::new_rtfs("(+ 1 2)".to_string(), vec!["intent-1".to_string()]);
 
         assert_eq!(plan.language, PlanLanguage::Rtfs20);
-        assert_eq!(plan.body, PlanBody::Text("(+ 1 2)".to_string()));
+        assert_eq!(plan.body, PlanBody::Rtfs("(+ 1 2)".to_string()));
         assert_eq!(plan.name, "");
         assert_eq!(plan.intent_ids, vec!["intent-1"]);
         assert!(plan.executed_at.is_none());
