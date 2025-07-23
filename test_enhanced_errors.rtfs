@@ -1,0 +1,19 @@
+;; Test cases for enhanced parser error reporting
+
+;; Test 1: Mismatched delimiter (opening parenthesis missing closing)
+(let [x 5
+
+;; Test 2: Mismatched bracket
+[1 2 3)
+
+;; Test 3: Missing function name
+(+ 1 2)
+
+;; Test 4: Invalid let syntax  
+(let x 5)
+
+;; Test 5: Invalid if syntax
+(if)
+
+;; Test 6: Invalid fn syntax
+(fn)
