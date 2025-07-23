@@ -112,42 +112,44 @@ At the heart of CCOS is the **Arbiter**—this is the AI. It is the core cogniti
 
 ```mermaid
 graph TD
-    subgraph User / Environment
-        U[/"👤<br/>User Intent<br/>'Summarize project status'"/]
+    subgraph "External World"
+        U[/"👤<br/>User Intent"/]
+        ExtAgents["⚡️ External Capabilities<br/>(Other LLMs, APIs, A2A Agents)"]
     end
 
     subgraph "CCOS: A Governed Cognitive Architecture"
-        subgraph "🧠 Cognitive Layer (Low Privilege, AI-driven)"
-            Arbiter["Arbiter<br/>(LLM-based Planner)<br/>Reasons about intent, queries knowledge"]
+        subgraph "🧠 Cognitive Layer (Low Privilege)"
+            Arbiter["Arbiter<br/>(AI Planner/Reasoner)"]
         end
 
-        subgraph "🛡️ Governance Layer (High Privilege, Human-defined)"
-            Kernel["Governance Kernel<br/>(Formally Verified Engine)"]
-            Constitution["📜 Constitution<br/>(Immutable Rules, Ethics, Policies)"]
+        subgraph "🛡️ Governance Layer (High Privilege)"
+            Kernel["Governance Kernel<br/>(Validates & Authorizes)"]
+            Constitution["📜 Constitution<br/>(Immutable Rules & Policies)"]
         end
 
-        subgraph "⚙️ Orchestration Layer (Deterministic)"
-            Orchestrator["Orchestrator<br/>Executes validated steps"]
-        end
-
-        subgraph "🌍 Knowledge & Capability Ecosystem"
-            IntentGraph["🎯 Living Intent Graph<br/>(The 'Why')"]
-            Marketplace["🏪 Capability Marketplace<br/>(Discoverable Functions)"]
-            CausalChain["⛓️ Causal Chain<br/>(The Immutable 'What Happened')"]
+        subgraph "⚙️ Orchestration & Knowledge"
+            Orchestrator["Orchestrator<br/>(Deterministic Executor)"]
+            Marketplace["🏪 Capability Marketplace<br/>(Internal & External Discovery)"]
+            IntentGraph["🎯 Living Intent Graph"]
+            CausalChain["⛓️ Immutable Causal Chain"]
         end
     end
-
-    %% Flows
+    
+    %% Core Flows
     U --> |1. Expresses Intent| Arbiter
-    Arbiter -- "2. Reads context from" --> IntentGraph
+    Arbiter -- "2. Reads context" --> IntentGraph
     Arbiter -- "3. Proposes Plan" --> Kernel
     Kernel -- "4. Validates Plan against" --> Constitution
     Kernel -- "5. Authorizes & Dispatches" --> Orchestrator
-    Orchestrator -- "6. Executes Step<br/>(e.g., calls a capability)" --> Marketplace
-    Marketplace -- "7. Returns Result" --> Orchestrator
-    Orchestrator -- "8. Records Action<br/>(Links Intent, Plan, Result)" --> CausalChain
-    Arbiter -- "9. Learns & Updates" --> IntentGraph
-    CausalChain -- "Provides full audit trail for" --> U
+    
+    Orchestrator -- "6. Executes Step" --> Marketplace
+    Marketplace -- "7. Discovers & Calls" --> ExtAgents
+    ExtAgents -- "8. Returns Result" --> Marketplace
+    Marketplace -- "9. Forwards Result" --> Orchestrator
+    
+    Orchestrator -- "10. Records Action to" --> CausalChain
+    Arbiter -- "11. Learns from" --> CausalChain
+    CausalChain -.-> |"Provides Full Audit Trail"| U
 ```
 This architecture ensures that the AI's powerful reasoning capabilities are always constrained by human-defined rules, creating a system that is both intelligent and trustworthy.
 
@@ -218,6 +220,16 @@ Here is a conceptual example of a plan that demonstrates this dynamic delegation
   )
 )
 ```
+
+## CCOS and the Broader AI Ecosystem (MCP, A2A)
+
+It is crucial to understand that CCOS is **not** a competing standard to agent communication protocols like **MCP (Model Context Protocol)** or **A2A (Agent-to-Agent)**. Instead, CCOS is a foundational layer that complements and empowers them.
+
+If MCP and A2A are the "languages" that agents use to speak to each other, **CCOS is the advanced "operating system" that an agent runs on.**
+
+The CCOS architecture integrates these protocols seamlessly through its `CapabilityMarketplace`. To an agent running on CCOS, an external MCP tool or another A2A agent simply appears as another capability it can discover and orchestrate within a plan. The CCOS runtime handles the low-level protocol details, while the agent's Arbiter focuses on the high-level strategic goal.
+
+This means an agent built on CCOS can be a fully-fledged, compliant citizen in any multi-agent ecosystem. It gains the immense benefits of CCOS's internal governance, planning, and auditable reasoning, while still being able to communicate and collaborate using established, open standards. **CCOS doesn't seek to replace the agent network; it aims to provide a smarter, safer node to run on it.**
 
 ## Getting Started
 
