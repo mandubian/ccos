@@ -128,6 +128,11 @@ pub enum RuntimeError {
     InvalidTaskDefinition(String),
 
     InvalidParallelExpression,
+
+    InvalidArguments {
+        expected: String,
+        actual: String,
+    },
 }
 
 impl RuntimeError {
@@ -229,6 +234,9 @@ impl fmt::Display for RuntimeError {
             RuntimeError::StackOverflow(msg) => {
                 write!(f, "Stack overflow: {}", msg)
             },
+            RuntimeError::InvalidArguments { expected, actual } => {
+                write!(f, "Invalid arguments: expected {}, got {}", expected, actual)
+            },
         }
     }
 }
@@ -268,6 +276,9 @@ impl RuntimeError {    pub fn to_value(&self) -> Value {
             },
             RuntimeError::KeyNotFound { key } => {
                 format!("Key not found: {}", key)
+            },
+            RuntimeError::InvalidArguments { expected, actual } => {
+                format!("Invalid arguments: expected {}, got {}", expected, actual)
             },
             _ => {
                 self.to_string()

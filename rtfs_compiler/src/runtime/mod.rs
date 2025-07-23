@@ -38,7 +38,7 @@ pub use ccos_environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel, Capabili
 use crate::ast::Expression;
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
-use crate::runtime::security::{RuntimeContext, SecurityPolicies};
+use crate::runtime::security::{RuntimeContext};
 use crate::runtime::host::RuntimeHost;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::capability_registry::CapabilityRegistry;
@@ -46,8 +46,7 @@ use crate::ccos::causal_chain::CausalChain;
 use std::rc::Rc;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, Copy)]
 pub enum RuntimeStrategyValue {
@@ -86,12 +85,11 @@ impl Runtime {
         
         let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Rc::new(RefCell::new(
-            CausalChain::new().expect("Failed to create causal chain")
-        ));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+
         let host = Rc::new(RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         
@@ -108,12 +106,11 @@ impl Runtime {
         
         let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Rc::new(RefCell::new(
-            CausalChain::new().expect("Failed to create causal chain")
-        ));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+
         let host = Rc::new(RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         
@@ -129,13 +126,12 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         
         let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Rc::new(RefCell::new(
-            CausalChain::new().expect("Failed to create causal chain")
-        ));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));       
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+
         let host = Rc::new(RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         
@@ -180,12 +176,11 @@ impl IrWithFallbackStrategy {
         
         let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Rc::new(RefCell::new(
-            CausalChain::new().expect("Failed to create causal chain")
-        ));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+
         let host = Rc::new(RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         

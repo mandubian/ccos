@@ -127,11 +127,11 @@ mod object_tests {
         let module_registry = Rc::new(ModuleRegistry::new());
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-        let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let security_context =  crate::runtime::security::RuntimeContext::pure();
         let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         let evaluator = Evaluator::new(module_registry, Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);
@@ -149,11 +149,11 @@ mod object_tests {
         let module_registry = Rc::new(ModuleRegistry::new());
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-        let causal_chain = std::rc::Rc::new(std::cell::RefCell::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let security_context =  crate::runtime::security::RuntimeContext::pure();
         let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         let evaluator = Evaluator::new(module_registry, Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);

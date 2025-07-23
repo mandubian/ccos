@@ -118,9 +118,10 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
                 let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
                 
+                let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
                 let host = std::rc::Rc::new(RuntimeHost::new(
+                    causal_chain,
                     capability_marketplace,
-                    std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                     rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));
                 let evaluator =
@@ -260,9 +261,11 @@ fn main() {
                 eprintln!("Warning: Failed to load standard library: {:?}", e);
             }
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+                let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+                let capability_marketplace = Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
                 let host = std::rc::Rc::new(RuntimeHost::new(
-                    Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry)),
-                    std::rc::Rc::new(RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+                    causal_chain,
+                    capability_marketplace,
                     rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));
                 let mut evaluator =
@@ -273,12 +276,11 @@ fn main() {
                         host.clone(),
                     );
 
-            // Set execution context for capability calls
-            host.prepare_execution("demo-plan".to_string(), vec!["demo-intent".to_string()]);
+            // TODO: Call host.prepare_execution() when method is implemented
 
             match evaluator.eval_toplevel(&parsed_items) {
                 Ok(value) => {
-                    host.cleanup_execution();
+                    // TODO: Call host.cleanup_execution() when method is implemented
                     let exec_time = exec_start.elapsed();
                     if args.verbose {
                         println!("✅ Execution completed in {:?}", exec_time);
@@ -287,7 +289,7 @@ fn main() {
                     all_results.push(value);
                 }
                 Err(e) => {
-                    host.cleanup_execution();
+                    // TODO: Call host.cleanup_execution() when method is implemented
                     eprintln!("❌ Runtime error: {:?}", e);
                     std::process::exit(1);
                 }

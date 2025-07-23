@@ -10,13 +10,16 @@ use crate::runtime::host_interface::HostInterface;
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::{Arity, Function, Value};
 use crate::runtime::security::RuntimeContext;
+use crate::ccos::types::ExecutionResult;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
+
+type SpecialFormHandler = fn(&Evaluator, &[Expression], &mut Environment) -> RuntimeResult<Value>;
 
 #[derive(Clone, Debug)]
 pub struct Evaluator {
@@ -31,6 +34,8 @@ pub struct Evaluator {
     pub security_context: RuntimeContext,
     /// Host interface for CCOS interactions
     pub host: Rc<dyn HostInterface>,
+    /// Dispatch table for special forms
+    special_forms: HashMap<String, SpecialFormHandler>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -49,6 +54,13 @@ fn values_equivalent(a: &Value, b: &Value) -> bool {
 }
 
 impl Evaluator {
+    fn default_special_forms() -> HashMap<String, SpecialFormHandler> {
+        let mut special_forms: HashMap<String, SpecialFormHandler> = HashMap::new();
+        special_forms.insert("step".to_string(), Self::eval_step_form);
+        // Add other evaluator-level special forms here in the future
+        special_forms
+    }
+
     /// Create a new evaluator with secure environment and default security context
     pub fn new(
         module_registry: Rc<ModuleRegistry>, 
@@ -69,6 +81,7 @@ impl Evaluator {
             model_registry,
             security_context,
             host,
+            special_forms: Self::default_special_forms(),
         }
     }
 
@@ -93,6 +106,7 @@ impl Evaluator {
             model_registry,
             security_context,
             host,
+            special_forms: Self::default_special_forms(),
         }
     }
 
@@ -216,19 +230,23 @@ impl Evaluator {
             Expression::Symbol(sym) => env
                 .lookup(sym)
                 .ok_or_else(|| RuntimeError::UndefinedSymbol(sym.clone())),
-            Expression::List(exprs) => {
-                // Empty list evaluates to empty list
-                if exprs.is_empty() {
+            Expression::List(list) => {
+                if list.is_empty() {
                     return Ok(Value::Vector(vec![]));
                 }
 
-                // First element should be a function
-                let func_expr = &exprs[0];
+                if let Expression::Symbol(s) = &list[0] {
+                    if let Some(handler) = self.special_forms.get(&s.0) {
+                        return handler(self, &list[1..], env);
+                    }
+                }
+
+                // It's a regular function call
+                let func_expr = &list[0];
                 let func_value = self.eval_expr(func_expr, env)?;
 
-                // Evaluate arguments
                 let args: Result<Vec<Value>, RuntimeError> =
-                    exprs[1..].iter().map(|e| self.eval_expr(e, env)).collect();
+                    list[1..].iter().map(|e| self.eval_expr(e, env)).collect();
                 let args = args?;
 
                 self.call_function(func_value, &args, env)
@@ -292,6 +310,53 @@ impl Evaluator {
             }
         }
     }
+
+    fn eval_step_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // 1. Validate arguments: "name" ...body
+        if args.is_empty() { 
+            return Err(RuntimeError::InvalidArguments {
+                expected: "at least 1 (a string name)".to_string(),
+                actual: "0".to_string(),
+            });
+        }
+
+        let step_name = match &args[0] {
+            Expression::Literal(crate::ast::Literal::String(s)) => s.clone(),
+            _ => return Err(RuntimeError::InvalidArguments {
+                expected: "a string for the step name".to_string(),
+                actual: format!("{:?}", args[0]),
+            }),
+        };
+
+        // 2. Notify host that step has started
+        let step_action_id = self.host.notify_step_started(&step_name)?;
+
+        // 3. Evaluate the body of the step
+        let body_exprs = &args[1..];
+        let mut last_result = Ok(Value::Nil);
+
+        for expr in body_exprs {
+            last_result = self.eval_expr(expr, env);
+            if let Err(e) = &last_result {
+                // On failure, notify host and propagate the error
+                self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                return last_result;
+            }
+        }
+
+        // 4. Notify host of successful completion
+        let final_value = last_result?;
+        let exec_result = ExecutionResult {
+            success: true,
+            value: final_value.clone(),
+            metadata: Default::default(),
+        };
+        self.host.notify_step_completed(&step_action_id, &exec_result)?;
+
+        Ok(final_value)
+    }
+
+    
 
     /// Evaluate an expression in the global environment
     pub fn evaluate(&self, expr: &Expression) -> RuntimeResult<Value> {
@@ -1658,6 +1723,7 @@ impl Evaluator {
             model_registry: self.model_registry.clone(),
             security_context,
             host: self.host.clone(),
+            special_forms: Self::default_special_forms(),
         }
     }
 
@@ -1678,6 +1744,7 @@ impl Evaluator {
             model_registry: Arc::new(ModelRegistry::with_defaults()),
             security_context,
             host,
+            special_forms: Self::default_special_forms(),
         }
     }
 }
@@ -1699,11 +1766,14 @@ impl Default for Evaluator {
         use tokio::sync::RwLock;
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
-        let causal_chain = Rc::new(RefCell::new(CausalChain::new().unwrap()));
-        let host_security_context = RuntimeContext::pure();
-        let runtime_host = RuntimeHost::new(capability_marketplace, causal_chain, host_security_context);
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let runtime_host = RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        );
         let host = Rc::new(runtime_host);
-        
+
         Self::new(
             module_registry,
             delegation_engine,
