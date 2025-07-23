@@ -13,11 +13,7 @@ use std::collections::HashMap;
 
 /// Convert RTFS IntentDefinition to CCOS Intent
 pub fn intent_from_rtfs(rtfs_intent: &IntentDefinition) -> Result<Intent, RuntimeError> {
-    let mut intent = Intent::with_name(
-        rtfs_intent.name.0.clone(),
-        String::new(), // Will be set from properties
-        String::new(), // Will be set from properties
-    );
+    let mut intent = Intent::new(String::new()).with_name(rtfs_intent.name.0.clone());
 
     // Parse properties
     for property in &rtfs_intent.properties {
@@ -35,12 +31,6 @@ pub fn intent_from_rtfs(rtfs_intent: &IntentDefinition) -> Result<Intent, Runtim
             }
             "success-criteria" => {
                 intent.success_criteria = Some(expression_to_value(&property.value)?);
-            }
-            "emotional-tone" => {
-                intent.emotional_tone = Some(expression_to_string(&property.value)?);
-            }
-            "parent-intent" => {
-                intent.parent_intent = Some(expression_to_string(&property.value)?);
             }
             "id" | "intent-id" => {
                 intent.intent_id = expression_to_string(&property.value)?;
@@ -248,7 +238,7 @@ mod tests {
         };
 
         let intent = intent_from_rtfs(&rtfs_intent).unwrap();
-        assert_eq!(intent.name, "my-intent");
+        assert_eq!(intent.name.unwrap(), "my-intent");
         assert_eq!(intent.goal, "Analyze data");
     }
 
@@ -271,7 +261,7 @@ mod tests {
         };
 
         let plan = plan_from_rtfs(&rtfs_plan).unwrap();
-        assert_eq!(plan.name, "my-plan");
+        assert_eq!(plan.name.unwrap(), "my-plan");
         assert_eq!(plan.language, PlanLanguage::Rtfs20);
         assert_eq!(plan.intent_ids, vec!["intent-1"]);
     }
