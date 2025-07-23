@@ -85,13 +85,13 @@ impl Orchestrator {
         let final_result = match &plan.language {
             PlanLanguage::Rtfs20 => {
                 match &plan.body {
-                    PlanBody::Text(rtfs_code) => {
+                    PlanBody::Rtfs(rtfs_code) => {
                         match parse_expression(rtfs_code) {
                             Ok(expr) => evaluator.evaluate(&expr),
                             Err(e) => Err(RuntimeError::Generic(format!("Failed to parse RTFS plan body: {:?}", e))),
                         }
                     }
-                    PlanBody::Bytes(_) => Err(RuntimeError::Generic("RTFS plans must use Text body format".to_string())),
+                    PlanBody::Wasm(_) => Err(RuntimeError::Generic("RTFS plans must use Rtfs body format".to_string())),
                 }
             }
             _ => Err(RuntimeError::Generic(format!("Unsupported plan language: {:?}", plan.language))),
