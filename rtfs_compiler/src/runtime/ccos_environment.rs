@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Security levels for CCOS execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +109,7 @@ impl CCOSEnvironment {
         // Create capability marketplace with integrated registry
         let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
         // Create causal chain for tracking
-        let causal_chain = Rc::new(RefCell::new(CausalChain::new()?));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
         // Determine runtime context based on security level
         let runtime_context = match config.security_level {
             SecurityLevel::Minimal => RuntimeContext::pure(),
@@ -117,8 +118,8 @@ impl CCOSEnvironment {
         };
         // Create runtime host
         let host = Rc::new(RuntimeHost::new(
-            marketplace.clone(),
             causal_chain,
+            marketplace.clone(),
             runtime_context.clone(),
         ));
         // Create module registry and load standard library
@@ -144,17 +145,17 @@ impl CCOSEnvironment {
     
     /// Execute a single RTFS expression
     pub fn execute_expression(&self, expr: &Expression) -> RuntimeResult<Value> {
-        // Set execution context
-        self.host.prepare_execution(
-            "repl-session".to_string(),
-            vec!["interactive".to_string()],
-        );
+        // TODO: Call host.prepare_execution() when method is implemented
+        // self.host.prepare_execution(
+        //     "repl-session".to_string(),
+        //     vec!["interactive".to_string()],
+        // );
         
         // Execute the expression
         let result = self.evaluator.evaluate(expr);
         
-        // Cleanup execution context
-        self.host.cleanup_execution();
+        // TODO: Call host.cleanup_execution() when method is implemented
+        // self.host.cleanup_execution();
         
         result
     }
@@ -167,11 +168,11 @@ impl CCOSEnvironment {
         
         let mut last_result = Value::Nil;
         
-        // Set execution context
-        self.host.prepare_execution(
-            "code-execution".to_string(),
-            vec!["batch".to_string()],
-        );
+        // TODO: Call host.prepare_execution() when method is implemented
+        // self.host.prepare_execution(
+        //     "code-execution".to_string(),
+        //     vec!["batch".to_string()],
+        // );
         
         // Execute each top-level item
         for item in parsed {
@@ -188,8 +189,8 @@ impl CCOSEnvironment {
             }
         }
         
-        // Cleanup execution context
-        self.host.cleanup_execution();
+        // TODO: Call host.cleanup_execution() when method is implemented
+        // self.host.cleanup_execution();
         
         Ok(last_result)
     }

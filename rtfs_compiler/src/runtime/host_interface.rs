@@ -1,27 +1,26 @@
-//! Defines the `HostInterface` trait for decoupling the runtime from the host environment.
+//! Host Interface
+//!
+//! Defines the trait that bridges the RTFS runtime (which is pure) and the
+//! CCOS host environment (which manages state, security, and capabilities).
 
-use crate::runtime::error::RuntimeResult;
 use crate::runtime::values::Value;
+use crate::runtime::error::RuntimeResult;
+use crate::ccos::types::ExecutionResult;
 
-/// `HostInterface` is the contract between an RTFS execution engine (like the `Evaluator`)
-/// and the host environment (like the CCOS Arbiter).
-///
-/// This trait allows the runtime to request host-level services, such as executing a
-/// capability, without being coupled to the specific implementation of the host.
+/// The HostInterface provides the contract between the RTFS runtime and the CCOS host.
 pub trait HostInterface: std::fmt::Debug {
-    /// Sets the context for the subsequent execution run.
-    ///
-    /// This must be called by the host (e.g., a Plan Executor) before evaluating
-    /// the RTFS program to ensure that all generated actions have the correct
-    /// provenance (plan ID, intent IDs).
-    fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>);
-
-    /// Clears the execution context after a run is complete.
-    fn clear_execution_context(&self);
-
-    /// Requests that the host execute a capability with the given name and arguments.
-    ///
-    /// The implementation of this method is responsible for all CCOS-specific logic,
-    /// including security checks, marketplace lookups, and causal chain recording.
+    /// Executes a capability through the CCOS infrastructure.
+    /// This is the primary entry point for the runtime to perform external actions.
     fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value>;
+
+    /// Notifies the host that a plan step has started.
+    /// The host is responsible for logging this to the Causal Chain.
+    /// Returns the action_id of the created "PlanStepStarted" action.
+    fn notify_step_started(&self, step_name: &str) -> RuntimeResult<String>;
+
+    /// Notifies the host that a plan step has completed successfully.
+    fn notify_step_completed(&self, step_action_id: &str, result: &ExecutionResult) -> RuntimeResult<()>;
+
+    /// Notifies the host that a plan step has failed.
+    fn notify_step_failed(&self, step_action_id: &str, error: &str) -> RuntimeResult<()>;
 }

@@ -15,10 +15,14 @@ fn test_mutual_recursion_pattern() {
 
     let parsed = parser::parse(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(RuntimeHost::new(
-        std::sync::Arc::new(CapabilityMarketplace::default()),
-        Rc::new(RefCell::new(CausalChain::new().unwrap())),
-        RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(
         module_registry,
@@ -52,10 +56,14 @@ fn test_nested_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(RuntimeHost::new(
-        std::sync::Arc::new(CapabilityMarketplace::default()),
-        Rc::new(RefCell::new(CausalChain::new().unwrap())),
-        RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(
         module_registry,
@@ -77,10 +85,14 @@ fn test_higher_order_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(RuntimeHost::new(
-        std::sync::Arc::new(CapabilityMarketplace::default()),
-        Rc::new(RefCell::new(CausalChain::new().unwrap())),
-        RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(
         module_registry,
@@ -102,10 +114,14 @@ fn test_three_way_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(RuntimeHost::new(
-        std::sync::Arc::new(CapabilityMarketplace::default()),
-        Rc::new(RefCell::new(CausalChain::new().unwrap())),
-        RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(
         module_registry,

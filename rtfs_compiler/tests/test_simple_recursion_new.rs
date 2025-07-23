@@ -19,11 +19,14 @@ fn test_simple_mutual_recursion() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(capability_registry)),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
@@ -50,11 +53,14 @@ fn test_simple_factorial() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Rc::new(ModuleRegistry::new());
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(capability_registry)),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");

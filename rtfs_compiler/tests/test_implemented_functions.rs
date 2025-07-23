@@ -11,10 +11,14 @@ use std::sync::Arc;
 fn test_factorial() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -53,10 +57,14 @@ fn test_factorial() {
 fn test_length_value() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -101,10 +109,14 @@ fn test_length_value() {
 fn test_current_time() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -130,10 +142,14 @@ fn test_current_time() {
 fn test_json_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -206,10 +222,14 @@ fn test_json_functions() {
 fn test_file_exists() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -233,10 +253,14 @@ fn test_file_exists() {
 fn test_get_env() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -266,10 +290,14 @@ fn test_get_env() {
 fn test_log_function() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -294,10 +322,14 @@ fn test_log_function() {
 fn test_agent_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -348,10 +380,14 @@ fn test_agent_functions() {
 fn test_map_filter_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
@@ -395,10 +431,14 @@ fn test_map_filter_functions() {
 fn test_reduce_function() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Rc::new(ModuleRegistry::new());
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new()),
-        Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
-        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
+    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
     ));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 

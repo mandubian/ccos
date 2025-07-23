@@ -16,6 +16,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::Mutex;
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]
@@ -88,14 +89,12 @@ impl RtfsRepl {
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-        let causal_chain = Rc::new(RefCell::new(
-            CausalChain::new().expect("Failed to create causal chain")
-        ));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         
         let host = Rc::new(RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         
@@ -121,14 +120,12 @@ impl RtfsRepl {
                 let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
                 let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-                let causal_chain: Rc<RefCell<CausalChain>> = Rc::new(RefCell::new(
-                    CausalChain::new().expect("Failed to create causal chain")
-                ));
+                let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
                 let security_context = crate::runtime::security::RuntimeContext::pure();
                 
                 let host = Rc::new(RuntimeHost::new(
-                    capability_marketplace,
                     causal_chain,
+                    capability_marketplace,
                     security_context.clone(),
                 ));
                 
@@ -247,14 +244,12 @@ impl RtfsRepl {
                 let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
                 let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-                let causal_chain = Rc::new(RefCell::new(
-                    CausalChain::new().expect("Failed to create causal chain")
-                ));
+                let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
                 let security_context = crate::runtime::security::RuntimeContext::pure();
                 
                 let host = Rc::new(RuntimeHost::new(
-                    capability_marketplace,
                     causal_chain,
+                    capability_marketplace,
                     security_context.clone(),
                 ));
                 
@@ -535,14 +530,12 @@ impl RtfsTestFramework {
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-        let causal_chain = Rc::new(RefCell::new(
-            CausalChain::new().expect("Failed to create causal chain")
-        ));
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         
         let host = Rc::new(RuntimeHost::new(
-            capability_marketplace,
             causal_chain,
+            capability_marketplace,
             security_context.clone(),
         ));
         

@@ -3,7 +3,7 @@
 //! This module implements the Living Intent Graph - a dynamic, multi-layered data structure
 //! that stores and manages user intents with their relationships and lifecycle.
 
-use super::types::{Edge, EdgeType, ExecutionResult, Intent, IntentId, IntentStatus};
+use super::types::{EdgeType, ExecutionResult, Intent, IntentId, IntentStatus};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use std::collections::{HashMap, HashSet};
@@ -56,12 +56,12 @@ impl IntentGraphStorage {
         let mut related = Vec::new();
 
         for edge in &self.edges {
-            if edge.from_intent == *intent_id {
-                if let Some(intent) = self.intents.get(&edge.to_intent) {
+            if edge.from == *intent_id {
+                if let Some(intent) = self.intents.get(&edge.to) {
                     related.push(intent);
                 }
-            } else if edge.to_intent == *intent_id {
-                if let Some(intent) = self.intents.get(&edge.from_intent) {
+            } else if edge.to == *intent_id {
+                if let Some(intent) = self.intents.get(&edge.from) {
                     related.push(intent);
                 }
             }
@@ -74,8 +74,8 @@ impl IntentGraphStorage {
         let mut dependent = Vec::new();
 
         for edge in &self.edges {
-            if edge.to_intent == *intent_id && edge.edge_type == EdgeType::DependsOn {
-                if let Some(intent) = self.intents.get(&edge.from_intent) {
+            if edge.to == *intent_id && edge.edge_type == EdgeType::DependsOn {
+                if let Some(intent) = self.intents.get(&edge.from) {
                     dependent.push(intent);
                 }
             }
@@ -88,8 +88,8 @@ impl IntentGraphStorage {
         let mut subgoals = Vec::new();
 
         for edge in &self.edges {
-            if edge.from_intent == *intent_id && edge.edge_type == EdgeType::IsSubgoalOf {
-                if let Some(intent) = self.intents.get(&edge.to_intent) {
+            if edge.from == *intent_id && edge.edge_type == EdgeType::IsSubgoalOf {
+                if let Some(intent) = self.intents.get(&edge.to) {
                     subgoals.push(intent);
                 }
             }
@@ -102,13 +102,13 @@ impl IntentGraphStorage {
         let mut conflicting = Vec::new();
 
         for edge in &self.edges {
-            if (edge.from_intent == *intent_id || edge.to_intent == *intent_id)
+            if (edge.from == *intent_id || edge.to == *intent_id)
                 && edge.edge_type == EdgeType::ConflictsWith
             {
-                let other_id = if edge.from_intent == *intent_id {
-                    &edge.to_intent
+                let other_id = if edge.from == *intent_id {
+                    &edge.to
                 } else {
-                    &edge.from_intent
+                    &edge.from
                 };
                 if let Some(intent) = self.intents.get(other_id) {
                     conflicting.push(intent);
@@ -235,15 +235,7 @@ impl IntentGraphVirtualization {
         // Load related intents (parents, dependencies, etc.)
         for intent_id in intent_ids {
             if let Some(intent) = storage.get_intent(intent_id) {
-                // Load parent intents
-                if let Some(parent_id) = &intent.parent_intent {
-                    if !loaded_ids.contains(parent_id) {
-                        if let Some(parent) = storage.get_intent(parent_id) {
-                            context_intents.push(parent.clone());
-                            loaded_ids.insert(parent_id.clone());
-                        }
-                    }
-                }
+                // parent_intent field does not exist; skip or use metadata if needed
 
                 // Load dependent intents
                 for dependent in storage.get_dependent_intents(intent_id) {
@@ -535,6 +527,20 @@ impl IntentGraph {
         let edge = Edge::new(from_intent, to_intent, edge_type);
         self.storage.store_edge(edge)?;
         Ok(())
+    }
+}
+
+// Minimal Edge struct to resolve missing type errors
+#[derive(Clone, Debug)]
+pub struct Edge {
+    pub from: String,
+    pub to: String,
+    pub edge_type: EdgeType,
+}
+
+impl Edge {
+    pub fn new(from: String, to: String, edge_type: EdgeType) -> Self {
+        Self { from, to, edge_type }
     }
 }
 
