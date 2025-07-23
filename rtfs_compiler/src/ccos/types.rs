@@ -90,8 +90,8 @@ pub struct Plan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanBody {
-    Text(String),     // RTFS source, Python script, JSON spec
-    Bytes(Vec<u8>),   // compiled WASM, jar, etc.
+    Rtfs(String),     // RTFS source code
+    Wasm(Vec<u8>),    // compiled WASM bytecode
 }
 
 // --- Causal Chain (SEP-003) ---
@@ -170,7 +170,7 @@ impl Plan {
             name: None,
             intent_ids,
             language: PlanLanguage::Rtfs20,
-            body: PlanBody::Text(rtfs_code),
+            body: PlanBody::Rtfs(rtfs_code),
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             metadata: HashMap::new(),
         }
@@ -249,5 +249,57 @@ impl ExecutionResult {
         self.success = false;
         self.metadata.insert("error".to_string(), Value::String(error_message.to_string()));
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intent_creation() {
+        let intent = Intent::new("Test goal".to_string())
+            .with_constraint("max_cost".to_string(), Value::Float(100.0))
+            .with_preference("priority".to_string(), Value::String("speed".to_string()));
+
+        assert_eq!(intent.goal, "Test goal");
+        assert_eq!(
+            intent.constraints.get("max_cost"),
+            Some(&Value::Float(100.0))
+        );
+        assert_eq!(
+            intent.preferences.get("priority"),
+            Some(&Value::String("speed".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_plan_creation() {
+        let plan = Plan::new_rtfs("(+ 1 2)".to_string(), vec!["intent-1".to_string()]);
+
+        assert_eq!(plan.language, PlanLanguage::Rtfs20);
+        assert_eq!(plan.body, PlanBody::Rtfs("(+ 1 2)".to_string()));
+        assert_eq!(plan.intent_ids, vec!["intent-1"]);
+    }
+
+    #[test]
+    fn test_action_creation() {
+        let action = Action::new(ActionType::CapabilityCall, "plan-1".to_string(), "intent-1".to_string());
+
+        assert_eq!(action.plan_id, "plan-1");
+        assert_eq!(action.intent_id, "intent-1");
+    }
+
+    #[test]
+    fn test_capability_creation() {
+        let capability = Capability::new(
+            "image-processing/sharpen".to_string(),
+            "provider-1".to_string(),
+            "(sharpen image factor)".to_string(),
+        );
+
+        assert_eq!(capability.function_name, "image-processing/sharpen");
+        assert_eq!(capability.provider_id, "provider-1");
+        assert_eq!(capability.status, CapabilityStatus::Active);
     }
 }

@@ -158,7 +158,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(plan.name, Some("analyze_user_sentiment".to_string()));
-        if let PlanBody::Text(body_text) = &plan.body {
+        if let PlanBody::Rtfs(body_text) = &plan.body {
             assert!(body_text.contains(":ml.analyze-sentiment"));
         } else {
             panic!("Plan body is not textual");
@@ -171,7 +171,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(plan.name, Some("optimize_response_time".to_string()));
-        if let PlanBody::Text(body_text) = &plan.body {
+        if let PlanBody::Rtfs(body_text) = &plan.body {
             assert!(body_text.contains(":monitoring.get-system-metrics"));
         } else {
             panic!("Plan body is not textual");
