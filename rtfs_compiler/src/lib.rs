@@ -41,5 +41,4 @@ pub use builders::{
 };
 
 // Re-export CCOS components
-pub use ccos::delegation;
-pub use ccos::{types::*, CCOSRuntime};
+pub use ccos::types::*;

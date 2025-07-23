@@ -99,8 +99,8 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
             let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
             let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
             let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+                Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                 capability_marketplace,
-                Rc::new(std::cell::RefCell::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                 rtfs_compiler::runtime::security::RuntimeContext::full(),
             ));
             let mut evaluator = Evaluator::with_environment(
@@ -112,7 +112,7 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
             );
             let exec_plan_name = plan_name.unwrap_or_else(|| "run-plan".to_string());
             for (i, step_expr) in steps_vec.iter().enumerate() {
-                HostInterface::set_execution_context(&*evaluator.host, exec_plan_name.clone(), vec!["run-intent".to_string()]);
+                // TODO: Set execution context when HostInterface supports it
                 let normalized_step = normalize_keywords_to_strings(step_expr);
                 let result = evaluator.eval_expr(&normalized_step, &mut evaluator.env.clone());
                 match result {
