@@ -90,8 +90,8 @@ pub struct Plan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanBody {
-    Text(String),     // RTFS source, Python script, JSON spec
-    Bytes(Vec<u8>),   // compiled WASM, jar, etc.
+    Rtfs(String),     // RTFS source code
+    Wasm(Vec<u8>),    // compiled WASM bytecode
 }
 
 // --- Causal Chain (SEP-003) ---

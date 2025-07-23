@@ -104,7 +104,7 @@ impl GovernanceKernel {
         // Check for logical inconsistencies between the intent and the plan.
         // Example: If intent is to send an email, the plan shouldn't be deleting files.
         if intent.goal.contains("email") {
-            if let PlanBody::Text(body_text) = &plan.body {
+                if let PlanBody::Rtfs(body_text) = &plan.body {
                 if body_text.contains("delete-file") {
                     return Err(RuntimeError::Generic("Plan action contradicts intent goal".to_string()));
                 }
@@ -118,8 +118,8 @@ impl GovernanceKernel {
     fn scaffold_plan(&self, mut plan: Plan) -> RuntimeResult<Plan> {
         // Extract the original body text
         let original_body = match &plan.body {
-            PlanBody::Text(text) => text.clone(),
-            PlanBody::Bytes(_) => return Err(RuntimeError::Generic("Cannot scaffold binary plan body".to_string())),
+            PlanBody::Rtfs(text) => text.clone(),
+            PlanBody::Wasm(_) => return Err(RuntimeError::Generic("Cannot scaffold binary plan body".to_string())),
         };
 
         // Wrap the original body in a `(do ...)` block if it isn't already.
@@ -135,7 +135,7 @@ impl GovernanceKernel {
             wrapped_body
         );
 
-        plan.body = PlanBody::Text(scaffolded_body);
+        plan.body = PlanBody::Rtfs(scaffolded_body);
         Ok(plan)
     }
 
@@ -143,7 +143,7 @@ impl GovernanceKernel {
     fn validate_against_constitution(&self, plan: &Plan) -> RuntimeResult<()> {
         // TODO: Implement actual validation logic based on loaded constitutional rules.
         // For now, this is a placeholder.
-                if let PlanBody::Text(body_text) = &plan.body {
+                if let PlanBody::Rtfs(body_text) = &plan.body {
             if body_text.contains("launch-nukes") {
                 return Err(RuntimeError::Generic("Plan violates Constitution: Rule against global thermonuclear war.".to_string()));
             }
