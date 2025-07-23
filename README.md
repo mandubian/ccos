@@ -136,19 +136,19 @@ graph TD
     end
     
     %% Core Flows
-    U --> |1. Expresses Intent| Arbiter
-    Arbiter -- "2. Reads context" --> IntentGraph
-    Arbiter -- "3. Proposes Plan" --> Kernel
-    Kernel -- "4. Validates Plan against" --> Constitution
-    Kernel -- "5. Authorizes & Dispatches" --> Orchestrator
+    U --> |1 Expresses Intent| Arbiter
+    Arbiter -- "2 Reads context" --> IntentGraph
+    Arbiter -- "3 Proposes Plan" --> Kernel
+    Kernel -- "4 Validates Plan against" --> Constitution
+    Kernel -- "5 Authorizes & Dispatches" --> Orchestrator
     
-    Orchestrator -- "6. Executes Step" --> Marketplace
-    Marketplace -- "7. Discovers & Calls" --> ExtAgents
-    ExtAgents -- "8. Returns Result" --> Marketplace
-    Marketplace -- "9. Forwards Result" --> Orchestrator
+    Orchestrator -- "6 Executes Step" --> Marketplace
+    Marketplace -- "7 Discovers & Calls" --> ExtAgents
+    ExtAgents -- "8 Returns Result" --> Marketplace
+    Marketplace -- "9 Forwards Result" --> Orchestrator
     
-    Orchestrator -- "10. Records Action to" --> CausalChain
-    Arbiter -- "11. Learns from" --> CausalChain
+    Orchestrator -- "10 Records Action to" --> CausalChain
+    Arbiter -- "11 Learns from" --> CausalChain
     CausalChain -.-> |"Provides Full Audit Trail"| U
 ```
 This architecture ensures that the AI's powerful reasoning capabilities are always constrained by human-defined rules, creating a system that is both intelligent and trustworthy.
