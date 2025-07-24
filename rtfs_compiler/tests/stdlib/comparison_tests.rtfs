@@ -1,0 +1,54 @@
+;; Comparison Function Tests
+;; Test file for comparison functions in the standard library
+
+;; Equal tests
+(= 1 1)                    ; Should return true
+(= 1 2)                    ; Should return false
+(= 1.0 1.0)               ; Should return true
+(= 1 1.0)                  ; Should return true
+(= "hello" "hello")        ; Should return true
+(= "hello" "world")        ; Should return false
+(= true true)              ; Should return true
+(= false true)             ; Should return false
+(= nil nil)                ; Should return true
+(= [] [])                  ; Should return true
+(= [1 2] [1 2])            ; Should return true
+(= [1 2] [1 3])            ; Should return false
+(= {:a 1} {:a 1})          ; Should return true
+(= {:a 1} {:a 2})          ; Should return false
+
+;; Not equal tests
+(not= 1 2)                 ; Should return true
+(not= 1 1)                 ; Should return false
+(not= "hello" "world")     ; Should return true
+(not= "hello" "hello")     ; Should return false
+
+;; Greater than tests
+(> 3 2)                    ; Should return true
+(> 2 3)                    ; Should return false
+(> 2 2)                    ; Should return false
+(> 3.5 2.5)               ; Should return true
+(> 2.5 3.5)               ; Should return false
+
+;; Less than tests
+(< 2 3)                    ; Should return true
+(< 3 2)                    ; Should return false
+(< 2 2)                    ; Should return false
+(< 2.5 3.5)               ; Should return true
+(< 3.5 2.5)               ; Should return false
+
+;; Greater than or equal tests
+(>= 3 2)                   ; Should return true
+(>= 2 2)                   ; Should return true
+(>= 2 3)                   ; Should return false
+(>= 3.5 2.5)              ; Should return true
+(>= 2.5 2.5)              ; Should return true
+(>= 2.5 3.5)              ; Should return false
+
+;; Less than or equal tests
+(<= 2 3)                   ; Should return true
+(<= 2 2)                   ; Should return true
+(<= 3 2)                   ; Should return false
+(<= 2.5 3.5)              ; Should return true
+(<= 2.5 2.5)              ; Should return true
+(<= 3.5 2.5)              ; Should return false 

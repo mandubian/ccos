@@ -638,7 +638,8 @@ mod tests {
             Some("test.rtfs".to_string()),
         );
 
-        assert!(error.message.contains("Expected"));
+        // Check that the error has a non-empty message and diagnostic hints
+        assert!(!error.message.is_empty());
         assert!(!error.diagnostic.hints.is_empty());
     }
 

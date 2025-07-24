@@ -254,13 +254,15 @@ impl ExecutionResult {
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::capability::Capability;
+
     use super::*;
 
     #[test]
     fn test_intent_creation() {
-        let intent = Intent::new("Test goal".to_string())
-            .with_constraint("max_cost".to_string(), Value::Float(100.0))
-            .with_preference("priority".to_string(), Value::String("speed".to_string()));
+        let mut intent = Intent::new("Test goal".to_string());
+        intent.constraints.insert("max_cost".to_string(), Value::Float(100.0));
+        intent.preferences.insert("priority".to_string(), Value::String("speed".to_string()));
 
         assert_eq!(intent.goal, "Test goal");
         assert_eq!(
@@ -292,14 +294,20 @@ mod tests {
 
     #[test]
     fn test_capability_creation() {
+        use crate::runtime::values::Arity;
+        use std::rc::Rc;
+        use crate::runtime::error::RuntimeResult;
+        use crate::runtime::values::Value;
+
         let capability = Capability::new(
             "image-processing/sharpen".to_string(),
-            "provider-1".to_string(),
-            "(sharpen image factor)".to_string(),
+            Arity::Fixed(2),
+            Rc::new(|_args: Vec<Value>| -> RuntimeResult<Value> {
+                Ok(Value::Nil)
+            })
         );
 
-        assert_eq!(capability.function_name, "image-processing/sharpen");
-        assert_eq!(capability.provider_id, "provider-1");
-        assert_eq!(capability.status, CapabilityStatus::Active);
+        assert_eq!(capability.id, "image-processing/sharpen");
+        assert_eq!(capability.arity, Arity::Fixed(2));
     }
 }

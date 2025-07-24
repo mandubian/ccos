@@ -43,7 +43,7 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
     let plan = arbiter.intent_to_plan(&intent).await.unwrap();
 
     // 5. Ensure the plan body is valid RTFS that the parser accepts
-    if let PlanBody::Text(code) = &plan.body {
+    if let PlanBody::Rtfs(code) = &plan.body {
         assert!(rtfs_compiler::parser::parse_expression(code).is_ok(), "Generated RTFS failed to parse");
     } else {
         panic!("Plan body is not textual RTFS");

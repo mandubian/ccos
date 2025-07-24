@@ -1,0 +1,89 @@
+;; Collection Function Tests
+;; Test file for collection manipulation functions in the standard library
+
+;; Vector tests
+(vector)                    ; Should return []
+(vector 1 2 3)             ; Should return [1 2 3]
+(vector "a" "b" "c")       ; Should return ["a" "b" "c"]
+(vector 1 "hello" true)    ; Should return [1 "hello" true]
+
+;; Hash map tests
+(hash-map)                  ; Should return {}
+(hash-map :a 1 :b 2)       ; Should return {:a 1 :b 2}
+(hash-map "key" "value")    ; Should return {"key" "value"}
+
+;; Get tests
+(get [1 2 3] 0)            ; Should return 1
+(get [1 2 3] 1)            ; Should return 2
+(get [1 2 3] 5)            ; Should return nil
+(get [1 2 3] -1)           ; Should return nil
+(get {:a 1 :b 2} :a)       ; Should return 1
+(get {:a 1 :b 2} :c)       ; Should return nil
+(get {:a 1 :b 2} :c 42)    ; Should return 42 (default)
+
+;; Count tests
+(count [])                  ; Should return 0
+(count [1 2 3])            ; Should return 3
+(count "")                  ; Should return 0
+(count "hello")             ; Should return 5
+(count {})                  ; Should return 0
+(count {:a 1 :b 2})        ; Should return 2
+
+;; First tests
+(first [1 2 3])            ; Should return 1
+(first [])                 ; Should return nil
+(first "hello")            ; Should return "h"
+(first "")                 ; Should return nil
+
+;; Rest tests
+(rest [1 2 3])             ; Should return [2 3]
+(rest [1])                 ; Should return []
+(rest [])                  ; Should return []
+(rest "hello")             ; Should return "ello"
+(rest "")                  ; Should return ""
+
+;; Conj tests
+(conj [1 2] 3)             ; Should return [1 2 3]
+(conj [1 2] 3 4)           ; Should return [1 2 3 4]
+(conj [] 1)                ; Should return [1]
+(conj {:a 1} [:b 2])       ; Should return {:a 1 :b 2}
+
+;; Empty tests
+(empty? [])                ; Should return true
+(empty? [1 2])             ; Should return false
+(empty? "")                ; Should return true
+(empty? "hello")           ; Should return false
+(empty? {})                ; Should return true
+(empty? {:a 1})            ; Should return false
+
+;; Cons tests
+(cons 1 [2 3])             ; Should return [1 2 3]
+(cons 1 [])                ; Should return [1]
+(cons "a" "bc")            ; Should return "abc"
+
+;; Get-in tests
+(get-in {:a {:b {:c 1}}} [:a :b :c])    ; Should return 1
+(get-in {:a {:b {:c 1}}} [:a :b :d])    ; Should return nil
+(get-in {:a {:b {:c 1}}} [:a :b :d] 42) ; Should return 42
+(get-in [[1 2] [3 4]] [0 1])            ; Should return 2
+
+;; Partition tests
+(partition 2 [1 2 3 4])    ; Should return [[1 2] [3 4]]
+(partition 2 [1 2 3])      ; Should return [[1 2]]
+(partition 3 [1 2 3 4 5 6]) ; Should return [[1 2 3] [4 5 6]]
+
+;; Assoc tests
+(assoc [1 2 3] 1 42)       ; Should return [1 42 3]
+(assoc {:a 1} :b 2)        ; Should return {:a 1 :b 2}
+(assoc {:a 1} :a 42)       ; Should return {:a 42}
+
+;; Dissoc tests
+(dissoc {:a 1 :b 2} :a)    ; Should return {:b 2}
+(dissoc {:a 1 :b 2} :c)    ; Should return {:a 1 :b 2}
+(dissoc {:a 1} :a)         ; Should return {}
+
+;; Range tests
+(range 5)                  ; Should return [0 1 2 3 4]
+(range 1 5)                ; Should return [1 2 3 4]
+(range 0 10 2)             ; Should return [0 2 4 6 8]
+(range 5 0 -1)             ; Should return [5 4 3 2 1] 
