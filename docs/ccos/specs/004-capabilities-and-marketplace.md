@@ -72,17 +72,26 @@ Delegation is the process of using a capability to assign a sub-task to another 
 
 Delegation is not a different mechanism; it is a pattern of using capabilities. A typical delegation capability might be `llm.generate-plan` or `human.approve-transaction`.
 
-```lisp
-(step "Generate a sub-plan"
-  (let [sub-plan-request {:goal "Analyze user sentiment data" :constraints ...}]
-    (let [generated-plan (call :llm.generate-plan sub-plan-request)])
-  )
-)
+The following example shows how a plan can use one step to generate a sub-plan and a second step to execute it. The outer `(let ...)` block ensures that the result of the first step (`generated_plan`) is available to the second step.
 
-(step "Execute the sub-plan"
-  (call :ccos.execute-plan generated-plan)
+```lisp
+(let [
+  ;; Step 1: Generate a sub-plan. The resulting plan object is bound to the `generated_plan` variable.
+  generated_plan (step "Generate a sub-plan"
+    (call :llm.generate-plan {:goal "Analyze user sentiment data" :constraints ...}))
+]
+  ;; Step 2: Execute the plan that was created in the previous step.
+  (step "Execute the sub-plan"
+    (call :ccos.execute-plan generated_plan))
 )
 ```
+
+> **Note on `(let)` and `(step)` Patterns**
+>
+> There are two primary ways to combine `let` and `step`, each for a different purpose:
+>
+> 1.  **`(let [var (step ...)] ...)` (Sequencing):** As shown above, this is the standard pattern for creating a sequence of dependent steps. The `let` creates a scope, and the result of one step is stored in a variable that can be used by subsequent steps.
+> 2.  **`(step ... (let ...))` (Encapsulation):** This pattern is used when a single step requires complex internal logic or temporary variables to prepare for its main `(call)`. The `let` is contained entirely *within* the step and its variables are not visible to other steps.
 
 ### 5.2. Key Features
 
