@@ -47,15 +47,416 @@ impl EnhancedIrOptimizer {
         match self.optimization_level {
             OptimizationLevel::None => node,
             _ => {
-                // First pass: control flow analysis
+                // First pass: constant folding
+                let node = self.optimize_constant_folding(node);
+                
+                // Second pass: control flow analysis
                 let node = self.optimize_control_flow(node);
                 
-                // Second pass: enhanced dead code elimination
+                // Third pass: enhanced dead code elimination
                 let node = self.optimize_dead_code_elimination(node);
                 
-                // Third pass: function inlining opportunities
+                // Fourth pass: function inlining opportunities
                 self.optimize_function_inlines(node)
             }
+        }
+    }
+
+    fn optimize_constant_folding(&self, node: IrNode) -> IrNode {
+        match node {
+            IrNode::Apply { id, function, arguments, ir_type, source_location } => {
+                // First optimize the arguments recursively
+                let optimized_args: Vec<IrNode> = arguments.into_iter()
+                    .map(|arg| self.optimize_constant_folding(arg))
+                    .collect();
+                
+                // Check if this is a call to a built-in arithmetic/comparison function with all literal arguments
+                if let IrNode::VariableRef { name, .. } = function.as_ref() {
+                    if self.can_constant_fold(name, &optimized_args) {
+                        if let Some(folded_result) = self.fold_constants(name, &optimized_args) {
+                            return folded_result;
+                        }
+                    }
+                }
+                
+                // If not folded, return with optimized arguments
+                IrNode::Apply {
+                    id,
+                    function: Box::new(self.optimize_constant_folding(*function)),
+                    arguments: optimized_args,
+                    ir_type,
+                    source_location,
+                }
+            },
+            
+            // Recursively optimize other node types
+            IrNode::If { id, condition, then_branch, else_branch, ir_type, source_location } => {
+                IrNode::If {
+                    id,
+                    condition: Box::new(self.optimize_constant_folding(*condition)),
+                    then_branch: Box::new(self.optimize_constant_folding(*then_branch)),
+                    else_branch: else_branch.map(|e| Box::new(self.optimize_constant_folding(*e))),
+                    ir_type,
+                    source_location,
+                }
+            },
+            
+            IrNode::Let { id, bindings, body, ir_type, source_location } => {
+                let optimized_bindings = bindings.into_iter().map(|binding| {
+                    IrLetBinding {
+                        pattern: self.optimize_constant_folding(binding.pattern),
+                        type_annotation: binding.type_annotation,
+                        init_expr: self.optimize_constant_folding(binding.init_expr),
+                    }
+                }).collect();
+                
+                IrNode::Let {
+                    id,
+                    bindings: optimized_bindings,
+                    body: body.into_iter().map(|expr| self.optimize_constant_folding(expr)).collect(),
+                    ir_type,
+                    source_location,
+                }
+            },
+            
+            IrNode::Do { id, expressions, ir_type, source_location } => {
+                IrNode::Do {
+                    id,
+                    expressions: expressions.into_iter().map(|expr| self.optimize_constant_folding(expr)).collect(),
+                    ir_type,
+                    source_location,
+                }
+            },
+            
+            // For literals and other nodes, return as-is
+            _ => self.optimize_recursive_constant_folding(node)
+        }
+    }
+
+    fn can_constant_fold(&self, function_name: &str, args: &[IrNode]) -> bool {
+        // Check if all arguments are literals and the function is foldable
+        let all_literals = args.iter().all(|arg| matches!(arg, IrNode::Literal { .. }));
+        
+        all_literals && matches!(function_name, "+" | "-" | "*" | "/" | "%" | ">" | "<" | ">=" | "<=" | "=" | "!=" | "and" | "or" | "not")
+    }
+
+    fn fold_constants(&self, function_name: &str, args: &[IrNode]) -> Option<IrNode> {
+        match function_name {
+            "+" => self.fold_arithmetic_add(args),
+            "-" => self.fold_arithmetic_subtract(args),
+            "*" => self.fold_arithmetic_multiply(args),
+            "/" => self.fold_arithmetic_divide(args),
+            "%" => self.fold_arithmetic_modulo(args),
+            ">" => self.fold_comparison_gt(args),
+            "<" => self.fold_comparison_lt(args),
+            ">=" => self.fold_comparison_gte(args),
+            "<=" => self.fold_comparison_lte(args),
+            "=" => self.fold_comparison_eq(args),
+            "!=" => self.fold_comparison_neq(args),
+            "and" => self.fold_logical_and(args),
+            "or" => self.fold_logical_or(args),
+            "not" => self.fold_logical_not(args),
+            _ => None,
+        }
+    }
+
+    fn fold_arithmetic_add(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() < 2 { return None; }
+        
+        let mut result = 0i64;
+        for arg in args {
+            if let IrNode::Literal { value: Literal::Integer(n), .. } = arg {
+                result += n;
+            } else {
+                return None; // Non-integer found
+            }
+        }
+        
+        Some(IrNode::Literal {
+            id: 0,
+            value: Literal::Integer(result),
+            ir_type: IrType::Int,
+            source_location: None,
+        })
+    }
+
+    fn fold_arithmetic_subtract(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            Some(IrNode::Literal {
+                id: 0,
+                value: Literal::Integer(a - b),
+                ir_type: IrType::Int,
+                source_location: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn fold_arithmetic_multiply(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() < 2 { return None; }
+        
+        let mut result = 1i64;
+        for arg in args {
+            if let IrNode::Literal { value: Literal::Integer(n), .. } = arg {
+                result *= n;
+            } else {
+                return None; // Non-integer found
+            }
+        }
+        
+        Some(IrNode::Literal {
+            id: 0,
+            value: Literal::Integer(result),
+            ir_type: IrType::Int,
+            source_location: None,
+        })
+    }
+
+    fn fold_arithmetic_divide(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            if *b != 0 {
+                Some(IrNode::Literal {
+                    id: 0,
+                    value: Literal::Integer(a / b),
+                    ir_type: IrType::Int,
+                    source_location: None,
+                })
+            } else {
+                None // Division by zero
+            }
+        } else {
+            None
+        }
+    }
+
+    fn fold_arithmetic_modulo(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            if *b != 0 {
+                Some(IrNode::Literal {
+                    id: 0,
+                    value: Literal::Integer(a % b),
+                    ir_type: IrType::Int,
+                    source_location: None,
+                })
+            } else {
+                None // Modulo by zero
+            }
+        } else {
+            None
+        }
+    }
+
+    fn fold_comparison_gt(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            Some(IrNode::Literal {
+                id: 0,
+                value: Literal::Boolean(a > b),
+                ir_type: IrType::Bool,
+                source_location: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn fold_comparison_lt(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            Some(IrNode::Literal {
+                id: 0,
+                value: Literal::Boolean(a < b),
+                ir_type: IrType::Bool,
+                source_location: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn fold_comparison_gte(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            Some(IrNode::Literal {
+                id: 0,
+                value: Literal::Boolean(a >= b),
+                ir_type: IrType::Bool,
+                source_location: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn fold_comparison_lte(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        if let (IrNode::Literal { value: Literal::Integer(a), .. }, 
+                IrNode::Literal { value: Literal::Integer(b), .. }) = (&args[0], &args[1]) {
+            Some(IrNode::Literal {
+                id: 0,
+                value: Literal::Boolean(a <= b),
+                ir_type: IrType::Bool,
+                source_location: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn fold_comparison_eq(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        match (&args[0], &args[1]) {
+            (IrNode::Literal { value: Literal::Integer(a), .. }, 
+             IrNode::Literal { value: Literal::Integer(b), .. }) => {
+                Some(IrNode::Literal {
+                    id: 0,
+                    value: Literal::Boolean(a == b),
+                    ir_type: IrType::Bool,
+                    source_location: None,
+                })
+            },
+            (IrNode::Literal { value: Literal::Boolean(a), .. }, 
+             IrNode::Literal { value: Literal::Boolean(b), .. }) => {
+                Some(IrNode::Literal {
+                    id: 0,
+                    value: Literal::Boolean(a == b),
+                    ir_type: IrType::Bool,
+                    source_location: None,
+                })
+            },
+            _ => None
+        }
+    }
+
+    fn fold_comparison_neq(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 2 { return None; }
+        
+        match (&args[0], &args[1]) {
+            (IrNode::Literal { value: Literal::Integer(a), .. }, 
+             IrNode::Literal { value: Literal::Integer(b), .. }) => {
+                Some(IrNode::Literal {
+                    id: 0,
+                    value: Literal::Boolean(a != b),
+                    ir_type: IrType::Bool,
+                    source_location: None,
+                })
+            },
+            (IrNode::Literal { value: Literal::Boolean(a), .. }, 
+             IrNode::Literal { value: Literal::Boolean(b), .. }) => {
+                Some(IrNode::Literal {
+                    id: 0,
+                    value: Literal::Boolean(a != b),
+                    ir_type: IrType::Bool,
+                    source_location: None,
+                })
+            },
+            _ => None
+        }
+    }
+
+    fn fold_logical_and(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() < 2 { return None; }
+        
+        for arg in args {
+            if let IrNode::Literal { value: Literal::Boolean(b), .. } = arg {
+                if !b {
+                    // Short circuit - if any argument is false, result is false
+                    return Some(IrNode::Literal {
+                        id: 0,
+                        value: Literal::Boolean(false),
+                        ir_type: IrType::Bool,
+                        source_location: None,
+                    });
+                }
+            } else {
+                return None; // Non-boolean found
+            }
+        }
+        
+        // All arguments are true
+        Some(IrNode::Literal {
+            id: 0,
+            value: Literal::Boolean(true),
+            ir_type: IrType::Bool,
+            source_location: None,
+        })
+    }
+
+    fn fold_logical_or(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() < 2 { return None; }
+        
+        for arg in args {
+            if let IrNode::Literal { value: Literal::Boolean(b), .. } = arg {
+                if *b {
+                    // Short circuit - if any argument is true, result is true
+                    return Some(IrNode::Literal {
+                        id: 0,
+                        value: Literal::Boolean(true),
+                        ir_type: IrType::Bool,
+                        source_location: None,
+                    });
+                }
+            } else {
+                return None; // Non-boolean found
+            }
+        }
+        
+        // All arguments are false
+        Some(IrNode::Literal {
+            id: 0,
+            value: Literal::Boolean(false),
+            ir_type: IrType::Bool,
+            source_location: None,
+        })
+    }
+
+    fn fold_logical_not(&self, args: &[IrNode]) -> Option<IrNode> {
+        if args.len() != 1 { return None; }
+        
+        if let IrNode::Literal { value: Literal::Boolean(b), .. } = &args[0] {
+            Some(IrNode::Literal {
+                id: 0,
+                value: Literal::Boolean(!b),
+                ir_type: IrType::Bool,
+                source_location: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn optimize_recursive_constant_folding(&self, node: IrNode) -> IrNode {
+        match node {
+            IrNode::Lambda { id, params, variadic_param, body, captures, ir_type, source_location } => {
+                IrNode::Lambda {
+                    id,
+                    params: params.into_iter().map(|p| self.optimize_constant_folding(p)).collect(),
+                    variadic_param: variadic_param.map(|vp| Box::new(self.optimize_constant_folding(*vp))),
+                    body: body.into_iter().map(|expr| self.optimize_constant_folding(expr)).collect(),
+                    captures,
+                    ir_type,
+                    source_location,
+                }
+            },
+            _ => node // Return literals and identifiers as-is
         }
     }
 
