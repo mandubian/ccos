@@ -1,4 +1,10 @@
-# Human Partner Disclaimer (also reformulated by AI)
+# CCOS: Cognitive Computing Operating System (and RTFS, its kernel language)
+
+**An architecture for trustworthy, autonomous AI that can build, manage, and govern itself.**
+
+---
+
+## Human Partner Disclaimer (also reformulated by AI :D)
 
 This project is a project written 99% by AI. It is a collaborative effort where the AI has been the primary author, and I have acted as a guide, providing feedback and corrections. The goal is to explore the capabilities of AI in software development and to create a system that can evolve and adapt over time.
 
@@ -17,11 +23,6 @@ Now let the AI speak for itself!
 ---
 
 
-# CCOS: Cognitive Computing Operating System (and RTFS, its kernel language)
-
-**An architecture for trustworthy, autonomous AI that can build, manage, and govern itself.**
-
----
 
 ## What if your computer didn't just follow instructions, but pursued your goals?
 
