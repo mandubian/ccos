@@ -46,9 +46,13 @@ We begin from a position of strength. We have a robust, performant RTFS implemen
 
 **Key Steps:**
 1.  **Implement `(llm-execute)`:** Create the first, explicit bridge allowing an RTFS plan to delegate a task back to a core LLM. This introduces the hybrid execution model in its simplest form.
+    *   **Specification:** [`docs/ccos/specs/006-arbiter-and-cognitive-control.md`](./ccos/specs/006-arbiter-and-cognitive-control.md)
 2.  **Launch the Agent Registry:** Implement a real, network-accessible service where agents can register their function signatures. This moves beyond the current `NoOpAgentDiscovery` and makes the agent system real.
+    *   **Specification:** [`docs/ccos/specs/004-capabilities-and-marketplace.md`](./ccos/specs/004-capabilities-and-marketplace.md)
 3.  **Develop the `ArbiterV1`:** Refactor the core runtime. Before executing any function, it will first check if the function is a local, native one or if it exists in the Agent Registry. This is the birth of dynamic delegation.
+    *   **Specification:** [`docs/ccos/specs/008-delegation-engine.md`](./ccos/specs/008-delegation-engine.md)
 4.  **Formalize the RTFS Task Protocol:** Define a standard RTFS data structure for tasks that can be sent to agents, including required fields like `:on-success` and `:on-failure` callbacks.
+    *   **Specification:** [`docs/ccos/specs/002-plans-and-orchestration.md`](./ccos/specs/002-plans-and-orchestration.md)
 
 ---
 
@@ -58,9 +62,13 @@ We begin from a position of strength. We have a robust, performant RTFS implemen
 
 **Key Steps:**
 1.  **Launch the Capability Marketplace V1:** Upgrade the Agent Registry. Agents now register a rich RTFS object containing not just a function name, but basic SLA metadata: `cost`, `provider-id`, `expected-speed`, etc.
+    *   **Specification:** [`docs/ccos/specs/004-capabilities-and-marketplace.md`](./ccos/specs/004-capabilities-and-marketplace.md)
 2.  **Implement the Global Function Mesh V1:** Create the universal naming system. This can start as a centralized service that maps universal function names (e.g., `image-processing/sharpen`) to active listings in the Capability Marketplace.
+    *   **Specification:** [`docs/ccos/specs/007-global-function-mesh.md`](./ccos/specs/007-global-function-mesh.md)
 3.  **Develop the Language of Intent V1:** Create a simple data structure to be passed with each plan, containing user preferences like `(priority :speed)` or `(constraint :max-cost 5)`.
+    *   **Specification:** [`docs/ccos/specs/001-intent-graph.md`](./ccos/specs/001-intent-graph.md)
 4.  **Upgrade to `ArbiterV2`:** The Arbiter now uses the Intent data to select the *best* provider from the Marketplace based on the user's stated priorities, rather than just picking the first one it finds.
+    *   **Specification:** [`docs/ccos/specs/006-arbiter-and-cognitive-control.md`](./ccos/specs/006-arbiter-and-cognitive-control.md)
 
 ---
 
@@ -70,8 +78,11 @@ We begin from a position of strength. We have a robust, performant RTFS implemen
 
 **Key Steps:**
 1.  **Implement the Causal Chain of Thought V1:** The runtime now logs every significant action (the function call, the chosen agent, the result, the cost) to an immutable, append-only ledger. This provides perfect auditability and is the prerequisite for self-reflection.
+    *   **Specification:** [`docs/ccos/specs/003-causal-chain.md`](./ccos/specs/003-causal-chain.md)
 2.  **Introduce the Ethical Governance Framework V1:** Implement a "pre-flight check" in the Arbiter. Before executing any plan, it is validated against a set of hard-coded RTFS rules (the "constitution"). Execution is halted on any violation.
+    *   **Specification:** [`docs/ccos/specs/010-ethical-governance.md`](./ccos/specs/010-ethical-governance.md)
 3.  **Develop the "Subconscious" V1 (The Analyst):** Create a separate, offline process that reads the Causal Chain ledger. Its first job is simple: analysis and reporting. It can identify the most expensive functions, the least reliable agents, or patterns of failure, providing crucial insights to human developers.
+    *   **Specification:** [`docs/ccos/specs/013-working-memory.md`](./ccos/specs/013-working-memory.md)
 
 ---
 
@@ -81,9 +92,13 @@ We begin from a position of strength. We have a robust, performant RTFS implemen
 
 **Key Steps:**
 1.  **Launch the Federation of Minds V1:** Instantiate multiple, specialized Arbiters (e.g., a `LogicArbiter` for deterministic code, a `CreativeArbiter` for generative tasks). A "meta-arbiter" routes incoming tasks to the appropriate specialist.
+    *   **Specification:** [`docs/ccos/specs/006-arbiter-and-cognitive-control.md`](./ccos/specs/006-arbiter-and-cognitive-control.md)
 2.  **Implement the Immune System V1:** Introduce basic security protocols. Agents on the Marketplace must register with a cryptographic signature. The Arbiter verifies these signatures and introduces basic anomaly detection to spot misbehaving agents.
+    *   **Specification:** [`docs/ccos/specs/011-capability-attestation.md`](./ccos/specs/011-capability-attestation.md)
 3.  **Upgrade the "Subconscious" V2 (The Optimizer):** The Subconscious can now do more than analyze. It can run `what-if` simulations on past events from the ledger. If it finds a provably better strategy, it can *suggest* a new rule or heuristic to the human developers.
+    *   **Specification:** [`docs/ccos/specs/013-working-memory.md`](./ccos/specs/013-working-memory.md)
 4.  **Develop the Persona V1:** The system begins building a simple user profile, storing key interactions and preferences to inform future decisions and provide a more personalized experience.
+    *   **Specification:** [`docs/ccos/specs/005-security-and-context.md`](./ccos/specs/005-security-and-context.md)
 
 ---
 
