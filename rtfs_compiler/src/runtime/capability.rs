@@ -21,6 +21,10 @@ pub struct Capability {
 }
 
 impl Capability {
+    /// Helper constructor for Capability
+    pub fn new(id: String, arity: Arity, func: Rc<dyn Fn(Vec<Value>) -> RuntimeResult<Value>>) -> Self {
+        Self { id, arity, func }
+    }
     /// Convert this capability into a regular RTFS `Value::Function` that
     /// records provenance via the given logger.
     ///

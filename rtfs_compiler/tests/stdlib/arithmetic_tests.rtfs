@@ -1,0 +1,55 @@
+;; Arithmetic Function Tests
+;; Test file for arithmetic functions in the standard library
+
+;; Addition tests
+(+ 1 2)                    ; Should return 3
+(+ 1 2 3 4 5)             ; Should return 15
+(+ 0 0)                    ; Should return 0
+(+ -1 1)                   ; Should return 0
+(+ 1.5 2.5)               ; Should return 4.0
+(+ 1 2.5)                  ; Should return 3.5
+
+;; Subtraction tests
+(- 5 3)                    ; Should return 2
+(- 10 5 2)                 ; Should return 3
+(- 0 5)                    ; Should return -5
+(- 1.5 0.5)               ; Should return 1.0
+(- 1 2.5)                  ; Should return -1.5
+
+;; Multiplication tests
+(* 2 3)                    ; Should return 6
+(* 2 3 4)                  ; Should return 24
+(* 0 5)                    ; Should return 0
+(* -2 3)                   ; Should return -6
+(* 1.5 2)                  ; Should return 3.0
+
+;; Division tests
+(/ 6 2)                    ; Should return 3
+(/ 10 2 2)                 ; Should return 2.5
+(/ 5 2)                    ; Should return 2.5
+(/ 0 5)                    ; Should return 0
+(/ 1 3)                    ; Should return 0.333...
+
+;; Max tests
+(max 1 2 3)                ; Should return 3
+(max 1)                    ; Should return 1
+(max -1 -2 -3)             ; Should return -1
+(max 1.5 2.5 1.0)          ; Should return 2.5
+
+;; Min tests
+(min 1 2 3)                ; Should return 1
+(min 1)                    ; Should return 1
+(min -1 -2 -3)             ; Should return -3
+(min 1.5 2.5 1.0)          ; Should return 1.0
+
+;; Increment tests
+(inc 1)                    ; Should return 2
+(inc 0)                    ; Should return 1
+(inc -1)                   ; Should return 0
+(inc 1.5)                  ; Should return 2.5
+
+;; Factorial tests
+(factorial 0)              ; Should return 1
+(factorial 1)              ; Should return 1
+(factorial 5)              ; Should return 120
+(factorial 7)              ; Should return 5040 

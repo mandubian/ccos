@@ -1,0 +1,110 @@
+;; Type Predicate Function Tests
+;; Test file for type predicate functions in the standard library
+
+;; Integer predicate tests
+(int? 42)                   ; Should return true
+(int? 0)                    ; Should return true
+(int? -1)                   ; Should return true
+(int? 3.14)                 ; Should return false
+(int? "42")                 ; Should return false
+(int? true)                 ; Should return false
+(int? nil)                  ; Should return false
+(int? [])                   ; Should return false
+(int? {})                   ; Should return false
+
+;; Float predicate tests
+(float? 3.14)               ; Should return true
+(float? 0.0)                ; Should return true
+(float? -1.5)               ; Should return true
+(float? 42)                 ; Should return false
+(float? "3.14")             ; Should return false
+(float? true)               ; Should return false
+(float? nil)                ; Should return false
+
+;; Number predicate tests
+(number? 42)                ; Should return true
+(number? 3.14)              ; Should return true
+(number? 0)                 ; Should return true
+(number? -1.5)              ; Should return true
+(number? "42")              ; Should return false
+(number? true)              ; Should return false
+(number? nil)               ; Should return false
+(number? [])                ; Should return false
+
+;; String predicate tests
+(string? "hello")           ; Should return true
+(string? "")                ; Should return true
+(string? "42")              ; Should return true
+(string? 42)                ; Should return false
+(string? 3.14)              ; Should return false
+(string? true)              ; Should return false
+(string? nil)               ; Should return false
+(string? [])                ; Should return false
+(string? {})                ; Should return false
+
+;; Boolean predicate tests
+(bool? true)                ; Should return true
+(bool? false)               ; Should return true
+(bool? 42)                  ; Should return false
+(bool? 3.14)                ; Should return false
+(bool? "true")              ; Should return false
+(bool? nil)                 ; Should return false
+(bool? [])                  ; Should return false
+
+;; Nil predicate tests
+(nil? nil)                  ; Should return true
+(nil? 42)                   ; Should return false
+(nil? 3.14)                 ; Should return false
+(nil? "hello")              ; Should return false
+(nil? true)                 ; Should return false
+(nil? [])                   ; Should return false
+(nil? {})                   ; Should return false
+
+;; Map predicate tests
+(map? {})                   ; Should return true
+(map? {:a 1 :b 2})          ; Should return true
+(map? [])                   ; Should return false
+(map? [1 2 3])              ; Should return false
+(map? "hello")              ; Should return false
+(map? 42)                   ; Should return false
+(map? nil)                  ; Should return false
+
+;; Vector predicate tests
+(vector? [])                ; Should return true
+(vector? [1 2 3])           ; Should return true
+(vector? {})                ; Should return false
+(vector? {:a 1 :b 2})       ; Should return false
+(vector? "hello")           ; Should return false
+(vector? 42)                ; Should return false
+(vector? nil)               ; Should return false
+
+;; Keyword predicate tests
+(keyword? :hello)           ; Should return true
+(keyword? :a)               ; Should return true
+(keyword? "hello")          ; Should return false
+(keyword? 42)               ; Should return false
+(keyword? true)             ; Should return false
+(keyword? nil)              ; Should return false
+(keyword? [])               ; Should return false
+(keyword? {})               ; Should return false
+
+;; Symbol predicate tests
+(symbol? 'hello)            ; Should return true
+(symbol? 'a)                ; Should return true
+(symbol? "hello")           ; Should return false
+(symbol? 42)                ; Should return false
+(symbol? true)              ; Should return false
+(symbol? nil)               ; Should return false
+(symbol? [])                ; Should return false
+(symbol? {})                ; Should return false
+
+;; Function predicate tests
+(fn? +)                     ; Should return true
+(fn? str)                   ; Should return true
+(fn? (fn [x] x))            ; Should return true
+(fn? 42)                    ; Should return false
+(fn? "hello")               ; Should return false
+(fn? true)                  ; Should return false
+(fn? nil)                   ; Should return false
+(fn? [])                    ; Should return false
+(fn? {})                    ; Should return false 

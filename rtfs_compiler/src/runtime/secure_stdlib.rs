@@ -132,6 +132,16 @@ impl SecureStandardLibrary {
                 }),
             })),
         );
+
+        // Factorial function
+        env.define(
+            &Symbol("factorial".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "factorial".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::factorial),
+            })),
+        );
     }
     
     pub(crate) fn load_comparison_functions(env: &mut Environment) {
@@ -149,6 +159,15 @@ impl SecureStandardLibrary {
             &Symbol("!=".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "!=".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::not_equal),
+            })),
+        );
+        
+        env.define(
+            &Symbol("not=".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "not=".to_string(),
                 arity: Arity::Fixed(2),
                 func: Rc::new(Self::not_equal),
             })),
@@ -478,7 +497,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "bool?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::nil_p),
+                func: Rc::new(Self::bool_p),
             })),
         );
 
@@ -849,20 +868,24 @@ impl SecureStandardLibrary {
         let args = args.as_slice();
         for arg in args {
             if !arg.is_truthy() {
-                return Ok(arg.clone());
+                // If any argument is falsy, return Boolean(false)
+                return Ok(Value::Boolean(false));
             }
         }
-        Ok(args.last().cloned().unwrap_or(Value::Boolean(true)))
+        // If all arguments are truthy or no arguments, return Boolean(true)
+        Ok(Value::Boolean(true))
     }
     
     fn or(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         for arg in args {
             if arg.is_truthy() {
-                return Ok(arg.clone());
+                // If any argument is truthy, return Boolean(true)
+                return Ok(Value::Boolean(true));
             }
         }
-        Ok(args.last().cloned().unwrap_or(Value::Nil))
+        // If all arguments are falsy or no arguments, return Boolean(false)
+        Ok(Value::Boolean(false))
     }
     
     fn not(args: Vec<Value>) -> RuntimeResult<Value> {

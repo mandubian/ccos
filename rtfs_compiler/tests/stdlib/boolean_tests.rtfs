@@ -1,0 +1,37 @@
+;; Boolean Logic Function Tests
+;; Test file for boolean logic functions in the standard library
+
+;; And tests
+(and true true)             ; Should return true
+(and true false)            ; Should return false
+(and false true)            ; Should return false
+(and false false)           ; Should return false
+(and true true true)        ; Should return true
+(and true false true)       ; Should return false
+(and)                       ; Should return true (empty and)
+(and true)                  ; Should return true (single true)
+(and false)                 ; Should return false (single false)
+
+;; Or tests
+(or true true)              ; Should return true
+(or true false)             ; Should return true
+(or false true)             ; Should return true
+(or false false)            ; Should return false
+(or true true false)        ; Should return true
+(or false false true)       ; Should return true
+(or)                        ; Should return false (empty or)
+(or true)                   ; Should return true (single true)
+(or false)                  ; Should return false (single false)
+
+;; Not tests
+(not true)                  ; Should return false
+(not false)                 ; Should return true
+(not nil)                   ; Should return true
+(not 0)                     ; Should return false
+(not 1)                     ; Should return false
+(not "")                    ; Should return true
+(not "hello")               ; Should return false
+(not [])                    ; Should return true
+(not [1 2])                 ; Should return false
+(not {})                    ; Should return true
+(not {:a 1})                ; Should return false 

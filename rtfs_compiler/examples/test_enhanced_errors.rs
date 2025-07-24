@@ -17,10 +17,6 @@ fn main() {
         ("Unclosed Function Call", "(+ 1 2"),
     ];
 
-    let reporter = ParserErrorReporter::new()
-        .with_colors(false) // Disable colors for better readability in examples
-        .with_max_context_lines(2);
-
     for (test_name, source) in &test_cases {
         println!("=== {} ===", test_name);
         

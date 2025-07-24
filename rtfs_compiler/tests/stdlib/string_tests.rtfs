@@ -1,0 +1,38 @@
+;; String Function Tests
+;; Test file for string manipulation functions in the standard library
+
+;; Str function tests (convert to string)
+(str 42)                    ; Should return "42"
+(str 3.14)                  ; Should return "3.14"
+(str true)                  ; Should return "true"
+(str false)                 ; Should return "false"
+(str nil)                   ; Should return "nil"
+(str "hello")               ; Should return "hello"
+(str [1 2 3])               ; Should return "[1 2 3]"
+(str {:a 1 :b 2})           ; Should return "{:a 1 :b 2}"
+(str)                       ; Should return ""
+
+;; Substring tests
+(substring "hello world" 0 5)    ; Should return "hello"
+(substring "hello world" 6 11)   ; Should return "world"
+(substring "hello" 0 1)          ; Should return "h"
+(substring "hello" 4 5)          ; Should return "o"
+(substring "hello" 0 0)          ; Should return ""
+(substring "hello" 0 10)         ; Should return "hello" (truncated)
+
+;; String length tests
+(string-length "")               ; Should return 0
+(string-length "hello")          ; Should return 5
+(string-length "hello world")    ; Should return 11
+(string-length "a")              ; Should return 1
+(string-length "12345")          ; Should return 5
+
+;; String contains tests
+(string-contains "hello world" "hello")     ; Should return true
+(string-contains "hello world" "world")     ; Should return true
+(string-contains "hello world" "xyz")       ; Should return false
+(string-contains "hello" "he")              ; Should return true
+(string-contains "hello" "lo")              ; Should return true
+(string-contains "hello" "")                ; Should return true
+(string-contains "" "hello")                ; Should return false
+(string-contains "hello" "hello")           ; Should return true 
