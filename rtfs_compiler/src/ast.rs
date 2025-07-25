@@ -172,6 +172,82 @@ pub enum TypeExpr {
     Never,                       // :never type
 }
 
+impl TypeExpr {
+    /// Parse a TypeExpr from a string (simplified implementation)
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        // For now, provide a simple implementation
+        // In practice, this should use the RTFS parser
+        match s.trim() {
+            ":int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+            ":float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+            ":string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+            ":bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+            ":nil" => Ok(TypeExpr::Primitive(PrimitiveType::Nil)),
+            ":any" => Ok(TypeExpr::Any),
+            _ => {
+                // For complex types, we'd need to use the full parser
+                // For now, treat as alias
+                Ok(TypeExpr::Alias(Symbol(s.to_string())))
+            }
+        }
+    }
+
+    /// Convert TypeExpr to JSON Schema for validation
+    pub fn to_json(&self) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        
+        match self {
+            TypeExpr::Primitive(ptype) => match ptype {
+                PrimitiveType::Int => Ok(json!({"type": "integer"})),
+                PrimitiveType::Float => Ok(json!({"type": "number"})),
+                PrimitiveType::String => Ok(json!({"type": "string"})),
+                PrimitiveType::Bool => Ok(json!({"type": "boolean"})),
+                PrimitiveType::Nil => Ok(json!({"type": "null"})),
+                _ => Ok(json!({"type": "object"})), // Default for complex types
+            },
+            TypeExpr::Vector(inner) => Ok(json!({
+                "type": "array",
+                "items": inner.to_json()?
+            })),
+            TypeExpr::Union(types) => {
+                let schemas: Result<Vec<_>, _> = types.iter().map(|t| t.to_json()).collect();
+                Ok(json!({
+                    "anyOf": schemas?
+                }))
+            },
+            TypeExpr::Any => Ok(json!({})), // Accept anything
+            _ => {
+                // For other complex types, provide a basic schema
+                // This is a simplified implementation
+                Ok(json!({"type": "object"}))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for TypeExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeExpr::Primitive(ptype) => match ptype {
+                PrimitiveType::Int => write!(f, ":int"),
+                PrimitiveType::Float => write!(f, ":float"),
+                PrimitiveType::String => write!(f, ":string"),
+                PrimitiveType::Bool => write!(f, ":bool"),
+                PrimitiveType::Nil => write!(f, ":nil"),
+                _ => write!(f, ":object"),
+            },
+            TypeExpr::Vector(inner) => write!(f, "[:vec {}]", inner),
+            TypeExpr::Union(types) => {
+                let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                write!(f, "[:union {}]", type_strs.join(" "))
+            },
+            TypeExpr::Any => write!(f, ":any"),
+            TypeExpr::Alias(symbol) => write!(f, "{}", symbol.0),
+            _ => write!(f, ":object"), // Simplified for other types
+        }
+    }
+}
+
 // --- Core Expression Structure ---
 
 // Represents a single binding in a `let` expression

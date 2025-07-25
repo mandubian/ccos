@@ -190,13 +190,15 @@ pub fn create_mcp_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
 }
 
 /// Helper to set up execution context for testing (required before running RTFS code with capabilities)
-pub fn setup_execution_context(host: &mut dyn HostInterface) {
-    // TODO: Implement set_execution_context when HostInterface supports it
-    // host.set_execution_context("test_plan".to_string(), vec!["test_intent".to_string()]);
+pub fn setup_execution_context(host: &dyn HostInterface) {
+    host.set_execution_context(
+        "test_plan_id".to_string(), 
+        vec!["test_intent_id".to_string()],
+        "test_parent_action_id".to_string()
+    );
 }
 
 /// Helper to clean up execution context after testing
 pub fn cleanup_execution_context(host: &dyn HostInterface) {
-    // TODO: Implement clear_execution_context when HostInterface supports it
-    // host.clear_execution_context();
+    host.clear_execution_context();
 }

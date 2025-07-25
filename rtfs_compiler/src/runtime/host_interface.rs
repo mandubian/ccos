@@ -23,4 +23,11 @@ pub trait HostInterface: std::fmt::Debug {
 
     /// Notifies the host that a plan step has failed.
     fn notify_step_failed(&self, step_action_id: &str, error: &str) -> RuntimeResult<()>;
+
+    /// Sets the execution context for subsequent capability calls.
+    /// This is required before calling execute_capability.
+    fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String);
+
+    /// Clears the execution context after a plan has finished.
+    fn clear_execution_context(&self);
 }

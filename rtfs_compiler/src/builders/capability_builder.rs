@@ -1,5 +1,5 @@
 use super::{BuilderError, ObjectBuilder};
-use crate::ast::{CapabilityDefinition, Expression, Keyword, Literal, MapKey, Property, Symbol};
+use crate::ast::{CapabilityDefinition, Expression, Keyword, Literal, MapKey, Property, Symbol, TypeExpr};
 use std::collections::HashMap;
 
 /// Fluent interface builder for RTFS 2.0 Capability objects
@@ -8,8 +8,8 @@ pub struct CapabilityBuilder {
     name: String,
     provider: Option<String>,
     function_signature: Option<FunctionSignature>,
-    input_schema: Option<String>,
-    output_schema: Option<String>,
+    input_schema: Option<TypeExpr>,
+    output_schema: Option<TypeExpr>,
     sla: Option<SLA>,
     pricing: Option<Pricing>,
     examples: Vec<Example>,
@@ -91,14 +91,14 @@ impl CapabilityBuilder {
     }
 
     /// Set the input schema
-    pub fn with_input_schema(mut self, schema: &str) -> Self {
-        self.input_schema = Some(schema.to_string());
+    pub fn with_input_schema(mut self, schema: TypeExpr) -> Self {
+        self.input_schema = Some(schema);
         self
     }
 
     /// Set the output schema
-    pub fn with_output_schema(mut self, schema: &str) -> Self {
-        self.output_schema = Some(schema.to_string());
+    pub fn with_output_schema(mut self, schema: TypeExpr) -> Self {
+        self.output_schema = Some(schema);
         self
     }
 
@@ -176,11 +176,11 @@ impl CapabilityBuilder {
         }
 
         if self.input_schema.is_none() {
-            suggestions.push("Set input schema with .with_input_schema(\"schema\")".to_string());
+            suggestions.push("Set input schema with .with_input_schema(TypeExpr::from_str(\":string\").unwrap())".to_string());
         }
 
         if self.output_schema.is_none() {
-            suggestions.push("Set output schema with .with_output_schema(\"schema\")".to_string());
+            suggestions.push("Set output schema with .with_output_schema(TypeExpr::from_str(\":any\").unwrap())".to_string());
         }
 
         if self.sla.is_none() {
@@ -375,17 +375,17 @@ impl ObjectBuilder<CapabilityDefinition> for CapabilityBuilder {
         }
 
         // Add optional properties
-        if let Some(input_schema) = self.input_schema {
+        if let Some(input_schema) = &self.input_schema {
             properties.push(Property {
                 key: Keyword::new("input-schema"),
-                value: Expression::Literal(Literal::String(input_schema)),
+                value: Expression::Symbol(Symbol::new("type-expr")), // Placeholder for TypeExpr
             });
         }
 
-        if let Some(output_schema) = self.output_schema {
+        if let Some(output_schema) = &self.output_schema {
             properties.push(Property {
                 key: Keyword::new("output-schema"),
-                value: Expression::Literal(Literal::String(output_schema)),
+                value: Expression::Symbol(Symbol::new("type-expr")), // Placeholder for TypeExpr
             });
         }
 
@@ -659,8 +659,8 @@ mod tests {
         let capability = CapabilityBuilder::new("test-capability")
             .with_provider("test-provider")
             .with_function_signature(signature)
-            .with_input_schema("string")
-            .with_output_schema("json")
+            .with_input_schema(TypeExpr::from_str(":string").unwrap())
+            .with_output_schema(TypeExpr::from_str(":any").unwrap())
             .build()
             .unwrap();
 

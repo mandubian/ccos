@@ -40,11 +40,16 @@ ordered-float = "3.7"
 validator = { version = "0.18.1", features = ["derive"] }
 schemars = "0.8.21"
 toml = "0.8"
+jsonschema = "0.18"
+sha2 = "0.10"
 
 # Networking/API
 reqwest = { version = "0.11", features = ["json", "blocking"] }
 tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.0", features = ["v4"] }
+
+# MCP (Model Context Protocol) dependencies - using direct JSON-RPC implementation
+# rmcp = { version = "0.3.0", features = ["client", "transport-sse-client", "transport-child-process"] }
 
 # REPL dependencies
 clap = { version = "4.0", features = ["derive"] }
@@ -52,7 +57,6 @@ rustyline = { version = "13.0", optional = true }
 
 # Utilities
 indexmap = "2.0"
-sha2 = "0.10"
 llama_cpp = { version = "0.3.2", optional = true }
 num_cpus = "1.17.0"
 
