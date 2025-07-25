@@ -221,10 +221,11 @@ impl StandardLibrary {
 
     // --- CCOS Capability Function Implementations ---
 
-    /// `(call "capability.name" arg1 arg2 ...)`
+    /// `(call :capability-id arg1 arg2 ...)` or `(call "capability-name" arg1 arg2 ...)`
     /// 
     /// Dynamically invokes a CCOS capability. This is the main entry point
     /// for RTFS to interact with the broader CCOS environment.
+    /// Supports both keyword syntax (:capability-id) and string syntax ("capability-name")
     fn call_capability(
         args: Vec<Value>,
         evaluator: &Evaluator,
@@ -239,10 +240,11 @@ impl StandardLibrary {
         }
 
         let capability_name = match &args[0] {
-            Value::String(s) => s,
+            Value::String(s) => s.clone(),
+            Value::Keyword(k) => k.0.clone(), // Support keyword syntax
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "string".to_string(),
+                    expected: "string or keyword".to_string(),
                     actual: args[0].type_name().to_string(),
                     operation: "call".to_string(),
                 })
@@ -252,7 +254,7 @@ impl StandardLibrary {
         let capability_args = &args[1..];
 
         // Delegate the actual capability execution to the host
-        evaluator.host.execute_capability(capability_name, capability_args)
+        evaluator.host.execute_capability(&capability_name, capability_args)
     }
 
 }

@@ -136,8 +136,11 @@ mod http_capability_tests {
         // Set up runtime with HTTP capability using helper
         let (_marketplace, evaluator) = create_http_test_setup().await;
 
+        // Set up execution context (required for capability calls)
+        setup_execution_context(evaluator.host.as_ref());
+
         // Parse and execute RTFS code that uses HTTP capability
-        let rtfs_code = r#"(call :http.get [])"#;
+        let rtfs_code = r#"(call :http.get [])"#;  // Use keyword syntax as originally intended
         let ast = parser::parse_expression(rtfs_code).expect("Failed to parse RTFS");
         
         let mut env = evaluator.env.clone();

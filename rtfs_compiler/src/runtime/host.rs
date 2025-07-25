@@ -159,6 +159,14 @@ impl HostInterface for RuntimeHost {
         self.get_causal_chain()?.append(&action)?;
         Ok(())
     }
+
+    fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String) {
+        self.set_execution_context(plan_id, intent_ids, parent_action_id);
+    }
+
+    fn clear_execution_context(&self) {
+        self.clear_execution_context();
+    }
 }
 
 impl std::fmt::Debug for RuntimeHost {
