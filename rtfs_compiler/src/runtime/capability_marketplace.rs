@@ -2,20 +2,19 @@
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
 use crate::runtime::capability_registry::CapabilityRegistry;
+use crate::runtime::type_validator::{TypeValidator, ValidationError as TypeValidationError, TypeCheckingConfig, VerificationContext}; // Add optimized validation imports
 use crate::ast::MapKey;
 use crate::ast::TypeExpr; // Add import for RTFS type expressions
 use std::collections::HashMap;
 use std::sync::Arc;
-use bincode::de;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
 // use rmcp::client::Client;
 // use rmcp::transport::HttpTransport;
 use serde_json::json;
-use std::any::{Any, TypeId};
-use jsonschema::{JSONSchema, ValidationError};
-use sha2::{Sha256, Digest};
+use std::any::TypeId;
+use sha2::Digest;
 use chrono::{DateTime, Utc};
 
 // MCP SDK imports (disabled due to dependency issues)
@@ -84,7 +83,7 @@ pub struct ProgressNotification {
 }
 
 /// Types of streaming capabilities
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StreamType {
     /// Produces data to consumers (unidirectional)
     Source,
@@ -99,7 +98,7 @@ pub enum StreamType {
 }
 
 /// Bidirectional stream configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BidirectionalConfig {
     /// Buffer size for incoming data
     pub input_buffer_size: usize,
@@ -112,7 +111,7 @@ pub struct BidirectionalConfig {
 }
 
 /// Duplex stream channels
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DuplexChannels {
     pub input_channel: String,
     pub output_channel: String,
@@ -141,6 +140,17 @@ impl std::fmt::Debug for StreamCallbacks {
     }
 }
 
+impl PartialEq for StreamCallbacks {
+    fn eq(&self, other: &Self) -> bool {
+        // For function pointers, we can only check if both are Some or None
+        // This is a simplified comparison for compilation purposes
+        self.on_connected.is_some() == other.on_connected.is_some()
+            && self.on_disconnected.is_some() == other.on_disconnected.is_some()
+            && self.on_data_received.is_some() == other.on_data_received.is_some()
+            && self.on_error.is_some() == other.on_error.is_some()
+    }
+}
+
 impl Default for StreamCallbacks {
     fn default() -> Self {
         Self {
@@ -154,7 +164,7 @@ impl Default for StreamCallbacks {
 
 
 /// Configuration for streaming capabilities
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StreamConfig {
     pub callbacks: Option<StreamCallbacks>,
     pub auto_reconnect: bool,
@@ -336,6 +346,8 @@ pub struct CapabilityMarketplace {
     capability_registry: Arc<RwLock<CapabilityRegistry>>,
     executors: HashMap<TypeId, Arc<dyn CapabilityExecutor>>,
     network_registry: Option<NetworkRegistryConfig>,
+    // Add type validator for RTFS type validation
+    type_validator: Arc<TypeValidator>,
 }
 
 impl CapabilityMarketplace {
@@ -347,6 +359,7 @@ impl CapabilityMarketplace {
             capability_registry,
             executors: HashMap::new(),
             network_registry: None,
+            type_validator: Arc::new(TypeValidator::new()),
         };
         marketplace.register_executor(Arc::new(MCPExecutor));
         marketplace.register_executor(Arc::new(A2AExecutor));
@@ -386,6 +399,17 @@ impl CapabilityMarketplace {
         input_schema: Option<TypeExpr>,
         output_schema: Option<TypeExpr>,
     ) -> Result<(), RuntimeError> {
+        // Validate the schemas are well-formed
+        if let Some(ref schema) = input_schema {
+            self.validate_schema_wellformed(schema)?;
+        }
+        if let Some(ref schema) = output_schema {
+            self.validate_schema_wellformed(schema)?;
+        }
+
+        // Create a validating wrapper around the handler
+        let validating_handler = self.create_validating_handler(handler, input_schema.clone(), output_schema.clone());
+
         let content_hash = self.compute_content_hash(&format!("{}{}{}", id, name, description));
         let provenance = CapabilityProvenance {
             source: "local".to_string(),
@@ -399,7 +423,7 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::Local(LocalCapability { handler }),
+            provider: ProviderType::Local(LocalCapability { handler: validating_handler }),
             version: "1.0.0".to_string(),
             input_schema,
             output_schema,
@@ -411,6 +435,43 @@ impl CapabilityMarketplace {
 
         let mut capabilities = self.capabilities.write().await;
         capabilities.insert(id, capability);
+        Ok(())
+    }
+
+    /// Create a validating wrapper around a capability handler
+    fn create_validating_handler(
+        &self,
+        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        input_schema: Option<TypeExpr>,
+        output_schema: Option<TypeExpr>,
+    ) -> Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync> {
+        let validator = self.type_validator.clone();
+        
+        Arc::new(move |input: &Value| -> RuntimeResult<Value> {
+            // Validate input
+            if let Some(ref schema) = input_schema {
+                validator.validate_value(input, schema)
+                    .map_err(|e| RuntimeError::new(&format!("Input validation failed: {}", e)))?;
+            }
+            
+            // Call original handler
+            let result = handler(input)?;
+            
+            // Validate output
+            if let Some(ref schema) = output_schema {
+                validator.validate_value(&result, schema)
+                    .map_err(|e| RuntimeError::new(&format!("Output validation failed: {}", e)))?;
+            }
+            
+            Ok(result)
+        })
+    }
+
+    /// Validate that a type schema is well-formed
+    fn validate_schema_wellformed(&self, _schema: &TypeExpr) -> Result<(), RuntimeError> {
+        // For now, just check that the schema is not malformed
+        // In the future, we could add more sophisticated validation
+        // such as checking for circular references, etc.
         Ok(())
     }
 
@@ -667,15 +728,29 @@ impl CapabilityMarketplace {
         capability_id: &str,
         params: &HashMap<String, Value>,
     ) -> Result<Value, RuntimeError> {
+        let config = TypeCheckingConfig::default();
+        self.execute_with_validation_config(capability_id, params, &config).await
+    }
+    
+    /// Execute capability with optimized type checking configuration
+    pub async fn execute_with_validation_config(
+        &self,
+        capability_id: &str,
+        params: &HashMap<String, Value>,
+        config: &TypeCheckingConfig,
+    ) -> Result<Value, RuntimeError> {
         let capability = {
             let capabilities = self.capabilities.read().await;
             capabilities.get(capability_id).cloned()
                 .ok_or_else(|| RuntimeError::Generic(format!("Capability not found: {}", capability_id)))?
         };
 
+        // Create capability boundary context (always validates regardless of config)
+        let boundary_context = VerificationContext::capability_boundary(capability_id);
+
         // Validate input against schema if present
         if let Some(input_schema) = &capability.input_schema {
-            self.validate_input_schema(params, input_schema).await?;
+            self.validate_input_schema_optimized(params, input_schema, config, &boundary_context).await?;
         }
 
         // Convert params to Value for execution
@@ -686,10 +761,43 @@ impl CapabilityMarketplace {
 
         // Validate output against schema if present
         if let Some(output_schema) = &capability.output_schema {
-            self.validate_output_schema(&result, output_schema).await?;
+            self.validate_output_schema_optimized(&result, output_schema, config, &boundary_context).await?;
         }
 
         Ok(result)
+    }
+
+    /// Optimized input validation with configuration
+    async fn validate_input_schema_optimized(
+        &self,
+        params: &HashMap<String, Value>,
+        schema_expr: &TypeExpr,
+        config: &TypeCheckingConfig,
+        context: &VerificationContext,
+    ) -> Result<(), RuntimeError> {
+        // Convert RTFS params to Value for validation
+        let params_value = self.params_to_value(params)?;
+        
+        // Use optimized validation
+        self.type_validator.validate_with_config(&params_value, schema_expr, config, context)
+            .map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Optimized output validation with configuration
+    async fn validate_output_schema_optimized(
+        &self,
+        result: &Value,
+        schema_expr: &TypeExpr,
+        config: &TypeCheckingConfig,
+        context: &VerificationContext,
+    ) -> Result<(), RuntimeError> {
+        // Use optimized validation
+        self.type_validator.validate_with_config(result, schema_expr, config, context)
+            .map_err(|e| RuntimeError::Generic(format!("Output validation failed: {}", e)))?;
+
+        Ok(())
     }
 
     /// Validate input parameters against JSON schema

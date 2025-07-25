@@ -65,6 +65,9 @@ pub enum RuntimeError {
     /// JSON parsing errors
     JsonError(String),
     
+    /// Type validation errors from the optimization system
+    TypeValidationError(String),
+    
     /// Pattern matching errors
     MatchError(String),
     
@@ -190,6 +193,9 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::JsonError(msg) => {
                 write!(f, "JSON error: {}", msg)
+            },
+            RuntimeError::TypeValidationError(msg) => {
+                write!(f, "Type validation error: {}", msg)
             },
             RuntimeError::MatchError(msg) => {
                 write!(f, "Match error: {}", msg)

@@ -150,6 +150,47 @@ pub enum ParamType {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub enum ArrayDimension {
+    Fixed(usize),  // Fixed size dimension like 3 in [3 4]
+    Variable,      // Variable dimension represented by ?
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TypePredicate {
+    // Numeric predicates
+    GreaterThan(Literal),
+    GreaterEqual(Literal),
+    LessThan(Literal),
+    LessEqual(Literal),
+    Equal(Literal),
+    NotEqual(Literal),
+    InRange(Literal, Literal),
+    
+    // String predicates
+    MinLength(usize),
+    MaxLength(usize),
+    Length(usize),
+    MatchesRegex(String),
+    IsUrl,
+    IsEmail,
+    
+    // Collection predicates
+    MinCount(usize),
+    MaxCount(usize),
+    Count(usize),
+    NonEmpty,
+    
+    // Map predicates
+    HasKey(Keyword),
+    RequiredKeys(Vec<Keyword>),
+    
+    // Custom predicate for extensibility
+    Custom(Keyword, Vec<Literal>),
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum TypeExpr {
     Primitive(PrimitiveType),
     Alias(Symbol),         // Type alias like MyType or my.namespace/MyType
@@ -165,29 +206,55 @@ pub enum TypeExpr {
         return_type: Box<TypeExpr>,
     },
     Resource(Symbol),            // E.g., [:resource my.pkg/Handle]
-    Union(Vec<TypeExpr>),        // E.g., [:or :int :string]
+    Union(Vec<TypeExpr>),        // E.g., [:union :int :string] (changed from :or)
     Intersection(Vec<TypeExpr>), // E.g., [:and HasName HasId]
     Literal(Literal),            // E.g., [:val 123] or [:val "hello"]
     Any,                         // :any type
     Never,                       // :never type
+    
+    // New RTFS 2.0 type features
+    Array {
+        element_type: Box<TypeExpr>,
+        shape: Vec<ArrayDimension>,
+    },
+    Refined {
+        base_type: Box<TypeExpr>,
+        predicates: Vec<TypePredicate>,
+    },
+    Enum(Vec<Literal>),          // E.g., [:enum :red :green :blue]
+    Optional(Box<TypeExpr>),     // Sugar for [:union T :nil]
 }
 
 impl TypeExpr {
-    /// Parse a TypeExpr from a string (simplified implementation)
+    /// Parse a TypeExpr from a string using the RTFS parser
     pub fn from_str(s: &str) -> Result<Self, String> {
-        // For now, provide a simple implementation
-        // In practice, this should use the RTFS parser
-        match s.trim() {
-            ":int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
-            ":float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
-            ":string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
-            ":bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
-            ":nil" => Ok(TypeExpr::Primitive(PrimitiveType::Nil)),
-            ":any" => Ok(TypeExpr::Any),
-            _ => {
-                // For complex types, we'd need to use the full parser
-                // For now, treat as alias
-                Ok(TypeExpr::Alias(Symbol(s.to_string())))
+        // Try to use the full parser first
+        match crate::parser::parse_type_expression(s) {
+            Ok(type_expr) => Ok(type_expr),
+            Err(_) => {
+                // Fallback to simple parsing for basic types
+                match s.trim() {
+                    ":int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+                    ":float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+                    ":string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+                    ":bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+                    ":nil" => Ok(TypeExpr::Primitive(PrimitiveType::Nil)),
+                    ":keyword" => Ok(TypeExpr::Primitive(PrimitiveType::Keyword)),
+                    ":symbol" => Ok(TypeExpr::Primitive(PrimitiveType::Symbol)),
+                    ":any" => Ok(TypeExpr::Any),
+                    ":never" => Ok(TypeExpr::Never),
+                    _ => {
+                        // Handle optional types (T?)
+                        if s.ends_with("?") {
+                            let base_type_str = &s[..s.len()-1];
+                            let base_type = Self::from_str(base_type_str)?;
+                            return Ok(TypeExpr::Optional(Box::new(base_type)));
+                        }
+                        
+                        // For other types, treat as alias
+                        Ok(TypeExpr::Alias(Symbol(s.to_string())))
+                    }
+                }
             }
         }
     }
@@ -203,19 +270,100 @@ impl TypeExpr {
                 PrimitiveType::String => Ok(json!({"type": "string"})),
                 PrimitiveType::Bool => Ok(json!({"type": "boolean"})),
                 PrimitiveType::Nil => Ok(json!({"type": "null"})),
-                _ => Ok(json!({"type": "object"})), // Default for complex types
+                PrimitiveType::Keyword => Ok(json!({"type": "string", "pattern": "^:.+"})),
+                PrimitiveType::Symbol => Ok(json!({"type": "string"})),
+                PrimitiveType::Custom(k) => Ok(json!({"type": "object", "description": format!("Custom type: {}", k.0)})),
             },
             TypeExpr::Vector(inner) => Ok(json!({
                 "type": "array",
                 "items": inner.to_json()?
             })),
+            TypeExpr::Array { element_type, shape } => {
+                let mut schema = json!({
+                    "type": "array",
+                    "items": element_type.to_json()?
+                });
+                
+                // Add shape constraints if present
+                if !shape.is_empty() {
+                    if let Some(fixed_size) = shape.iter()
+                        .filter_map(|d| if let ArrayDimension::Fixed(n) = d { Some(*n) } else { None })
+                        .next() {
+                        schema["minItems"] = json!(fixed_size);
+                        schema["maxItems"] = json!(fixed_size);
+                    }
+                }
+                Ok(schema)
+            },
+            TypeExpr::Tuple(types) => {
+                let schemas: Result<Vec<_>, _> = types.iter().map(|t| t.to_json()).collect();
+                Ok(json!({
+                    "type": "array",
+                    "items": schemas?,
+                    "minItems": types.len(),
+                    "maxItems": types.len()
+                }))
+            },
             TypeExpr::Union(types) => {
                 let schemas: Result<Vec<_>, _> = types.iter().map(|t| t.to_json()).collect();
                 Ok(json!({
                     "anyOf": schemas?
                 }))
             },
+            TypeExpr::Optional(inner) => {
+                Ok(json!({
+                    "anyOf": [inner.to_json()?, json!({"type": "null"})]
+                }))
+            },
+            TypeExpr::Enum(values) => {
+                let enum_values: Vec<serde_json::Value> = values.iter().map(|lit| {
+                    match lit {
+                        Literal::Integer(i) => json!(i),
+                        Literal::Float(f) => json!(f),
+                        Literal::String(s) => json!(s),
+                        Literal::Boolean(b) => json!(b),
+                        Literal::Keyword(k) => json!(k.0),
+                        _ => json!(format!("{:?}", lit)),
+                    }
+                }).collect();
+                Ok(json!({
+                    "enum": enum_values
+                }))
+            },
+            TypeExpr::Refined { base_type, predicates } => {
+                let mut schema = base_type.to_json()?;
+                
+                // Apply predicates as JSON Schema constraints
+                for predicate in predicates {
+                    match predicate {
+                        TypePredicate::MinLength(len) => {
+                            schema["minLength"] = json!(len);
+                        },
+                        TypePredicate::MaxLength(len) => {
+                            schema["maxLength"] = json!(len);
+                        },
+                        TypePredicate::MatchesRegex(pattern) => {
+                            schema["pattern"] = json!(pattern);
+                        },
+                        TypePredicate::GreaterThan(Literal::Integer(n)) => {
+                            schema["minimum"] = json!(n + 1);
+                        },
+                        TypePredicate::GreaterEqual(Literal::Integer(n)) => {
+                            schema["minimum"] = json!(n);
+                        },
+                        TypePredicate::LessThan(Literal::Integer(n)) => {
+                            schema["maximum"] = json!(n - 1);
+                        },
+                        TypePredicate::LessEqual(Literal::Integer(n)) => {
+                            schema["maximum"] = json!(n);
+                        },
+                        _ => {} // Other predicates not directly expressible in JSON Schema
+                    }
+                }
+                Ok(schema)
+            },
             TypeExpr::Any => Ok(json!({})), // Accept anything
+            TypeExpr::Never => Ok(json!({"not": {}})), // Accept nothing
             _ => {
                 // For other complex types, provide a basic schema
                 // This is a simplified implementation
@@ -234,16 +382,79 @@ impl std::fmt::Display for TypeExpr {
                 PrimitiveType::String => write!(f, ":string"),
                 PrimitiveType::Bool => write!(f, ":bool"),
                 PrimitiveType::Nil => write!(f, ":nil"),
-                _ => write!(f, ":object"),
+                PrimitiveType::Keyword => write!(f, ":keyword"),
+                PrimitiveType::Symbol => write!(f, ":symbol"),
+                PrimitiveType::Custom(k) => write!(f, ":{}", k.0),
             },
-            TypeExpr::Vector(inner) => write!(f, "[:vec {}]", inner),
+            TypeExpr::Vector(inner) => write!(f, "[:vector {}]", inner),
+            TypeExpr::Array { element_type, shape } => {
+                if shape.is_empty() {
+                    write!(f, "[:array {}]", element_type)
+                } else {
+                    let shape_str: Vec<String> = shape.iter().map(|d| match d {
+                        ArrayDimension::Fixed(n) => n.to_string(),
+                        ArrayDimension::Variable => "?".to_string(),
+                    }).collect();
+                    write!(f, "[:array {} [{}]]", element_type, shape_str.join(" "))
+                }
+            },
+            TypeExpr::Tuple(types) => {
+                let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                write!(f, "[:tuple {}]", type_strs.join(" "))
+            },
             TypeExpr::Union(types) => {
                 let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
                 write!(f, "[:union {}]", type_strs.join(" "))
             },
+            TypeExpr::Optional(inner) => write!(f, "{}?", inner),
+            TypeExpr::Enum(values) => {
+                let value_strs: Vec<String> = values.iter().map(|v| match v {
+                    Literal::Keyword(k) => format!(":{}", k.0),
+                    Literal::String(s) => format!("\"{}\"", s),
+                    Literal::Integer(i) => i.to_string(),
+                    Literal::Float(f) => f.to_string(),
+                    Literal::Boolean(b) => b.to_string(),
+                    _ => format!("{:?}", v),
+                }).collect();
+                write!(f, "[:enum {}]", value_strs.join(" "))
+            },
+            TypeExpr::Refined { base_type, predicates } => {
+                if predicates.is_empty() {
+                    write!(f, "{}", base_type)
+                } else {
+                    let pred_strs: Vec<String> = predicates.iter().map(|p| format!("{:?}", p)).collect();
+                    write!(f, "[:and {} {}]", base_type, pred_strs.join(" "))
+                }
+            },
             TypeExpr::Any => write!(f, ":any"),
+            TypeExpr::Never => write!(f, ":never"),
             TypeExpr::Alias(symbol) => write!(f, "{}", symbol.0),
-            _ => write!(f, ":object"), // Simplified for other types
+            TypeExpr::Map { entries, wildcard } => {
+                let mut parts = Vec::new();
+                for entry in entries {
+                    let optional = if entry.optional { "?" } else { "" };
+                    parts.push(format!("[:{} {}{}]", entry.key.0, entry.value_type, optional));
+                }
+                if let Some(w) = wildcard {
+                    parts.push(format!("[:* {}]", w));
+                }
+                write!(f, "[:map {}]", parts.join(" "))
+            },
+            TypeExpr::Function { param_types, variadic_param_type, return_type } => {
+                let mut param_strs: Vec<String> = param_types.iter().map(|p| match p {
+                    ParamType::Simple(t) => t.to_string(),
+                }).collect();
+                if let Some(variadic) = variadic_param_type {
+                    param_strs.push(format!("& {}", variadic));
+                }
+                write!(f, "[:fn [{}] {}]", param_strs.join(" "), return_type)
+            },
+            TypeExpr::Resource(symbol) => write!(f, "[:resource {}]", symbol.0),
+            TypeExpr::Intersection(types) => {
+                let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                write!(f, "[:and {}]", type_strs.join(" "))
+            },
+            TypeExpr::Literal(lit) => write!(f, "[:val {:?}]", lit),
         }
     }
 }
