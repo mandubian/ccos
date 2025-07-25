@@ -10,6 +10,7 @@ use crate::runtime::host_interface::HostInterface;
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::{Arity, Function, Value};
 use crate::runtime::security::RuntimeContext;
+use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, ValidationLevel, VerificationContext};
 use crate::ccos::types::ExecutionResult;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -36,6 +37,10 @@ pub struct Evaluator {
     pub host: Rc<dyn HostInterface>,
     /// Dispatch table for special forms
     special_forms: HashMap<String, SpecialFormHandler>,
+    /// Type validator for hybrid validation
+    pub type_validator: Arc<TypeValidator>,
+    /// Type checking configuration for optimization
+    pub type_config: TypeCheckingConfig,
 }
 
 // Helper function to check if two values are in equivalent
@@ -82,6 +87,8 @@ impl Evaluator {
             security_context,
             host,
             special_forms: Self::default_special_forms(),
+            type_validator: Arc::new(TypeValidator::new()),
+            type_config: TypeCheckingConfig::default(),
         }
     }
 
@@ -107,6 +114,8 @@ impl Evaluator {
             security_context,
             host,
             special_forms: Self::default_special_forms(),
+            type_validator: Arc::new(TypeValidator::new()),
+            type_config: TypeCheckingConfig::default(),
         }
     }
 
@@ -131,6 +140,168 @@ impl Evaluator {
     /// Get the current task context
     pub fn get_task_context(&self) -> Option<Value> {
         self.task_context.clone()
+    }
+
+    /// Configure type checking behavior
+    pub fn set_type_checking_config(&mut self, config: TypeCheckingConfig) {
+        self.type_config = config;
+    }
+
+    /// Get current type checking configuration
+    pub fn get_type_checking_config(&self) -> &TypeCheckingConfig {
+        &self.type_config
+    }
+
+    /// Create evaluator with optimized type checking for production
+    pub fn new_optimized(
+        module_registry: Rc<ModuleRegistry>,
+        delegation_engine: Arc<dyn DelegationEngine>,
+        security_context: RuntimeContext,
+        host: Rc<dyn HostInterface>,
+    ) -> Self {
+        let mut evaluator = Self::new(module_registry, delegation_engine, security_context, host);
+        evaluator.type_config = TypeCheckingConfig {
+            skip_compile_time_verified: true,
+            enforce_capability_boundaries: true,
+            validate_external_data: true,
+            validation_level: ValidationLevel::Standard,
+        };
+        evaluator
+    }
+
+    /// Create evaluator with strict type checking for development
+    pub fn new_strict(
+        module_registry: Rc<ModuleRegistry>,
+        delegation_engine: Arc<dyn DelegationEngine>,
+        security_context: RuntimeContext,
+        host: Rc<dyn HostInterface>,
+    ) -> Self {
+        let mut evaluator = Self::new(module_registry, delegation_engine, security_context, host);
+        evaluator.type_config = TypeCheckingConfig {
+            skip_compile_time_verified: false,
+            enforce_capability_boundaries: true,
+            validate_external_data: true,
+            validation_level: ValidationLevel::Strict,
+        };
+        evaluator
+    }
+
+    /// Create verification context for local expression evaluation
+    fn create_local_verification_context(&self, compile_time_verified: bool) -> VerificationContext {
+        VerificationContext {
+            compile_time_verified,
+            is_capability_boundary: false,
+            is_external_data: false,
+            source_location: None,
+            trust_level: if compile_time_verified { 
+                crate::runtime::type_validator::TrustLevel::Trusted 
+            } else { 
+                crate::runtime::type_validator::TrustLevel::Verified 
+            },
+        }
+    }
+
+    /// Validate a value against an expected type with current configuration
+    fn validate_expression_result(
+        &self, 
+        value: &Value, 
+        expected_type: &crate::ast::TypeExpr,
+        compile_time_verified: bool,
+    ) -> RuntimeResult<()> {
+        let context = self.create_local_verification_context(compile_time_verified);
+        self.type_validator.validate_with_config(value, expected_type, &self.type_config, &context)
+            .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))
+    }
+
+    /// Validate arguments for known builtin functions
+    fn validate_builtin_function_args(&self, function_name: &str, args: &[Value]) -> RuntimeResult<()> {
+        // Only validate if we're in strict mode or if this is a security-critical function
+        if !self.should_validate_function_call(function_name) {
+            return Ok(());
+        }
+
+        // Validate arguments for well-known functions with type information
+        match function_name {
+            // Arithmetic functions - require numbers
+            "+" | "-" | "*" | "/" | "mod" => {
+                for (i, arg) in args.iter().enumerate() {
+                    if !matches!(arg, Value::Integer(_) | Value::Float(_)) {
+                        let expected_type = crate::ast::TypeExpr::Union(vec![
+                            crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Int),
+                            crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Float),
+                        ]);
+                        let context = self.create_local_verification_context(false); // Runtime values
+                        return self.type_validator.validate_with_config(arg, &expected_type, &self.type_config, &context)
+                            .map_err(|e| RuntimeError::TypeValidationError(
+                                format!("Function '{}' argument {}: {}", function_name, i, e)
+                            ));
+                    }
+                }
+            }
+            // Note: Standard library functions (str, string-length, count, etc.) are NOT optimized here
+            // They should be validated through their own function signatures, not hardcoded in the evaluator
+            // Only true language primitives should be optimized in this validation
+            _ => {
+                // Unknown function - no specific validation
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate results for known builtin functions
+    fn validate_builtin_function_result(&self, function_name: &str, result: &Value, _args: &[Value]) -> RuntimeResult<()> {
+        // Only validate if we're in strict mode
+        if !self.should_validate_function_result(function_name) {
+            return Ok(());
+        }
+
+        // Validate return types for well-known functions
+        match function_name {
+            // Arithmetic functions return numbers
+            "+" | "-" | "*" | "/" | "mod" => {
+                if !matches!(result, Value::Integer(_) | Value::Float(_)) {
+                    let expected_type = crate::ast::TypeExpr::Union(vec![
+                        crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Int),
+                        crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Float),
+                    ]);
+                    let context = self.create_local_verification_context(false);
+                    return self.type_validator.validate_with_config(result, &expected_type, &self.type_config, &context)
+                        .map_err(|e| RuntimeError::TypeValidationError(
+                            format!("Function '{}' should return number: {}", function_name, e)
+                        ));
+                }
+            }
+            // Note: Standard library functions (str, string-length, count, etc.) are NOT optimized here
+            // They should be validated through their own function signatures, not hardcoded in the evaluator
+            // Only true language primitives should be optimized in this result validation
+            _ => {
+                // Unknown function - no specific validation
+            }
+        }
+        Ok(())
+    }
+
+    /// Determine if we should validate arguments for this function call
+    fn should_validate_function_call(&self, function_name: &str) -> bool {
+        // Always validate in strict mode
+        if self.type_config.validation_level == ValidationLevel::Strict {
+            return true;
+        }
+
+        // In standard mode, validate security-critical functions
+        if self.type_config.validation_level == ValidationLevel::Standard {
+            return matches!(function_name, "eval" | "load" | "exec" | "read-file" | "write-file");
+        }
+
+        // In basic mode, skip validation unless it's a known unsafe function
+        false
+    }
+
+    /// Determine if we should validate results for this function call  
+    fn should_validate_function_result(&self, function_name: &str) -> bool {
+        // Only validate results in strict mode for demonstration
+        self.type_config.validation_level == ValidationLevel::Strict 
+            && !matches!(function_name, "print" | "println") // Skip output functions
     }
 
     pub fn eval_toplevel(&mut self, program: &[TopLevel]) -> RuntimeResult<Value> {
@@ -374,16 +545,45 @@ impl Evaluator {
     }
 
     fn eval_literal(&self, lit: &Literal) -> RuntimeResult<Value> {
-        match lit {
-            Literal::Integer(n) => Ok(Value::Integer(*n)),
-            Literal::Float(f) => Ok(Value::Float(*f)),
-            Literal::String(s) => Ok(Value::String(s.clone())),
-            Literal::Boolean(b) => Ok(Value::Boolean(*b)),
-            Literal::Keyword(k) => Ok(Value::Keyword(k.clone())),
-            Literal::Nil => Ok(Value::Nil),
-            Literal::Timestamp(ts) => Ok(Value::String(ts.clone())),
-            Literal::Uuid(uuid) => Ok(Value::String(uuid.clone())),
-            Literal::ResourceHandle(handle) => Ok(Value::String(handle.clone())),
+        // Literals are compile-time verified, so we can create optimized verification context
+        let value = match lit {
+            Literal::Integer(n) => Value::Integer(*n),
+            Literal::Float(f) => Value::Float(*f),
+            Literal::String(s) => Value::String(s.clone()),
+            Literal::Boolean(b) => Value::Boolean(*b),
+            Literal::Keyword(k) => Value::Keyword(k.clone()),
+            Literal::Nil => Value::Nil,
+            Literal::Timestamp(ts) => Value::String(ts.clone()),
+            Literal::Uuid(uuid) => Value::String(uuid.clone()),
+            Literal::ResourceHandle(handle) => Value::String(handle.clone()),
+        };
+
+        // Demonstrate the optimization system for literal values
+        // Note: In a real implementation, you'd have type annotations from the parser
+        if self.type_config.skip_compile_time_verified {
+            // This is the fast path - skip validation for compile-time verified literals
+            // The type was already verified when the literal was parsed
+            Ok(value)
+        } else {
+            // Development/debug mode - validate even compile-time verified values
+            // For demonstration, we'll create basic type expressions for literals
+            let inferred_type = match lit {
+                Literal::Integer(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Int),
+                Literal::Float(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Float),
+                Literal::String(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::String),
+                Literal::Boolean(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Bool),
+                Literal::Keyword(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Keyword),
+                Literal::Nil => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Nil),
+                Literal::Timestamp(_) | Literal::Uuid(_) | Literal::ResourceHandle(_) => 
+                    crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::String),
+            };
+
+            // Validate using the optimization system
+            let context = self.create_local_verification_context(true); // compile_time_verified = true
+            self.type_validator.validate_with_config(&value, &inferred_type, &self.type_config, &context)
+                .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+
+            Ok(value)
         }
     }
 
@@ -419,7 +619,16 @@ impl Evaluator {
                     });
                 }
 
-                (func.func)(args.to_vec())
+                // Validate function arguments with known signatures (demonstration)
+                self.validate_builtin_function_args(&func.name, args)?;
+
+                // Call the function
+                let result = (func.func)(args.to_vec())?;
+
+                // Validate function result for known signatures
+                self.validate_builtin_function_result(&func.name, &result, args)?;
+
+                Ok(result)
             }
             Value::Function(Function::BuiltinWithContext(func)) => {
                 // Check arity
@@ -1724,6 +1933,8 @@ impl Evaluator {
             security_context,
             host: self.host.clone(),
             special_forms: Self::default_special_forms(),
+            type_validator: self.type_validator.clone(),
+            type_config: self.type_config.clone(),
         }
     }
 
@@ -1745,6 +1956,8 @@ impl Evaluator {
             security_context,
             host,
             special_forms: Self::default_special_forms(),
+            type_validator: Arc::new(TypeValidator::new()),
+            type_config: TypeCheckingConfig::default(),
         }
     }
 }

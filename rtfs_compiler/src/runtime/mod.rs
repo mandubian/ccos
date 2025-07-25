@@ -21,6 +21,7 @@ pub mod microvm_config;
 pub mod module_runtime;
 pub mod stdlib;
 pub mod secure_stdlib;
+pub mod type_validator;  // Add type validator module
 pub mod values;
 pub mod security;
 
@@ -32,6 +33,7 @@ pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
 pub use ir_runtime::IrRuntime;
 pub use module_runtime::{Module, ModuleRegistry};
+pub use type_validator::{TypeValidator, ValidationError, ValidationResult};  // Export type validator
 pub use values::{Function, Value};
 pub use ccos_environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory};
 

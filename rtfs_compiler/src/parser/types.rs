@@ -1,9 +1,12 @@
 use super::{PestParseError, Rule};
-use crate::ast::{MapTypeEntry, ParamType, PrimitiveType, Symbol, TypeExpr}; // Added Symbol
+use crate::ast::{
+    MapTypeEntry, ParamType, PrimitiveType, Symbol, TypeExpr, 
+    ArrayDimension, TypePredicate, Literal, Keyword
+}; // Enhanced imports
 use pest::iterators::Pair;
 
 // Helper function imports from sibling modules
-use super::common::{build_keyword, build_symbol};
+use super::common::{build_keyword, build_symbol, build_literal};
 
 // Build type expression from a parsed pair
 pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
@@ -188,7 +191,6 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
         }
         Rule::literal => {
             // Handle the case where a keyword is parsed as a literal
-            use super::common::build_literal;
             let literal = build_literal(actual_type_pair.clone())?;
             match literal {
                 crate::ast::Literal::Keyword(keyword) => {
@@ -197,10 +199,306 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 }
                 _ => Ok(TypeExpr::Literal(literal))
             }
+        }
+        Rule::array_type => {
+            let mut inner = actual_type_pair.into_inner();
+            let element_type_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected element type in array".to_string(), span: None }
+            })?;
+            let element_type = Box::new(build_type_expr(element_type_pair)?);
+            
+            // Parse optional shape
+            let mut shape = Vec::new();
+            if let Some(shape_pair) = inner.next() {
+                if shape_pair.as_rule() == Rule::shape {
+                    for dimension_pair in shape_pair.into_inner() {
+                        if dimension_pair.as_rule() == Rule::dimension {
+                            let dimension_inner = dimension_pair.into_inner().next().ok_or_else(|| {
+                                PestParseError::MissingToken { token: "expected dimension content".to_string(), span: None }
+                            })?;
+                            
+                            match dimension_inner.as_str() {
+                                "?" => shape.push(ArrayDimension::Variable),
+                                n => {
+                                    let size = n.parse::<usize>().map_err(|_| PestParseError::InvalidInput {
+                                        message: format!("Invalid array dimension: {}", n),
+                                        span: None,
+                                    })?;
+                                    shape.push(ArrayDimension::Fixed(size));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Ok(TypeExpr::Array { element_type, shape })
+        }
+        Rule::enum_type => {
+            let mut literals = Vec::new();
+            for literal_pair in actual_type_pair.into_inner() {
+                if literal_pair.as_rule() != Rule::WHITESPACE && literal_pair.as_rule() != Rule::COMMENT {
+                    literals.push(build_literal(literal_pair)?);
+                }
+            }
+            Ok(TypeExpr::Enum(literals))
+        }
+        Rule::optional_type => {
+            let mut inner = actual_type_pair.into_inner();
+            let base_type_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected base type in optional".to_string(), span: None }
+            })?;
+            
+            let base_type = build_type_expr(base_type_pair)?;
+            Ok(TypeExpr::Optional(Box::new(base_type)))
+        }
+        Rule::intersection_type => {
+            let mut inner = actual_type_pair.into_inner();
+            let mut types = Vec::new();
+            let mut predicates = Vec::new();
+            
+            for pair in inner {
+                if pair.as_rule() != Rule::WHITESPACE && pair.as_rule() != Rule::COMMENT {
+                    if is_predicate_rule(&pair) {
+                        predicates.push(build_predicate_expr(pair)?);
+                    } else {
+                        types.push(build_type_expr(pair)?);
+                    }
+                }
+            }
+            
+            // If we have predicates, create a refined type
+            if !predicates.is_empty() && types.len() == 1 {
+                Ok(TypeExpr::Refined {
+                    base_type: Box::new(types.into_iter().next().unwrap()),
+                    predicates,
+                })
+            } else {
+                // Otherwise, create an intersection type
+                Ok(TypeExpr::Intersection(types))
+            }
         }        s => Err(PestParseError::UnexpectedRule {
             expected: "valid type expression".to_string(),
             found: format!("{:?}", s),
             rule_text: actual_type_pair.as_str().to_string(),
+            span: None
+        }),
+    }
+}
+
+/// Check if a pair represents a predicate expression
+fn is_predicate_rule(pair: &Pair<Rule>) -> bool {
+    matches!(pair.as_rule(), 
+        Rule::predicate_expr | 
+        Rule::comparison_predicate | 
+        Rule::length_predicate | 
+        Rule::regex_predicate | 
+        Rule::range_predicate | 
+        Rule::collection_predicate | 
+        Rule::map_predicate | 
+        Rule::custom_predicate
+    )
+}
+
+/// Build a predicate expression from a parsed pair
+fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseError> {
+    let actual_predicate_pair = match pair.as_rule() {
+        Rule::predicate_expr => pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| PestParseError::MissingToken { token: "predicate_expr inner".to_string(), span: None })?,
+        _ => pair,
+    };
+
+    match actual_predicate_pair.as_rule() {
+        Rule::comparison_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let operator_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected operator in comparison".to_string(), span: None }
+            })?;
+            let value_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected value in comparison".to_string(), span: None }
+            })?;
+            
+            let value = build_literal(value_pair)?;
+            
+            match operator_pair.as_str() {
+                ":>" => Ok(TypePredicate::GreaterThan(value)),
+                ":>=" => Ok(TypePredicate::GreaterEqual(value)),
+                ":<" => Ok(TypePredicate::LessThan(value)),
+                ":<=" => Ok(TypePredicate::LessEqual(value)),
+                ":=" => Ok(TypePredicate::Equal(value)),
+                ":!=" => Ok(TypePredicate::NotEqual(value)),
+                _ => Err(PestParseError::InvalidInput {
+                    message: format!("Unknown comparison operator: {}", operator_pair.as_str()),
+                    span: None,
+                })
+            }
+        }
+        
+        Rule::length_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let operator_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected operator in length predicate".to_string(), span: None }
+            })?;
+            let value_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected value in length predicate".to_string(), span: None }
+            })?;
+            
+            let value_str = value_pair.as_str();
+            let length = value_str.parse::<usize>().map_err(|_| PestParseError::InvalidInput {
+                message: format!("Invalid length value: {}", value_str),
+                span: None,
+            })?;
+            
+            match operator_pair.as_str() {
+                ":min-length" => Ok(TypePredicate::MinLength(length)),
+                ":max-length" => Ok(TypePredicate::MaxLength(length)),
+                ":length" => Ok(TypePredicate::Length(length)),
+                _ => Err(PestParseError::InvalidInput {
+                    message: format!("Unknown length operator: {}", operator_pair.as_str()),
+                    span: None,
+                })
+            }
+        }
+        
+        Rule::regex_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let _keyword = inner.next(); // Skip :matches-regex keyword
+            let pattern_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected pattern in regex predicate".to_string(), span: None }
+            })?;
+            
+            if let Literal::String(pattern) = build_literal(pattern_pair)? {
+                Ok(TypePredicate::MatchesRegex(pattern))
+            } else {
+                Err(PestParseError::InvalidInput {
+                    message: "Regex pattern must be a string".to_string(),
+                    span: None,
+                })
+            }
+        }
+        
+        Rule::range_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let _keyword = inner.next(); // Skip :in-range keyword
+            let min_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected min value in range predicate".to_string(), span: None }
+            })?;
+            let max_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected max value in range predicate".to_string(), span: None }
+            })?;
+            
+            let min_value = build_literal(min_pair)?;
+            let max_value = build_literal(max_pair)?;
+            
+            Ok(TypePredicate::InRange(min_value, max_value))
+        }
+        
+        Rule::collection_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let operator_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected operator in collection predicate".to_string(), span: None }
+            })?;
+            
+            match operator_pair.as_str() {
+                ":non-empty" => Ok(TypePredicate::NonEmpty),
+                ":min-count" | ":max-count" | ":count" => {
+                    let value_pair = inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken { token: "expected count value".to_string(), span: None }
+                    })?;
+                    
+                    let value_str = value_pair.as_str();
+                    let count = value_str.parse::<usize>().map_err(|_| PestParseError::InvalidInput {
+                        message: format!("Invalid count value: {}", value_str),
+                        span: None,
+                    })?;
+                    
+                    match operator_pair.as_str() {
+                        ":min-count" => Ok(TypePredicate::MinCount(count)),
+                        ":max-count" => Ok(TypePredicate::MaxCount(count)),
+                        ":count" => Ok(TypePredicate::Count(count)),
+                        _ => unreachable!(),
+                    }
+                }
+                _ => Err(PestParseError::InvalidInput {
+                    message: format!("Unknown collection operator: {}", operator_pair.as_str()),
+                    span: None,
+                })
+            }
+        }
+        
+        Rule::map_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let operator_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected operator in map predicate".to_string(), span: None }
+            })?;
+            
+            match operator_pair.as_str() {
+                ":has-key" => {
+                    let key_pair = inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken { token: "expected key in has-key predicate".to_string(), span: None }
+                    })?;
+                    let key = build_keyword(key_pair)?;
+                    Ok(TypePredicate::HasKey(key))
+                }
+                ":required-keys" => {
+                    let keys_list_pair = inner.next().ok_or_else(|| {
+                        PestParseError::MissingToken { token: "expected keys list in required-keys predicate".to_string(), span: None }
+                    })?;
+                    
+                    let mut keys = Vec::new();
+                    for key_pair in keys_list_pair.into_inner() {
+                        if key_pair.as_rule() != Rule::WHITESPACE && key_pair.as_rule() != Rule::COMMENT {
+                            keys.push(build_keyword(key_pair)?);
+                        }
+                    }
+                    Ok(TypePredicate::RequiredKeys(keys))
+                }
+                _ => Err(PestParseError::InvalidInput {
+                    message: format!("Unknown map operator: {}", operator_pair.as_str()),
+                    span: None,
+                })
+            }
+        }
+        
+        Rule::custom_predicate => {
+            let mut inner = actual_predicate_pair.into_inner();
+            let name_pair = inner.next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected predicate name".to_string(), span: None }
+            })?;
+            
+            let name = match name_pair.as_rule() {
+                Rule::keyword => build_keyword(name_pair)?,
+                Rule::symbol => {
+                    let symbol = build_symbol(name_pair)?;
+                    Keyword::new(&symbol.0)
+                }
+                _ => return Err(PestParseError::InvalidInput {
+                    message: "Predicate name must be keyword or symbol".to_string(),
+                    span: None,
+                })
+            };
+            
+            let mut args = Vec::new();
+            for arg_pair in inner {
+                if arg_pair.as_rule() != Rule::WHITESPACE && arg_pair.as_rule() != Rule::COMMENT {
+                    args.push(build_literal(arg_pair)?);
+                }
+            }
+            
+            // Handle built-in predicates without arguments
+            match name.0.as_str() {
+                "is-url" => Ok(TypePredicate::IsUrl),
+                "is-email" => Ok(TypePredicate::IsEmail),
+                _ => Ok(TypePredicate::Custom(name, args)),
+            }
+        }
+        
+        _ => Err(PestParseError::UnexpectedRule {
+            expected: "valid predicate expression".to_string(),
+            found: format!("{:?}", actual_predicate_pair.as_rule()),
+            rule_text: actual_predicate_pair.as_str().to_string(),
             span: None
         }),
     }

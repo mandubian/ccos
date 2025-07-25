@@ -89,3 +89,13 @@ pub fn parse_expression(input: &str) -> Result<Expression, PestParseError> {
     })?;
     build_expression(expr_pair)
 }
+
+/// Parse a type expression (useful for type validation and capability schemas)
+pub fn parse_type_expression(input: &str) -> Result<crate::ast::TypeExpr, PestParseError> {
+    let pairs = RTFSParser::parse(Rule::type_expr, input).map_err(PestParseError::from)?;
+    let type_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput {
+        message: "No type expression found".to_string(),
+        span: span_from_input(input),
+    })?;
+    types::build_type_expr(type_pair)
+}
