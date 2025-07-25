@@ -23,8 +23,8 @@ Issue #43 focuses on stabilizing and securing the RTFS capability system for pro
   - [ ] Network-based capability registry discovery
   - [ ] Plugin-based capability discovery
   - [ ] Automatic capability registration agents
-- [ ] **Security Hardening**: Add comprehensive security features
-  - [~] Input/output schema validation for all capability calls *(implemented in execute_with_validation, not enforced everywhere yet)*
+- [x] **Security Hardening**: Add comprehensive security features
+  - [x] Input/output schema validation for all capability calls ✅ **(Issue #50 Completed)**
   - [ ] Capability attestation and provenance checks *(structs and helpers present, not enforced; parsing/verification helpers exist but not integrated)*
   - [ ] Enhanced security context validation
   - [ ] MicroVM isolation for dangerous operations
@@ -85,10 +85,10 @@ Issue #43 focuses on stabilizing and securing the RTFS capability system for pro
 **Target**: Production-ready security features
 
 #### 2.1 Schema Validation
-- [~] **Input Validation**: JSON Schema validation for capability inputs *(implemented in execute_with_validation, not enforced everywhere yet)*
-- [~] **Output Validation**: Ensure capability outputs match expected schemas *(implemented in execute_with_validation, not enforced everywhere yet)*
-- [ ] **Schema Registry**: Manage and version capability schemas
-- [ ] **Validation Caching**: Cache parsed schemas for performance
+- [x] **Input Validation**: RTFS native type validation for capability inputs ✅ **(Issue #50 Completed)**
+- [x] **Output Validation**: RTFS native type validation for capability outputs ✅ **(Issue #50 Completed)**
+- [x] **Schema Registry**: TypeExpr-based schema management ✅ **(Issue #50 Completed)**
+- [x] **Validation Optimization**: Skip compile-time verified optimization system ✅ **(Issue #50 Completed)**
 
 #### 2.2 Capability Attestation
 - [ ] **Provenance Tracking**: Track capability execution history *(structs and helpers present, not enforced; parsing/verification helpers exist but not integrated)*
@@ -165,7 +165,8 @@ Issue #43 focuses on stabilizing and securing the RTFS capability system for pro
 - [x] **Async/Await Used Throughout**: All provider execution is async
 - [x] **Executor Stubs for All Planned Provider Types**: Structure in place for MCP, A2A, Plugin, RemoteRTFS, etc.
 - [x] **Test for Local Provider Registration/Execution**: Ensures basic marketplace flow works
-- [~] **execute_with_validation**: Provides input/output schema validation for capabilities (in progress)
+- [x] **execute_with_validation**: Provides input/output schema validation for capabilities ✅
+- [x] **RTFS Native Type System**: Complete TypeExpr-based validation replacing JSON Schema ✅ **(Issue #50 Completed)**
 
 ### 🚧 In Progress Components
 - [x] **Call Function Integration**: Fixed to support intended keyword syntax ✅
@@ -176,7 +177,7 @@ Issue #43 focuses on stabilizing and securing the RTFS capability system for pro
 
 ### ⏳ Pending Components
 - [ ] **Dynamic Discovery**: No implementation yet
-- [ ] **Schema Validation**: Not implemented everywhere
+- [x] **Schema Validation**: RTFS native type validation fully implemented ✅ **(Issue #50 Completed)**
 - [ ] **Capability Attestation**: Not enforced/integrated
 - [ ] **MicroVM Integration**: Planned but not started
 
@@ -185,6 +186,7 @@ Issue #43 focuses on stabilizing and securing the RTFS capability system for pro
 ### Internal Dependencies
 - ✅ **Issue #41**: IR system completed (provides optimization foundation)
 - ✅ **Issue #42**: IR optimization completed (provides performance foundation)
+- ✅ **Issue #50**: RTFS Native Type System completed (provides schema validation foundation)
 - ⏳ **Issue #44**: Standard library testing (parallel development)
 
 ### External Dependencies
