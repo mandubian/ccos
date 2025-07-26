@@ -49,8 +49,8 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.0", features = ["v4"] }
 url = "2.5"  # Add URL dependency for type validation
 
-# MCP (Model Context Protocol) dependencies - using direct JSON-RPC implementation
-# rmcp = { version = "0.3.0", features = ["client", "transport-sse-client", "transport-child-process"] }
+# MCP (Model Context Protocol) dependencies - using tokio directly
+# rmcp = { version = "0.3.0", features = ["client", "server", "transport-child-process"] }
 
 # REPL dependencies
 clap = { version = "4.0", features = ["derive"] }

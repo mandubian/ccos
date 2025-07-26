@@ -443,6 +443,26 @@ impl SecureStandardLibrary {
                 func: Rc::new(Self::range),
             })),
         );
+
+        // Length function
+        env.define(
+            &Symbol("length".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "length".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::length),
+            })),
+        );
+
+        // Type name function
+        env.define(
+            &Symbol("type-name".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "type-name".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::type_name),
+            })),
+        );
     }
     
     pub(crate) fn load_type_predicate_functions(env: &mut Environment) {
@@ -1801,7 +1821,7 @@ impl SecureStandardLibrary {
         }
     }
 
-    fn length_value(args: Vec<Value>) -> RuntimeResult<Value> {
+    fn length(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
             return Err(RuntimeError::ArityMismatch {
@@ -1821,6 +1841,19 @@ impl SecureStandardLibrary {
                 operation: "length".to_string(),
             }),
         }
+    }
+
+    fn type_name(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "type-name".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        Ok(Value::String(args[0].type_name().to_string()))
     }
 
     fn range(args: Vec<Value>) -> RuntimeResult<Value> {
