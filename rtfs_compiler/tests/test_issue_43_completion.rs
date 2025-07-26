@@ -7,13 +7,14 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rtfs_compiler::runtime::capability_marketplace::{
     CapabilityMarketplace, CapabilityManifest, CapabilityAttestation, CapabilityProvenance,
     LocalCapability, ProviderType
 };
 use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::ast::{TypeExpr, PrimitiveType, MapTypeEntry, Keyword};
 use tokio::sync::RwLock;
 
 #[cfg(test)]
@@ -31,17 +32,39 @@ mod issue_43_tests {
         let marketplace = create_test_marketplace();
         
         // Create enhanced manifest with all Phase 1 security fields
-        let manifest = CapabilityManifest {
+        let _manifest = CapabilityManifest {
             id: "test_capability".to_string(),
             name: "Test Capability".to_string(), 
             description: "A test capability with security enhancements".to_string(),
-            provider_type: ProviderType::Local(LocalCapability {
+            provider: ProviderType::Local(LocalCapability {
                 handler: Arc::new(|_| Ok(Value::String("test".to_string()))),
             }),
-            local: true,
-            endpoint: None,
-            input_schema: Some(r#"{"type": "object", "properties": {"name": {"type": "string"}}}"#.to_string()),
-            output_schema: Some(r#"{"type": "object", "properties": {"result": {"type": "string"}}}"#.to_string()),
+            version: "1.0.0".to_string(),
+            input_schema: Some(TypeExpr::Map {
+                entries: vec![
+                    MapTypeEntry {
+                        key: Keyword("name".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                        optional: false,
+                    }
+                ],
+                wildcard: None,
+            }),
+            output_schema: Some(TypeExpr::Map {
+                entries: vec![
+                    MapTypeEntry {
+                        key: Keyword("result".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                        optional: false,
+                    }
+                ],
+                wildcard: None,
+            }),
+            permissions: vec!["read".to_string(), "write".to_string()],
+            metadata: HashMap::from([
+                ("security_level".to_string(), "high".to_string()),
+                ("permissions".to_string(), "read,write".to_string()),
+            ]),
             
             // Phase 1 security enhancements
             attestation: Some(CapabilityAttestation {
@@ -79,14 +102,21 @@ mod issue_43_tests {
     async fn test_phase_2_schema_validation() {
         let marketplace = create_test_marketplace();
         
-        let input_schema = r#"{
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "number"}
-            },
-            "required": ["name"]
-        }"#.to_string();
+        let input_schema = TypeExpr::Map {
+            entries: vec![
+                MapTypeEntry {
+                    key: Keyword("name".to_string()),
+                    value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                    optional: true,
+                },
+                MapTypeEntry {
+                    key: Keyword("age".to_string()),
+                    value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                    optional: false,
+                }
+            ],
+            wildcard: None,
+        };
 
         // Register capability with schema validation
         marketplace.register_local_capability_with_schema(
@@ -133,13 +163,14 @@ mod issue_43_tests {
             id: "test.attested".to_string(),
             name: "Attested Capability".to_string(),
             description: "A capability with attestation".to_string(),
-            provider_type: ProviderType::Local(LocalCapability {
+            provider: ProviderType::Local(LocalCapability {
                 handler: Arc::new(|_| Ok(Value::String("test".to_string()))),
             }),
-            local: true,
-            endpoint: None,
+            version: "1.0.0".to_string(),
             input_schema: None,
             output_schema: None,
+            permissions: vec!["read".to_string(), "write".to_string()],
+            metadata: HashMap::new(),
             attestation: Some(attestation),
             provenance: Some(CapabilityProvenance {
                 source: "test://attested.capability".to_string(),
@@ -188,24 +219,35 @@ mod issue_43_tests {
     async fn test_comprehensive_schema_validation() {
         let marketplace = create_test_marketplace();
         
-        let complex_schema = r#"{
-            "type": "object",
-            "properties": {
-                "user": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "email": {"type": "string", "format": "email"}
-                    },
-                    "required": ["name", "email"]
+        let complex_schema = TypeExpr::Map {
+            entries: vec![
+                MapTypeEntry {
+                    key: Keyword("user".to_string()),
+                    value_type: Box::new(TypeExpr::Map {
+                        entries: vec![
+                            MapTypeEntry {
+                                key: Keyword("name".to_string()),
+                                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                                optional: false,
+                            },
+                            MapTypeEntry {
+                                key: Keyword("email".to_string()),
+                                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                                optional: false,
+                            }
+                        ],
+                        wildcard: None,
+                    }),
+                    optional: false,
                 },
-                "permissions": {
-                    "type": "array",
-                    "items": {"type": "string"}
+                MapTypeEntry {
+                    key: Keyword("permissions".to_string()),
+                    value_type: Box::new(TypeExpr::Vector(Box::new(TypeExpr::Primitive(PrimitiveType::String)))),
+                    optional: true,
                 }
-            },
-            "required": ["user"]
-        }"#;
+            ],
+            wildcard: None,
+        };
 
         // Register capability with complex schema
         marketplace.register_local_capability_with_schema(
@@ -218,7 +260,7 @@ mod issue_43_tests {
                 (rtfs_compiler::ast::MapKey::String("processed_at".to_string()), 
                 Value::String(Utc::now().to_rfc3339())),
             ])))),
-            Some(complex_schema.to_string()),
+            Some(complex_schema.clone()),
             None,
         ).await.unwrap();
 
@@ -235,13 +277,37 @@ mod issue_43_tests {
             id: "integration.test".to_string(),
             name: "Integration Test Capability".to_string(),
             description: "Complete integration test for Issue #43".to_string(),
-            provider_type: ProviderType::Local(LocalCapability {
+            provider: ProviderType::Local(LocalCapability {
                 handler: Arc::new(|_| Ok(Value::String("integration_success".to_string()))),
             }),
-            local: true,
-            endpoint: None,
-            input_schema: Some(r#"{"type": "object", "properties": {"data": {"type": "string"}}}"#.to_string()),
-            output_schema: Some(r#"{"type": "object", "properties": {"status": {"type": "string"}}}"#.to_string()),
+            version: "1.0.0".to_string(),
+            input_schema: Some(TypeExpr::Map {
+                entries: vec![
+                    MapTypeEntry {
+                        key: Keyword("data".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                        optional: false,
+                    }
+                ],
+                wildcard: None,
+            }),
+            output_schema: Some(TypeExpr::Map {
+                entries: vec![
+                    MapTypeEntry {
+                        key: Keyword("status".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                        optional: false,
+                    }
+                ],
+                wildcard: None,
+            }),
+            permissions: vec!["read".to_string(), "write".to_string(), "execute".to_string()],
+            metadata: HashMap::from([
+                ("integration_test".to_string(), "passed".to_string()),
+                ("security_review".to_string(), "approved".to_string()),
+                ("security_level".to_string(), "maximum".to_string()),
+                ("permissions".to_string(), "read,write,execute".to_string()),
+            ]),
             attestation: Some(CapabilityAttestation {
                 authority: "rtfs.security.authority".to_string(),
                 signature: "ed25519:integration_test_signature".to_string(),
