@@ -1134,7 +1134,12 @@ impl CapabilityMarketplace {
     fn params_to_value(&self, params: &HashMap<String, Value>) -> Result<Value, RuntimeError> {
         let mut map = HashMap::new();
         for (key, value) in params {
-            map.insert(MapKey::String(key.clone()), value.clone());
+            let map_key = if key.starts_with(':') {
+                MapKey::Keyword(crate::ast::Keyword(key[1..].to_string()))
+            } else {
+                MapKey::String(key.clone())
+            };
+            map.insert(map_key, value.clone());
         }
         Ok(Value::Map(map))
     }
