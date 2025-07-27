@@ -1,0 +1,82 @@
+;; RTFS Language Feature Test: let expressions
+;; Tests all forms of let binding including destructuring, recursion, and type annotations
+
+;; Basic let binding
+(let [x 42] x)
+;; Expected: 42
+
+;; Multiple bindings
+(let [x 10
+      y 20] 
+  (+ x y))
+;; Expected: 30
+
+;; Nested let expressions
+(let [x 5]
+  (let [y (* x 2)]
+    (+ x y)))
+;; Expected: 15
+
+;; Let with type annotations
+(let [x:int 42
+      y:string "hello"]
+  [x y])
+;; Expected: [42 "hello"]
+
+;; Vector destructuring
+(let [[a b c] [1 2 3]]
+  (+ a b c))
+;; Expected: 6
+
+;; Vector destructuring with rest
+(let [[first & rest] [1 2 3 4 5]]
+  [first rest])
+;; Expected: [1 [2 3 4 5]]
+
+;; Map destructuring with keys
+(let [{:keys [name age]} {:name "Alice" :age 30}]
+  [name age])
+;; Expected: ["Alice" 30]
+
+;; Map destructuring with explicit bindings
+(let [{name :name age :age} {:name "Bob" :age 25}]
+  {:person name :years age})
+;; Expected: {:person "Bob" :years 25}
+
+;; Recursive let (letrec) - fibonacci
+(let [fib (fn [n]
+            (if (<= n 1)
+              n
+              (+ (fib (- n 1)) (fib (- n 2)))))]
+  (fib 6))
+;; Expected: 8
+
+;; Mutually recursive functions
+(let [even? (fn [n] (if (= n 0) true (odd? (- n 1))))
+      odd?  (fn [n] (if (= n 0) false (even? (- n 1))))]
+  [(even? 4) (odd? 4) (even? 5) (odd? 5)])
+;; Expected: [true false false true]
+
+;; Let with expression evaluation order
+(let [x (do (println "Evaluating x") 10)
+      y (do (println "Evaluating y") 20)]
+  (+ x y))
+;; Expected: 30 (with side effects)
+
+;; Wildcard destructuring
+(let [[_ second _] [1 2 3]]
+  second)
+;; Expected: 2
+
+;; Nested destructuring
+(let [[[a b] [c d]] [[1 2] [3 4]]]
+  [a b c d])
+;; Expected: [1 2 3 4]
+
+;; Edge case: Empty let
+(let [] 42)
+;; Expected: 42
+
+;; Edge case: Let with nil binding
+(let [x nil] x)
+;; Expected: nil

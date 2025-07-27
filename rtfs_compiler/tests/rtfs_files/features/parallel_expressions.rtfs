@@ -1,0 +1,150 @@
+;; RTFS Language Feature Test: parallel expressions
+;; Tests parallel execution and concurrency
+
+;; Basic parallel execution
+(parallel
+  [a 10]
+  [b 20]
+  [c 30])
+;; Expected: Map or structure with results from parallel execution
+
+;; Parallel with computations
+(parallel
+  [x (* 10 10)]
+  [y (+ 50 50)]
+  [z (/ 200 4)])
+;; Expected: Results computed in parallel
+
+;; Parallel with function calls
+(do
+  (defn slow-add [a b] 
+    (Thread/sleep 100) ; simulate slow operation
+    (+ a b))
+  (parallel
+    [result1 (slow-add 1 2)]
+    [result2 (slow-add 3 4)]
+    [result3 (slow-add 5 6)]))
+;; Expected: [3 7 11] computed in parallel
+
+;; Parallel with different types
+(parallel
+  [num 42]
+  [str "hello"]
+  [vec [1 2 3]]
+  [map {:key "value"}])
+;; Expected: Mixed types computed in parallel
+
+;; Parallel with dependencies (should still work)
+(let [base 10]
+  (parallel
+    [doubled (* base 2)]
+    [tripled (* base 3)]
+    [quadrupled (* base 4)]))
+;; Expected: [20 30 40] using shared base value
+
+;; Parallel with nested expressions
+(parallel
+  [calc1 (let [x 5 y 10] (+ x y))]
+  [calc2 (if true 100 200)]
+  [calc3 (do (def temp 42) temp)])
+;; Expected: [15 100 42]
+
+;; Parallel with type annotations
+(parallel
+  [a:int 100]
+  [b:string "parallel"]
+  [c:vector [1 2 3]])
+;; Expected: Typed parallel results
+
+;; Parallel with exception handling
+(parallel
+  [safe (* 2 3)]
+  [risky (try (/ 10 0) (catch Exception e :error))]
+  [normal (+ 1 1)])
+;; Expected: [6 :error 2] with error handling
+
+;; Parallel with resource usage (if supported)
+(parallel
+  [file1 (read-file "file1.txt")]
+  [file2 (read-file "file2.txt")]
+  [file3 (read-file "file3.txt")])
+;; Expected: File contents read in parallel
+
+;; Parallel with map operations
+(let [data [1 2 3 4 5]]
+  (parallel
+    [evens (filter even? data)]
+    [odds (filter odd? data)]
+    [squares (map #(* % %) data)]))
+;; Expected: [[2 4] [1 3 5] [1 4 9 16 25]]
+
+;; Parallel with reduce operations
+(let [numbers [1 2 3 4 5]]
+  (parallel
+    [sum (reduce + numbers)]
+    [product (reduce * numbers)]
+    [max-val (reduce max numbers)]))
+;; Expected: [15 120 5]
+
+;; Parallel with HTTP requests (if supported)
+(parallel
+  [api1 (http/get "http://api1.example.com")]
+  [api2 (http/get "http://api2.example.com")]
+  [api3 (http/get "http://api3.example.com")])
+;; Expected: API responses fetched in parallel
+
+;; Parallel with database queries (if supported)
+(parallel
+  [users (db/query "SELECT * FROM users")]
+  [orders (db/query "SELECT * FROM orders")]
+  [products (db/query "SELECT * FROM products")])
+;; Expected: Database results fetched in parallel
+
+;; Nested parallel expressions
+(parallel
+  [group1 (parallel
+            [a1 10]
+            [a2 20])]
+  [group2 (parallel
+            [b1 30]
+            [b2 40])])
+;; Expected: Nested parallel execution
+
+;; Parallel with shared mutable state (if supported)
+(let [counter (atom 0)]
+  (parallel
+    [inc1 (swap! counter inc)]
+    [inc2 (swap! counter inc)]
+    [inc3 (swap! counter inc)]))
+;; Expected: Concurrent increments (results may vary)
+
+;; Parallel with timeout (if supported)
+(parallel
+  [quick 42]
+  [slow (do (Thread/sleep 5000) "done")]
+  [medium (do (Thread/sleep 1000) "medium")])
+;; Expected: Results as they complete
+
+;; Parallel execution order independence
+(let [log (atom [])]
+  (parallel
+    [task1 (do (swap! log conj "task1") 1)]
+    [task2 (do (swap! log conj "task2") 2)]
+    [task3 (do (swap! log conj "task3") 3)]))
+;; Expected: [1 2 3] with log order varying
+
+;; Edge case: Single parallel task
+(parallel
+  [single 42])
+;; Expected: 42 (or [42])
+
+;; Edge case: Empty parallel (should error or return empty)
+;; (parallel)
+;; Expected: Error or empty result
+
+;; Edge case: Parallel with side effects
+(parallel
+  [print1 (println "First parallel task")]
+  [print2 (println "Second parallel task")]
+  [print3 (println "Third parallel task")])
+;; Expected: Side effects executed in parallel

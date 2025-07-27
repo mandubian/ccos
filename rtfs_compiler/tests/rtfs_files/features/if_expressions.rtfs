@@ -1,0 +1,102 @@
+;; RTFS Language Feature Test: if expressions  
+;; Tests conditional logic with various data types and edge cases
+
+;; Basic if-then-else
+(if true "yes" "no")
+;; Expected: "yes"
+
+(if false "yes" "no")
+;; Expected: "no"
+
+;; If without else clause (returns nil if false)
+(if true 42)
+;; Expected: 42
+
+(if false 42)
+;; Expected: nil
+
+;; If with numeric conditions (truthy/falsy)
+(if 0 "zero" "not-zero")
+;; Expected: "zero" (0 is truthy in RTFS)
+
+(if 1 "one" "not-one")
+;; Expected: "one"
+
+;; If with nil condition
+(if nil "nil" "not-nil")
+;; Expected: "not-nil"
+
+;; If with empty collections
+(if [] "empty-vec" "non-empty-vec")
+;; Expected: "empty-vec" (assuming empty collections are truthy)
+
+(if {} "empty-map" "non-empty-map")  
+;; Expected: "empty-map"
+
+;; If with string conditions
+(if "" "empty-string" "non-empty-string")
+;; Expected: "empty-string" (assuming empty string is truthy)
+
+(if "hello" "has-string" "no-string")
+;; Expected: "has-string"
+
+;; Nested if expressions
+(if true
+  (if false "inner-false" "inner-true")
+  "outer-false")
+;; Expected: "inner-true"
+
+;; If with complex expressions in condition
+(if (> 5 3) "five-greater" "three-greater")
+;; Expected: "five-greater"
+
+(if (= 2 (+ 1 1)) "math-works" "math-broken")
+;; Expected: "math-works"
+
+;; If with function calls in branches
+(if true
+  (+ 10 20)
+  (* 10 20))
+;; Expected: 30
+
+;; If returning different types
+(if true 42 "string")
+;; Expected: 42
+
+(if false 42 "string")  
+;; Expected: "string"
+
+;; If with collections as results
+(if true [1 2 3] {:a 1})
+;; Expected: [1 2 3]
+
+;; Chained if-else-if pattern using nested ifs
+(let [x 5]
+  (if (< x 0)
+    "negative"
+    (if (= x 0)
+      "zero" 
+      "positive")))
+;; Expected: "positive"
+
+;; If with side effects
+(if true
+  (do (println "true branch") "result")
+  (do (println "false branch") "other"))
+;; Expected: "result" (with side effect)
+
+;; Edge case: If with boolean expressions
+(if (and true true) "both-true" "not-both-true")
+;; Expected: "both-true"
+
+(if (or false true) "at-least-one-true" "both-false")
+;; Expected: "at-least-one-true"
+
+;; If with comparison operators
+(if (>= 10 10) "greater-or-equal" "less")
+;; Expected: "greater-or-equal"
+
+;; If evaluating to functions
+(let [f (if true + -)]
+  (f 10 5))
+;; Expected: 15

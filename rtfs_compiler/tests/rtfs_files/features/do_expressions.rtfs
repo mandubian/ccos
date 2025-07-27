@@ -1,0 +1,140 @@
+;; RTFS Language Feature Test: do expressions
+;; Tests sequential evaluation and side effects
+
+;; Basic do with multiple expressions
+(do 
+  1
+  2  
+  3)
+;; Expected: 3
+
+;; Do with side effects
+(do
+  (println "First")
+  (println "Second") 
+  "result")
+;; Expected: "result" (with side effects)
+
+;; Do with variable assignments
+(do
+  (def x 10)
+  (def y 20)
+  (+ x y))
+;; Expected: 30
+
+;; Nested do expressions
+(do
+  (do 1 2)
+  (do 3 4) 
+  5)
+;; Expected: 5
+
+;; Do with conditional logic
+(do
+  (def condition true)
+  (if condition
+    (do (println "True branch") "true-result")
+    (do (println "False branch") "false-result")))
+;; Expected: "true-result" (with side effect)
+
+;; Do with function calls
+(do
+  (defn square [x] (* x x))
+  (defn cube [x] (* x x x))
+  [(square 3) (cube 3)])
+;; Expected: [9 27]
+
+;; Do with let bindings
+(do
+  (let [x 5] 
+    (println "x is" x)
+    x)
+  (let [y 10]
+    (println "y is" y) 
+    y))
+;; Expected: 10 (with side effects)
+
+;; Do with loop constructs (if available)
+(do
+  (def sum 0)
+  (dotimes [i 5]
+    (set! sum (+ sum i)))
+  sum)
+;; Expected: 10 (if mutable variables and dotimes are supported)
+
+;; Do with error handling
+(do
+  (try
+    (/ 1 0)
+    (catch Exception e "caught-error"))
+  "after-try")
+;; Expected: "after-try"
+
+;; Do with collection operations
+(do
+  (def nums [1 2 3 4 5])
+  (def evens (filter even? nums))
+  (def sum (reduce + evens))
+  sum)
+;; Expected: 6
+
+;; Do with function definitions and calls
+(do
+  (defn add [x y] (+ x y))
+  (defn mult [x y] (* x y))
+  (defn calc [a b] (mult (add a b) 2))
+  (calc 3 4))
+;; Expected: 14
+
+;; Do with map/vector creation
+(do
+  (def data {:name "Alice" :age 30})
+  (def stats [100 200 300])
+  [data stats])
+;; Expected: [{:name "Alice" :age 30} [100 200 300]]
+
+;; Do with resource management
+(do
+  (println "Opening resource")
+  (let [resource "fake-resource"]
+    (println "Using resource" resource)
+    (println "Closing resource")
+    "resource-result"))
+;; Expected: "resource-result" (with side effects)
+
+;; Empty do expression
+(do)
+;; Expected: nil
+
+;; Single expression do (should behave like the expression itself)
+(do 42)
+;; Expected: 42
+
+;; Do with early returns (if supported)
+(do
+  (if true
+    (do (println "Early return") (return "early"))
+    (do (println "Late return") "late"))
+  "unreachable")
+;; Expected: "early" or error if return not supported
+
+;; Do with exception throwing
+(do
+  (println "Before exception")
+  (try
+    (throw (Exception. "test error"))
+    (catch Exception e "caught"))
+  (println "After exception")
+  "done")
+;; Expected: "done" (with side effects)
+
+;; Do with complex computation
+(do
+  (defn fibonacci [n]
+    (if (<= n 1)
+      n
+      (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
+  (def fib-10 (fibonacci 10))
+  (println "Fibonacci 10:" fib-10)
+  fib-10)
+;; Expected: 55 (with side effect)

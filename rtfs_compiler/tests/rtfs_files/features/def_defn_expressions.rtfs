@@ -1,0 +1,184 @@
+;; RTFS Language Feature Test: def and defn expressions
+;; Tests global variable and function definitions
+
+;; Basic def
+(do
+  (def x 42)
+  x)
+;; Expected: 42
+
+;; Def with type annotation
+(do
+  (def y:int 100)
+  y)
+;; Expected: 100
+
+;; Def with complex expression
+(do
+  (def computed (+ (* 3 4) 2))
+  computed)
+;; Expected: 14
+
+;; Def with collection
+(do
+  (def numbers [1 2 3 4 5])
+  numbers)
+;; Expected: [1 2 3 4 5]
+
+;; Def with map
+(do
+  (def config {:host "localhost" :port 8080})
+  config)
+;; Expected: {:host "localhost" :port 8080}
+
+;; Basic defn
+(do
+  (defn square [x] (* x x))
+  (square 5))
+;; Expected: 25
+
+;; Defn with multiple parameters
+(do
+  (defn add [x y] (+ x y))
+  (add 10 20))
+;; Expected: 30
+
+;; Defn with type annotations
+(do
+  (defn multiply [x:int y:int] :int (* x y))
+  (multiply 6 7))
+;; Expected: 42
+
+;; Defn with no parameters
+(do
+  (defn get-answer [] 42)
+  (get-answer))
+;; Expected: 42
+
+;; Defn with multiple expressions in body
+(do
+  (defn greet [name]
+    (println "Hello," name)
+    (str "Welcome, " name))
+  (greet "Alice"))
+;; Expected: "Welcome, Alice" (with side effect)
+
+;; Defn with conditional logic
+(do
+  (defn abs [x]
+    (if (< x 0) (- x) x))
+  [(abs -5) (abs 5)])
+;; Expected: [5 5]
+
+;; Defn with destructuring parameters
+(do
+  (defn sum-pair [[a b]] (+ a b))
+  (sum-pair [3 4]))
+;; Expected: 7
+
+;; Defn with map destructuring
+(do
+  (defn greet-person [{:keys [name age]}]
+    (str name " is " age " years old"))
+  (greet-person {:name "Bob" :age 30}))
+;; Expected: "Bob is 30 years old"
+
+;; Recursive defn
+(do
+  (defn factorial [n]
+    (if (<= n 1)
+      1
+      (* n (factorial (- n 1)))))
+  (factorial 5))
+;; Expected: 120
+
+;; Defn with variadic parameters (if supported)
+(do
+  (defn sum-all [& numbers]
+    (reduce + numbers))
+  (sum-all 1 2 3 4 5))
+;; Expected: 15
+
+;; Mutually recursive defn
+(do
+  (defn even? [n] 
+    (if (= n 0) true (odd? (- n 1))))
+  (defn odd? [n] 
+    (if (= n 0) false (even? (- n 1))))
+  [(even? 4) (odd? 4)])
+;; Expected: [true false]
+
+;; Defn returning function (higher-order)
+(do
+  (defn make-multiplier [factor]
+    (fn [x] (* x factor)))
+  (let [double (make-multiplier 2)]
+    (double 7)))
+;; Expected: 14
+
+;; Defn with lexical scoping
+(do
+  (def global-var 100)
+  (defn test-scope [x]
+    (let [local-var 10]
+      (+ x local-var global-var)))
+  (test-scope 5))
+;; Expected: 115
+
+;; Defn overriding previous definition
+(do
+  (defn test-func [] "first")
+  (defn test-func [] "second")
+  (test-func))
+;; Expected: "second"
+
+;; Def with function value
+(do
+  (def my-add +)
+  (my-add 3 4))
+;; Expected: 7
+
+;; Def with lambda
+(do
+  (def square-fn (fn [x] (* x x)))
+  (square-fn 6))
+;; Expected: 36
+
+;; Defn with metadata (if supported)
+(do
+  (defn ^{:doc "Calculates square of a number"} 
+    documented-square [x] (* x x))
+  (documented-square 8))
+;; Expected: 64
+
+;; Nested function definitions
+(do
+  (defn outer [x]
+    (defn inner [y] (+ x y))
+    (inner 10))
+  (outer 5))
+;; Expected: 15 (if nested defn is supported)
+
+;; Defn with guards/preconditions (if supported)
+(do
+  (defn safe-divide [a b]
+    {:pre [(not= b 0)]}
+    (/ a b))
+  (safe-divide 10 2))
+;; Expected: 5
+
+;; Def with delayed evaluation
+(do
+  (def expensive-calc (delay (do (println "Computing...") (* 100 100))))
+  (force expensive-calc))
+;; Expected: 10000 (with side effect, if delay/force supported)
+
+;; Edge case: Def with nil value
+(do
+  (def nil-value nil)
+  nil-value)
+;; Expected: nil
+
+;; Edge case: Defn with empty body (should error)
+;; (defn empty-func [x])
+;; Expected: Error

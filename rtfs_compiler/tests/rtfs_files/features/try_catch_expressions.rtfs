@@ -1,0 +1,148 @@
+;; RTFS Language Feature Test: try-catch expressions
+;; Tests error handling, exception catching, and finally blocks
+
+;; Basic try-catch
+(try
+  (/ 10 2)
+  (catch Exception e "error-occurred"))
+;; Expected: 5
+
+;; Try-catch with error
+(try
+  (/ 10 0)
+  (catch Exception e "division-by-zero"))
+;; Expected: "division-by-zero"
+
+;; Try-catch with multiple catch clauses
+(try
+  (throw (RuntimeException. "runtime error"))
+  (catch ArithmeticException e "arithmetic-error")
+  (catch RuntimeException e "runtime-error") 
+  (catch Exception e "general-error"))
+;; Expected: "runtime-error"
+
+;; Try-catch-finally
+(try
+  (+ 1 2)
+  (catch Exception e "error")
+  (finally (println "cleanup")))
+;; Expected: 3 (with side effect)
+
+;; Try-catch-finally with error
+(try
+  (throw (Exception. "test error"))
+  (catch Exception e "caught")
+  (finally (println "always-runs")))
+;; Expected: "caught" (with side effect)
+
+;; Nested try-catch
+(try
+  (try
+    (/ 1 0)
+    (catch ArithmeticException e
+      (throw (RuntimeException. "nested error"))))
+  (catch RuntimeException e "outer-catch"))
+;; Expected: "outer-catch"
+
+;; Try with multiple expressions
+(try
+  (def x 10)
+  (def y 20)
+  (/ x y)
+  (catch Exception e "error-in-block"))
+;; Expected: 0.5
+
+;; Try-catch with binding to exception object
+(try
+  (throw (Exception. "custom message"))
+  (catch Exception e (.getMessage e)))
+;; Expected: "custom message"
+
+;; Try-catch with re-throwing
+(try
+  (try
+    (throw (Exception. "original"))
+    (catch Exception e 
+      (println "Caught and re-throwing")
+      (throw e)))
+  (catch Exception e "re-caught"))
+;; Expected: "re-caught" (with side effect)
+
+;; Try-catch with different exception types
+(try
+  (throw (IllegalArgumentException. "bad argument"))
+  (catch IllegalArgumentException e "illegal-arg")
+  (catch Exception e "general-exception"))
+;; Expected: "illegal-arg"
+
+;; Try with successful computation and unused catch
+(try
+  (let [result (* 6 7)]
+    (if (> result 0) result (throw (Exception. "negative"))))
+  (catch Exception e "error"))
+;; Expected: 42
+
+;; Try-catch with return values from catch
+(let [safe-divide (fn [a b]
+                    (try
+                      (/ a b)
+                      (catch Exception e :division-error)))]
+  [(safe-divide 10 2) (safe-divide 10 0)])
+;; Expected: [5 :division-error]
+
+;; Try-finally without catch
+(try
+  (* 3 4)
+  (finally (println "cleanup-only")))
+;; Expected: 12 (with side effect)
+
+;; Try-catch with custom exception handling function
+(let [handle-error (fn [e] {:error true :message (.getMessage e)})]
+  (try
+    (throw (Exception. "something went wrong"))
+    (catch Exception e (handle-error e))))
+;; Expected: {:error true :message "something went wrong"}
+
+;; Propagating exceptions through multiple levels
+(let [level1 (fn [] (throw (Exception. "level-1-error")))
+      level2 (fn [] (try (level1) (catch Exception e (throw (Exception. "level-2-error")))))
+      level3 (fn [] (try (level2) (catch Exception e "caught-at-level-3")))]
+  (level3))
+;; Expected: "caught-at-level-3"
+
+;; Try-catch with resource cleanup pattern
+(try
+  (let [resource (open-resource)]
+    (try
+      (use-resource resource)
+      (finally (close-resource resource))))
+  (catch Exception e "resource-error"))
+;; Expected: depends on implementation
+
+;; Exception in finally block (if supported)
+(try
+  (try
+    "normal-result"
+    (finally (throw (Exception. "finally-error"))))
+  (catch Exception e "caught-finally-error"))
+;; Expected: "caught-finally-error"
+
+;; Try-catch with pattern matching on exception (if supported)
+(try
+  (throw (Exception. "pattern-test"))
+  (catch Exception e
+    (match (.getMessage e)
+      "pattern-test" "pattern-matched"
+      _ "pattern-not-matched")))
+;; Expected: "pattern-matched"
+
+;; Edge case: Empty try block
+(try
+  (catch Exception e "empty-try"))
+;; Expected: nil or error
+
+;; Edge case: Catch without exception type (catch-all)
+(try
+  (throw (Exception. "any-error"))
+  (catch e "caught-anything"))
+;; Expected: "caught-anything" or error if syntax not supported

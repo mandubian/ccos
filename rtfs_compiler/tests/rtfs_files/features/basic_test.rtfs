@@ -1,0 +1,9 @@
+;; Simple test for basic arithmetic
+42
+;; Expected: 42
+
+(+ 1 2)
+;; Expected: 3
+
+(let [x 5] x)
+;; Expected: 5

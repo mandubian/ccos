@@ -1,0 +1,206 @@
+;; RTFS Language Feature Test: literal values
+;; Tests all supported literal types and edge cases
+
+;; Integer literals
+42
+;; Expected: 42
+
+-17
+;; Expected: -17
+
+0
+;; Expected: 0
+
+;; Large integers
+9223372036854775807
+;; Expected: 9223372036854775807 (max long)
+
+;; Float literals  
+3.14159
+;; Expected: 3.14159
+
+-2.5
+;; Expected: -2.5
+
+0.0
+;; Expected: 0.0
+
+;; Scientific notation
+1.23e4
+;; Expected: 12300.0
+
+-4.56E-2
+;; Expected: -0.0456
+
+;; String literals
+"hello world"
+;; Expected: "hello world"
+
+""
+;; Expected: ""
+
+"multi-line\nstring"
+;; Expected: "multi-line\nstring"
+
+;; String with escape sequences
+"line1\nline2\ttabbed\"quoted\\"
+;; Expected: "line1\nline2\ttabbed\"quoted\\"
+
+;; Boolean literals
+true
+;; Expected: true
+
+false  
+;; Expected: false
+
+;; Nil literal
+nil
+;; Expected: nil
+
+;; Keyword literals
+:simple-keyword
+;; Expected: :simple-keyword
+
+:kebab-case-keyword
+;; Expected: :kebab-case-keyword
+
+:namespace/qualified-keyword
+;; Expected: :namespace/qualified-keyword
+
+:com.company.module/versioned-keyword
+;; Expected: :com.company.module/versioned-keyword
+
+;; RTFS 2.0 enhanced literals - UUID
+550e8400-e29b-41d4-a716-446655440000
+;; Expected: UUID literal
+
+;; RTFS 2.0 enhanced literals - Timestamp
+2024-01-15T10:30:45Z
+;; Expected: Timestamp literal
+
+2024-01-15T10:30:45.123Z
+;; Expected: Timestamp with milliseconds
+
+;; RTFS 2.0 enhanced literals - Resource handle
+resource://local/data/file.txt
+;; Expected: Resource handle literal
+
+resource://remote/api/endpoint
+;; Expected: Resource handle literal
+
+;; Complex literal combinations in expressions
+(+ 10 20.5)
+;; Expected: 30.5
+
+(str "Hello " "World")
+;; Expected: "Hello World"
+
+(= true true)
+;; Expected: true
+
+(= nil nil)
+;; Expected: true
+
+;; Keywords in comparison
+(= :foo :foo)
+;; Expected: true
+
+(= :foo :bar)
+;; Expected: false
+
+;; Numeric literal edge cases
++42
+;; Expected: 42
+
++0
+;; Expected: 0
+
+-0
+;; Expected: 0 (or -0.0)
+
+;; Float special values (if supported)
+##Inf
+;; Expected: Infinity (if supported)
+
+##-Inf  
+;; Expected: Negative infinity (if supported)
+
+##NaN
+;; Expected: NaN (if supported)
+
+;; String with Unicode (if supported)
+"Unicode: αβγ δεζ"
+;; Expected: "Unicode: αβγ δεζ"
+
+;; String with special characters
+"Special: !@#$%^&*()_+-=[]{}|;':\",./<>?"
+;; Expected: "Special: !@#$%^&*()_+-=[]{}|;':\",./<>?"
+
+;; Very long string
+"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."
+;; Expected: The long string
+
+;; Keywords with special characters
+:_private
+;; Expected: :_private
+
+:$global
+;; Expected: :$global
+
+:*dynamic*
+;; Expected: :*dynamic*
+
+:+operator+
+;; Expected: :+operator+
+
+;; Ratios (if supported)
+1/2
+;; Expected: 0.5 or ratio representation
+
+22/7
+;; Expected: ~3.14286 or ratio representation
+
+;; Hexadecimal integers (if supported)
+0x42
+;; Expected: 66
+
+0xFF
+;; Expected: 255
+
+;; Octal integers (if supported)  
+0o755
+;; Expected: 493
+
+;; Binary integers (if supported)
+0b1010
+;; Expected: 10
+
+;; Character literals (if supported)
+\a
+;; Expected: Character 'a'
+
+\newline
+;; Expected: Newline character
+
+\space
+;; Expected: Space character
+
+;; Regular expression literals (if supported)
+#"[a-zA-Z]+"
+;; Expected: Regex pattern
+
+;; Symbol literals vs keywords
+'symbol-literal
+;; Expected: Symbol (if quote syntax supported)
+
+;; Edge cases: Empty keyword (should error)
+;; :
+;; Expected: Error
+
+;; Edge cases: Invalid number formats
+;; 1.2.3
+;; Expected: Error
+
+;; Edge cases: Unterminated string (should error)  
+;; "unterminated
+;; Expected: Error

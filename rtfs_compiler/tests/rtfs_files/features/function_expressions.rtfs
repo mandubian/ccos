@@ -1,0 +1,124 @@
+;; RTFS Language Feature Test: function expressions
+;; Tests function definition, calls, closures, higher-order functions, and edge cases
+
+;; Basic anonymous function
+((fn [x] (* x 2)) 5)
+;; Expected: 10
+
+;; Function with multiple parameters
+((fn [x y] (+ x y)) 3 4)
+;; Expected: 7
+
+;; Function with no parameters
+((fn [] 42))
+;; Expected: 42
+
+;; Function with type annotations on parameters
+((fn [x:int y:int] (+ x y)) 10 20)
+;; Expected: 30
+
+;; Function with return type annotation
+((fn [x y] :int (+ x y)) 5 6)
+;; Expected: 11
+
+;; Closure - function accessing outer scope
+(let [multiplier 3]
+  ((fn [x] (* x multiplier)) 4))
+;; Expected: 12
+
+;; Closure modifying captured variable
+(let [counter 0]
+  (let [inc (fn [] (set! counter (+ counter 1)))]
+    (do (inc) (inc) counter)))
+;; Expected: 2 (if mutable variables supported)
+
+;; Higher-order function - function returning function
+(let [make-adder (fn [n] (fn [x] (+ x n)))]
+  (let [add5 (make-adder 5)]
+    (add5 10)))
+;; Expected: 15
+
+;; Higher-order function - function taking function as parameter
+(let [apply-twice (fn [f x] (f (f x)))]
+  (apply-twice (fn [n] (* n 2)) 3))
+;; Expected: 12
+
+;; Recursive function
+(let [factorial (fn [n] 
+                  (if (<= n 1) 
+                    1 
+                    (* n (factorial (- n 1)))))]
+  (factorial 5))
+;; Expected: 120
+
+;; Variadic function (if supported)
+((fn [x & rest] [x rest]) 1 2 3 4)
+;; Expected: [1 [2 3 4]]
+
+;; Function with destructuring parameters
+((fn [[a b] {:keys [x y]}] (+ a b x y)) [1 2] {:x 3 :y 4})
+;; Expected: 10
+
+;; Curried function pattern
+(let [curry-add (fn [x] (fn [y] (+ x y)))]
+  ((curry-add 10) 5))
+;; Expected: 15
+
+;; Function composition
+(let [compose (fn [f g] (fn [x] (f (g x))))
+      add1 (fn [x] (+ x 1))
+      mult2 (fn [x] (* x 2))
+      add1-then-mult2 (compose mult2 add1)]
+  (add1-then-mult2 5))
+;; Expected: 12
+
+;; Function with multiple expressions in body
+((fn [x] 
+   (println "Processing" x)
+   (let [doubled (* x 2)]
+     (+ doubled 1))) 5)
+;; Expected: 11 (with side effect)
+
+;; Function returning different types based on condition
+((fn [x] 
+   (if (> x 0) 
+     x 
+     "negative")) -5)
+;; Expected: "negative"
+
+;; Nested functions
+((fn [x] 
+   (let [inner (fn [y] (+ x y))]
+     (inner 10))) 5)
+;; Expected: 15
+
+;; Function with map/filter/reduce patterns
+(let [numbers [1 2 3 4 5]
+      square (fn [x] (* x x))]
+  (map square numbers))
+;; Expected: [1 4 9 16 25]
+
+;; Function as map value
+(let [ops {:add + :mult *}]
+  ((:add ops) 5 3))
+;; Expected: 8
+
+;; Self-modifying function (if supported)
+(let [memo-fib 
+      (let [cache {}]
+        (fn [n] 
+          (if (contains? cache n)
+            (get cache n)
+            (let [result (if (<= n 1) n (+ (memo-fib (- n 1)) (memo-fib (- n 2))))]
+              (assoc! cache n result)
+              result))))]
+  (memo-fib 10))
+;; Expected: 55
+
+;; Edge case: Function with no body (should error or return nil)
+;; ((fn [x]))
+;; Expected: Error or nil
+
+;; Edge case: Function with conflicting parameter names (should error)  
+;; ((fn [x x] (+ x x)) 1 2)
+;; Expected: Error
