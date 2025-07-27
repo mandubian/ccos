@@ -109,18 +109,18 @@ mod issue_43_tests {
             "A capability with schema validation".to_string(),
             Arc::new(|inputs| {
                 if let Value::Map(map) = inputs {
-                    if let Some(Value::String(name)) = map.get(&rtfs_compiler::ast::MapKey::String("name".to_string())) {
+                    if let Some(Value::String(name)) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword("name".to_string()))) {
                         let mut result = HashMap::new();
-                        result.insert(rtfs_compiler::ast::MapKey::String("result".to_string()), Value::String(format!("Hello, {}!", name)));
+                        result.insert(rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword("result".to_string())), Value::String(format!("Hello, {}!", name)));
                         Ok(Value::Map(result))
                     } else {
                         let mut result = HashMap::new();
-                        result.insert(rtfs_compiler::ast::MapKey::String("result".to_string()), Value::String("Hello, World!".to_string()));
+                        result.insert(rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword("result".to_string())), Value::String("Hello, World!".to_string()));
                         Ok(Value::Map(result))
                     }
                 } else {
                     let mut result = HashMap::new();
-                    result.insert(rtfs_compiler::ast::MapKey::String("result".to_string()), Value::String("Invalid input".to_string()));
+                    result.insert(rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword("result".to_string())), Value::String("Invalid input".to_string()));
                     Ok(Value::Map(result))
                 }
             }),
@@ -148,7 +148,7 @@ mod issue_43_tests {
 
         // Test valid input
         let mut valid_params = HashMap::new();
-        valid_params.insert("name".to_string(), Value::String("Alice".to_string()));
+        valid_params.insert(":name".to_string(), Value::String("Alice".to_string()));
         
         let result = marketplace.execute_with_validation("validated_capability", &valid_params).await;
         if let Err(e) = &result {
