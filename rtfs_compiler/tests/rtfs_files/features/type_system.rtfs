@@ -1,0 +1,205 @@
+;; RTFS Language Feature Test: type system
+;; Tests type annotations, type checking, and type expressions
+
+;; Basic type annotations in let
+(let [x:int 42
+      y:string "hello"] 
+  [x y])
+;; Expected: [42 "hello"]
+
+;; Type annotations in function parameters
+((fn [x:int y:int] :int (+ x y)) 10 20)
+;; Expected: 30
+
+;; Type annotations with complex types
+(let [numbers:[:vector :int] [1 2 3 4 5]]
+  (reduce + numbers))
+;; Expected: 15
+
+;; Map type annotations
+(let [config:[:map {:host :string :port :int}] 
+      {:host "localhost" :port 8080}]
+  (:host config))
+;; Expected: "localhost"
+
+;; Optional type annotations
+(let [maybe-name:[:union :string :nil] nil]
+  (or maybe-name "default"))
+;; Expected: "default"
+
+;; Function type annotations
+(let [adder:[:fn [:int :int] :int] +]
+  (adder 5 3))
+;; Expected: 8
+
+;; Tuple type annotations
+(let [point:[:tuple :int :int] [3 4]]
+  (let [[x y] point]
+    (+ (* x x) (* y y))))
+;; Expected: 25
+
+;; Custom type aliases (if supported)
+(do
+  (deftype Point [:tuple :int :int])
+  (let [p:Point [10 20]]
+    (first p)))
+;; Expected: 10
+
+;; Type predicates in conditions
+(let [value 42]
+  (if (int? value)
+    "is-integer"
+    "not-integer"))
+;; Expected: "is-integer"
+
+;; Type checking with collections
+(let [mixed-list [1 "hello" :keyword]]
+  (map type mixed-list))
+;; Expected: [Int String Keyword] or similar
+
+;; Type constraints with predicates
+(let [positive-num:[:and :int [:> 0]] 42]
+  (* positive-num 2))
+;; Expected: 84
+
+;; Type validation with ranges
+(let [percentage:[:and :int [:>= 0] [:<= 100]] 75]
+  (str percentage "%"))
+;; Expected: "75%"
+
+;; String type with length constraints
+(let [short-string:[:and :string [:max-length 10]] "hello"]
+  (count short-string))
+;; Expected: 5
+
+;; Vector type with size constraints
+(let [triple:[:and [:vector :int] [:count 3]] [1 2 3]]
+  (reduce + triple))
+;; Expected: 6
+
+;; Map type with required keys
+(let [user:[:map {:name :string :age :int}] 
+      {:name "Alice" :age 30}]
+  (:name user))
+;; Expected: "Alice"
+
+;; Optional map keys
+(let [config:[:map {:host :string :port [:union :int :nil]}]
+      {:host "localhost"}]
+  (or (:port config) 3000))
+;; Expected: 3000
+
+;; Polymorphic function types (if supported)
+(let [identity:[:fn [:t] :t] (fn [x] x)]
+  [(identity 42) (identity "hello")])
+;; Expected: [42 "hello"]
+
+;; Generic collection types
+(let [string-list:[:vector :string] ["a" "b" "c"]]
+  (map count string-list))
+;; Expected: [1 1 1]
+
+;; Union types in practice
+(let [result:[:union :int :string] "error"]
+  (if (string? result)
+    (str "Error: " result)
+    (str "Success: " result)))
+;; Expected: "Error: error"
+
+;; Type refinement through conditionals
+(let [input:[:union :int :string] 42]
+  (if (int? input)
+    (+ input 10)      ; input is refined to :int here
+    (count input)))   ; input is refined to :string here
+;; Expected: 52
+
+;; Type checking functions
+(defn typed-add [x:int y:int] :int
+  (+ x y))
+
+(typed-add 5 7)
+;; Expected: 12
+
+;; Type errors (should fail compilation)
+;; (typed-add "hello" 5)
+;; Expected: Type error
+
+;; Variadic function with types
+(defn sum-ints [& numbers:[:vector :int]] :int
+  (reduce + numbers))
+
+(sum-ints 1 2 3 4 5)
+;; Expected: 15
+
+;; Type checking with destructuring
+(let [[x:int y:int z:int] [1 2 3]]
+  (+ x y z))
+;; Expected: 6
+
+;; Map destructuring with types
+(let [{name:string :name age:int :age} {:name "Bob" :age 25}]
+  [name age])
+;; Expected: ["Bob" 25]
+
+;; Resource types (RTFS 2.0)
+(let [file:[:resource :file] (resource:ref "data.txt")]
+  (read-resource file))
+;; Expected: File contents
+
+;; Capability types (RTFS 2.0)
+(let [http-cap:[:capability :http] (discover-capability :http)]
+  (invoke-capability http-cap {:url "http://example.com"}))
+;; Expected: HTTP response
+
+;; Type-safe agent communication
+(let [agent:[:agent {:capabilities [:vector :string]}] 
+      (first (discover-agents {:capabilities ["math"]}))]
+  (send-message agent {:operation "add" :args [1 2]}))
+;; Expected: Agent response
+
+;; Type validation at runtime
+(do
+  (defn validate-user [user]
+    (and (map? user)
+         (string? (:name user))
+         (int? (:age user))
+         (>= (:age user) 0)))
+  
+  (let [user {:name "Charlie" :age 35}]
+    (if (validate-user user)
+      "valid-user"
+      "invalid-user")))
+;; Expected: "valid-user"
+
+;; Type coercion (if supported)
+(let [str-num "42"]
+  (+ (parse-int str-num) 8))
+;; Expected: 50
+
+;; Type-safe error handling
+(defn safe-divide [x:int y:int] :[:union :int :string]
+  (if (= y 0)
+    "division-by-zero"
+    (/ x y)))
+
+(let [result (safe-divide 10 2)]
+  (if (string? result)
+    result
+    (* result 2)))
+;; Expected: 10
+
+;; Advanced type patterns
+(let [complex:[:map {:real :float :imag :float}] {:real 3.0 :imag 4.0}]
+  (Math/sqrt (+ (* (:real complex) (:real complex)) 
+                (* (:imag complex) (:imag complex)))))
+;; Expected: 5.0
+
+;; Type-based dispatch (if supported)
+(defmulti process-data type)
+
+(defmethod process-data :string [s] (count s))
+(defmethod process-data :vector [v] (reduce + v))
+(defmethod process-data :map [m] (count (keys m)))
+
+[(process-data "hello") (process-data [1 2 3]) (process-data {:a 1 :b 2})]
+;; Expected: [5 6 2]

@@ -1,0 +1,186 @@
+;; RTFS Language Feature Test: RTFS 2.0 special forms
+;; Tests new RTFS 2.0 constructs like log-step, discover-agents, and task context
+
+;; Basic log-step
+(step "Starting computation")
+;; Expected: nil (with logging side effect)
+
+;; Log-step with level
+(step :info "Information message")
+;; Expected: nil (with info-level logging)
+
+(step :warn "Warning message")
+;; Expected: nil (with warning-level logging)
+
+(step :error "Error message")  
+;; Expected: nil (with error-level logging)
+
+;; Log-step with data
+(step :debug "Processing" {:count 42 :status "active"})
+;; Expected: nil (with debug logging including data)
+
+;; Log-step in computation context
+(let [x 10
+      y 20]
+  (step "Computing sum" {:x x :y y})
+  (+ x y))
+;; Expected: 30 (with logging side effect)
+
+;; Multiple log steps
+(do
+  (step "Step 1: Initialize")
+  (step "Step 2: Process")
+  (step "Step 3: Complete")
+  "done")
+;; Expected: "done" (with multiple log entries)
+
+;; Task context access
+@task-id
+;; Expected: Task ID from context (if set)
+
+@user-id
+;; Expected: User ID from context (if set)
+
+@request-id
+;; Expected: Request ID from context (if set)
+
+;; Task context in expressions
+(if @debug-mode
+  (step :debug "Debug mode enabled")
+  (step :info "Production mode"))
+;; Expected: Conditional logging based on context
+
+;; Task context with default values
+(let [timeout (or @timeout 30000)]
+  (step "Using timeout" {:timeout timeout})
+  timeout)
+;; Expected: Timeout value with logging
+
+;; Discover agents - basic query
+(discover-agents 
+  {:capabilities ["http" "json"]
+   :location "local"})
+;; Expected: List of matching agents
+
+;; Discover agents with complex criteria
+(discover-agents
+  {:capabilities ["database" "analytics"]
+   :performance {:min-memory "4GB" :min-cpu "2.0GHz"}
+   :security-level "high"})
+;; Expected: List of high-performance, secure agents
+
+;; Discover agents with options
+(discover-agents
+  {:capabilities ["ai" "nlp"]}
+  {:max-results 5 :timeout 10000})
+;; Expected: Up to 5 NLP-capable agents
+
+;; Resource references
+(resource:ref "step-1.output")
+;; Expected: Reference to output from step-1
+
+(resource:ref "database.connection")
+;; Expected: Reference to database connection resource
+
+;; Resource references in expressions
+(let [data (resource:ref "input.data")]
+  (process-data data))
+;; Expected: Processed data from referenced resource
+
+;; Complex RTFS 2.0 workflow
+(do
+  (step :info "Starting workflow" {:workflow-id @workflow-id})
+  (let [agents (discover-agents {:capabilities ["data-processing"]})]
+    (step :debug "Found agents" {:count (count agents)})
+    (if (empty? agents)
+      (do
+        (step :error "No suitable agents found")
+        :no-agents)
+      (do
+        (step :info "Processing with agents" {:agents (map :id agents)})
+        (let [input-data (resource:ref "workflow.input")
+              result (process-with-agents agents input-data)]
+          (step :info "Workflow completed" {:result-size (count result)})
+          result)))))
+;; Expected: Workflow result with comprehensive logging
+
+;; Agent coordination pattern
+(let [coordinator (first (discover-agents {:role "coordinator"}))
+      workers (discover-agents {:role "worker" :status "available"})]
+  (step :info "Coordinating work" 
+        {:coordinator (:id coordinator) 
+         :workers (map :id workers)})
+  (coordinate-work coordinator workers (resource:ref "task.definition")))
+;; Expected: Coordination result
+
+;; Dynamic capability discovery
+(let [required-caps @required-capabilities
+      agents (discover-agents {:capabilities required-caps})]
+  (step :debug "Dynamic discovery" 
+        {:required required-caps :found (count agents)})
+  agents)
+;; Expected: Agents matching dynamic requirements
+
+;; Error handling with logging
+(try
+  (do
+    (step :info "Attempting risky operation")
+    (risky-operation (resource:ref "risky.input")))
+  (catch Exception e
+    (step :error "Operation failed" {:error (.getMessage e)})
+    :operation-failed))
+;; Expected: Error handling with logging
+
+;; Performance monitoring
+(let [start-time (current-time-millis)]
+  (step :info "Starting performance test")
+  (let [result (expensive-computation)]
+    (let [duration (- (current-time-millis) start-time)]
+      (step :info "Performance test completed" 
+            {:duration-ms duration :result-size (count result)})
+      result)))
+;; Expected: Result with performance logging
+
+;; Conditional agent discovery
+(let [env @environment]
+  (discover-agents 
+    (if (= env "production")
+      {:security-level "high" :region "us-east-1"}
+      {:security-level "medium" :region "local"})))
+;; Expected: Environment-appropriate agents
+
+;; Resource dependency chain
+(let [config (resource:ref "system.config")
+      db-conn (resource:ref "database.connection")
+      cache (resource:ref "cache.instance")]
+  (step :debug "Resources loaded" 
+        {:config (keys config) 
+         :db-status (:status db-conn)
+         :cache-size (:size cache)})
+  (initialize-system config db-conn cache))
+;; Expected: System initialization with resource tracking
+
+;; Hierarchical task context
+(let [parent-task @parent-task-id
+      subtask-id (generate-uuid)]
+  (step :info "Starting subtask" 
+        {:parent parent-task :subtask subtask-id})
+  (with-task-context {:task-id subtask-id :parent parent-task}
+    (step :debug "In subtask context")
+    (subtask-operation)))
+;; Expected: Subtask execution with hierarchical context
+
+;; Agent capability verification
+(let [agents (discover-agents {:capabilities ["security" "encryption"]})]
+  (for [agent agents]
+    (do
+      (step :debug "Verifying agent" {:agent-id (:id agent)})
+      (if (verify-agent-capabilities agent)
+        (do
+          (step :info "Agent verified" {:agent-id (:id agent)})
+          agent)
+        (do
+          (step :warn "Agent verification failed" {:agent-id (:id agent)})
+          nil))))
+  (remove nil? verified-agents))
+;; Expected: List of verified agents with detailed logging

@@ -503,3 +503,76 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{TypeExpr, PrimitiveType, Symbol, Literal, Keyword, ArrayDimension, TypePredicate};
+    use crate::parser::parse_type_expression;
+
+    #[test]
+    fn test_parse_type_expressions() {
+        // Test primitive types
+        assert!(parse_type_expression("int").is_ok());
+        assert!(parse_type_expression("string").is_ok());
+        assert!(parse_type_expression("float").is_ok());
+        assert!(parse_type_expression("bool").is_ok());
+
+        // Test keyword primitive types
+        assert!(parse_type_expression(":int").is_ok());
+        assert!(parse_type_expression(":string").is_ok());
+        assert!(parse_type_expression(":float").is_ok());
+        assert!(parse_type_expression(":bool").is_ok());
+
+        // Test vector types
+        assert!(parse_type_expression("[:vector int]").is_ok());
+        assert!(parse_type_expression("[:vector string]").is_ok());
+
+        // Test array types with shapes
+        assert!(parse_type_expression("[:array int [5]]").is_ok());
+        assert!(parse_type_expression("[:array float [3 4]]").is_ok());
+        assert!(parse_type_expression("[:array string [?]]").is_ok());
+
+        // Test refined types with predicates
+        assert!(parse_type_expression("[:and int [:> 0]]").is_ok());
+        assert!(parse_type_expression("[:and string [:min-length 3]]").is_ok());
+        assert!(parse_type_expression("[:and string [:max-length 255]]").is_ok());
+
+        // Test enum types
+        assert!(parse_type_expression("[:enum :red :green :blue]").is_ok());
+        assert!(parse_type_expression("[:enum \"active\" \"inactive\"]").is_ok());
+
+        // Test union types
+        assert!(parse_type_expression("[:union int string]").is_ok());
+
+        // Test optional types
+        assert!(parse_type_expression("int?").is_ok());
+        assert!(parse_type_expression("string?").is_ok());
+
+        // Test map types
+        assert!(parse_type_expression("[:map [:id int] [:name string]]").is_ok());
+        assert!(parse_type_expression("[:map [:id int] [:name string ?]]").is_ok());
+
+        println!("All basic type expression parsing tests passed!");
+    }
+
+    #[test]
+    fn test_complex_type_expressions() {
+        // Test complex refined types
+        let complex_refined = parse_type_expression("[:and string [:min-length 3] [:max-length 255] [:matches-regex \"^[a-zA-Z]+$\"]]");
+        assert!(complex_refined.is_ok());
+        println!("Complex refined type parsing: {:?}", complex_refined.unwrap());
+
+        // Test array of refined types
+        let array_refined = parse_type_expression("[:array [:and int [:> 0]] [5]]");
+        assert!(array_refined.is_ok());
+        println!("Array of refined types parsing: {:?}", array_refined.unwrap());
+
+        // Test nested types
+        let nested = parse_type_expression("[:vector [:map [:id int] [:name string]]]");
+        assert!(nested.is_ok());
+        println!("Nested types parsing: {:?}", nested.unwrap());
+
+        println!("All complex type expression parsing tests passed!");
+    }
+}

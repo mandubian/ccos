@@ -1,0 +1,153 @@
+;; RTFS Language Feature Test: with-resource expressions  
+;; Tests resource management and cleanup
+
+;; Basic resource usage
+(with-resource [file String "test.txt"]
+  (read-lines file))
+;; Expected: File contents with automatic cleanup
+
+;; Resource with type annotation
+(with-resource [conn DatabaseConnection (connect-db "localhost")]
+  (query conn "SELECT * FROM users"))
+;; Expected: Query results with connection cleanup
+
+;; Multiple resources
+(with-resource [input-file File "input.txt"]
+  (with-resource [output-file File "output.txt"]
+    (copy-file input-file output-file)))
+;; Expected: File copy with both files cleaned up
+
+;; Resource with exception handling
+(with-resource [resource Resource (create-resource)]
+  (try
+    (risky-operation resource)
+    (catch Exception e
+      (log-error e)
+      :error)))
+;; Expected: Resource cleaned up even if exception occurs
+
+;; Resource with computations
+(with-resource [buffer ByteBuffer (allocate-buffer 1024)]
+  (do
+    (write-to-buffer buffer "Hello")
+    (write-to-buffer buffer " World")
+    (buffer-to-string buffer)))
+;; Expected: "Hello World" with buffer cleanup
+
+;; Resource returning different types
+(with-resource [stream InputStream (open-file "data.bin")]
+  (if (available? stream)
+    (read-bytes stream)
+    :empty))
+;; Expected: Bytes or :empty with stream cleanup
+
+;; Nested resource operations
+(with-resource [outer-resource OuterResource (create-outer)]
+  (let [data (get-data outer-resource)]
+    (with-resource [inner-resource InnerResource (create-inner data)]
+      (process inner-resource))))
+;; Expected: Nested resource management
+
+;; Resource with parallel operations (if supported)
+(with-resource [pool ThreadPool (create-pool 4)]
+  (parallel
+    [task1 (submit-task pool (fn [] (compute-1)))]
+    [task2 (submit-task pool (fn [] (compute-2)))]
+    [task3 (submit-task pool (fn [] (compute-3)))]))
+;; Expected: Parallel execution with pool cleanup
+
+;; Resource with loop operations
+(with-resource [conn Connection (connect-to-service)]
+  (let [results []]
+    (dotimes [i 5]
+      (let [result (fetch-data conn i)]
+        (conj! results result)))
+    results))
+;; Expected: Loop results with connection cleanup
+
+;; Resource with function calls
+(with-resource [cache Cache (create-cache 100)]
+  (do
+    (defn cached-compute [x]
+      (if-let [cached (get cache x)]
+        cached
+        (let [result (* x x)]
+          (put cache x result)
+          result)))
+    [(cached-compute 5) (cached-compute 5) (cached-compute 6)]))
+;; Expected: [25 25 36] with cache cleanup
+
+;; Resource with conditional resource creation
+(with-resource [resource (if (file-exists? "config.txt")
+                           (open-file "config.txt") 
+                           (create-default-config))]
+  (read-config resource))
+;; Expected: Config data with appropriate resource cleanup
+
+;; Resource with transformation pipeline
+(with-resource [input-stream InputStream (open-url "http://example.com/data")]
+  (-> input-stream
+      (parse-json)
+      (filter-data)
+      (transform-data)
+      (to-vector)))
+;; Expected: Transformed data with stream cleanup
+
+;; Resource with error propagation
+(with-resource [critical-resource CriticalResource (acquire-critical)]
+  (if (validate-resource critical-resource)
+    (use-resource critical-resource)
+    (throw (Exception. "Invalid resource"))))
+;; Expected: Exception thrown with resource cleanup
+
+;; Resource with return value from inner expression
+(let [result (with-resource [temp-file File (create-temp-file)]
+               (write-file temp-file "temporary data")
+               (read-file temp-file))]
+  result)
+;; Expected: "temporary data" with temp file cleaned up
+
+;; Resource with side effects
+(with-resource [logger Logger (create-logger "app.log")]
+  (do
+    (log logger "Starting operation")
+    (let [result (complex-operation)]
+      (log logger "Operation completed")
+      result)))
+;; Expected: Operation result with logger cleanup and log entries
+
+;; Resource pool management
+(with-resource [db-pool ConnectionPool (create-pool 10)]
+  (let [results []]
+    (doseq [query ["SELECT 1" "SELECT 2" "SELECT 3"]]
+      (with-resource [conn Connection (borrow-connection db-pool)]
+        (conj! results (execute-query conn query))))
+    results))
+;; Expected: Query results with pool and connection cleanup
+
+;; Resource with timeout (if supported)
+(with-resource [lock Lock (acquire-lock-with-timeout 5000)]
+  (if lock
+    (critical-section)
+    :timeout))
+;; Expected: Critical section result or :timeout with lock cleanup
+
+;; Edge case: Resource creation fails
+(try
+  (with-resource [bad-resource BadResource (throw (Exception. "creation failed"))]
+    (use-resource bad-resource))
+  (catch Exception e
+    "creation-error"))
+;; Expected: "creation-error" (no cleanup needed if creation fails)
+
+;; Edge case: Empty resource body
+(with-resource [resource SimpleResource (create-simple)]
+  nil)
+;; Expected: nil with resource cleanup
+
+;; Edge case: Resource used after with-resource block (should be invalid)
+(let [leaked-resource (with-resource [r Resource (create-resource)]
+                        r)]
+  ; leaked-resource should be invalid here
+  :leaked)
+;; Expected: :leaked (but leaked-resource should be invalid)

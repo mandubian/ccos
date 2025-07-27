@@ -1,0 +1,146 @@
+;; RTFS Language Feature Test: match expressions
+;; Tests pattern matching with various patterns and guards
+
+;; Basic literal matching
+(match 42
+  42 "found-forty-two"
+  _ "not-forty-two")
+;; Expected: "found-forty-two"
+
+;; String literal matching
+(match "hello"
+  "hi" "greeting-hi"
+  "hello" "greeting-hello"
+  _ "unknown-greeting")
+;; Expected: "greeting-hello"
+
+;; Boolean matching
+(match true
+  true "is-true"
+  false "is-false")
+;; Expected: "is-true"
+
+;; Variable binding
+(match 100
+  x (+ x 1))
+;; Expected: 101
+
+;; Vector pattern matching
+(match [1 2 3]
+  [] "empty"
+  [x] x
+  [x y] (+ x y)
+  [x y z] (* x y z)
+  _ "other")
+;; Expected: 6
+
+;; Vector with rest pattern
+(match [1 2 3 4 5]
+  [first & rest] [first rest])
+;; Expected: [1 [2 3 4 5]]
+
+;; Nested vector patterns
+(match [[1 2] [3 4]]
+  [[a b] [c d]] (+ a b c d))
+;; Expected: 10
+
+;; Map pattern matching
+(match {:name "Alice" :age 30}
+  {:name name} name
+  _ "no-name")
+;; Expected: "Alice"
+
+;; Map with multiple key patterns
+(match {:x 1 :y 2 :z 3}
+  {:x x :y y} (+ x y)
+  _ 0)
+;; Expected: 3
+
+;; Type-based pattern matching (if supported)
+(match "hello"
+  (x :when (string? x)) (str x " world")
+  (x :when (number? x)) (+ x 1)
+  _ "unknown-type")
+;; Expected: "hello world"
+
+;; Guard clauses
+(match 15
+  x (when (> x 10)) "greater-than-ten"
+  x (when (> x 5)) "greater-than-five"
+  _ "small-number")
+;; Expected: "greater-than-ten"
+
+;; Complex nested patterns
+(match {:data [1 2 {:inner "value"}]}
+  {:data [a b {:inner inner}]} inner
+  _ "no-match")
+;; Expected: "value"
+
+;; Multiple value matching with or-patterns (if supported)
+(match 2
+  (1 | 2 | 3) "small-number"
+  (4 | 5 | 6) "medium-number"
+  _ "other-number")
+;; Expected: "small-number"
+
+;; As-patterns (binding entire matched value)
+(match [1 2 3]
+  (whole @ [first & rest]) [whole first rest])
+;; Expected: [[1 2 3] 1 [2 3]]
+
+;; Wildcard patterns
+(match [1 2 3 4]
+  [_ second _ fourth] [second fourth])
+;; Expected: [2 4]
+
+;; Matching functions (if supported)
+(match +
+  f (f 10 20))
+;; Expected: 30
+
+;; Matching with custom data types (if supported)
+;; (deftype Point [x y])
+;; (match (Point. 3 4)
+;;   (Point x y) (+ x y))
+;; Expected: 7
+
+;; Multiple clauses with different types
+(match nil
+  nil "is-nil"
+  false "is-false"
+  0 "is-zero"
+  _ "something-else")
+;; Expected: "is-nil"
+
+;; Matching collections with specific lengths
+(match [1 2]
+  [] "empty"
+  [_] "one-element" 
+  [_ _] "two-elements"
+  _ "more-elements")
+;; Expected: "two-elements"
+
+;; Range matching with guards
+(match 50
+  x (when (< x 0)) "negative"
+  x (when (= x 0)) "zero"
+  x (when (< x 100)) "small-positive"  
+  _ "large-positive")
+;; Expected: "small-positive"
+
+;; Recursive pattern matching
+(let [tree [:node 1 [:node 2 :leaf] [:node 3 :leaf]]]
+  (match tree
+    :leaf 0
+    [:node value left right] (+ value (match left :leaf 0 [:node v _ _] v) (match right :leaf 0 [:node v _ _] v))))
+;; Expected: 6
+
+;; Edge case: No matching pattern (should error or have default)
+(match "unknown"
+  "known" "found"
+  42 "number")
+;; Expected: Error (no default case)
+
+;; Edge case: Empty match (should error)
+;; (match 42)
+;; Expected: Error
