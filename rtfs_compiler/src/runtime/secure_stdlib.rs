@@ -4,7 +4,7 @@
 //! in any context without security concerns. All dangerous operations (file I/O,
 //! network access, system calls) are moved to CCOS capabilities.
 
-use crate::ast::{Keyword, MapKey};
+use crate::ast::{Keyword, MapKey, Expression};
 use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::{BuiltinFunction, Arity, Function, BuiltinFunctionWithContext};
@@ -317,6 +317,36 @@ impl SecureStandardLibrary {
                 func: Rc::new(Self::string_contains),
             })),
         );
+
+        // String upper case function
+        env.define(
+            &Symbol("string-upper".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-upper".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::string_upper),
+            })),
+        );
+
+        // String lower case function
+        env.define(
+            &Symbol("string-lower".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-lower".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::string_lower),
+            })),
+        );
+
+        // String trim function
+        env.define(
+            &Symbol("string-trim".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-trim".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::string_trim),
+            })),
+        );
     }
     
     pub(crate) fn load_collection_functions(env: &mut Environment) {
@@ -531,6 +561,76 @@ impl SecureStandardLibrary {
                 name: "type-name".to_string(),
                 arity: Arity::Fixed(1),
                 func: Rc::new(Self::type_name),
+            })),
+        );
+
+        // Reverse function
+        env.define(
+            &Symbol("reverse".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "reverse".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::reverse),
+            })),
+        );
+
+        // Last function
+        env.define(
+            &Symbol("last".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "last".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::last),
+            })),
+        );
+
+        // Take function
+        env.define(
+            &Symbol("take".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "take".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::take),
+            })),
+        );
+
+        // Drop function
+        env.define(
+            &Symbol("drop".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "drop".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::drop),
+            })),
+        );
+
+        // Distinct function
+        env.define(
+            &Symbol("distinct".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "distinct".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::distinct),
+            })),
+        );
+
+        // Every? function
+        env.define(
+            &Symbol("every?".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "every?".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::every_with_context),
+            })),
+        );
+
+        // Some? function
+        env.define(
+            &Symbol("some?".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "some?".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::some_with_context),
             })),
         );
     }
@@ -2260,5 +2360,384 @@ impl SecureStandardLibrary {
 
         let subvector = vector[start..end].to_vec();
         Ok(Value::Vector(subvector))
+    }
+
+    // String utility functions
+    fn string_upper(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "string-upper".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => Ok(Value::String(s.to_uppercase())),
+            _ => Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "string-upper".to_string(),
+            }),
+        }
+    }
+
+    fn string_lower(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "string-lower".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => Ok(Value::String(s.to_lowercase())),
+            _ => Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "string-lower".to_string(),
+            }),
+        }
+    }
+
+    fn string_trim(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "string-trim".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => Ok(Value::String(s.trim().to_string())),
+            _ => Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "string-trim".to_string(),
+            }),
+        }
+    }
+
+    // Collection utility functions
+    fn reverse(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "reverse".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => {
+                let mut reversed = v.clone();
+                reversed.reverse();
+                Ok(Value::Vector(reversed))
+            }
+            Value::String(s) => {
+                let reversed: String = s.chars().rev().collect();
+                Ok(Value::String(reversed))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "reverse".to_string(),
+            }),
+        }
+    }
+
+    fn last(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "last".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => {
+                if v.is_empty() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(v.last().unwrap().clone())
+                }
+            }
+            Value::String(s) => {
+                if s.is_empty() {
+                    Ok(Value::String("".to_string()))
+                } else {
+                    Ok(Value::String(s.chars().last().unwrap().to_string()))
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "last".to_string(),
+            }),
+        }
+    }
+
+    fn take(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "take".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let count = match &args[0] {
+            Value::Integer(n) => *n as usize,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "take count".to_string(),
+                })
+            }
+        };
+
+        match &args[1] {
+            Value::Vector(v) => {
+                let taken: Vec<Value> = v.iter().take(count).cloned().collect();
+                Ok(Value::Vector(taken))
+            }
+            Value::String(s) => {
+                let taken: String = s.chars().take(count).collect();
+                Ok(Value::String(taken))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: args[1].type_name().to_string(),
+                operation: "take".to_string(),
+            }),
+        }
+    }
+
+    fn drop(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "drop".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let count = match &args[0] {
+            Value::Integer(n) => *n as usize,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "drop count".to_string(),
+                })
+            }
+        };
+
+        match &args[1] {
+            Value::Vector(v) => {
+                let dropped: Vec<Value> = v.iter().skip(count).cloned().collect();
+                Ok(Value::Vector(dropped))
+            }
+            Value::String(s) => {
+                let dropped: String = s.chars().skip(count).collect();
+                Ok(Value::String(dropped))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: args[1].type_name().to_string(),
+                operation: "drop".to_string(),
+            }),
+        }
+    }
+
+    fn distinct(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "distinct".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => {
+                let mut distinct = Vec::new();
+                
+                for item in v {
+                    if !distinct.contains(item) {
+                        distinct.push(item.clone());
+                    }
+                }
+                
+                Ok(Value::Vector(distinct))
+            }
+            Value::String(s) => {
+                let mut seen = std::collections::HashSet::new();
+                let mut distinct = String::new();
+                
+                for c in s.chars() {
+                    if !seen.contains(&c) {
+                        seen.insert(c);
+                        distinct.push(c);
+                    }
+                }
+                
+                Ok(Value::String(distinct))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "distinct".to_string(),
+            }),
+        }
+    }
+
+    // Functional predicate functions
+    fn every_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "every?".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let predicate = &args[0];
+        let collection = &args[1];
+
+        match collection {
+            Value::Vector(v) => {
+                for item in v {
+                    let result = evaluator.evaluate(
+                        &crate::ast::Expression::FunctionCall {
+                            callee: Box::new(Expression::try_from(predicate.clone())?),
+                            arguments: vec![Expression::try_from(item.clone())?],
+                        },
+                    )?;
+
+                    match result {
+                        Value::Boolean(false) => return Ok(Value::Boolean(false)),
+                        Value::Boolean(true) => continue,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "boolean".to_string(),
+                                actual: result.type_name().to_string(),
+                                operation: "every? predicate result".to_string(),
+                            })
+                        }
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            Value::String(s) => {
+                for c in s.chars() {
+                    let char_value = Value::String(c.to_string());
+                    let result = evaluator.evaluate(
+                        &crate::ast::Expression::FunctionCall {
+                            callee: Box::new(Expression::try_from(predicate.clone())?),
+                            arguments: vec![Expression::try_from(char_value)?],
+                        },
+                    )?;
+
+                    match result {
+                        Value::Boolean(false) => return Ok(Value::Boolean(false)),
+                        Value::Boolean(true) => continue,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "boolean".to_string(),
+                                actual: result.type_name().to_string(),
+                                operation: "every? predicate result".to_string(),
+                            })
+                        }
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "every?".to_string(),
+            }),
+        }
+    }
+
+    fn some_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "some?".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let predicate = &args[0];
+        let collection = &args[1];
+
+        match collection {
+            Value::Vector(v) => {
+                for item in v {
+                    let result = evaluator.evaluate(
+                        &crate::ast::Expression::FunctionCall {
+                            callee: Box::new(Expression::try_from(predicate.clone())?),
+                            arguments: vec![Expression::try_from(item.clone())?],
+                        },
+                    )?;
+
+                    match result {
+                        Value::Boolean(true) => return Ok(Value::Boolean(true)),
+                        Value::Boolean(false) => continue,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "boolean".to_string(),
+                                actual: result.type_name().to_string(),
+                                operation: "some? predicate result".to_string(),
+                            })
+                        }
+                    }
+                }
+                Ok(Value::Boolean(false))
+            }
+            Value::String(s) => {
+                for c in s.chars() {
+                    let char_value = Value::String(c.to_string());
+                    let result = evaluator.evaluate(
+                        &crate::ast::Expression::FunctionCall {
+                            callee: Box::new(Expression::try_from(predicate.clone())?),
+                            arguments: vec![Expression::try_from(char_value)?],
+                        },
+                    )?;
+
+                    match result {
+                        Value::Boolean(true) => return Ok(Value::Boolean(true)),
+                        Value::Boolean(false) => continue,
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "boolean".to_string(),
+                                actual: result.type_name().to_string(),
+                                operation: "some? predicate result".to_string(),
+                            })
+                        }
+                    }
+                }
+                Ok(Value::Boolean(false))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "some?".to_string(),
+            }),
+        }
     }
 }
