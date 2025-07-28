@@ -32,6 +32,9 @@ cargo build --release --bin rtfs-compiler
 
 # Performance analysis
 cargo run --bin rtfs-compiler -- --input file.rtfs --execute --show-timing --show-stats
+
+# Specific test execution
+cargo test --test integration_tests -- --nocapture --test-threads 1
 ```
 
 ### Test Structure

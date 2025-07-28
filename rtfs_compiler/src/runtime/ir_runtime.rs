@@ -4,7 +4,7 @@
 use super::environment::IrEnvironment;
 use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
-use super::values::{Function, Value};
+use super::values::{Function, Value, BuiltinFunctionWithContext};
 use crate::ast::{Expression, Keyword, MapKey};
 use crate::ccos::delegation::{CallContext, DelegationEngine, ExecTarget, ModelRegistry};
 use crate::ir::converter::IrConverter;
@@ -55,7 +55,7 @@ impl IrStrategy {
 
 impl RuntimeStrategy for IrStrategy {
     fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
-        let mut converter = IrConverter::new();
+        let mut converter = IrConverter::with_module_registry(&self.module_registry);
         let ir_node = converter
             .convert_expression(program.clone())
             .map_err(|e| RuntimeError::Generic(format!("IR conversion error: {:?}", e)))?;
@@ -491,6 +491,11 @@ impl IrRuntime {
                         }
                         (builtin_fn.func)(args.to_vec())
                     }
+                    Function::BuiltinWithContext(builtin_fn) => {
+                        // Implement BuiltinWithContext functions in IR runtime
+                        // These functions need access to the execution context to handle user-defined functions
+                        self.execute_builtin_with_context(builtin_fn, args.to_vec(), env, module_registry)
+                    }
                     Function::Ir(ir_fn) => {
                         let param_names: Vec<String> = ir_fn
                             .params
@@ -524,6 +529,41 @@ impl IrRuntime {
                     )),
                 }
             },
+            Value::Keyword(keyword) => {
+                // Keywords act as functions: (:key map) is equivalent to (get map :key)
+                if args.len() == 1 {
+                    match &args[0] {
+                        Value::Map(map) => {
+                            let map_key = crate::ast::MapKey::Keyword(keyword.clone());
+                            Ok(map.get(&map_key).cloned().unwrap_or(Value::Nil))
+                        }
+                        _ => Err(RuntimeError::TypeError {
+                            expected: "map".to_string(),
+                            actual: args[0].type_name().to_string(),
+                            operation: "keyword lookup".to_string(),
+                        }),
+                    }
+                } else if args.len() == 2 {
+                    // (:key map default) is equivalent to (get map :key default)
+                    match &args[0] {
+                        Value::Map(map) => {
+                            let map_key = crate::ast::MapKey::Keyword(keyword.clone());
+                            Ok(map.get(&map_key).cloned().unwrap_or(args[1].clone()))
+                        }
+                        _ => Err(RuntimeError::TypeError {
+                            expected: "map".to_string(),
+                            actual: args[0].type_name().to_string(),
+                            operation: "keyword lookup".to_string(),
+                        }),
+                    }
+                } else {
+                    Err(RuntimeError::ArityMismatch {
+                        function: format!(":{}", keyword.0),
+                        expected: "1 or 2".to_string(),
+                        actual: args.len(),
+                    })
+                }
+            }
             _ => Err(RuntimeError::Generic(format!(
                 "Not a function: {}",
                 function.to_string()
@@ -654,6 +694,237 @@ impl IrRuntime {
             }
         }
         Ok(Value::Vector(result))
+    }
+
+    /// Execute BuiltinWithContext functions in IR runtime
+    /// These functions need execution context to handle user-defined functions
+    fn execute_builtin_with_context(
+        &mut self,
+        builtin_fn: &BuiltinFunctionWithContext,
+        args: Vec<Value>,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<Value, RuntimeError> {
+        match builtin_fn.name.as_str() {
+            "map" => self.ir_map_with_context(args, env, module_registry),
+            "filter" => self.ir_filter_with_context(args, env, module_registry),
+            "reduce" => self.ir_reduce_with_context(args, env, module_registry),
+            _ => {
+                // For other BuiltinWithContext functions, we need a proper evaluator
+                // For now, return an error
+                Err(RuntimeError::Generic(format!(
+                    "BuiltinWithContext function '{}' not yet implemented in IR runtime",
+                    builtin_fn.name
+                )))
+            }
+        }
+    }
+
+    /// IR runtime implementation of map with context
+    fn ir_map_with_context(
+        &mut self,
+        args: Vec<Value>,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection = &args[1];
+        
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map".to_string(),
+                })
+            }
+        };
+
+        let mut result = Vec::new();
+        for item in collection_vec {
+            let mapped_value = match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item];
+                    (builtin_func.func)(func_args)?
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item];
+                    self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                }
+                Value::Function(func) => {
+                    let func_args = vec![item];
+                    self.apply_function(
+                        Value::Function(func.clone()),
+                        &func_args,
+                        env,
+                        false,
+                        module_registry,
+                    )?
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "map".to_string(),
+                    });
+                }
+            };
+            result.push(mapped_value);
+        }
+        Ok(Value::Vector(result))
+    }
+
+    /// IR runtime implementation of filter with context
+    fn ir_filter_with_context(
+        &mut self,
+        args: Vec<Value>,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "filter".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection = &args[1];
+        
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "filter".to_string(),
+                })
+            }
+        };
+
+        let mut result = Vec::new();
+        for item in collection_vec {
+            let keep = match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?;
+                    v.is_truthy()
+                }
+                Value::Function(func) => {
+                    let func_args = vec![item.clone()];
+                    let v = self.apply_function(
+                        Value::Function(func.clone()),
+                        &func_args,
+                        env,
+                        false,
+                        module_registry,
+                    )?;
+                    v.is_truthy()
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "filter".to_string(),
+                    });
+                }
+            };
+            if keep {
+                result.push(item);
+            }
+        }
+        Ok(Value::Vector(result))
+    }
+
+    /// IR runtime implementation of reduce with context
+    fn ir_reduce_with_context(
+        &mut self,
+        args: Vec<Value>,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() < 2 || args.len() > 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "reduce".to_string(),
+                expected: "2 or 3".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection_arg_index = args.len() - 1;
+        let collection = &args[collection_arg_index];
+        let init_value = if args.len() == 3 { Some(&args[1]) } else { None };
+        
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "reduce".to_string(),
+                })
+            }
+        };
+
+        if collection_vec.is_empty() {
+            return if let Some(init) = init_value {
+                Ok(init.clone())
+            } else {
+                Err(RuntimeError::Generic(
+                    "reduce on empty collection with no initial value".to_string()
+                ))
+            };
+        }
+
+        let (mut accumulator, rest) = if let Some(init) = init_value {
+            (init.clone(), collection_vec.as_slice())
+        } else {
+            (collection_vec[0].clone(), &collection_vec[1..])
+        };
+        
+        for item in rest {
+            accumulator = match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![accumulator, item.clone()];
+                    (builtin_func.func)(func_args)?
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![accumulator, item.clone()];
+                    self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                }
+                Value::Function(func) => {
+                    let func_args = vec![accumulator, item.clone()];
+                    self.apply_function(
+                        Value::Function(func.clone()),
+                        &func_args,
+                        env,
+                        false,
+                        module_registry,
+                    )?
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "reduce".to_string(),
+                    });
+                }
+            };
+        }
+        Ok(accumulator)
     }
 
     /// Check if a pattern matches a value

@@ -9,7 +9,7 @@
   
   :plan
   (do
-    (tool:log "Starting advanced data processing")
+    (tool/log "Starting advanced data processing")
     
     ; Define data processing functions
     (defn process-batch [batch]
@@ -30,17 +30,17 @@
         [:ok (process-batch batch)]
         (catch :error/runtime err
           (do
-            (tool:log "Error processing batch:" (:message err))
+            (tool/log "Error processing batch:" (:message err))
             [:error {:type :processing-failed :batch batch :error err}]))
         (finally
-          (tool:log "Batch processing completed"))))
+          (tool/log "Batch processing completed"))))
       ; Main processing logic
     (let [task-context (rtfs.task/current)
           input-data (get task-context :input-data)
           batch-size (get task-context :batch-size)
           batches (partition batch-size input-data)]
       
-      (tool:log "Processing" (count batches) "batches of size" batch-size)
+      (tool/log "Processing" (count batches) "batches of size" batch-size)
       
       ; Parallel processing with error handling
       (let [results (parallel
@@ -54,7 +54,7 @@
            :batch2-result [:ok result2]
            :batch3-result [:ok result3]}
           (do
-            (tool:log "All batches processed successfully")
+            (tool/log "All batches processed successfully")
             {
               :status :success
               :processed-batches 3

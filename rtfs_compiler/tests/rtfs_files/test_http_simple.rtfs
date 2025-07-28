@@ -2,18 +2,18 @@
 (println "=== Simple HTTP Test ===")
 
 ;; Test basic GET request
-(let [response (tool:http-fetch "https://httpbin.org/get")]
+(let [response (tool/http-fetch "https://httpbin.org/get")]
   (println "Status:" (get response :status)))
 
 ;; Test with simple headers
 (let [headers {:Accept "application/json"}
-      response (tool:http-fetch "https://httpbin.org/headers" "GET" headers)]
+      response (tool/http-fetch "https://httpbin.org/headers" "GET" headers)]
   (println "Status:" (get response :status)))
 
 ;; Test with POST and body
 (let [headers {:ContentType "application/json"}
       body "{\"test\": \"data\"}"
-      response (tool:http-fetch "https://httpbin.org/post" "POST" headers body)]
+      response (tool/http-fetch "https://httpbin.org/post" "POST" headers body)]
   (println "Status:" (get response :status)))
 
 (println "=== Test Complete ===") 

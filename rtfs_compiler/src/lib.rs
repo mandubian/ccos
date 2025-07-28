@@ -7,6 +7,7 @@ pub mod capabilities;
 pub mod ccos;
 pub mod development_tooling;
 pub mod error_reporting;
+pub mod input_handling;
 pub mod ir;
 pub mod parser;
 pub mod parser_error_reporter;

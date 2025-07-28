@@ -142,6 +142,46 @@ impl SecureStandardLibrary {
                 func: Rc::new(Self::factorial),
             })),
         );
+
+        // Absolute value function
+        env.define(
+            &Symbol("abs".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "abs".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::abs),
+            })),
+        );
+
+        // Modulo function
+        env.define(
+            &Symbol("mod".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "mod".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::modulo),
+            })),
+        );
+
+        // Square root function
+        env.define(
+            &Symbol("sqrt".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "sqrt".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::sqrt),
+            })),
+        );
+
+        // Power function
+        env.define(
+            &Symbol("pow".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "pow".to_string(),
+                arity: Arity::Fixed(2),
+                func: Rc::new(Self::pow),
+            })),
+        );
     }
     
     pub(crate) fn load_comparison_functions(env: &mut Environment) {
@@ -385,6 +425,36 @@ impl SecureStandardLibrary {
                 name: "get".to_string(),
                 arity: Arity::Variadic(2),
                 func: Rc::new(Self::get),
+            })),
+        );
+
+        // Nth function - access element by index
+        env.define(
+            &Symbol("nth".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "nth".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::nth),
+            })),
+        );
+
+        // Concat function - concatenate collections
+        env.define(
+            &Symbol("concat".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "concat".to_string(),
+                arity: Arity::Variadic(0),
+                func: Rc::new(Self::concat),
+            })),
+        );
+
+        // Subvec function - get subvector
+        env.define(
+            &Symbol("subvec".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "subvec".to_string(),
+                arity: Arity::Variadic(2),
+                func: Rc::new(Self::subvec),
             })),
         );
 
@@ -1891,6 +1961,68 @@ impl SecureStandardLibrary {
         Ok(Value::Vector(vec))
     }
 
+    fn nth(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() < 2 || args.len() > 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "nth".to_string(),
+                expected: "2 or 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let collection = &args[0];
+        let index = match &args[1] {
+            Value::Integer(i) => *i,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "nth".to_string(),
+                })
+            }
+        };
+
+        let default = if args.len() == 3 { Some(&args[2]) } else { None };
+
+        match collection {
+            Value::Vector(v) => {
+                if index < 0 || index as usize >= v.len() {
+                    if let Some(default_val) = default {
+                        Ok(default_val.clone())
+                    } else {
+                        Err(RuntimeError::IndexOutOfBounds {
+                            index: index,
+                            length: v.len(),
+                        })
+                    }
+                } else {
+                    Ok(v[index as usize].clone())
+                }
+            }
+            Value::String(s) => {
+                let chars: Vec<char> = s.chars().collect();
+                if index < 0 || index as usize >= chars.len() {
+                    if let Some(default_val) = default {
+                        Ok(default_val.clone())
+                    } else {
+                        Err(RuntimeError::IndexOutOfBounds {
+                            index: index,
+                            length: chars.len(),
+                        })
+                    }
+                } else {
+                    Ok(Value::String(chars[index as usize].to_string()))
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "nth".to_string(),
+            }),
+        }
+    }
+
     fn value_to_map_key(value: &Value) -> RuntimeResult<MapKey> {
         match value {
             Value::String(s) => Ok(MapKey::String(s.clone())),
@@ -1901,5 +2033,232 @@ impl SecureStandardLibrary {
                 operation: "map key".to_string(),
             }),
         }
+    }
+
+    fn abs(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "abs".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Integer(n) => Ok(Value::Integer(n.abs())),
+            Value::Float(f) => Ok(Value::Float(f.abs())),
+            _ => Err(RuntimeError::TypeError {
+                expected: "number".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "abs".to_string(),
+            }),
+        }
+    }
+
+    fn modulo(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "mod".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match (&args[0], &args[1]) {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Integer(a % b))
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if *b == 0.0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Float(a % b))
+                }
+            }
+            (Value::Integer(a), Value::Float(b)) => {
+                if *b == 0.0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Float(*a as f64 % b))
+                }
+            }
+            (Value::Float(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    Err(RuntimeError::DivisionByZero)
+                } else {
+                    Ok(Value::Float(a % (*b as f64)))
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "numbers".to_string(),
+                actual: format!("{}, {}", args[0].type_name(), args[1].type_name()),
+                operation: "mod".to_string(),
+            }),
+        }
+    }
+
+    fn sqrt(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "sqrt".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Integer(n) => {
+                if *n < 0 {
+                    Err(RuntimeError::InvalidArgument(
+                        "Cannot take square root of negative number".to_string(),
+                    ))
+                } else {
+                    Ok(Value::Float((*n as f64).sqrt()))
+                }
+            }
+            Value::Float(f) => {
+                if *f < 0.0 {
+                    Err(RuntimeError::InvalidArgument(
+                        "Cannot take square root of negative number".to_string(),
+                    ))
+                } else {
+                    Ok(Value::Float(f.sqrt()))
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "number".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "sqrt".to_string(),
+            }),
+        }
+    }
+
+    fn pow(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "pow".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match (&args[0], &args[1]) {
+            (Value::Integer(base), Value::Integer(exp)) => {
+                if *exp < 0 {
+                    // For negative exponents, return float result
+                    Ok(Value::Float((*base as f64).powf(*exp as f64)))
+                } else {
+                    Ok(Value::Integer(base.pow(*exp as u32)))
+                }
+            }
+            (Value::Float(base), Value::Float(exp)) => {
+                Ok(Value::Float(base.powf(*exp)))
+            }
+            (Value::Integer(base), Value::Float(exp)) => {
+                Ok(Value::Float((*base as f64).powf(*exp)))
+            }
+            (Value::Float(base), Value::Integer(exp)) => {
+                Ok(Value::Float(base.powf(*exp as f64)))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "numbers".to_string(),
+                actual: format!("{}, {}", args[0].type_name(), args[1].type_name()),
+                operation: "pow".to_string(),
+            }),
+        }
+    }
+
+    fn concat(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Ok(Value::Vector(vec![]));
+        }
+
+        let mut result = Vec::new();
+        
+        for arg in &args {
+            match arg {
+                Value::Vector(v) => {
+                    result.extend(v.iter().cloned());
+                }
+                Value::String(s) => {
+                    // For strings, treat each character as an element
+                    for c in s.chars() {
+                        result.push(Value::String(c.to_string()));
+                    }
+                }
+                other => {
+                    // For single values, just add them
+                    result.push(other.clone());
+                }
+            }
+        }
+
+        Ok(Value::Vector(result))
+    }
+
+    fn subvec(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() < 2 || args.len() > 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "subvec".to_string(),
+                expected: "2 or 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let vector = match &args[0] {
+            Value::Vector(v) => v,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "subvec".to_string(),
+                })
+            }
+        };
+
+        let start = match &args[1] {
+            Value::Integer(i) => *i as usize,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "subvec start index".to_string(),
+                })
+            }
+        };
+
+        let end = if args.len() == 3 {
+            match &args[2] {
+                Value::Integer(i) => *i as usize,
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "integer".to_string(),
+                        actual: args[2].type_name().to_string(),
+                        operation: "subvec end index".to_string(),
+                    })
+                }
+            }
+        } else {
+            vector.len()
+        };
+
+        if start > vector.len() || end > vector.len() || start > end {
+            return Err(RuntimeError::IndexOutOfBounds {
+                index: start as i64,
+                length: vector.len(),
+            });
+        }
+
+        let subvector = vector[start..end].to_vec();
+        Ok(Value::Vector(subvector))
     }
 }

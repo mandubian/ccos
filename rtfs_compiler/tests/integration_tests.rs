@@ -179,8 +179,26 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     }
 
     // Parse the content first
-    let parsed = parse_expression(&processed_content)
-        .map_err(|e| format!("Failed to parse content: {:?}", e))?;
+    let parsed = match parse_expression(&processed_content) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            // Handle parse errors for tests that should fail to compile
+            if !config.should_compile {
+                let error_str = format!("Failed to parse content: {:?}", e);
+                if let Some(expected) = config.expected_error {
+                    if !error_str.contains(expected) {
+                        return Err(format!(
+                            "Parse error mismatch. Expected to contain: '{}', Got: '{}'",
+                            expected, error_str
+                        ));
+                    }
+                }
+                return Ok("Expected parse error".to_string());
+            } else {
+                return Err(format!("Failed to parse content: {:?}", e));
+            }
+        }
+    };
 
     // Execute the code using the run method
     match runtime.run(&parsed) {
@@ -457,13 +475,7 @@ fn test_mutual_recursion() {
 
 #[test]
 fn test_computational_heavy() {
-    run_all_tests_for_file(&TestConfig {
-        name: "test_computational_heavy".to_string(),
-        should_compile: false,
-        should_execute: false,
-        expected_error: Some("PestError"),
-        ..TestConfig::new("test_computational_heavy")
-    });
+    run_all_tests_for_file(&TestConfig::new("test_computational_heavy"));
 }
 
 #[test]
@@ -513,6 +525,7 @@ fn test_wildcard_destructuring() {
     });
 }
 
+#[ignore] // RTFS 1.0 task syntax - needs conversion to RTFS 2.0/CCOS
 #[test]
 fn test_advanced_focused() {
     run_all_tests_for_file(&TestConfig {
@@ -630,13 +643,7 @@ fn test_http_simple() {
 
 #[test]
 fn test_keyword_json_roundtrip() {
-    run_all_tests_for_file(&TestConfig {
-        name: "test_keyword_json_roundtrip".to_string(),
-        should_compile: false,
-        should_execute: false,
-        expected_error: Some("Not a function"),
-        ..TestConfig::new("test_keyword_json_roundtrip")
-    });
+    run_all_tests_for_file(&TestConfig::new("test_keyword_json_roundtrip"));
 }
 
 #[test]
@@ -656,24 +663,12 @@ fn test_json_operations() {
 
 #[test]
 fn test_simple() {
-    run_all_tests_for_file(&TestConfig {
-        name: "test_simple".to_string(),
-        should_compile: false,
-        should_execute: false,
-        expected_error: Some("UndefinedSymbol"),
-        ..TestConfig::new("test_simple")
-    });
+    run_all_tests_for_file(&TestConfig::new("test_simple"));
 }
 
 #[test]
 fn test_simple_no_comments() {
-    run_all_tests_for_file(&TestConfig {
-        name: "test_simple_no_comments".to_string(),
-        should_compile: false,
-        should_execute: false,
-        expected_error: Some("UndefinedSymbol"),
-        ..TestConfig::new("test_simple_no_comments")
-    });
+    run_all_tests_for_file(&TestConfig::new("test_simple_no_comments"));
 }
 
 #[test]

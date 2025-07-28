@@ -1,4 +1,4 @@
 ;; Test comma in string value
 (let [headers {:a "value,with,comma" :b 42}
-      response (tool:http-fetch "https://httpbin.org/get")]
+      response (tool/http-fetch "https://httpbin.org/get")]
   (println "Comma string test complete")) 

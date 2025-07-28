@@ -33,9 +33,9 @@
 
   :plan
   (do
-    (tool:log "Initializing distributed agent coordination system")
+    (tool/log "Initializing distributed agent coordination system")
       ;; Initialize coordination context
-    (let [coordination-start (tool:current-timestamp-ms)
+    (let [coordination-start (tool/current-timestamp-ms)
           task-context (rtfs.task/current)
           problem-spec (get task-context :problem-type)
           complexity (get task-context :complexity-level)
@@ -48,22 +48,22 @@
           (match available-agents
             [:ok agent-pool]
             (do
-              (tool:log "Discovered" (count agent-pool) "capable agents")
+              (tool/log "Discovered" (count agent-pool) "capable agents")
               
               ;; Phase 2: Optimal Agent Selection and Task Decomposition
               (let [coordination-plan (create-coordination-plan agent-pool problem-spec complexity resource-limits)]
                 (match coordination-plan
                   [:ok plan]
                   (do
-                    (tool:log "Created coordination plan with" (count (:selected-agents plan)) "agents")
+                    (tool/log "Created coordination plan with" (count (:selected-agents plan)) "agents")
                     
                     ;; Phase 3: Distributed Execution with Monitoring
                     (let [execution-result (execute-distributed-coordination plan quality-reqs)]
                       (match execution-result
                         [:ok results]
-                        (let [coordination-end (tool:current-timestamp-ms)
+                        (let [coordination-end (tool/current-timestamp-ms)
                               total-time (- coordination-end coordination-start)]
-                          (tool:log "Coordination completed successfully in" total-time "ms")
+                          (tool/log "Coordination completed successfully in" total-time "ms")
                           
                           ;; Generate comprehensive results
                           {
@@ -77,7 +77,7 @@
                         
                         [:error execution-error]
                         (do
-                          (tool:log "Distributed execution failed:" (:message execution-error))
+                          (tool/log "Distributed execution failed:" (:message execution-error))
                           (cleanup-coordination-resources (:active-agents execution-error))
                           [:error {:type :error/coordination-failed
                                    :message "Distributed agent coordination failed"
@@ -85,14 +85,14 @@
                   
                   [:error plan-error]
                   (do
-                    (tool:log "Failed to create coordination plan:" (:message plan-error))
+                    (tool/log "Failed to create coordination plan:" (:message plan-error))
                     [:error {:type :error/planning-failed
                              :message "Could not plan agent coordination"
                              :data plan-error}]))))
             
             [:error discovery-error]
             (do
-              (tool:log "Agent discovery failed:" (:message discovery-error))
+              (tool/log "Agent discovery failed:" (:message discovery-error))
               [:error {:type :error/agent-discovery-failed
                        :message "Could not discover suitable agents"
                        :data discovery-error}])))
@@ -100,7 +100,7 @@
         ;; Comprehensive error handling for coordination system
         (catch :error/network-partition partition-err
           (do
-            (tool:log "Network partition detected:" (:message partition-err))
+            (tool/log "Network partition detected:" (:message partition-err))
             (attempt-partition-recovery partition-err)
             [:error {:type :error/network-partition
                      :message "Coordination failed due to network partition"
@@ -108,7 +108,7 @@
         
         (catch :error/agent-failure agent-err
           (do
-            (tool:log "Agent failure during coordination:" (:message agent-err))
+            (tool/log "Agent failure during coordination:" (:message agent-err))
             (redistribute-failed-agent-tasks agent-err)
             [:error {:type :error/agent-failure
                      :message "Agent failure disrupted coordination"
@@ -116,7 +116,7 @@
         
         (catch :error/resource-exhaustion resource-err
           (do
-            (tool:log "Resource exhaustion in coordination:" (:message resource-err))
+            (tool/log "Resource exhaustion in coordination:" (:message resource-err))
             (scale-down-coordination resource-limits)
             [:error {:type :error/resource-exhaustion
                      :message "Coordination scaled down due to resource limits"
@@ -124,7 +124,7 @@
         
         (finally
           (do
-            (tool:log "Cleaning up coordination resources")
+            (tool/log "Cleaning up coordination resources")
             (cleanup-all-coordination-state)
             (report-coordination-metrics))))))
 
@@ -141,7 +141,7 @@
     :max-discovery-time-ms 30000
   }]
     
-    (tool:log "Starting agent discovery with criteria:" discovery-criteria)
+    (tool/log "Starting agent discovery with criteria:" discovery-criteria)
     
     (try
       ;; Use advanced agent discovery with filtering
@@ -149,7 +149,7 @@
         (match discovery-result
           [:ok discovered-agents]
           (do
-            (tool:log "Found" (count discovered-agents) "agents, assessing capabilities")
+            (tool/log "Found" (count discovered-agents) "agents, assessing capabilities")
             
             ;; Parallel capability assessment
             (let [assessment-results (parallel-map
@@ -204,7 +204,7 @@
               :problem-expertise expertise-score
               :reliability reliability-score
               :communication-latency latency-ms
-              :assessment-timestamp (tool:current-timestamp)
+              :assessment-timestamp (tool/current-timestamp)
             }])
           
           assessment-errors
@@ -225,7 +225,7 @@
     :optimization-objective :balanced  ;; :speed, :quality, :cost, :balanced
   }]
     
-    (tool:log "Creating coordination plan for" (count agent-pool) "agents")
+    (tool/log "Creating coordination plan for" (count agent-pool) "agents")
     
     (try
       ;; Advanced task decomposition
@@ -233,7 +233,7 @@
         (match task-decomposition
           [:ok subtasks]
           (do
-            (tool:log "Decomposed problem into" (count subtasks) "subtasks")
+            (tool/log "Decomposed problem into" (count subtasks) "subtasks")
             
             ;; Optimal agent-task assignment
             (let [assignment-result (optimize-agent-task-assignment subtasks agent-pool resource-limits)]
@@ -274,7 +274,7 @@
     :coordination-protocol :consensus-based
   }]
     
-    (tool:log "Starting distributed execution with" (count (:selected-agents plan)) "agents")
+    (tool/log "Starting distributed execution with" (count (:selected-agents plan)) "agents")
     
     (try
       ;; Initialize coordination infrastructure
@@ -287,7 +287,7 @@
             (match phase-results
               [:ok results]
               (do
-                (tool:log "All coordination phases completed successfully")
+                (tool/log "All coordination phases completed successfully")
                 
                 ;; Aggregate and validate results
                 (let [aggregated-results (aggregate-coordination-results results)
@@ -316,7 +316,7 @@
       
       (catch :error/coordination-deadlock deadlock-err
         (do
-          (tool:log "Coordination deadlock detected:" (:message deadlock-err))
+          (tool/log "Coordination deadlock detected:" (:message deadlock-err))
           (break-coordination-deadlock deadlock-err)
           [:error {:type :error/coordination-deadlock
                    :message "Coordination deadlock required intervention"
@@ -324,7 +324,7 @@
       
       (catch :error/consensus-failure consensus-err
         (do
-          (tool:log "Consensus failure in coordination:" (:message consensus-err))
+          (tool/log "Consensus failure in coordination:" (:message consensus-err))
           (attempt-consensus-recovery consensus-err)
           [:error {:type :error/consensus-failure
                    :message "Failed to reach consensus among agents"
@@ -334,7 +334,7 @@
   (let [phases (:execution-schedule plan)
         total-phases (count phases)]
     
-    (tool:log "Executing" total-phases "coordination phases")
+    (tool/log "Executing" total-phases "coordination phases")
     
     (try
       ;; Execute phases with monitoring and fault tolerance
@@ -368,7 +368,7 @@
         assigned-agents (:agents phase-spec)
         subtasks (:subtasks phase-spec)]
     
-    (tool:log "Executing coordination phase" phase-id "with" (count assigned-agents) "agents")
+    (tool/log "Executing coordination phase" phase-id "with" (count assigned-agents) "agents")
     
     (try
       ;; Parallel execution of subtasks with real-time monitoring
@@ -386,7 +386,7 @@
           
           (if (>= (count successful-subtasks) (:min-success-threshold phase-spec))
             (do
-              (tool:log "Phase" phase-id "completed with" (count successful-subtasks) "successful subtasks")
+              (tool/log "Phase" phase-id "completed with" (count successful-subtasks) "successful subtasks")
               
               ;; Handle any failed subtasks with recovery
               (when (not (empty? failed-subtasks))
@@ -408,7 +408,7 @@
       
       (catch :error/phase-timeout timeout-err
         (do
-          (tool:log "Phase" phase-id "timed out")
+          (tool/log "Phase" phase-id "timed out")
           [:error {:type :error/phase-timeout
                    :message "Coordination phase execution timed out"
                    :data {:phase-id phase-id :error timeout-err}}])))))

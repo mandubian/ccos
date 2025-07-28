@@ -22,10 +22,11 @@ timestamp = @{ ASCII_DIGIT{4} ~ "-" ~ ASCII_DIGIT{2} ~ "-" ~ ASCII_DIGIT{2} ~ "T
 uuid = @{ ASCII_HEX_DIGIT{8} ~ "-" ~ ASCII_HEX_DIGIT{4} ~ "-" ~ ASCII_HEX_DIGIT{4} ~ "-" ~ ASCII_HEX_DIGIT{4} ~ "-" ~ ASCII_HEX_DIGIT{12} }
 resource_handle = @{ "resource://" ~ (!WHITESPACE ~ ANY)+ }
 
-literal = { timestamp | uuid | resource_handle | float | integer | string | boolean | nil | keyword } // Added keyword and new RTFS 2.0 literals
+literal = { timestamp | uuid | resource_handle | special_float | float | integer | string | boolean | nil | keyword } // Added keyword and new RTFS 2.0 literals
 
 integer = @{ ("-" | "+")? ~ ASCII_DIGIT+ }
 float   = @{ ("-" | "+")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+special_float = @{ "##Inf" | "##-Inf" | "##NaN" }
 
 // String parsing rules:
 // escape_sequence must be defined before string_char, and string_char before string.
@@ -39,7 +40,7 @@ nil     = @{ "nil" ~ !identifier_chars }
 // --- Identifiers & Symbols ---
 // Based on grammar_spec.md, allowing common Lisp chars. '.' is for ns, '-' is common.
 identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" }
-identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | ":" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
 identifier            = @{ identifier_start_char ~ identifier_chars* }
 
 // --- Versioned Namespacing Extension ---
@@ -180,7 +181,8 @@ wildcard = @{ "_" }
 
 // Define these before binding_pattern uses them
 keys_entry = { ":keys" ~ "[" ~ symbol* ~ "]" }
-map_destructuring_entry = { keys_entry | map_key ~ binding_pattern }
+symbol_key_binding = { symbol ~ map_key }
+map_destructuring_entry = { keys_entry | map_key ~ binding_pattern | symbol_key_binding }
 
 map_rest_binding = { "&" ~ symbol }
 map_as_binding = { ":as" ~ symbol }
