@@ -1,0 +1,119 @@
+---
+alwaysApply: true
+description: RTFS 2.0 syntax and specification compliance rules
+---
+
+# RTFS 2.0 Syntax and Specification Compliance
+
+## RTFS 2.0 Specifications Location
+
+The complete RTFS 2.0 specifications can be found in the [docs/rtfs-2.0/specs/](mdc:docs/rtfs-2.0/specs/) directory. Key specification documents include:
+
+- **[README.md](mdc:docs/rtfs-2.0/specs/README.md)** - Complete specification overview and index
+- **[01-language-features.md](mdc:docs/rtfs-2.0/specs/01-language-features.md)** - Core language features and implementation status
+- **[10-formal-language-specification.md](mdc:docs/rtfs-2.0/specs/10-formal-language-specification.md)** - Complete formal language specification
+- **[03-object-schemas.md](mdc:docs/rtfs-2.0/specs/03-object-schemas.md)** - Object schema definitions and validation
+- **[06-capability-system.md](mdc:docs/rtfs-2.0/specs/06-capability-system.md)** - Complete capability system architecture
+
+## RTFS 2.0 Core Syntax
+
+### Language Characteristics
+- **Functional**: All expressions must be pure functions with no side effects
+- **Capability-Centric**: Execution is based on discoverable capabilities
+- **Type-Safe**: Use comprehensive type system with compile-time validation
+- **Security-First**: Implement built-in security features and attestation
+- **CCOS-Integrated**: Design to work seamlessly with CCOS components
+
+### Essential Syntax
+
+#### Special Forms
+```clojure
+; Variable binding
+(let [x 10 y 20] (+ x y))
+
+; Conditionals
+(if (> x 10) "big" "small")
+(if-let [value (get-value)] value "default")
+
+; Functions
+(fn [x y] (+ x y))
+(fn factorial [n] (if (= n 0) 1 (* n (factorial (- n 1)))))
+
+; Sequential execution
+(do (println "Step 1") (println "Step 2") 42)
+
+; Pattern matching
+(match value
+  0 "zero"
+  1 "one"
+  n (str "number: " n))
+
+; Error handling
+(try (risky-operation)
+     (catch Exception e (handle-error e)))
+```
+
+#### Data Structures
+```clojure
+; Vectors
+[1 2 3 4]
+(get [1 2 3] 1)  ; => 2
+
+; Maps
+{:name "John" :age 30}
+(:a {:a 1})      ; => 1 (keyword access)
+
+; Keywords
+:keyword
+:namespace/keyword
+```
+
+#### Capability System
+```clojure
+; Capability calls
+(call :provider-name {:param1 "value1" :param2 42})
+
+; Step special form for CCOS integration
+(step "step-name" (call :capability args))
+
+; Capability discovery
+(discover {:type "http" :filter {:category "data-processing"}})
+```
+
+### Type System
+- **Native Types**: string, number, boolean, null, array, vector, map, union, optional
+- **Schema Validation**: Use type annotations and schema definitions
+- **Type Safety**: Compile-time validation required
+
+### Security Requirements
+- **Capability Attestation**: Digital signatures and verification required
+- **Provenance Tracking**: Complete chain of custody
+- **Content Hashing**: SHA-256 integrity verification
+- **Permission System**: Fine-grained capability permissions
+
+## Implementation Guidelines
+
+### ✅ Required Practices
+1. **Reference RTFS 2.0 specs** when implementing new features
+2. **Use proper type annotations** for all function parameters and returns
+3. **Implement capability attestation** for all external calls
+4. **Follow functional programming principles** - no side effects
+5. **Use schema validation** for all data structures
+6. **Use the step special form** for CCOS integration
+7. **Follow security-first design** principles
+
+### ❌ Avoid These Practices
+1. **Don't use imperative programming** patterns
+2. **Don't skip type validation** in capability calls
+3. **Don't ignore attestation requirements**
+4. **Don't use mutable state** or side effects
+5. **Don't bypass schema validation**
+
+## Quick Reference
+
+### Key Specification Files
+- **Language Features**: [01-language-features.md](mdc:docs/rtfs-2.0/specs/01-language-features.md)
+- **Formal Specification**: [10-formal-language-specification.md](mdc:docs/rtfs-2.0/specs/10-formal-language-specification.md)
+- **Object Schemas**: [03-object-schemas.md](mdc:docs/rtfs-2.0/specs/03-object-schemas.md)
+- **Capability System**: [06-capability-system.md](mdc:docs/rtfs-2.0/specs/06-capability-system.md)
+- **CCOS Integration**: [13-rtfs-ccos-integration-guide.md](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md)

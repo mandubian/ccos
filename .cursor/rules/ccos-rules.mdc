@@ -1,0 +1,189 @@
+---
+alwaysApply: true
+description: CCOS concepts and specification compliance rules
+---
+
+# CCOS (Cognitive Computing Operating System) Concepts and Specifications
+
+## CCOS Specifications Location
+
+The complete CCOS specifications can be found in the [docs/ccos/specs/](mdc:docs/ccos/specs/) directory. Key specification documents include:
+
+- **[000-ccos-architecture.md](mdc:docs/ccos/specs/000-ccos-architecture.md)** - Complete system architecture overview
+- **[001-intent-graph.md](mdc:docs/ccos/specs/001-intent-graph.md)** - Intent Graph specification and management
+- **[002-plans-and-orchestration.md](mdc:docs/ccos/specs/002-plans-and-orchestration.md)** - Plans and orchestration system
+- **[003-causal-chain.md](mdc:docs/ccos/specs/003-causal-chain.md)** - Causal Chain immutable audit ledger
+- **[004-capabilities-and-marketplace.md](mdc:docs/ccos/specs/004-capabilities-and-marketplace.md)** - Capabilities and marketplace system
+- **[014-step-special-form-design.md](mdc:docs/ccos/specs/014-step-special-form-design.md)** - Step special form for CCOS integration
+
+## RTFS 2.0 Integration
+
+For RTFS 2.0 syntax and language features, refer to the [RTFS 2.0 rules](mdc:.cursor/rules/rtfs-2.0-rules.mdc) and the [RTFS-CCOS Integration Guide](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md) which cover:
+
+- **RTFS 2.0 rules**: Language characteristics, special forms, data structures, type system, security patterns
+- **Integration Guide**: RTFS object structures for CCOS integration, step special form usage, capability invocation patterns
+
+The integration guide provides the definitive RTFS syntax for:
+- Intent objects in CCOS context
+- Plan objects with step logging
+- Action objects for Causal Chain
+- Step special form integration patterns
+
+## CCOS Core Philosophy
+
+### Intent-Driven Architecture
+- **Intent**: The "why" behind all system behavior - structured goals with constraints and preferences
+- **Plan**: The "how" - executable RTFS programs that achieve intents
+- **Action**: The "what happened" - immutable records in the Causal Chain
+
+### Core Principles
+- **Intent-Driven**: All actions originate from clearly defined Intents
+- **Orchestration over Execution**: Observe, manage, and adapt execution flow
+- **Immutable Auditing**: Complete audit trail in cryptographically verifiable Causal Chain
+- **Secure by Design**: Zero-trust model with privilege separation and attestation
+- **Extensible Capabilities**: Dynamic marketplace of versioned, signed capabilities
+
+## CCOS System Components
+
+### Cognitive Layer
+- **Arbiter**: AI-driven reasoning, plan generation, and strategic exception handling
+- **Digital Ethics Committee**: Human oversight and governance
+
+### Orchestration Layer
+- **Orchestrator & RTFS Runtime**: Deterministic plan execution and security enforcement
+- **Global Function Mesh (GFM)**: Universal discovery and routing for capabilities
+- **Delegation Engine**: Policy-based provider selection
+- **Context Horizon**: Payload management and token optimization
+
+### Data & State Layer
+- **Intent Graph**: Persistent long-term memory of goals and relationships
+- **Plan Archive**: Immutable, content-addressable plan storage
+- **Causal Chain**: Append-only ledger of all significant events
+- **Working Memory**: High-performance cache and index
+- **Capability Marketplace**: Registry of available capability providers
+- **Runtime Context**: Security policies and resource constraints
+
+## CCOS Core Concepts
+
+### Intent Graph Management
+
+For RTFS syntax of Intent objects, see the [RTFS-CCOS Integration Guide](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md) which provides the complete Intent object structure with proper RTFS syntax.
+
+#### Intent Relationships
+- **DependsOn**: Intent A cannot be achieved until Intent B is completed
+- **IsSubgoalOf**: Intent A is a necessary component for Intent B
+- **ConflictsWith**: Achieving Intent A makes Intent B impossible
+- **Enables**: Completing Intent A provides resources for Intent B
+- **RelatedTo**: Generic semantic relationship for clustering
+
+### Plan and Orchestration
+
+For RTFS syntax of Plan objects, see the [RTFS-CCOS Integration Guide](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md) which provides the complete Plan object structure with step logging integration.
+
+#### Orchestration Primitives
+```clojure
+; Step special form for major milestones
+(step "Prepare Environment" (prepare-environment))
+
+; Conditional branching
+(step.if (> cost 100) 
+  (step "Use Budget Option" (deploy-budget))
+  (step "Use Premium Option" (deploy-premium)))
+
+; Parallel execution
+(step.parallel 
+  (step "Deploy Database" (deploy-db))
+  (step "Deploy Web Server" (deploy-web)))
+
+; Looping
+(step.loop (< retries 3)
+  (step "Retry Operation" (retry-operation)))
+```
+
+### Causal Chain
+
+For RTFS syntax of Action objects, see the [RTFS-CCOS Integration Guide](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md) which provides the complete Action object structure for Causal Chain integration.
+
+#### Action Types
+- **Plan Lifecycle**: PlanStarted, PlanCompleted, PlanAborted, PlanPaused/Resumed
+- **Step Lifecycle**: PlanStepStarted, PlanStepCompleted, PlanStepFailed, PlanStepRetrying
+- **Execution**: CapabilityCall, InternalStep
+
+### Capabilities and Marketplace
+
+For RTFS syntax of Capability objects and invocation patterns, see the [RTFS-CCOS Integration Guide](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md) which provides the complete Capability structure and invocation examples.
+
+#### Capability Invocation
+```clojure
+; Basic capability call
+(call :com.acme.database:v1.query {:table "users" :id 123})
+
+; Delegation pattern
+(let [generated_plan (step "Generate Sub-Plan"
+  (call :llm.generate-plan {:goal "Analyze data" :constraints {...}}))]
+  (step "Execute Sub-Plan"
+    (call :ccos.execute-plan generated_plan)))
+```
+
+## CCOS Integration Patterns
+
+### RTFS Integration
+- Use `(step ...)` special form for automatic action logging
+- Leverage RTFS functional programming for pure, side-effect-free operations
+- Implement capability attestation for all external calls
+- Use schema validation for all data structures
+
+### Security and Governance
+- **Intent Sanitization**: Validate and sanitize user intents
+- **Plan Scaffolding**: Ensure plans follow security constraints
+- **Constitution Validation**: Verify actions against ethical rules
+- **Attestation Verification**: Validate capability signatures
+
+### Delegation Patterns
+- **Recursive CCOS**: Nested CCOS instances with linked Causal Chains
+- **Human-in-the-Loop**: Pause execution for human approval
+- **Specialized Agents**: Delegate to domain-specific experts
+
+## Implementation Guidelines
+
+### ✅ Required Practices
+1. **Always reference CCOS specs** when implementing new features
+2. **Use Intent Graph** for goal management and relationship tracking
+3. **Implement Causal Chain** for immutable audit trails
+4. **Use Plan Archive** for immutable plan storage
+5. **Follow capability marketplace** patterns for extensibility
+6. **Implement proper delegation** for complex tasks
+7. **Use step special forms** for orchestration
+8. **Follow security-first design** with attestation
+9. **Use RTFS syntax** as defined in the integration guide
+
+### ❌ Avoid These Practices
+1. **Don't bypass Intent Graph** for goal management
+2. **Don't skip Causal Chain** logging for actions
+3. **Don't modify archived plans** after creation
+4. **Don't ignore capability attestation** requirements
+5. **Don't use imperative patterns** instead of orchestration
+6. **Don't skip security validation** in governance
+7. **Don't use custom RTFS syntax** - follow the integration guide
+
+## Quick Reference
+
+### Key Specification Files
+- **Architecture**: [000-ccos-architecture.md](mdc:docs/ccos/specs/000-ccos-architecture.md)
+- **Intent Graph**: [001-intent-graph.md](mdc:docs/ccos/specs/001-intent-graph.md)
+- **Plans & Orchestration**: [002-plans-and-orchestration.md](mdc:docs/ccos/specs/002-plans-and-orchestration.md)
+- **Causal Chain**: [003-causal-chain.md](mdc:docs/ccos/specs/003-causal-chain.md)
+- **Capabilities**: [004-capabilities-and-marketplace.md](mdc:docs/ccos/specs/004-capabilities-and-marketplace.md)
+- **Step Special Form**: [014-step-special-form-design.md](mdc:docs/ccos/specs/014-step-special-form-design.md)
+
+### RTFS Integration Reference
+- **RTFS 2.0 Rules**: [rtfs-2.0-rules.mdc](mdc:.cursor/rules/rtfs-2.0-rules.mdc)
+- **RTFS-CCOS Integration**: [13-rtfs-ccos-integration-guide.md](mdc:docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md)
+
+### Core Concepts Summary
+- **Intent**: Structured goals with constraints and preferences
+- **Plan**: Immutable RTFS programs for achieving intents
+- **Action**: Verifiable records in the Causal Chain
+- **Capability**: Versioned, attested, discoverable functions
+- **Orchestration**: Step-based execution with audit trails
+- **Delegation**: Pattern for task assignment and human-in-the-loop
