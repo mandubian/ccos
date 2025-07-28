@@ -11,19 +11,38 @@ This directory contains the complete specification for RTFS 2.0, a major evoluti
 
 ## Specification Documents
 
+### Philosophy and Overview
+
+0. **[00-rtfs-2.0-philosophy.md](00-rtfs-2.0-philosophy.md)** - RTFS 2.0 philosophy and CCOS integration
+
 ### Core Language Specifications
 
-1. **[02-grammar-extensions.md](02-grammar-extensions.md)** - Grammar extensions and syntax enhancements
-2. **[03-object-schemas.md](03-object-schemas.md)** - Object schema definitions and validation
-3. **[04-streaming-syntax.md](04-streaming-syntax.md)** - Streaming capabilities and syntax
-4. **[05-native-type-system.md](05-native-type-system.md)** - RTFS native type system specification
+1. **[01-language-features.md](01-language-features.md)** - Core language features and implementation status
+2. **[02-grammar-extensions.md](02-grammar-extensions.md)** - Grammar extensions and syntax enhancements
+3. **[03-object-schemas.md](03-object-schemas.md)** - Object schema definitions and validation
+4. **[04-streaming-syntax.md](04-streaming-syntax.md)** - Streaming capabilities and syntax
+5. **[05-native-type-system.md](05-native-type-system.md)** - RTFS native type system specification
+6. **[14-step-special-form.md](14-step-special-form.md)** - Step special form for CCOS plan execution
 
 ### System Architecture Specifications
 
-5. **[06-capability-system.md](06-capability-system.md)** - Complete capability system architecture
-6. **[07-network-discovery.md](07-network-discovery.md)** - Network discovery protocol specification
-7. **[08-security-attestation.md](08-security-attestation.md)** - Security and attestation system
-8. **[09-secure-standard-library.md](09-secure-standard-library.md)** - Secure standard library specification
+6. **[06-capability-system.md](06-capability-system.md)** - Complete capability system architecture
+7. **[07-network-discovery.md](07-network-discovery.md)** - Network discovery protocol specification
+8. **[08-security-attestation.md](08-security-attestation.md)** - Security and attestation system
+9. **[09-secure-standard-library.md](09-secure-standard-library.md)** - Secure standard library specification
+
+### Formal Specification
+
+10. **[10-formal-language-specification.md](10-formal-language-specification.md)** - Complete formal language specification
+
+### Summary and Overview
+
+11. **[11-specification-summary.md](11-specification-summary.md)** - Complete specification summary and relationships
+
+### Implementation and Integration
+
+12. **[12-capability-system-implementation.md](12-capability-system-implementation.md)** - Detailed capability system implementation architecture
+13. **[13-rtfs-ccos-integration-guide.md](13-rtfs-ccos-integration-guide.md)** - RTFS 2.0 and CCOS integration reference
 
 ## Key Features of RTFS 2.0
 
@@ -52,9 +71,18 @@ This directory contains the complete specification for RTFS 2.0, a major evoluti
 - **Type Inference**: Advanced type inference capabilities
 - **Error Handling**: Comprehensive type error reporting
 
+### 🔄 **CCOS Integration**
+- **Step Special Form**: `(step ...)` for automatic action logging
+- **Plan Execution**: Seamless integration with CCOS plan system
+- **Audit Trail**: Complete execution tracking in Causal Chain
+- **Context Management**: Execution context propagation across boundaries
+
 ## Implementation Status
 
 ### ✅ **Completed Features**
+- **RTFS 2.0 Philosophy**: Complete philosophical foundation and CCOS integration
+- **Object Schemas**: Comprehensive schema definitions for all RTFS 2.0 objects
+- **Formal Language Specification**: Complete syntax, semantics, and standard library
 - **Capability Marketplace**: Complete implementation with all provider types
 - **Network Discovery**: Full JSON-RPC 2.0 protocol implementation
 - **Security System**: Comprehensive attestation and provenance tracking
