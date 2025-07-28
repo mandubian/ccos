@@ -201,15 +201,15 @@ CCOS fundamentally separates three concerns that traditional computing conflates
 ### Homoiconicity: Code as Data
 The foundation of RTFS is **homoiconicity**, where code and data share the same structure (in this case, S-expressions). This allows RTFS artifacts, like an `Intent`, to be treated as intelligent data structures that can carry their own executable validation logic, as seen in the `:success-criteria` field in the example above.
 
-### A Rich Type System for Verifiability
-Trust requires verification. RTFS provides a powerful, gradual type system to enable it.
-- **Gradual & Structural Typing**: Provides the flexibility of a dynamic language with the safety of a static one. An AI can generate code quickly, and the system can still validate it.
-- **Schema Refinements**: Go beyond basic types. You can define a type as `[:and int [:> 0]]` (a positive integer) or `[:and string [:matches-regex "..."]]`. This allows the Governance Kernel to validate data with high precision.
+### A Rich Type System for High-Stakes Verification
+Trust requires verification, especially in autonomous systems. RTFS provides a powerful, gradual type system to enable it.
+- **Gradual & Structural Typing**: Provides the flexibility of a dynamic language with the safety of a static one. An AI can generate code quickly, and the Governance Kernel can still formally validate its structure and safety.
+- **Schema Refinements**: Go beyond basic types like `string` or `int`. You can define a type as `[:and int [:> 0]]` (a positive integer) or `[:and string [:matches-regex "..."]]`. This allows the Constitution to enforce high-precision invariants on data and operations.
 
-### Secure and Agent-Oriented by Design
-RTFS provides language-level constructs that enforce safe execution patterns.
-- **Safe Resource Management**: The `(with-resource [...] ...)` block guarantees that resources like file handles or network connections are safely acquired and automatically released.
-- **Unified Capability Model via `(call)`**: Instead of bloating the language with special commands for every type of interaction, RTFS provides a single, powerful primitive: `(call ...)`. Agent-to-agent communication, database queries, and local sandboxed code execution are all exposed as distinct capability types within the CCOS runtime. This makes the language incredibly stable and extensible.
+### Core Primitives for Governed Execution
+RTFS is intentionally minimal. It enforces a secure execution model through a few powerful, language-level primitives:
+- **`(call)`: The Sole Gateway to the World**: RTFS has no built-in functions for I/O, networking, or other side-effects. The *only* way for a plan to interact with the outside world is via the `(call ...)` primitive. This radical simplification is a core security feature. It means the language kernel is pure and formally verifiable, while all external interactions are handled by the CCOS `Orchestrator` through the auditable `CapabilityMarketplace`. This turns every side-effect into a secure, logged, and governable event.
+- **`(step)`: The Language of Auditable Orchestration**: To ensure every plan is transparent, RTFS includes the `(step ...)` special form. This isn't just for control flow; it's a CCOS integration primitive. Wrapping an expression in `(step "description" ...)` automatically creates `PlanStepStarted` and `PlanStepCompleted` actions in the `Causal Chain`. This makes high-level orchestration and auditing a first-class feature of the language, not an afterthought.
 
 ---
 
@@ -258,9 +258,18 @@ This means an agent built on CCOS can be a fully-fledged, compliant citizen in a
 ### 1. **Explore the Vision & Architecture**
 - [Documentation Hub](./docs/doc_organization.md) - **Start Here.** The central hub for all documentation, from high-level vision to detailed specifications.
 - [Sentient Runtime Vision](./docs/vision/SENTIENT_RUNTIME_VISION.md) - The philosophical and technical foundation.
-- [System Architecture](./docs/ccos/specs/000-ccos-architecture.md) - The complete technical overview.
+- **CCOS Core Specifications**:
+    - [System Architecture](./docs/ccos/specs/000-ccos-architecture.md) - The complete technical overview.
+    - [Intent Graph](./docs/ccos/specs/001-intent-graph.md) - The "why": managing goals and state.
+    - [Plans & Orchestration](./docs/ccos/specs/002-plans-and-orchestration.md) - The "how": executing tasks.
+    - [Causal Chain](./docs/ccos/specs/003-causal-chain.md) - The "what happened": immutable audit trail.
+    - [Capabilities & Marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md) - The "what it can do": extending functionality.
 
-### 2. **Dive into Implementation**
+### 2. **Understand the RTFS Language**
+- [RTFS 2.0 Specification Hub](./docs/rtfs-2.0/specs/README.md) - The complete specification for the RTFS language.
+- [RTFS & CCOS Integration Guide](./docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md) - How RTFS objects and primitives are used within CCOS.
+
+### 3. **Dive into Implementation**
 - [Migration Tracker](./docs/archive/ccos/CCOS_MIGRATION_TRACKER.md) - Live project status, tracking all features.
 - [Compiler Stabilization Plan](./docs/ccos/COMPILER_COMPLETION_PLAN.md) - The plan for production-readiness.
 - **`/rtfs_compiler/`** - The reference implementation in Rust (work in progress).
