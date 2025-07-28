@@ -23,6 +23,7 @@ This directory contains the complete specification for RTFS 2.0, a major evoluti
 5. **[06-capability-system.md](06-capability-system.md)** - Complete capability system architecture
 6. **[07-network-discovery.md](07-network-discovery.md)** - Network discovery protocol specification
 7. **[08-security-attestation.md](08-security-attestation.md)** - Security and attestation system
+8. **[09-secure-standard-library.md](09-secure-standard-library.md)** - Secure standard library specification
 
 ## Key Features of RTFS 2.0
 
@@ -58,6 +59,7 @@ This directory contains the complete specification for RTFS 2.0, a major evoluti
 - **Network Discovery**: Full JSON-RPC 2.0 protocol implementation
 - **Security System**: Comprehensive attestation and provenance tracking
 - **Schema Validation**: RTFS native type validation system
+- **Secure Standard Library**: Complete implementation of pure functions (Issue #51)
 - **Testing**: Complete test suite with 100% coverage
 
 ### 🚧 **In Progress**

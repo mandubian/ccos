@@ -709,6 +709,8 @@ impl IrRuntime {
             "map" => self.ir_map_with_context(args, env, module_registry),
             "filter" => self.ir_filter_with_context(args, env, module_registry),
             "reduce" => self.ir_reduce_with_context(args, env, module_registry),
+            "every?" => self.ir_every_with_context(args, env, module_registry),
+            "some?" => self.ir_some_with_context(args, env, module_registry),
             _ => {
                 // For other BuiltinWithContext functions, we need a proper evaluator
                 // For now, return an error
@@ -925,6 +927,208 @@ impl IrRuntime {
             };
         }
         Ok(accumulator)
+    }
+
+    /// IR runtime implementation of every? with context
+    fn ir_every_with_context(
+        &mut self,
+        args: Vec<Value>,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "every?".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let predicate = &args[0];
+        let collection = &args[1];
+
+        match collection {
+            Value::Vector(vec) => {
+                for item in vec {
+                    let result = match predicate {
+                        Value::Function(Function::Builtin(builtin_func)) => {
+                            let func_args = vec![item.clone()];
+                            (builtin_func.func)(func_args)?
+                        }
+                        Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                            let func_args = vec![item.clone()];
+                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                        }
+                        Value::Function(func) => {
+                            let func_args = vec![item.clone()];
+                            self.apply_function(
+                                Value::Function(func.clone()),
+                                &func_args,
+                                env,
+                                false,
+                                module_registry,
+                            )?
+                        }
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: predicate.type_name().to_string(),
+                                operation: "every?".to_string(),
+                            });
+                        }
+                    };
+                    
+                    if let Value::Boolean(false) = result {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            Value::String(s) => {
+                for ch in s.chars() {
+                    let char_value = Value::String(ch.to_string());
+                    let result = match predicate {
+                        Value::Function(Function::Builtin(builtin_func)) => {
+                            let func_args = vec![char_value];
+                            (builtin_func.func)(func_args)?
+                        }
+                        Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                            let func_args = vec![char_value];
+                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                        }
+                        Value::Function(func) => {
+                            let func_args = vec![char_value];
+                            self.apply_function(
+                                Value::Function(func.clone()),
+                                &func_args,
+                                env,
+                                false,
+                                module_registry,
+                            )?
+                        }
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: predicate.type_name().to_string(),
+                                operation: "every?".to_string(),
+                            });
+                        }
+                    };
+                    
+                    if let Value::Boolean(false) = result {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            _ => {
+                Err(RuntimeError::TypeError {
+                    expected: "vector or string".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "every?".to_string(),
+                })
+            }
+        }
+    }
+
+    /// IR runtime implementation of some? with context
+    fn ir_some_with_context(
+        &mut self,
+        args: Vec<Value>,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "some?".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let predicate = &args[0];
+        let collection = &args[1];
+
+        match collection {
+            Value::Vector(vec) => {
+                for item in vec {
+                    let result = match predicate {
+                        Value::Function(Function::Builtin(builtin_func)) => {
+                            let func_args = vec![item.clone()];
+                            (builtin_func.func)(func_args)?
+                        }
+                        Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                            let func_args = vec![item.clone()];
+                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                        }
+                        Value::Function(func) => {
+                            let func_args = vec![item.clone()];
+                            self.apply_function(
+                                Value::Function(func.clone()),
+                                &func_args,
+                                env,
+                                false,
+                                module_registry,
+                            )?
+                        }
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: predicate.type_name().to_string(),
+                                operation: "some?".to_string(),
+                            });
+                        }
+                    };
+                    
+                    if let Value::Boolean(true) = result {
+                        return Ok(Value::Boolean(true));
+                    }
+                }
+                Ok(Value::Boolean(false))
+            }
+            Value::String(s) => {
+                for ch in s.chars() {
+                    let char_value = Value::String(ch.to_string());
+                    let result = match predicate {
+                        Value::Function(Function::Builtin(builtin_func)) => {
+                            let func_args = vec![char_value];
+                            (builtin_func.func)(func_args)?
+                        }
+                        Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                            let func_args = vec![char_value];
+                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                        }
+                        Value::Function(func) => {
+                            let func_args = vec![char_value];
+                            self.apply_function(
+                                Value::Function(func.clone()),
+                                &func_args,
+                                env,
+                                false,
+                                module_registry,
+                            )?
+                        }
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: predicate.type_name().to_string(),
+                                operation: "some?".to_string(),
+                            });
+                        }
+                    };
+                    
+                    if let Value::Boolean(true) = result {
+                        return Ok(Value::Boolean(true));
+                    }
+                }
+                Ok(Value::Boolean(false))
+            }
+            _ => {
+                Err(RuntimeError::TypeError {
+                    expected: "vector or string".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "some?".to_string(),
+                })
+            }
+        }
     }
 
     /// Check if a pattern matches a value
