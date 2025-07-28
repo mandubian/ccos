@@ -1085,10 +1085,27 @@ impl<'a> IrConverter<'a> {
                 ir_type: binding_info.ir_type.clone(),
                 source_location: None,
             }),
-            None => Err(IrConversionError::UndefinedSymbol {
-                symbol: name,
-                location: None,
-            }),
+            None => {
+                // Check if it's available in the stdlib module
+                if let Some(registry) = self.module_registry {
+                    if let Some(stdlib_module) = registry.get_module("stdlib") {
+                        if let Some(export) = stdlib_module.exports.borrow().get(&name) {
+                            return Ok(IrNode::QualifiedSymbolRef {
+                                id,
+                                module: "stdlib".to_string(),
+                                symbol: name,
+                                ir_type: export.ir_type.clone(),
+                                source_location: None,
+                            });
+                        }
+                    }
+                }
+                
+                Err(IrConversionError::UndefinedSymbol {
+                    symbol: name,
+                    location: None,
+                })
+            }
         }
     }
 
@@ -1395,15 +1412,17 @@ impl<'a> IrConverter<'a> {
             let pattern_node =
                 self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
 
-            // Add non-function binding to scope after converting init expression
-            if let Pattern::Symbol(sym) = &pattern_clone {
+            // Add all symbols from the pattern to scope after converting init expression
+            let pattern_symbols = self.extract_pattern_symbols(&pattern_clone);
+            for symbol_name in pattern_symbols {
+                let symbol_binding_id = self.next_id();
                 let binding_info = BindingInfo {
-                    name: sym.0.clone(),
-                    binding_id,
+                    name: symbol_name.clone(),
+                    binding_id: symbol_binding_id,
                     ir_type: binding_type.clone(),
                     kind: BindingKind::Variable,
                 };
-                self.define_binding(sym.0.clone(), binding_info);
+                self.define_binding(symbol_name, binding_info);
             }
 
             bindings.push(IrLetBinding {
@@ -2233,5 +2252,42 @@ impl<'a> IrConverter<'a> {
     fn convert_match_pattern(&mut self, _pat: MatchPattern) -> IrConversionResult<IrPattern> {
         // TODO: Implement real match pattern conversion
         Ok(IrPattern::Wildcard)
+    }
+
+    /// Extract all symbol names from a pattern (including nested destructuring)
+    fn extract_pattern_symbols(&self, pattern: &Pattern) -> Vec<String> {
+        match pattern {
+            Pattern::Symbol(sym) => vec![sym.0.clone()],
+            Pattern::Wildcard => vec![], // Wildcards don't bind anything
+            Pattern::VectorDestructuring { elements, rest, .. } => {
+                let mut symbols = Vec::new();
+                for element in elements {
+                    symbols.extend(self.extract_pattern_symbols(element));
+                }
+                if let Some(rest_symbol) = rest {
+                    symbols.push(rest_symbol.0.clone());
+                }
+                symbols
+            }
+            Pattern::MapDestructuring { entries, rest, .. } => {
+                let mut symbols = Vec::new();
+                for entry in entries {
+                    match entry {
+                        MapDestructuringEntry::KeyBinding { pattern, .. } => {
+                            symbols.extend(self.extract_pattern_symbols(pattern));
+                        }
+                        MapDestructuringEntry::Keys(syms) => {
+                            for sym in syms {
+                                symbols.push(sym.0.clone());
+                            }
+                        }
+                    }
+                }
+                if let Some(rest_symbol) = rest {
+                    symbols.push(rest_symbol.0.clone());
+                }
+                symbols
+            }
+        }
     }
 }

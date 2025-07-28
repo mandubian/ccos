@@ -9,12 +9,12 @@
              :zip "12345"}})
 
 ;; Test JSON serialization
-(def json-string (tool:serialize-json test-data))
+(def json-string (tool/serialize-json test-data))
 (println "Serialized JSON:")
 (println json-string)
 
 ;; Test JSON parsing
-(def parsed-data (tool:parse-json json-string))
+(def parsed-data (tool/parse-json json-string))
 (println "\nParsed data:")
 (println parsed-data)
 

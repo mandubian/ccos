@@ -198,7 +198,7 @@ impl fmt::Debug for Function {
             Function::BuiltinWithContext(_) => write!(f, "BuiltinFunctionWithContext"),
             Function::Closure(_) => write!(f, "Closure"),
             Function::Native(_) => write!(f, "NativeFunction"),
-            Function::Ir(_) => write!(f, "IrFunction"),
+            Function::Ir(_) => write!(f, "Closure"), // Display IR functions as Closure for compatibility
         }
     }
 }

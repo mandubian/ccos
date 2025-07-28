@@ -13,8 +13,8 @@ use rtfs_compiler::runtime::host::RuntimeHost;
 // Note: We need to reference the parent crate since this is a binary
 extern crate rtfs_compiler;
 use rtfs_compiler::{
-    agent::discovery_traits::NoOpAgentDiscovery,
     ast::TopLevel,
+    input_handling::{InputConfig, InputSource, read_input_content, validate_input_args},
     ir::converter::IrConverter,
     ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     parser::parse_with_enhanced_errors,
@@ -28,18 +28,21 @@ use rtfs_compiler::{
 #[command(about = "RTFS Production Compiler with RTFS 2.0 Support and Advanced Optimization")]
 #[command(version = "0.1.0")]
 struct Args {
-    /// Input RTFS source file (can be provided as positional argument or with --input flag)
-    #[arg(value_name = "FILE")]
-    input: Option<PathBuf>,
+    /// Input source type
+    #[arg(short = 'i', long, value_enum, default_value_t = InputSource::File)]
+    input: InputSource,
 
-    /// Input RTFS source file (alternative to positional argument)
-    #[arg(
-        short = 'i',
-        long = "input",
-        value_name = "FILE",
-        conflicts_with = "input"
-    )]
-    input_flag: Option<PathBuf>,
+    /// Input RTFS source file (when using --input file)
+    #[arg(short = 'f', long = "file", value_name = "FILE")]
+    file: Option<PathBuf>,
+
+    /// Input string (when using --input string)
+    #[arg(short = 's', long = "string")]
+    string: Option<String>,
+
+    /// Input RTFS source file (positional argument, alternative to --file)
+    #[arg(value_name = "FILE", conflicts_with = "file")]
+    input_file: Option<PathBuf>,
 
     /// Output file (optional, defaults to stdout)
     #[arg(short, long)]
@@ -160,38 +163,57 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
 fn main() {
     let args = Args::parse();
 
-    // Determine input file
-    let input_file = args
-        .input_flag
-        .or(args.input)
-        .expect("Input file is required");
+    // Validate input arguments
+    let file_path = args.file.or(args.input_file);
+    if let Err(e) = validate_input_args(args.input.clone(), &file_path, &args.string) {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
 
-    // Read source code
-    let source_code = match fs::read_to_string(&input_file) {
+    // Create input configuration
+    let input_config = match args.input {
+        InputSource::File => {
+            let path = file_path.expect("File path should be validated");
+            InputConfig::from_file(path, args.verbose)
+        }
+        InputSource::String => {
+            let content = args.string.expect("String content should be validated");
+            InputConfig::from_string(content, args.verbose)
+        }
+        InputSource::Pipe => {
+            InputConfig::from_pipe(args.verbose)
+        }
+        InputSource::Interactive => {
+            eprintln!("❌ Error: Interactive mode is not supported in rtfs-compiler. Use rtfs-repl instead.");
+            std::process::exit(1);
+        }
+    };
+
+    // Read input content
+    let input_content = match read_input_content(&input_config) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("❌ Error reading file: {}", e);
+            eprintln!("{}", e);
             std::process::exit(1);
         }
     };
 
     if args.verbose {
-        println!("📖 Reading source file: {}", input_file.display());
-        println!("📊 Source size: {} bytes", source_code.len());
+        println!("📖 Reading from: {}", input_content.source_name);
+        println!("📊 Source size: {} bytes", input_content.content.len());
     }
 
     let total_start = Instant::now();
 
     // Phase 1: Parsing
     let parse_start = Instant::now();
-    let parsed_items =
-        match parse_with_enhanced_errors(&source_code, Some(input_file.to_str().unwrap())) {
-            Ok(items) => items,
-            Err(e) => {
-                eprintln!("{}", e);
-                std::process::exit(1);
-            }
-        };
+    let parsed_items = match parse_with_enhanced_errors(&input_content.content, Some(&input_content.source_name)) {
+        Ok(items) => items,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
     let parse_time = parse_start.elapsed();
 
     if args.verbose {
@@ -354,7 +376,14 @@ fn main() {
                         RuntimeType::Ir | RuntimeType::Fallback => {
                             // Convert expression to IR for IR-based runtimes
                             let ir_start = Instant::now();
-                            let mut ir_converter = IrConverter::new();
+                            
+                            // Create module registry and load standard library for IR conversion
+                            let mut module_registry = ModuleRegistry::new();
+                            if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                                eprintln!("Warning: Failed to load standard library for IR conversion: {:?}", e);
+                            }
+                            
+                            let mut ir_converter = IrConverter::with_module_registry(&module_registry);
                             let ir_node = match ir_converter.convert_expression(expr.clone()) {
                                 Ok(ir) => ir,
                                 Err(e) => {

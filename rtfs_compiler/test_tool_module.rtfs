@@ -1,0 +1,2 @@
+;; Test tool module approach
+(tool/http-fetch "https://example.com")

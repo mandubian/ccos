@@ -32,9 +32,9 @@
   (do
     ;; Load configuration and validate environment
     (let [config (load-pipeline-config)
-          start-time (tool:current-timestamp-ms)]
+          start-time (tool/current-timestamp-ms)]
       
-      (tool:log "Starting data processing pipeline at:" start-time)
+      (tool/log "Starting data processing pipeline at:" start-time)
         ;; Validate input parameters from task intent
       (let [task-context (rtfs.task/current)
             sources (get task-context :data-sources)
@@ -50,9 +50,9 @@
               (match processing-result
                 [:ok results]
                 (do
-                  (let [end-time (tool:current-timestamp-ms)
+                  (let [end-time (tool/current-timestamp-ms)
                         total-time (- end-time start-time)]
-                    (tool:log "Pipeline completed successfully in" total-time "ms")
+                    (tool/log "Pipeline completed successfully in" total-time "ms")
                     ;; Return comprehensive results
                     {
                       :processed-records (:processed-count results)
@@ -64,7 +64,7 @@
                 
                 [:error pipeline-error]
                 (do
-                  (tool:log "Pipeline failed:" (:message pipeline-error))
+                  (tool/log "Pipeline failed:" (:message pipeline-error))
                   (cleanup-pipeline-resources (:temp-files pipeline-error))
                   [:error {:type :error/pipeline-failed
                            :message "Data processing pipeline failed"
@@ -73,7 +73,7 @@
             ;; Comprehensive error handling
             (catch :error/resource-exhausted resource-err
               (do
-                (tool:log "Resource exhaustion in pipeline:" (:message resource-err))
+                (tool/log "Resource exhaustion in pipeline:" (:message resource-err))
                 (scale-down-processing max-parallel)
                 [:error {:type :error/resource-exhausted
                          :message "Pipeline failed due to resource constraints"
@@ -81,14 +81,14 @@
             
             (catch :error/data-validation validation-err
               (do
-                (tool:log "Data validation failed:" (:message validation-err))
+                (tool/log "Data validation failed:" (:message validation-err))
                 (generate-validation-report validation-err)
                 [:error {:type :error/data-validation
                          :message "Input data failed validation"
                          :data validation-err}]))
               (catch :error/network network-err
               (do
-                (tool:log "Network error during processing:" (:message network-err))
+                (tool/log "Network error during processing:" (:message network-err))
                 (schedule-pipeline-retry (get (rtfs.task/current) :data-sources))
                 [:error {:type :error/network-failure
                          :message "Pipeline will be retried due to network issues"
@@ -96,13 +96,13 @@
             
             (finally
               (do
-                (tool:log "Cleaning up pipeline resources")
+                (tool/log "Cleaning up pipeline resources")
                 (cleanup-temp-files)
                 (report-pipeline-metrics))))
           
           [:error validation-error]
           (do
-            (tool:log "Input validation failed:" (:message validation-error))
+            (tool/log "Input validation failed:" (:message validation-error))
             [:error {:type :error/invalid-inputs
                      :message "Pipeline inputs failed validation"
                      :data validation-error}])))))
@@ -117,14 +117,14 @@
         max-parallel (:max-parallel params)
         output-format (:output-format params)]
     
-    (tool:log "Processing" (count sources) "data sources with batch size" batch-size)
+    (tool/log "Processing" (count sources) "data sources with batch size" batch-size)
     
     ;; Parallel data loading and initial validation
     (let [source-data (load-sources-parallel sources max-parallel)]
       (match source-data
         [:ok loaded-sources]
         (do
-          (tool:log "Successfully loaded" (count loaded-sources) "data sources")
+          (tool/log "Successfully loaded" (count loaded-sources) "data sources")
           
           ;; Process data in parallel batches
           (let [batched-data (create-processing-batches loaded-sources batch-size)
@@ -190,13 +190,13 @@
 
 ; Load a single data source with proper resource management
 (defn load-single-source [source-path]
-  (with-resource [file [:resource FileHandle] (tool:open-file source-path :read)]
+  (with-resource [file [:resource FileHandle] (tool/open-file source-path :read)]
     (try
-      (let [file-metadata (tool:get-file-metadata file)
+      (let [file-metadata (tool/get-file-metadata file)
             file-size (:size file-metadata)
             file-type (detect-file-type source-path)]
         
-        (tool:log "Loading source:" source-path "(" file-size "bytes," file-type ")")
+        (tool/log "Loading source:" source-path "(" file-size "bytes," file-type ")")
         
         (match file-type
           :json (parse-json-source file)
@@ -231,7 +231,7 @@
         transform-rules (:transform-rules config)
         validation-rules (:validation-rules config)]
     
-    (tool:log "Processing batch" batch-id "with" (count batch-data) "records")
+    (tool/log "Processing batch" batch-id "with" (count batch-data) "records")
     
     (try
       ;; Apply transformations
@@ -264,14 +264,14 @@
       
       (catch :error/memory-limit memory-err
         (do
-          (tool:log "Memory limit exceeded processing batch" batch-id)
+          (tool/log "Memory limit exceeded processing batch" batch-id)
           [:error {:type :error/memory-exhausted
                    :message "Batch processing exceeded memory limits"
                    :data {:batch-id batch-id :error memory-err}}]))
       
       (catch :error/timeout timeout-err
         (do
-          (tool:log "Timeout processing batch" batch-id)
+          (tool/log "Timeout processing batch" batch-id)
           [:error {:type :error/processing-timeout
                    :message "Batch processing timed out"
                    :data {:batch-id batch-id :error timeout-err}}])))))
@@ -322,8 +322,8 @@
 
 ; Generate output files in the specified format
 (defn generate-output-files [aggregated-results output-format]
-  (let [output-dir (tool:create-temp-directory "rtfs-pipeline-output")
-        timestamp (tool:format-timestamp (tool:current-timestamp) "yyyy-MM-dd-HH-mm-ss")]
+  (let [output-dir (tool/create-temp-directory "rtfs-pipeline-output")
+        timestamp (tool/format-timestamp (tool/current-timestamp) "yyyy-MM-dd-HH-mm-ss")]
     
     (match output-format
       :json (generate-json-output aggregated-results output-dir timestamp)
@@ -366,8 +366,8 @@
 
 (defn load-pipeline-config []
   (let [config-file "pipeline-config.json"]
-    (match (tool:file-exists? config-file)
-      true (match (tool:read-json-file config-file)
+    (match (tool/file-exists? config-file)
+      true (match (tool/read-json-file config-file)
              [:ok config] config
              [:error _] (get-default-pipeline-config))
       false (get-default-pipeline-config))))

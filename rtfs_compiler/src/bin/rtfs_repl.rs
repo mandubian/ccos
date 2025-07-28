@@ -1,19 +1,16 @@
 // RTFS Interactive REPL with RTFS 2.0 Support
 // Interactive read-eval-print loop with RTFS 2.0 object support and validation
 
-use std::io::{self, Write, BufRead};
 use std::time::Instant;
-use std::fs;
-use std::path::Path;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
 // Import the RTFS compiler modules
 extern crate rtfs_compiler;
 use rtfs_compiler::{
-    agent::discovery_traits::NoOpAgentDiscovery,
     ast::TopLevel,              // Add TopLevel for RTFS 2.0 objects
+    input_handling::{InputConfig, InputSource, read_input_content, validate_input_args},
     ir::converter::IrConverter, // Fix import path
     ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     parser::parse_with_enhanced_errors, // Changed from parse_expression to parse for full programs
@@ -43,18 +40,6 @@ struct Args {
     verbose: bool,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
-enum InputSource {
-    /// Interactive REPL mode
-    Interactive,
-    /// Execute a string directly
-    String,
-    /// Execute a file
-    File,
-    /// Read from stdin pipe
-    Pipe,
-}
-
 fn main() {
     let args = Args::parse();
     
@@ -78,69 +63,43 @@ fn main() {
         InputSource::Interactive => {
             run_interactive_repl(&mut runtime, &mut ir_converter, &mut optimizer);
         }
-        InputSource::String => {
-            if let Some(input_string) = args.string {
-                if args.verbose {
-                    println!("📝 Executing string input:");
-                    println!("{}", input_string);
-                    println!();
-                }
-                process_rtfs_input(&input_string, &mut runtime, &mut ir_converter, &mut optimizer);
-            } else {
-                eprintln!("❌ Error: --string argument required when using --input string");
+        InputSource::String | InputSource::File | InputSource::Pipe => {
+            // Convert args to PathBuf for file path
+            let file_path = args.file.map(std::path::PathBuf::from);
+            
+            // Validate input arguments
+            if let Err(e) = validate_input_args(args.input.clone(), &file_path, &args.string) {
+                eprintln!("{}", e);
                 std::process::exit(1);
             }
-        }
-        InputSource::File => {
-            if let Some(file_path) = args.file {
-                if args.verbose {
-                    println!("📁 Reading from file: {}", file_path);
+
+            // Create input configuration
+            let input_config = match args.input {
+                InputSource::File => {
+                    let path = file_path.expect("File path should be validated");
+                    InputConfig::from_file(path, args.verbose)
                 }
-                match fs::read_to_string(&file_path) {
-                    Ok(content) => {
-                        if args.verbose {
-                            println!("📝 File content:");
-                            println!("{}", content);
-                            println!();
-                        }
-                        process_rtfs_input(&content, &mut runtime, &mut ir_converter, &mut optimizer);
-                    }
-                    Err(e) => {
-                        eprintln!("❌ Error reading file '{}': {}", file_path, e);
-                        std::process::exit(1);
-                    }
+                InputSource::String => {
+                    let content = args.string.expect("String content should be validated");
+                    InputConfig::from_string(content, args.verbose)
                 }
-            } else {
-                eprintln!("❌ Error: --file argument required when using --input file");
-                std::process::exit(1);
-            }
-        }
-        InputSource::Pipe => {
-            if args.verbose {
-                println!("📥 Reading from stdin pipe");
-            }
-            let stdin = io::stdin();
-            let mut content = String::new();
-            
-            for line in stdin.lock().lines() {
-                match line {
-                    Ok(line) => {
-                        content.push_str(&line);
-                        content.push('\n');
-                    }
-                    Err(e) => {
-                        eprintln!("❌ Error reading from stdin: {}", e);
-                        std::process::exit(1);
-                    }
+                InputSource::Pipe => {
+                    InputConfig::from_pipe(args.verbose)
                 }
-            }
-            
-            if args.verbose {
-                println!("📝 Pipe content:");
-                println!("{}", content);
-                println!();
-            }
-            process_rtfs_input(&content, &mut runtime, &mut ir_converter, &mut optimizer);
+                InputSource::Interactive => unreachable!(),
+            };
+
+            // Read input content
+            let input_content = match read_input_content(&input_config) {
+                Ok(content) => content,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Process the input
+            process_rtfs_input(&input_content.content, &mut runtime, &mut ir_converter, &mut optimizer);
         }
     }
 }

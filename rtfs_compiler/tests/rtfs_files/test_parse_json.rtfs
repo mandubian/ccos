@@ -1,1 +1,1 @@
-(tool:parse-json "{\"foo\": 42, \"bar\": [1, 2, 3]}") 
+(tool/parse-json "{\"foo\": 42, \"bar\": [1, 2, 3]}") 

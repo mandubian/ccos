@@ -954,6 +954,8 @@ impl Evaluator {
         let mut let_env = Environment::with_parent(Rc::new(env.clone()));
 
         for binding in &let_expr.bindings {
+            // Evaluate each binding value in the accumulated let environment
+            // This allows sequential bindings to reference previous bindings
             let value = self.eval_expr(&binding.value, &mut let_env)?;
             self.bind_pattern(&binding.pattern, &value, &mut let_env)?;
         }

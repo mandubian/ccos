@@ -49,7 +49,18 @@ impl Environment {
     }
 
     pub fn symbol_names(&self) -> Vec<String> {
-        self.bindings.keys().map(|s| s.0.clone()).collect()
+        let mut names = self.bindings.keys().map(|s| s.0.clone()).collect::<Vec<_>>();
+        
+        // Also collect names from parent environments to ensure we get all stdlib functions
+        if let Some(parent) = &self.parent {
+            let mut parent_names = parent.symbol_names();
+            names.append(&mut parent_names);
+        }
+        
+        // Remove duplicates while preserving current environment's bindings taking precedence
+        names.sort();
+        names.dedup();
+        names
     }
 
     /// Find the name of a function value by searching through all bindings
@@ -161,6 +172,21 @@ impl IrEnvironment {
 
     pub fn binding_count(&self) -> usize {
         self.bindings.len()
+    }
+
+    /// Get list of binding names for debugging
+    pub fn binding_names(&self) -> Vec<String> {
+        self.bindings.keys().cloned().collect()
+    }
+
+    /// Check if environment has parent
+    pub fn has_parent(&self) -> bool {
+        self.parent.is_some()
+    }
+
+    /// Get parent binding count
+    pub fn parent_binding_count(&self) -> usize {
+        self.parent.as_ref().map(|p| p.binding_count()).unwrap_or(0)
     }
 
     /// Defines a function in the IR environment. Currently an alias for `define`.

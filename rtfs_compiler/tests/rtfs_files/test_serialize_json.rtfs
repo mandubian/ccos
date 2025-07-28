@@ -1,1 +1,1 @@
-(tool:serialize-json {:foo 42 :bar [1 2 3]}) 
+(tool/serialize-json {:foo 42 :bar [1 2 3]}) 

@@ -7,12 +7,12 @@
   (println data)
   
   ;; Serialize to JSON
-  (let [json-str (tool:serialize-json data)]
+  (let [json-str (serialize-json data)]
     (println "\nSerialized JSON:")
     (println json-str)
     
     ;; Parse back from JSON
-    (let [parsed-data (tool:parse-json json-str)]
+    (let [parsed-data (parse-json json-str)]
       (println "\nParsed back data:")
       (println parsed-data)
       
