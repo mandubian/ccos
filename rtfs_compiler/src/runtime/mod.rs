@@ -1,7 +1,13 @@
+//! RTFS Runtime System
+//! 
+//! This module provides the core runtime for executing RTFS programs,
+//! including value representation, execution context, and capability management.
+
 pub mod rtfs_streaming_syntax;
 pub use rtfs_streaming_syntax::{
     RtfsStreamingSyntaxExecutor, RtfsStreamingExpression, StreamReference, ProcessingLogic, StreamOptions, StreamSchema, ValidationRule, ErrorHandlingStrategy, BackpressureStrategy, MultiplexStrategy
 };
+
 // Runtime system for RTFS
 // This module contains the evaluator, standard library, and runtime value system
 
@@ -50,6 +56,19 @@ use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Trait for RTFS runtime operations needed by CCOS
+/// This provides the interface for CCOS to interact with RTFS expressions
+pub trait RTFSRuntime {
+    /// Parse an RTFS expression string into a Value
+    fn parse_expression(&mut self, source: &str) -> Result<Value, RuntimeError>;
+    
+    /// Convert a Value back to RTFS source code
+    fn value_to_source(&self, value: &Value) -> Result<String, RuntimeError>;
+    
+    /// Evaluate an expression with access to CCOS context
+    fn evaluate_with_ccos(&mut self, expression: &Value, ccos: &crate::ccos::CCOS) -> Result<Value, RuntimeError>;
+}
+
 #[derive(Clone, Debug, Copy)]
 pub enum RuntimeStrategyValue {
     Ast,
@@ -80,7 +99,61 @@ impl Runtime {
     pub fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
         self.strategy.run(program)
     }
+}
 
+impl RTFSRuntime for Runtime {
+    fn parse_expression(&mut self, source: &str) -> Result<Value, RuntimeError> {
+        let parsed = parser::parse(source)
+            .map_err(|e| RuntimeError::Generic(format!("Parse error: {}", e)))?;
+        
+        // Convert TopLevel to Expression - this is a simplified approach
+        // In a real implementation, you'd want to handle this more carefully
+        if let Some(top_level) = parsed.first() {
+            match top_level {
+                crate::ast::TopLevel::Expression(expr) => self.run(expr),
+                _ => Err(RuntimeError::Generic("Expected expression".to_string())),
+            }
+        } else {
+            Err(RuntimeError::Generic("Empty parse result".to_string()))
+        }
+    }
+    
+    fn value_to_source(&self, value: &Value) -> Result<String, RuntimeError> {
+        // Simple conversion back to source - in a real implementation this would be more sophisticated
+        match value {
+            Value::String(s) => Ok(format!("\"{}\"", s)),
+            Value::Integer(i) => Ok(i.to_string()),
+            Value::Float(f) => Ok(f.to_string()),
+            Value::Boolean(b) => Ok(b.to_string()),
+            Value::Nil => Ok("nil".to_string()),
+            Value::Vector(v) => {
+                let elements: Vec<String> = v.iter()
+                    .map(|v| self.value_to_source(v))
+                    .collect::<Result<Vec<String>, RuntimeError>>()?;
+                Ok(format!("[{}]", elements.join(" ")))
+            },
+            Value::Map(m) => {
+                let pairs: Vec<String> = m.iter()
+                    .map(|(k, v)| {
+                        let key = format!("{:?}", k);
+                        let value = self.value_to_source(v)?;
+                        Ok(format!("{} {}", key, value))
+                    })
+                    .collect::<Result<Vec<String>, RuntimeError>>()?;
+                Ok(format!("{{{}}}", pairs.join(" ")))
+            },
+            _ => Ok(format!("{:?}", value)), // Fallback for complex types
+        }
+    }
+    
+    fn evaluate_with_ccos(&mut self, expression: &Value, _ccos: &crate::ccos::CCOS) -> Result<Value, RuntimeError> {
+        // For now, just return the expression as-is
+        // In a real implementation, this would evaluate the expression in the CCOS context
+        Ok(expression.clone())
+    }
+}
+
+impl Runtime {
     pub fn new_with_tree_walking_strategy(module_registry: Rc<ModuleRegistry>) -> Self {
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();

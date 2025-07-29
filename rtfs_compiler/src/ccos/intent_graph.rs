@@ -3,120 +3,197 @@
 //! This module implements the Living Intent Graph - a dynamic, multi-layered data structure
 //! that stores and manages user intents with their relationships and lifecycle.
 
+use super::intent_storage::{IntentFilter, IntentStorage, StorageFactory};
 use super::types::{EdgeType, ExecutionResult, Intent, IntentId, IntentStatus};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Storage backend for the Intent Graph
-/// In a full implementation, this would use vector and graph databases
+/// Configuration for Intent Graph storage backend
+#[derive(Debug, Clone)]
+pub struct IntentGraphConfig {
+    pub storage_path: Option<PathBuf>,
+}
+
+impl Default for IntentGraphConfig {
+    fn default() -> Self {
+        Self {
+            storage_path: None,
+        }
+    }
+}
+
+impl IntentGraphConfig {
+    pub fn with_file_storage(path: PathBuf) -> Self {
+        Self {
+            storage_config: StorageConfig::File { path },
+        }
+    }
+
+    pub fn with_in_memory_storage() -> Self {
+        Self {
+            storage_config: StorageConfig::InMemory,
+        }
+    }
+}
+
+/// Persistent storage backend for the Intent Graph with metadata caching
 pub struct IntentGraphStorage {
-    // In-memory storage for now - would be replaced with proper databases
-    intents: HashMap<IntentId, Intent>,
-    edges: Vec<Edge>,
+    storage: Box<dyn IntentStorage>,
     metadata: HashMap<IntentId, IntentMetadata>,
 }
 
 impl IntentGraphStorage {
-    pub fn new() -> Self {
+    pub async fn new(config: IntentGraphConfig) -> Self {
+        let storage = StorageFactory::create(config.storage_config).await;
         Self {
-            intents: HashMap::new(),
-            edges: Vec::new(),
+            storage,
             metadata: HashMap::new(),
         }
     }
 
-    pub fn store_intent(&mut self, intent: Intent) -> Result<(), RuntimeError> {
+    pub async fn store_intent(&mut self, intent: Intent) -> Result<(), RuntimeError> {
         let intent_id = intent.intent_id.clone();
         let metadata = IntentMetadata::new(&intent);
-        self.intents.insert(intent_id.clone(), intent);
+        
+        self.storage.store_intent(&intent).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
         self.metadata.insert(intent_id, metadata);
         Ok(())
     }
 
-    pub fn get_intent(&self, intent_id: &IntentId) -> Option<&Intent> {
-        self.intents.get(intent_id)
+    pub async fn get_intent(&self, intent_id: &IntentId) -> Result<Option<Intent>, RuntimeError> {
+        self.storage.get_intent(intent_id).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
     }
 
-    pub fn get_intent_mut(&mut self, intent_id: &IntentId) -> Option<&mut Intent> {
-        self.intents.get_mut(intent_id)
-    }
-
-    pub fn store_edge(&mut self, edge: Edge) -> Result<(), RuntimeError> {
-        self.edges.push(edge);
+    pub async fn update_intent(&mut self, intent: &Intent) -> Result<(), RuntimeError> {
+        self.storage.update_intent(intent).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
+        // Update metadata if it exists
+        if let Some(metadata) = self.metadata.get_mut(&intent.intent_id) {
+            metadata.last_accessed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            metadata.access_count += 1;
+        }
+        
         Ok(())
     }
 
-    pub fn get_edges(&self) -> &[Edge] {
-        &self.edges
+    pub async fn store_edge(&mut self, edge: Edge) -> Result<(), RuntimeError> {
+        self.storage.store_edge(&edge).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
     }
 
-    pub fn get_related_intents(&self, intent_id: &IntentId) -> Vec<&Intent> {
-        let mut related = Vec::new();
+    pub async fn get_edges(&self) -> Result<Vec<Edge>, RuntimeError> {
+        self.storage.get_edges().await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
+    }
 
-        for edge in &self.edges {
-            if edge.from == *intent_id {
-                if let Some(intent) = self.intents.get(&edge.to) {
-                    related.push(intent);
-                }
-            } else if edge.to == *intent_id {
-                if let Some(intent) = self.intents.get(&edge.from) {
-                    related.push(intent);
-                }
+    pub async fn get_related_intents(&self, intent_id: &IntentId) -> Result<Vec<Intent>, RuntimeError> {
+        let edges = self.storage.get_edges_for_intent(intent_id).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
+        let mut related = Vec::new();
+        for edge in edges {
+            let other_id = if edge.from == *intent_id { &edge.to } else { &edge.from };
+            if let Some(intent) = self.storage.get_intent(other_id).await
+                .map_err(|e| RuntimeError::StorageError(e.to_string()))? {
+                related.push(intent);
             }
         }
-
-        related
+        
+        Ok(related)
     }
 
-    pub fn get_dependent_intents(&self, intent_id: &IntentId) -> Vec<&Intent> {
+    pub async fn get_dependent_intents(&self, intent_id: &IntentId) -> Result<Vec<Intent>, RuntimeError> {
+        let edges = self.storage.get_edges_for_intent(intent_id).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
         let mut dependent = Vec::new();
-
-        for edge in &self.edges {
+        for edge in edges {
             if edge.to == *intent_id && edge.edge_type == EdgeType::DependsOn {
-                if let Some(intent) = self.intents.get(&edge.from) {
+                if let Some(intent) = self.storage.get_intent(&edge.from).await
+                    .map_err(|e| RuntimeError::StorageError(e.to_string()))? {
                     dependent.push(intent);
                 }
             }
         }
-
-        dependent
+        
+        Ok(dependent)
     }
 
-    pub fn get_subgoals(&self, intent_id: &IntentId) -> Vec<&Intent> {
+    pub async fn get_subgoals(&self, intent_id: &IntentId) -> Result<Vec<Intent>, RuntimeError> {
+        let edges = self.storage.get_edges_for_intent(intent_id).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
         let mut subgoals = Vec::new();
-
-        for edge in &self.edges {
+        for edge in edges {
             if edge.from == *intent_id && edge.edge_type == EdgeType::IsSubgoalOf {
-                if let Some(intent) = self.intents.get(&edge.to) {
+                if let Some(intent) = self.storage.get_intent(&edge.to).await
+                    .map_err(|e| RuntimeError::StorageError(e.to_string()))? {
                     subgoals.push(intent);
                 }
             }
         }
-
-        subgoals
+        
+        Ok(subgoals)
     }
 
-    pub fn get_conflicting_intents(&self, intent_id: &IntentId) -> Vec<&Intent> {
+    pub async fn get_conflicting_intents(&self, intent_id: &IntentId) -> Result<Vec<Intent>, RuntimeError> {
+        let edges = self.storage.get_edges_for_intent(intent_id).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
         let mut conflicting = Vec::new();
-
-        for edge in &self.edges {
-            if (edge.from == *intent_id || edge.to == *intent_id)
-                && edge.edge_type == EdgeType::ConflictsWith
-            {
-                let other_id = if edge.from == *intent_id {
-                    &edge.to
-                } else {
-                    &edge.from
-                };
-                if let Some(intent) = self.intents.get(other_id) {
+        for edge in edges {
+            if edge.edge_type == EdgeType::ConflictsWith {
+                let other_id = if edge.from == *intent_id { &edge.to } else { &edge.from };
+                if let Some(intent) = self.storage.get_intent(other_id).await
+                    .map_err(|e| RuntimeError::StorageError(e.to_string()))? {
                     conflicting.push(intent);
                 }
             }
         }
+        
+        Ok(conflicting)
+    }
 
-        conflicting
+    pub async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<Intent>, RuntimeError> {
+        self.storage.list_intents(filter).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
+    }
+
+    pub async fn health_check(&self) -> Result<(), RuntimeError> {
+        self.storage.health_check().await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
+    }
+
+    pub async fn backup(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
+        self.storage.backup(path).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
+    }
+
+    pub async fn restore(&mut self, path: &std::path::Path) -> Result<(), RuntimeError> {
+        self.storage.restore(path).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
+        // Clear and rebuild metadata cache
+        self.metadata.clear();
+        let all_intents = self.storage.list_intents(IntentFilter::default()).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
+        for intent in all_intents {
+            let metadata = IntentMetadata::new(&intent);
+            self.metadata.insert(intent.intent_id.clone(), metadata);
+        }
+        
+        Ok(())
     }
 }
 
@@ -305,40 +382,40 @@ impl GraphTraversalEngine {
 pub struct IntentLifecycleManager;
 
 impl IntentLifecycleManager {
-    pub fn archive_completed_intents(
+    pub async fn archive_completed_intents(
         &self,
         storage: &mut IntentGraphStorage,
     ) -> Result<(), RuntimeError> {
-        let completed_ids: Vec<IntentId> = storage
-            .intents
-            .iter()
-            .filter(|(_, intent)| intent.status == IntentStatus::Completed)
-            .map(|(id, _)| id.clone())
-            .collect();
+        let completed_filter = IntentFilter {
+            status: Some(IntentStatus::Completed),
+            ..Default::default()
+        };
+        
+        let completed_intents = storage.list_intents(completed_filter).await?;
 
-        for intent_id in completed_ids {
-            if let Some(intent) = storage.get_intent_mut(&intent_id) {
-                intent.status = IntentStatus::Archived;
-                intent.updated_at = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-            }
+        for mut intent in completed_intents {
+            intent.status = IntentStatus::Archived;
+            intent.updated_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            
+            storage.update_intent(&intent).await?;
         }
 
         Ok(())
     }
 
-    pub fn infer_edges(&self, storage: &mut IntentGraphStorage) -> Result<(), RuntimeError> {
+    pub async fn infer_edges(&self, storage: &mut IntentGraphStorage) -> Result<(), RuntimeError> {
         // Simple edge inference based on goal similarity
         // In a full implementation, this would use more sophisticated NLP
 
-        let intent_ids: Vec<IntentId> = storage.intents.keys().cloned().collect();
+        let all_intents = storage.list_intents(IntentFilter::default()).await?;
 
-        for i in 0..intent_ids.len() {
-            for j in (i + 1)..intent_ids.len() {
-                let intent_a = storage.get_intent(&intent_ids[i]).unwrap();
-                let intent_b = storage.get_intent(&intent_ids[j]).unwrap();
+        for i in 0..all_intents.len() {
+            for j in (i + 1)..all_intents.len() {
+                let intent_a = &all_intents[i];
+                let intent_b = &all_intents[j];
 
                 // Check for potential conflicts based on resource constraints
                 if self.detect_resource_conflict(intent_a, intent_b) {
@@ -347,7 +424,7 @@ impl IntentLifecycleManager {
                         intent_b.intent_id.clone(),
                         EdgeType::ConflictsWith,
                     );
-                    storage.store_edge(edge)?;
+                    storage.store_edge(edge).await?;
                 }
             }
         }
@@ -373,32 +450,58 @@ impl IntentLifecycleManager {
     }
 }
 
-/// Main Intent Graph implementation
+/// Main Intent Graph implementation with persistent storage
 pub struct IntentGraph {
     storage: IntentGraphStorage,
     virtualization: IntentGraphVirtualization,
     lifecycle: IntentLifecycleManager,
+    rt: tokio::runtime::Handle,
 }
 
 impl IntentGraph {
     pub fn new() -> Result<Self, RuntimeError> {
+        Self::with_config(IntentGraphConfig::default())
+    }
+
+    pub fn with_config(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
+        // Create a runtime for this instance if none exists
+        let rt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle
+        } else {
+            // Create a basic runtime for blocking operations
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| RuntimeError::StorageError(format!("Failed to create async runtime: {}", e)))?;
+            let handle = rt.handle().clone();
+            
+            // Keep the runtime alive by leaking it (not ideal but works for now)
+            std::mem::forget(rt);
+            handle
+        };
+
+        let storage = rt.block_on(async { IntentGraphStorage::new(config).await });
+
         Ok(Self {
-            storage: IntentGraphStorage::new(),
+            storage,
             virtualization: IntentGraphVirtualization::new(),
             lifecycle: IntentLifecycleManager,
+            rt,
         })
     }
 
     /// Store a new intent in the graph
     pub fn store_intent(&mut self, intent: Intent) -> Result<(), RuntimeError> {
-        self.storage.store_intent(intent)?;
-        self.lifecycle.infer_edges(&mut self.storage)?;
-        Ok(())
+        self.rt.block_on(async {
+            self.storage.store_intent(intent).await?;
+            self.lifecycle.infer_edges(&mut self.storage).await?;
+            Ok(())
+        })
     }
 
     /// Get an intent by ID
-    pub fn get_intent(&self, intent_id: &IntentId) -> Option<&Intent> {
-        self.storage.get_intent(intent_id)
+    pub fn get_intent(&self, intent_id: &IntentId) -> Option<Intent> {
+        self.rt.block_on(async {
+            self.storage.get_intent(intent_id).await.unwrap_or(None)
+        })
     }
 
     /// Update an intent with execution results
@@ -407,114 +510,125 @@ impl IntentGraph {
         intent: Intent,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
-        let intent_id = intent.intent_id.clone();
         let updated_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        if let Some(existing_intent) = self.storage.get_intent_mut(&intent_id) {
-            existing_intent.updated_at = updated_at;
+        let mut intent = intent;
+        intent.updated_at = updated_at;
 
-            // Update status based on result
-            existing_intent.status = if result.success {
-                IntentStatus::Completed
-            } else {
-                IntentStatus::Failed
-            };
-        }
+        // Update status based on result
+        intent.status = if result.success {
+            IntentStatus::Completed
+        } else {
+            IntentStatus::Failed
+        };
 
-        // Update metadata separately to avoid double mutable borrow
-        if let Some(metadata) = self.storage.metadata.get_mut(&intent_id) {
-            metadata.last_accessed = updated_at;
-            metadata.access_count += 1;
-        }
-
-        Ok(())
+        self.rt.block_on(async {
+            self.storage.update_intent(&intent).await
+        })
     }
 
     /// Find relevant intents for a query
     pub fn find_relevant_intents(&self, query: &str) -> Vec<Intent> {
-        let relevant_ids = self
-            .virtualization
-            .find_relevant_intents(query, &self.storage);
-        let mut relevant_intents = Vec::new();
-
-        for intent_id in relevant_ids {
-            if let Some(intent) = self.storage.get_intent(&intent_id) {
-                relevant_intents.push(intent.clone());
-            }
-        }
-
-        relevant_intents
+        self.rt.block_on(async {
+            let filter = IntentFilter {
+                goal_contains: Some(query.to_string()),
+                ..Default::default()
+            };
+            self.storage.list_intents(filter).await.unwrap_or_default()
+        })
     }
 
     /// Load context window for a set of intent IDs
     pub fn load_context_window(&self, intent_ids: &[IntentId]) -> Vec<Intent> {
-        self.virtualization
-            .load_context_window(intent_ids, &self.storage)
+        self.rt.block_on(async {
+            let mut context_intents = Vec::new();
+            let mut loaded_ids = HashSet::new();
+
+            // Load primary intents
+            for intent_id in intent_ids {
+                if let Ok(Some(intent)) = self.storage.get_intent(intent_id).await {
+                    context_intents.push(intent);
+                    loaded_ids.insert(intent_id.clone());
+                }
+            }
+
+            // Load related intents (dependencies, etc.)
+            for intent_id in intent_ids {
+                if let Ok(dependent) = self.storage.get_dependent_intents(intent_id).await {
+                    for dep_intent in dependent {
+                        if !loaded_ids.contains(&dep_intent.intent_id) {
+                            context_intents.push(dep_intent.clone());
+                            loaded_ids.insert(dep_intent.intent_id);
+                        }
+                    }
+                }
+            }
+
+            context_intents
+        })
     }
 
     /// Get related intents for a given intent
     pub fn get_related_intents(&self, intent_id: &IntentId) -> Vec<Intent> {
-        self.storage
-            .get_related_intents(intent_id)
-            .into_iter()
-            .cloned()
-            .collect()
+        self.rt.block_on(async {
+            self.storage.get_related_intents(intent_id).await.unwrap_or_default()
+        })
     }
 
     /// Get dependent intents for a given intent
     pub fn get_dependent_intents(&self, intent_id: &IntentId) -> Vec<Intent> {
-        self.storage
-            .get_dependent_intents(intent_id)
-            .into_iter()
-            .cloned()
-            .collect()
+        self.rt.block_on(async {
+            self.storage.get_dependent_intents(intent_id).await.unwrap_or_default()
+        })
     }
 
     /// Get subgoals for a given intent
     pub fn get_subgoals(&self, intent_id: &IntentId) -> Vec<Intent> {
-        self.storage
-            .get_subgoals(intent_id)
-            .into_iter()
-            .cloned()
-            .collect()
+        self.rt.block_on(async {
+            self.storage.get_subgoals(intent_id).await.unwrap_or_default()
+        })
     }
 
     /// Get conflicting intents for a given intent
     pub fn get_conflicting_intents(&self, intent_id: &IntentId) -> Vec<Intent> {
-        self.storage
-            .get_conflicting_intents(intent_id)
-            .into_iter()
-            .cloned()
-            .collect()
+        self.rt.block_on(async {
+            self.storage.get_conflicting_intents(intent_id).await.unwrap_or_default()
+        })
     }
 
     /// Archive completed intents
     pub fn archive_completed_intents(&mut self) -> Result<(), RuntimeError> {
-        self.lifecycle.archive_completed_intents(&mut self.storage)
+        self.rt.block_on(async {
+            self.lifecycle.archive_completed_intents(&mut self.storage).await
+        })
     }
 
     /// Get all active intents
     pub fn get_active_intents(&self) -> Vec<Intent> {
-        self.storage
-            .intents
-            .values()
-            .filter(|intent| intent.status == IntentStatus::Active)
-            .cloned()
-            .collect()
+        self.rt.block_on(async {
+            let filter = IntentFilter {
+                status: Some(IntentStatus::Active),
+                ..Default::default()
+            };
+            self.storage.list_intents(filter).await.unwrap_or_default()
+        })
     }
 
     /// Get intent count by status
     pub fn get_intent_count_by_status(&self) -> HashMap<IntentStatus, usize> {
-        let mut counts = HashMap::new();
+        self.rt.block_on(async {
+            let all_intents = self.storage.list_intents(IntentFilter::default()).await.unwrap_or_default();
+            let mut counts = HashMap::new();
 
-        for intent in self.storage.intents.values() {
-            *counts.entry(intent.status.clone()).or_insert(0) += 1;
-        }
+            for intent in all_intents {
+                *counts.entry(intent.status).or_insert(0) += 1;
+            }
 
-        counts
+            counts
+        })
     }
 
     /// Create an edge between two intents
@@ -525,13 +639,36 @@ impl IntentGraph {
         edge_type: EdgeType,
     ) -> Result<(), RuntimeError> {
         let edge = Edge::new(from_intent, to_intent, edge_type);
-        self.storage.store_edge(edge)?;
-        Ok(())
+        self.rt.block_on(async {
+            self.storage.store_edge(edge).await
+        })
+    }
+
+    /// Health check for the storage backend
+    pub fn health_check(&self) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.storage.health_check().await
+        })
+    }
+
+    /// Backup the intent graph to a file
+    pub fn backup(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.storage.backup(path).await
+        })
+    }
+
+    /// Restore the intent graph from a backup file
+    pub fn restore(&mut self, path: &std::path::Path) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.storage.restore(path).await
+        })
     }
 }
 
 // Minimal Edge struct to resolve missing type errors
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(PartialEq)]
 pub struct Edge {
     pub from: String,
     pub to: String,
@@ -548,6 +685,8 @@ impl Edge {
 mod tests {
     use super::*;
     use crate::runtime::values::Value;
+    use tempfile::tempdir;
+    use std::path::PathBuf;
 
     #[test]
     fn test_intent_graph_creation() {
@@ -562,7 +701,9 @@ mod tests {
         let intent_id = intent.intent_id.clone();
 
         assert!(graph.store_intent(intent).is_ok());
-        assert!(graph.get_intent(&intent_id).is_some());
+        let retrieved = graph.get_intent(&intent_id);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().goal, "Test goal");
     }
 
     #[test]
@@ -591,10 +732,8 @@ mod tests {
         graph.store_intent(intent).unwrap();
 
         // Initially active
-        assert_eq!(
-            graph.get_intent(&intent_id).unwrap().status,
-            IntentStatus::Active
-        );
+        let retrieved = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(retrieved.status, IntentStatus::Active);
 
         // Update with successful result
         let result = ExecutionResult {
@@ -603,15 +742,104 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        // Create update intent with the same ID
+        // Update intent with the same ID
         let mut update_intent = Intent::new("Test goal".to_string());
         update_intent.intent_id = intent_id.clone();
         graph.update_intent(update_intent, &result).unwrap();
 
         // Should be completed
-        assert_eq!(
-            graph.get_intent(&intent_id).unwrap().status,
-            IntentStatus::Completed
-        );
+        let final_intent = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(final_intent.status, IntentStatus::Completed);
+    }
+
+    #[test]
+    fn test_file_storage_persistence() {
+        let temp_dir = tempdir().unwrap();
+        let storage_path = temp_dir.path().join("intent_graph.json");
+
+        // Create graph with file storage
+        let config = IntentGraphConfig::with_file_storage(storage_path.clone());
+        let mut graph = IntentGraph::with_config(config).unwrap();
+
+        let intent = Intent::new("Persistent test goal".to_string());
+        let intent_id = intent.intent_id.clone();
+
+        graph.store_intent(intent).unwrap();
+
+        // Create new graph instance and verify data persists
+        let config2 = IntentGraphConfig::with_file_storage(storage_path);
+        let graph2 = IntentGraph::with_config(config2).unwrap();
+        
+        let retrieved = graph2.get_intent(&intent_id);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().goal, "Persistent test goal");
+    }
+
+    #[test]
+    fn test_intent_edges() {
+        let mut graph = IntentGraph::new().unwrap();
+
+        let intent1 = Intent::new("Main task".to_string());
+        let intent2 = Intent::new("Dependent task".to_string());
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+
+        // Create dependency edge
+        graph.create_edge(intent2_id.clone(), intent1_id.clone(), EdgeType::DependsOn).unwrap();
+
+        // Check dependent intents
+        let dependents = graph.get_dependent_intents(&intent1_id);
+        assert_eq!(dependents.len(), 1);
+        assert_eq!(dependents[0].goal, "Dependent task");
+    }
+
+    #[test]
+    fn test_backup_restore() {
+        let temp_dir = tempdir().unwrap();
+        let backup_path = temp_dir.path().join("backup.json");
+
+        let mut graph = IntentGraph::new().unwrap();
+        let intent = Intent::new("Backup test".to_string());
+        let intent_id = intent.intent_id.clone();
+
+        graph.store_intent(intent).unwrap();
+
+        // Backup
+        graph.backup(&backup_path).unwrap();
+
+        // Create new graph and restore
+        let mut new_graph = IntentGraph::new().unwrap();
+        new_graph.restore(&backup_path).unwrap();
+
+        let restored = new_graph.get_intent(&intent_id);
+        assert!(restored.is_some());
+        assert_eq!(restored.unwrap().goal, "Backup test");
+    }
+
+    #[test]
+    fn test_active_intents_filter() {
+        let mut graph = IntentGraph::new().unwrap();
+
+        let mut intent1 = Intent::new("Active task".to_string());
+        intent1.status = IntentStatus::Active;
+
+        let mut intent2 = Intent::new("Completed task".to_string());
+        intent2.status = IntentStatus::Completed;
+
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+
+        let active_intents = graph.get_active_intents();
+        assert_eq!(active_intents.len(), 1);
+        assert_eq!(active_intents[0].goal, "Active task");
+    }
+
+    #[test]
+    fn test_health_check() {
+        let graph = IntentGraph::new().unwrap();
+        assert!(graph.health_check().is_ok());
     }
 }

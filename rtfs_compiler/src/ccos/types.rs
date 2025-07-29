@@ -3,10 +3,20 @@
 //! This module defines the fundamental data structures for the Cognitive Computing
 //! Operating System, based on the CCOS specifications.
 
+use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+// Forward declarations for types used in this module
+pub struct IntentGraph;
+pub struct CausalChain;
+pub struct CapabilityMarketplace;
+
+// Use the real CCOS type from the main module
+pub use crate::ccos::CCOS;
 
 // --- ID Type Aliases ---
 pub type IntentId = String;
@@ -17,7 +27,7 @@ pub type CapabilityId = String;
 // --- Intent Graph (SEP-001) ---
 
 /// Represents the "why" behind all system behavior. A node in the Intent Graph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Intent {
     pub intent_id: IntentId,
     pub name: Option<String>,
@@ -32,7 +42,7 @@ pub struct Intent {
     pub metadata: HashMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IntentStatus {
     Active,
     Completed,
@@ -51,13 +61,34 @@ pub struct IntentEdge {
     pub metadata: HashMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EdgeType {
     DependsOn,
     IsSubgoalOf,
     ConflictsWith,
     Enables,
     RelatedTo,
+    TriggeredBy,
+    Blocks,
+}
+
+/// What caused an Intent to be created
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TriggerSource {
+    HumanRequest,        // Direct human input
+    PlanExecution,       // Created during plan execution  
+    SystemEvent,         // System-triggered (monitoring, alerts)
+    IntentCompletion,    // Triggered by another intent completing
+    ArbiterInference,    // Arbiter discovered need for this intent
+}
+
+/// Complete context for reproducing intent generation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationContext {
+    pub arbiter_version: String,
+    pub generation_timestamp: u64,
+    pub input_context: HashMap<String, String>,
+    pub reasoning_trace: Option<String>,
 }
 
 // --- Plans and Orchestration (SEP-002) ---
@@ -135,6 +166,74 @@ pub struct ExecutionResult {
     pub success: bool,
     pub value: Value,
     pub metadata: HashMap<String, Value>,
+}
+
+/// Storable version of Intent that contains only serializable data
+/// This is used for persistence and doesn't contain any runtime values
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorableIntent {
+    pub intent_id: IntentId,
+    pub name: Option<String>,
+    pub original_request: String,
+    pub rtfs_intent_source: String,                  // Canonical RTFS intent form
+    pub goal: String,
+    
+    // RTFS source code as strings (serializable)
+    pub constraints: HashMap<String, String>,        // RTFS source expressions
+    pub preferences: HashMap<String, String>,        // RTFS source expressions
+    pub success_criteria: Option<String>,            // RTFS source expression
+    
+    // Graph relationships
+    pub parent_intent: Option<IntentId>,
+    pub child_intents: Vec<IntentId>,
+    pub triggered_by: TriggerSource,
+    
+    // Generation context for audit/replay
+    pub generation_context: GenerationContext,
+    
+    pub status: IntentStatus,
+    pub priority: u32,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub metadata: HashMap<String, String>,           // Simple string metadata
+}
+
+/// Runtime version of Intent that can be executed in CCOS context
+/// Contains parsed RTFS expressions and runtime values
+#[derive(Debug, Clone)]
+pub struct RuntimeIntent {
+    pub intent_id: IntentId,
+    pub name: Option<String>,
+    pub original_request: String,
+    pub rtfs_intent_source: String,                  // Canonical RTFS intent form
+    pub goal: String,
+    
+    // Parsed RTFS expressions (runtime values)
+    pub constraints: HashMap<String, Value>,
+    pub preferences: HashMap<String, Value>,
+    pub success_criteria: Option<Value>,
+    
+    // Graph relationships
+    pub parent_intent: Option<IntentId>,
+    pub child_intents: Vec<IntentId>,
+    pub triggered_by: TriggerSource,
+    
+    // Generation context for audit/replay
+    pub generation_context: GenerationContext,
+    
+    pub status: IntentStatus,
+    pub priority: u32,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub metadata: HashMap<String, Value>,
+}
+
+/// Execution context for CCOS operations
+/// Provides access to current state and runtime for Intent evaluation
+pub struct CCOSContext<'a> {
+    pub ccos: &'a CCOS,
+    pub current_intent: Option<&'a RuntimeIntent>,
+    pub current_plan: Option<&'a Plan>,
 }
 
 // --- Implementations ---
@@ -249,6 +348,212 @@ impl ExecutionResult {
         self.success = false;
         self.metadata.insert("error".to_string(), Value::String(error_message.to_string()));
         self
+    }
+}
+
+impl StorableIntent {
+    /// Create a new StorableIntent
+    pub fn new(goal: String) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        Self {
+            intent_id: Uuid::new_v4().to_string(),
+            name: None,
+            original_request: goal.clone(),
+            rtfs_intent_source: String::new(),
+            goal,
+            constraints: HashMap::new(),
+            preferences: HashMap::new(),
+            success_criteria: None,
+            parent_intent: None,
+            child_intents: Vec::new(),
+            triggered_by: TriggerSource::HumanRequest,
+            generation_context: GenerationContext {
+                arbiter_version: "1.0.0".to_string(),
+                generation_timestamp: now,
+                input_context: HashMap::new(),
+                reasoning_trace: None,
+            },
+            status: IntentStatus::Active,
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            metadata: HashMap::new(),
+        }
+    }
+    
+    /// Convert to RuntimeIntent by parsing RTFS expressions
+    pub fn to_runtime_intent(&self, ccos: &CCOS) -> Result<RuntimeIntent, RuntimeError> {
+        let mut rtfs_runtime = ccos.rtfs_runtime.lock().unwrap();
+        
+        let mut constraints = HashMap::new();
+        for (key, source) in &self.constraints {
+            let parsed = rtfs_runtime.parse_expression(source)?;
+            constraints.insert(key.clone(), parsed);
+        }
+        
+        let mut preferences = HashMap::new();
+        for (key, source) in &self.preferences {
+            let parsed = rtfs_runtime.parse_expression(source)?;
+            preferences.insert(key.clone(), parsed);
+        }
+        
+        let success_criteria = if let Some(source) = &self.success_criteria {
+            Some(rtfs_runtime.parse_expression(source)?)
+        } else {
+            None
+        };
+        
+        let mut metadata = HashMap::new();
+        for (key, value) in &self.metadata {
+            metadata.insert(key.clone(), Value::String(value.clone()));
+        }
+        
+        Ok(RuntimeIntent {
+            intent_id: self.intent_id.clone(),
+            name: self.name.clone(),
+            original_request: self.original_request.clone(),
+            rtfs_intent_source: self.rtfs_intent_source.clone(),
+            goal: self.goal.clone(),
+            constraints,
+            preferences,
+            success_criteria,
+            parent_intent: self.parent_intent.clone(),
+            child_intents: self.child_intents.clone(),
+            triggered_by: self.triggered_by.clone(),
+            generation_context: self.generation_context.clone(),
+            status: self.status.clone(),
+            priority: self.priority,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            metadata,
+        })
+    }
+}
+
+impl RuntimeIntent {
+    /// Convert to StorableIntent by converting runtime values back to RTFS source
+    pub fn to_storable_intent(&self, ccos: &CCOS) -> Result<StorableIntent, RuntimeError> {
+        let rtfs_runtime = ccos.rtfs_runtime.lock().unwrap();
+        
+        let mut constraints = HashMap::new();
+        for (key, value) in &self.constraints {
+            let source = rtfs_runtime.value_to_source(value)?;
+            constraints.insert(key.clone(), source);
+        }
+        
+        let mut preferences = HashMap::new();
+        for (key, value) in &self.preferences {
+            let source = rtfs_runtime.value_to_source(value)?;
+            preferences.insert(key.clone(), source);
+        }
+        
+        let success_criteria = if let Some(value) = &self.success_criteria {
+            Some(rtfs_runtime.value_to_source(value)?)
+        } else {
+            None
+        };
+        
+        let mut metadata = HashMap::new();
+        for (key, value) in &self.metadata {
+            if let Value::String(s) = value {
+                metadata.insert(key.clone(), s.clone());
+            } else {
+                let source = rtfs_runtime.value_to_source(value)?;
+                metadata.insert(key.clone(), source);
+            }
+        }
+        
+        Ok(StorableIntent {
+            intent_id: self.intent_id.clone(),
+            name: self.name.clone(),
+            original_request: self.original_request.clone(),
+            rtfs_intent_source: self.rtfs_intent_source.clone(),
+            goal: self.goal.clone(),
+            constraints,
+            preferences,
+            success_criteria,
+            parent_intent: self.parent_intent.clone(),
+            child_intents: self.child_intents.clone(),
+            triggered_by: self.triggered_by.clone(),
+            generation_context: self.generation_context.clone(),
+            status: self.status.clone(),
+            priority: self.priority,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            metadata,
+        })
+    }
+    
+    /// Evaluate success criteria in CCOS context
+    pub fn evaluate_success_criteria(&self, context: &CCOSContext) -> Result<Value, RuntimeError> {
+        if let Some(criteria) = &self.success_criteria {
+            let mut rtfs_runtime = context.ccos.rtfs_runtime.lock().unwrap();
+            rtfs_runtime.evaluate_with_ccos(criteria, context.ccos)
+        } else {
+            Ok(Value::Boolean(true)) // Default to success if no criteria
+        }
+    }
+    
+    /// Evaluate a constraint by name
+    pub fn evaluate_constraint(&self, name: &str, context: &CCOSContext) -> Result<Value, RuntimeError> {
+        if let Some(constraint) = self.constraints.get(name) {
+            let mut rtfs_runtime = context.ccos.rtfs_runtime.lock().unwrap();
+            rtfs_runtime.evaluate_with_ccos(constraint, context.ccos)
+        } else {
+            Err(RuntimeError::Generic(format!("Constraint '{}' not found", name)))
+        }
+    }
+    
+    /// Evaluate a preference by name
+    pub fn evaluate_preference(&self, name: &str, context: &CCOSContext) -> Result<Value, RuntimeError> {
+        if let Some(preference) = self.preferences.get(name) {
+            let mut rtfs_runtime = context.ccos.rtfs_runtime.lock().unwrap();
+            rtfs_runtime.evaluate_with_ccos(preference, context.ccos)
+        } else {
+            Err(RuntimeError::Generic(format!("Preference '{}' not found", name)))
+        }
+    }
+}
+
+impl CCOSContext<'_> {
+    /// Create a new CCOS context
+    pub fn new<'a>(
+        ccos: &'a CCOS,
+        current_intent: Option<&'a RuntimeIntent>,
+        current_plan: Option<&'a Plan>,
+    ) -> CCOSContext<'a> {
+        CCOSContext {
+            ccos,
+            current_intent,
+            current_plan,
+        }
+    }
+    
+    /// Get current intent if available
+    pub fn current_intent(&self) -> Option<&RuntimeIntent> {
+        self.current_intent
+    }
+    
+    /// Get current plan if available
+    pub fn current_plan(&self) -> Option<&Plan> {
+        self.current_plan
+    }
+    
+    /// Access CCOS components
+    pub fn intent_graph(&self) -> std::sync::MutexGuard<IntentGraph> {
+        self.ccos.intent_graph.lock().unwrap()
+    }
+    
+    pub fn causal_chain(&self) -> std::sync::MutexGuard<CausalChain> {
+        self.ccos.causal_chain.lock().unwrap()
+    }
+    
+    pub fn capability_marketplace(&self) -> &CapabilityMarketplace {
+        &self.ccos.capability_marketplace
     }
 }
 

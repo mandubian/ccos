@@ -83,6 +83,7 @@ futures = "0.3"
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 wat = "1.0"
+tempfile = "3.8"
 
 [build-dependencies]
 tokio = { version = "1", features = ["full"] }

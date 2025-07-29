@@ -45,6 +45,9 @@ pub enum RuntimeError {
     
     Generic(String),
 
+    /// Storage backend errors
+    StorageError(String),
+
     /// Resource errors
     ResourceError {
         resource_type: String,
@@ -170,6 +173,7 @@ impl fmt::Display for RuntimeError {
             },
             RuntimeError::KeyNotFound { key } => write!(f, "Key not found: {}", key),
             RuntimeError::Generic(message) => write!(f, "Runtime error: {}", message),
+            RuntimeError::StorageError(message) => write!(f, "Storage error: {}", message),
             RuntimeError::ResourceError { resource_type, message } => {
                 write!(f, "Resource error ({}): {}", resource_type, message)
             }
