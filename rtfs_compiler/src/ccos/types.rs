@@ -10,10 +10,10 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-// Forward declarations for types used in this module
-pub struct IntentGraph;
-pub struct CausalChain;
-pub struct CapabilityMarketplace;
+// Forward declarations for types used in this module - these should be replaced with real imports
+pub use super::intent_graph::IntentGraph;
+pub use super::causal_chain::CausalChain;  
+pub use crate::runtime::capability_marketplace::CapabilityMarketplace;
 
 // Use the real CCOS type from the main module
 pub use crate::ccos::CCOS;
@@ -544,15 +544,15 @@ impl CCOSContext<'_> {
     }
     
     /// Access CCOS components
-    pub fn intent_graph(&self) -> std::sync::MutexGuard<IntentGraph> {
+    pub fn intent_graph(&self) -> std::sync::MutexGuard<super::intent_graph::IntentGraph> {
         self.ccos.intent_graph.lock().unwrap()
     }
     
-    pub fn causal_chain(&self) -> std::sync::MutexGuard<CausalChain> {
+    pub fn causal_chain(&self) -> std::sync::MutexGuard<super::causal_chain::CausalChain> {
         self.ccos.causal_chain.lock().unwrap()
     }
     
-    pub fn capability_marketplace(&self) -> &CapabilityMarketplace {
+    pub fn capability_marketplace(&self) -> &std::sync::Arc<crate::runtime::capability_marketplace::CapabilityMarketplace> {
         &self.ccos.capability_marketplace
     }
 }
