@@ -78,11 +78,13 @@ To support CCOS audit and replay capabilities:
 -   `generation_context` (GenerationContext): Complete context for reproducing the intent generation.
 
 ```clojure
-(defstruct GenerationContext
-  :arbiter-version      ; Which Arbiter version generated this
-  :generation-timestamp ; When it was generated
-  :input-context       ; Additional context used in generation
-  :reasoning-trace)    ; Arbiter's reasoning process (optional)
+;; NOTE: The `defstruct` keyword is a proposed enhancement for ergonomics.
+;; The current RTFS 2.0 implementation uses `deftype` with map refinements
+;; to achieve the same level of type safety and validation.
+(deftype GenerationContext (Map Keyword Any)
+  (and (has-key? :arbiter-version)
+       (has-key? :generation-timestamp)
+       (has-key? :input-context)))
 ```
 
 ## 3. Edges: Intent Relationships
