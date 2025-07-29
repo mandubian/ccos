@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod intent_storage_tests {
     use crate::ccos::intent_storage::*;
-    use crate::ccos::types::{Intent, IntentStatus};
+    use crate::ccos::types::{StorableIntent, IntentStatus};
     use tempfile::tempdir;
 
-    async fn create_test_intent(goal: &str) -> Intent {
-        Intent::new(goal.to_string())
+    async fn create_test_intent(goal: &str) -> StorableIntent {
+        StorableIntent::new(goal.to_string())
     }
 
     #[tokio::test]
@@ -15,7 +15,7 @@ mod intent_storage_tests {
         let intent_id = intent.intent_id.clone();
 
         // Test store
-        let stored_id = storage.store_intent(&intent).await.unwrap();
+        let stored_id = storage.store_intent(intent.clone()).await.unwrap();
         assert_eq!(stored_id, intent_id);
 
         // Test retrieve
@@ -26,7 +26,7 @@ mod intent_storage_tests {
         // Test update
         let mut updated_intent = intent.clone();
         updated_intent.status = IntentStatus::Completed;
-        storage.update_intent(&updated_intent).await.unwrap();
+        storage.update_intent(updated_intent).await.unwrap();
 
         let retrieved_updated = storage.get_intent(&intent_id).await.unwrap().unwrap();
         assert_eq!(retrieved_updated.status, IntentStatus::Completed);
@@ -38,14 +38,14 @@ mod intent_storage_tests {
         let storage_path = temp_dir.path().join("test_storage.json");
 
         // Create file storage and store intent
-        let mut storage = FileStorage::new(storage_path.clone()).unwrap();
+        let mut storage = FileStorage::new(storage_path.clone()).await.unwrap();
         let intent = create_test_intent("File persistence test").await;
         let intent_id = intent.intent_id.clone();
         
-        storage.store_intent(&intent).await.unwrap();
+        storage.store_intent(intent.clone()).await.unwrap();
 
         // Create new storage instance and verify persistence
-        let new_storage = FileStorage::new(storage_path).unwrap();
+        let new_storage = FileStorage::new(storage_path).await.unwrap();
         let retrieved = new_storage.get_intent(&intent_id).await.unwrap();
         
         assert!(retrieved.is_some());
@@ -76,8 +76,8 @@ mod intent_storage_tests {
         let mut intent2 = create_test_intent("Completed task").await;
         intent2.status = IntentStatus::Completed;
 
-        storage.store_intent(&intent1).await.unwrap();
-        storage.store_intent(&intent2).await.unwrap();
+        storage.store_intent(intent1).await.unwrap();
+        storage.store_intent(intent2).await.unwrap();
 
         // Filter by status
         let active_filter = IntentFilter {
