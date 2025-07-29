@@ -13,6 +13,7 @@ pub mod arbiter_engine;
 // CCOS Data Structures
 pub mod causal_chain;
 pub mod intent_graph;
+pub mod intent_storage;
 pub mod types;
 
 // CCOS Delegation and Execution
@@ -34,8 +35,10 @@ pub mod loaders;
 // --- Core CCOS System ---
 
 use std::sync::{Arc, Mutex};
+use std::rc::Rc;
 
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::{RTFSRuntime, Runtime, ModuleRegistry};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::security::RuntimeContext;
 
@@ -55,6 +58,7 @@ pub struct CCOS {
     intent_graph: Arc<Mutex<IntentGraph>>,
     causal_chain: Arc<Mutex<CausalChain>>,
     capability_marketplace: Arc<CapabilityMarketplace>,
+    rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
 }
 
 impl CCOS {
@@ -86,6 +90,7 @@ impl CCOS {
             intent_graph,
             causal_chain,
             capability_marketplace,
+            rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(Rc::new(ModuleRegistry::new())))),
         })
     }
 

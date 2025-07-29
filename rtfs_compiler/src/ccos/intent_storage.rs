@@ -1,0 +1,545 @@
+//! Persistent Storage Backend for Intent Graph
+//!
+//! This module provides a flexible storage abstraction for the Intent Graph,
+//! supporting multiple backends with graceful fallback to in-memory storage.
+
+use super::intent_graph::Edge;
+use super::types::{Intent, IntentId, IntentStatus, StorableIntent, RuntimeIntent};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::values::Value;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use uuid::Uuid;
+
+/// Storage-safe version of Value that excludes non-serializable types
+/// This version can be safely stored and retrieved from async storage backends
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StorageValue {
+    Null,
+    Boolean(bool),
+    Number(f64),
+    String(String),
+    Vector(Vec<StorageValue>),
+    Map(HashMap<String, StorageValue>),
+}
+
+impl StorageValue {
+    /// Convert from runtime Value to storage Value
+    pub fn from_value(value: &Value) -> Self {
+        match value {
+            Value::Nil => StorageValue::Null,
+            Value::Boolean(b) => StorageValue::Boolean(*b),
+            Value::Integer(i) => StorageValue::Number(*i as f64),
+            Value::Float(f) => StorageValue::Number(*f),
+            Value::String(s) => StorageValue::String(s.clone()),
+            Value::Vector(v) => StorageValue::Vector(v.iter().map(StorageValue::from_value).collect()),
+            Value::Map(m) => StorageValue::Map(m.iter().map(|(k, v)| (format!("{:?}", k), StorageValue::from_value(v))).collect()),
+            // Skip non-serializable types
+            Value::Function(_) => StorageValue::String("<<function>>".to_string()),
+            Value::FunctionPlaceholder(_) => StorageValue::String("<<function_placeholder>>".to_string()),
+            // Handle other Value variants
+            Value::Timestamp(t) => StorageValue::String(format!("timestamp:{}", t)),
+            Value::Uuid(u) => StorageValue::String(format!("uuid:{}", u)),
+            Value::ResourceHandle(rh) => StorageValue::String(format!("resource:{}", rh)),
+            Value::Symbol(s) => StorageValue::String(format!("symbol:{:?}", s)),
+            Value::Keyword(k) => StorageValue::String(format!("keyword:{:?}", k)),
+            Value::List(l) => StorageValue::Vector(l.iter().map(StorageValue::from_value).collect()),
+            Value::Error(e) => StorageValue::String(format!("error:{}", e.message)),
+        }
+    }
+}
+
+/// Trait defining the storage interface for Intent Graph persistence
+#[async_trait::async_trait]
+pub trait IntentStorage {
+    /// Persist a new intent
+    async fn store_intent(&mut self, intent: StorableIntent) -> Result<IntentId, StorageError>;
+
+    /// Retrieve an intent by ID
+    async fn get_intent(&self, id: &IntentId) -> Result<Option<StorableIntent>, StorageError>;
+
+    /// Update an existing intent
+    async fn update_intent(&mut self, intent: StorableIntent) -> Result<(), StorageError>;
+
+    /// Delete an intent by ID
+    async fn delete_intent(&mut self, id: &IntentId) -> Result<(), StorageError>;
+
+    /// List intents matching the given filter
+    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError>;
+
+    /// Store an edge relationship
+    async fn store_edge(&mut self, edge: &Edge) -> Result<(), StorageError>;
+
+    /// Get all edges
+    async fn get_edges(&self) -> Result<Vec<Edge>, StorageError>;
+
+    /// Delete an edge
+    async fn delete_edge(&mut self, edge: &Edge) -> Result<(), StorageError>;
+
+    /// Create a backup of all data
+    async fn backup(&self, path: &Path) -> Result<(), StorageError>;
+
+    /// Restore data from a backup
+    async fn restore(&mut self, path: &Path) -> Result<(), StorageError>;
+}
+
+/// Filter criteria for listing intents
+#[derive(Debug, Clone)]
+pub struct IntentFilter {
+    pub status: Option<IntentStatus>,
+    pub name_contains: Option<String>,
+    pub goal_contains: Option<String>,
+    pub priority_min: Option<u32>,
+    pub priority_max: Option<u32>,
+}
+
+impl Default for IntentFilter {
+    fn default() -> Self {
+        Self {
+            status: None,
+            name_contains: None,
+            goal_contains: None,
+            priority_min: None,
+            priority_max: None,
+        }
+    }
+}
+
+/// Storage errors
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("Intent not found: {0}")]
+    NotFound(IntentId),
+    
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+    
+    #[error("Deserialization error: {0}")]
+    Deserialization(String),
+    
+    #[error("Storage error: {0}")]
+    Storage(String),
+}
+
+/// In-memory storage implementation
+pub struct InMemoryStorage {
+    intents: Arc<RwLock<HashMap<IntentId, StorableIntent>>>,
+    edges: Arc<RwLock<Vec<Edge>>>,
+}
+
+impl InMemoryStorage {
+    pub fn new() -> Self {
+        Self {
+            intents: Arc::new(RwLock::new(HashMap::new())),
+            edges: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl IntentStorage for InMemoryStorage {
+    async fn store_intent(&mut self, intent: StorableIntent) -> Result<IntentId, StorageError> {
+        let intent_id = intent.intent_id.clone();
+        self.intents.write().await.insert(intent_id.clone(), intent);
+        Ok(intent_id)
+    }
+
+    async fn get_intent(&self, id: &IntentId) -> Result<Option<StorableIntent>, StorageError> {
+        let intents = self.intents.read().await;
+        Ok(intents.get(id).cloned())
+    }
+
+    async fn update_intent(&mut self, intent: StorableIntent) -> Result<(), StorageError> {
+        let mut intents = self.intents.write().await;
+        if intents.contains_key(&intent.intent_id) {
+            intents.insert(intent.intent_id.clone(), intent);
+            Ok(())
+        } else {
+            Err(StorageError::NotFound(intent.intent_id.clone()))
+        }
+    }
+
+    async fn delete_intent(&mut self, id: &IntentId) -> Result<(), StorageError> {
+        let mut intents = self.intents.write().await;
+        if intents.remove(id).is_some() {
+            Ok(())
+        } else {
+            Err(StorageError::NotFound(id.clone()))
+        }
+    }
+
+    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
+        let intents = self.intents.read().await;
+        let mut results: Vec<StorableIntent> = intents
+            .values()
+            .filter(|intent| {
+                // Apply filters
+                if let Some(status) = &filter.status {
+                    if intent.status != *status {
+                        return false;
+                    }
+                }
+                
+                if let Some(name_contains) = &filter.name_contains {
+                    if !intent.name.as_ref().map_or(false, |n| n.contains(name_contains)) {
+                        return false;
+                    }
+                }
+                
+                if let Some(goal_contains) = &filter.goal_contains {
+                    if !intent.goal.contains(goal_contains) {
+                        return false;
+                    }
+                }
+                
+                if let Some(priority_min) = filter.priority_min {
+                    if intent.priority < priority_min {
+                        return false;
+                    }
+                }
+                
+                if let Some(priority_max) = filter.priority_max {
+                    if intent.priority > priority_max {
+                        return false;
+                    }
+                }
+                
+                true
+            })
+            .cloned()
+            .collect();
+        
+        Ok(results)
+    }
+
+    async fn store_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
+        let mut edges = self.edges.write().await;
+        edges.push(edge.clone());
+        Ok(())
+    }
+
+    async fn get_edges(&self) -> Result<Vec<Edge>, StorageError> {
+        let edges = self.edges.read().await;
+        Ok(edges.clone())
+    }
+
+    async fn delete_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
+        let mut edges = self.edges.write().await;
+        if let Some(pos) = edges.iter().position(|e| e == edge) {
+            edges.remove(pos);
+            Ok(())
+        } else {
+            Err(StorageError::Storage("Edge not found".to_string()))
+        }
+    }
+
+    async fn backup(&self, path: &Path) -> Result<(), StorageError> {
+        let intents = self.intents.read().await;
+        let edges = self.edges.read().await;
+        
+        let backup_data = StorageBackupData {
+            intents: intents.clone(),
+            edges: edges.clone(),
+            version: "1.0".to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        let json = serde_json::to_string_pretty(&backup_data)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    async fn restore(&mut self, path: &Path) -> Result<(), StorageError> {
+        let content = fs::read_to_string(path)?;
+        let backup_data: StorageBackupData = serde_json::from_str(&content)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        let mut intents = self.intents.write().await;
+        let mut edges = self.edges.write().await;
+
+        *intents = backup_data.intents;
+        *edges = backup_data.edges;
+
+        Ok(())
+    }
+}
+
+/// File-based storage implementation
+pub struct FileStorage {
+    in_memory: InMemoryStorage,
+    file_path: PathBuf,
+}
+
+impl FileStorage {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
+        let path = path.as_ref().to_path_buf();
+        let mut storage = Self {
+            in_memory: InMemoryStorage::new(),
+            file_path: path.clone(),
+        };
+        
+        // Try to load existing data
+        if path.exists() {
+            storage.load_from_file()?;
+        }
+        
+        Ok(storage)
+    }
+    
+    fn save_to_file(&self) -> Result<(), StorageError> {
+        let intents = self.in_memory.intents.blocking_read();
+        let edges = self.in_memory.edges.blocking_read();
+        
+        let backup_data = StorageBackupData {
+            intents: intents.clone(),
+            edges: edges.clone(),
+            version: "1.0".to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        let json = serde_json::to_string_pretty(&backup_data)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        
+        fs::write(&self.file_path, json)?;
+        Ok(())
+    }
+    
+    fn load_from_file(&mut self) -> Result<(), StorageError> {
+        let content = fs::read_to_string(&self.file_path)?;
+        let backup_data: StorageBackupData = serde_json::from_str(&content)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        let mut intents = self.in_memory.intents.blocking_write();
+        let mut edges = self.in_memory.edges.blocking_write();
+
+        *intents = backup_data.intents;
+        *edges = backup_data.edges;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl IntentStorage for FileStorage {
+    async fn store_intent(&mut self, intent: StorableIntent) -> Result<IntentId, StorageError> {
+        let result = self.in_memory.store_intent(intent).await?;
+        self.save_to_file()?;
+        Ok(result)
+    }
+
+    async fn get_intent(&self, id: &IntentId) -> Result<Option<StorableIntent>, StorageError> {
+        self.in_memory.get_intent(id).await
+    }
+
+    async fn update_intent(&mut self, intent: StorableIntent) -> Result<(), StorageError> {
+        self.in_memory.update_intent(intent).await?;
+        self.save_to_file()?;
+        Ok(())
+    }
+
+    async fn delete_intent(&mut self, id: &IntentId) -> Result<(), StorageError> {
+        self.in_memory.delete_intent(id).await?;
+        self.save_to_file()?;
+        Ok(())
+    }
+
+    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
+        self.in_memory.list_intents(filter).await
+    }
+
+    async fn store_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
+        self.in_memory.store_edge(edge).await?;
+        self.save_to_file()?;
+        Ok(())
+    }
+
+    async fn get_edges(&self) -> Result<Vec<Edge>, StorageError> {
+        self.in_memory.get_edges().await
+    }
+
+    async fn delete_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
+        self.in_memory.delete_edge(edge).await?;
+        self.save_to_file()?;
+        Ok(())
+    }
+
+    async fn backup(&self, path: &Path) -> Result<(), StorageError> {
+        self.in_memory.backup(path).await
+    }
+
+    async fn restore(&mut self, path: &Path) -> Result<(), StorageError> {
+        self.in_memory.restore(path).await?;
+        self.save_to_file()?;
+        Ok(())
+    }
+}
+
+/// Backup data structure for serialization
+#[derive(Debug, Serialize, Deserialize)]
+struct StorageBackupData {
+    intents: HashMap<IntentId, StorableIntent>,
+    edges: Vec<Edge>,
+    version: String,
+    timestamp: u64,
+}
+
+/// Storage factory for creating different storage backends
+pub struct StorageFactory;
+
+impl StorageFactory {
+    /// Create an in-memory storage backend
+    pub fn in_memory() -> Box<dyn IntentStorage> {
+        Box::new(InMemoryStorage::new())
+    }
+    
+    /// Create a file-based storage backend
+    pub fn file<P: AsRef<Path>>(path: P) -> Result<Box<dyn IntentStorage>, StorageError> {
+        Ok(Box::new(FileStorage::new(path)?))
+    }
+    
+    /// Create storage with fallback strategy
+    pub fn with_fallback<P: AsRef<Path>>(primary_path: P) -> Box<dyn IntentStorage> {
+        match FileStorage::new(primary_path) {
+            Ok(file_storage) => Box::new(file_storage),
+            Err(_) => {
+                eprintln!("Warning: Failed to create file storage, falling back to in-memory");
+                Box::new(InMemoryStorage::new())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ccos::types::{IntentStatus};
+    use tempfile::tempdir;
+
+    fn create_test_intent(goal: &str) -> StorableIntent {
+        StorableIntent::new(goal.to_string())
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_storage() {
+        let mut storage = InMemoryStorage::new();
+        let intent = create_test_intent("Test goal");
+        let intent_id = intent.intent_id.clone();
+
+        // Store intent
+        let stored_id = storage.store_intent(&intent).await.unwrap();
+        assert_eq!(stored_id, intent_id);
+
+        // Retrieve intent
+        let retrieved = storage.get_intent(&intent_id).await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().goal, "Test goal");
+
+        // List intents
+        let all_intents = storage.list_intents(IntentFilter::default()).await.unwrap();
+        assert_eq!(all_intents.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_file_storage() {
+        let temp_dir = tempdir().unwrap();
+        let storage_path = temp_dir.path().join("test_storage.json");
+
+        let mut storage = FileStorage::new(storage_path.clone()).unwrap();
+        let intent = create_test_intent("File storage test");
+        let intent_id = intent.intent_id.clone();
+
+        // Store intent
+        storage.store_intent(&intent).await.unwrap();
+
+        // Verify file was created
+        assert!(storage_path.exists());
+
+        // Create new storage instance and verify data persists
+        let storage2 = FileStorage::new(storage_path).unwrap();
+        let retrieved = storage2.get_intent(&intent_id).await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().goal, "File storage test");
+    }
+
+    #[tokio::test]
+    async fn test_intent_filter() {
+        let mut storage = InMemoryStorage::new();
+        
+        let mut intent1 = create_test_intent("Active task");
+        intent1.status = IntentStatus::Active;
+        
+        let mut intent2 = create_test_intent("Completed task");
+        intent2.status = IntentStatus::Completed;
+
+        storage.store_intent(&intent1).await.unwrap();
+        storage.store_intent(&intent2).await.unwrap();
+
+        // Filter by status
+        let active_filter = IntentFilter {
+            status: Some(IntentStatus::Active),
+            ..Default::default()
+        };
+        let active_intents = storage.list_intents(active_filter).await.unwrap();
+        assert_eq!(active_intents.len(), 1);
+        assert_eq!(active_intents[0].goal, "Active task");
+
+        // Filter by goal content
+        let goal_filter = IntentFilter {
+            goal_contains: Some("Completed".to_string()),
+            ..Default::default()
+        };
+        let matching_intents = storage.list_intents(goal_filter).await.unwrap();
+        assert_eq!(matching_intents.len(), 1);
+        assert_eq!(matching_intents[0].goal, "Completed task");
+    }
+
+    #[tokio::test]
+    async fn test_storage_factory_fallback() {
+        // Test with invalid file path
+        let invalid_config = StorageConfig::File {
+            path: PathBuf::from("/invalid/path/that/does/not/exist/storage.json"),
+        };
+
+        let storage = StorageFactory::create(invalid_config).await;
+        
+        // Should fall back to in-memory storage
+        assert!(storage.health_check().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_backup_restore() {
+        let mut storage = InMemoryStorage::new();
+        let intent = create_test_intent("Backup test");
+        storage.store_intent(&intent).await.unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let backup_path = temp_dir.path().join("backup.json");
+
+        // Backup
+        storage.backup(&backup_path).await.unwrap();
+        assert!(backup_path.exists());
+
+        // Create new storage and restore
+        let mut new_storage = InMemoryStorage::new();
+        new_storage.restore(&backup_path).await.unwrap();
+
+        let restored = new_storage.get_intent(&intent.intent_id).await.unwrap();
+        assert!(restored.is_some());
+        assert_eq!(restored.unwrap().goal, "Backup test");
+    }
+}

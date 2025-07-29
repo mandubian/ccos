@@ -12,3 +12,4 @@ pub mod primitives_tests;
 pub mod rtfs2_tests;
 pub mod test_utils;
 pub mod test_helpers;
+pub mod intent_storage_tests;
