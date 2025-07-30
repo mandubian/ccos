@@ -53,6 +53,15 @@ pub struct IntentGraphStorage {
     metadata: HashMap<IntentId, IntentMetadata>,
 }
 
+impl std::fmt::Debug for IntentGraphStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntentGraphStorage")
+            .field("storage", &"Box<dyn IntentStorage>")
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
 impl IntentGraphStorage {
     pub async fn new(config: IntentGraphConfig) -> Self {
         let storage = StorageFactory::create(config.to_storage_config()).await;
@@ -256,6 +265,7 @@ impl IntentMetadata {
 }
 
 /// Virtualization layer for context horizon management
+#[derive(Debug)]
 pub struct IntentGraphVirtualization {
     context_manager: ContextWindowManager,
     semantic_search: SemanticSearchEngine,
@@ -324,6 +334,7 @@ impl IntentGraphVirtualization {
 }
 
 /// Manages context window constraints
+#[derive(Debug)]
 pub struct ContextWindowManager {
     max_intents: usize,
     max_tokens: usize,
@@ -356,6 +367,7 @@ impl ContextWindowManager {
 }
 
 /// Semantic search engine (placeholder for now)
+#[derive(Debug)]
 pub struct SemanticSearchEngine;
 
 impl SemanticSearchEngine {
@@ -365,6 +377,7 @@ impl SemanticSearchEngine {
 }
 
 /// Graph traversal engine (placeholder for now)
+#[derive(Debug)]
 pub struct GraphTraversalEngine;
 
 impl GraphTraversalEngine {
@@ -374,6 +387,7 @@ impl GraphTraversalEngine {
 }
 
 /// Lifecycle management for intents
+#[derive(Debug)]
 pub struct IntentLifecycleManager;
 
 impl IntentLifecycleManager {
@@ -847,6 +861,17 @@ pub struct IntentGraph {
     virtualization: IntentGraphVirtualization,
     lifecycle: IntentLifecycleManager,
     rt: tokio::runtime::Handle,
+}
+
+impl std::fmt::Debug for IntentGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntentGraph")
+            .field("storage", &self.storage)
+            .field("virtualization", &self.virtualization)
+            .field("lifecycle", &self.lifecycle)
+            .field("rt", &"tokio::runtime::Handle")
+            .finish()
+    }
 }
 
 impl IntentGraph {
@@ -2683,5 +2708,1755 @@ mod tests {
                 assert!(action.metadata.contains_key("signature"), "All actions should be cryptographically signed");
             }
         });
+    }
+
+    /// Test comprehensive query API functionality
+    #[test]
+    fn test_intent_query_api() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test intents with various statuses and metadata
+        let mut intent1 = StorableIntent::new("Deploy web service".to_string());
+        intent1.status = IntentStatus::Active;
+        intent1.metadata.insert("priority".to_string(), "high".to_string());
+        
+        let mut intent2 = StorableIntent::new("Setup database".to_string());
+        intent2.status = IntentStatus::Completed;
+        intent2.metadata.insert("priority".to_string(), "medium".to_string());
+        
+        let mut intent3 = StorableIntent::new("Configure monitoring".to_string());
+        intent3.status = IntentStatus::Failed;
+        intent3.metadata.insert("priority".to_string(), "low".to_string());
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        
+        // Create some relationships
+        graph.create_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn).unwrap();
+        graph.create_edge(intent1_id.clone(), intent3_id.clone(), EdgeType::RelatedTo).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test status filter
+        let query = IntentQuery {
+            status_filter: Some(vec![IntentStatus::Active]),
+            ..Default::default()
+        };
+        let result = query_api.query_intents(query).unwrap();
+        assert_eq!(result.intents.len(), 1);
+        assert_eq!(result.intents[0].goal, "Deploy web service");
+        
+        // Test goal text filter
+        let query = IntentQuery {
+            goal_contains: Some("web".to_string()),
+            ..Default::default()
+        };
+        let result = query_api.query_intents(query).unwrap();
+        assert_eq!(result.intents.len(), 1);
+        assert_eq!(result.intents[0].goal, "Deploy web service");
+        
+        // Test metadata filter
+        let mut metadata_filter = HashMap::new();
+        metadata_filter.insert("priority".to_string(), "high".to_string());
+        let query = IntentQuery {
+            metadata_filter: Some(metadata_filter),
+            ..Default::default()
+        };
+        let result = query_api.query_intents(query).unwrap();
+        assert_eq!(result.intents.len(), 1);
+        assert_eq!(result.intents[0].goal, "Deploy web service");
+        
+        // Test relationship type filter
+        let query = IntentQuery {
+            has_relationship_types: Some(vec![EdgeType::DependsOn]),
+            ..Default::default()
+        };
+        let result = query_api.query_intents(query).unwrap();
+        assert_eq!(result.intents.len(), 1); // Only intent1 has DependsOn relationship
+        
+        // Test limit
+        let query = IntentQuery {
+            limit: Some(2),
+            ..Default::default()
+        };
+        let result = query_api.query_intents(query).unwrap();
+        assert_eq!(result.intents.len(), 2);
+        assert_eq!(result.total_count, 3); // Total before limit
+        assert!(result.truncated);
+        
+        // Test sorting by goal alphabetical
+        let query = IntentQuery {
+            sort_by: Some(IntentSortCriteria::GoalAlphabetical(SortOrder::Ascending)),
+            ..Default::default()
+        };
+        let result = query_api.query_intents(query).unwrap();
+        assert!(result.intents[0].goal < result.intents[1].goal);
+        assert!(result.intents[1].goal < result.intents[2].goal);
+    }
+
+    #[test]
+    fn test_edge_query_api() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test intents
+        let intent1 = StorableIntent::new("Intent 1".to_string());
+        let intent2 = StorableIntent::new("Intent 2".to_string());
+        let intent3 = StorableIntent::new("Intent 3".to_string());
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        
+        // Create edges with different types and weights
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("reason".to_string(), "infrastructure".to_string());
+        graph.create_weighted_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn, 0.8, metadata1).unwrap();
+        
+        let mut metadata2 = HashMap::new();
+        metadata2.insert("reason".to_string(), "monitoring".to_string());
+        graph.create_weighted_edge(intent1_id.clone(), intent3_id.clone(), EdgeType::RelatedTo, 0.3, metadata2).unwrap();
+        
+        graph.create_edge(intent2_id.clone(), intent3_id.clone(), EdgeType::ConflictsWith).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test edge type filter
+        let query = EdgeQuery {
+            edge_types: Some(vec![EdgeType::DependsOn]),
+            ..Default::default()
+        };
+        let result = query_api.query_edges(query).unwrap();
+        assert_eq!(result.edges.len(), 1);
+        assert_eq!(result.edges[0].edge_type, EdgeType::DependsOn);
+        
+        // Test weight filter
+        let query = EdgeQuery {
+            min_weight: Some(0.5),
+            ..Default::default()
+        };
+        let result = query_api.query_edges(query).unwrap();
+        assert_eq!(result.edges.len(), 1);
+        assert_eq!(result.edges[0].weight, Some(0.8));
+        
+        // Test metadata filter
+        let mut metadata_filter = HashMap::new();
+        metadata_filter.insert("reason".to_string(), "infrastructure".to_string());
+        let query = EdgeQuery {
+            metadata_filter: Some(metadata_filter),
+            ..Default::default()
+        };
+        let result = query_api.query_edges(query).unwrap();
+        assert_eq!(result.edges.len(), 1);
+        
+        // Test from_intent filter
+        let query = EdgeQuery {
+            from_intent: Some(intent1_id.clone()),
+            ..Default::default()
+        };
+        let result = query_api.query_edges(query).unwrap();
+        assert_eq!(result.edges.len(), 2); // Two edges from intent1
+        
+        // Test involves_intent filter
+        let query = EdgeQuery {
+            involves_intent: Some(intent3_id.clone()),
+            ..Default::default()
+        };
+        let result = query_api.query_edges(query).unwrap();
+        assert_eq!(result.edges.len(), 2); // Two edges involving intent3
+    }
+
+    #[test]
+    fn test_visualization_data_export() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test data
+        let mut intent1 = StorableIntent::new("Web Service Deployment".to_string());
+        intent1.status = IntentStatus::Active;
+        let mut intent2 = StorableIntent::new("Database Setup".to_string());
+        intent2.status = IntentStatus::Completed;
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        
+        // Create relationship
+        graph.create_weighted_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn, 0.8, HashMap::new()).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test visualization data export
+        let viz_data = query_api.export_visualization_data().unwrap();
+        
+        // Verify nodes
+        assert_eq!(viz_data.nodes.len(), 2);
+        let web_service_node = viz_data.nodes.iter().find(|n| n.id == intent1_id).unwrap();
+        assert_eq!(web_service_node.label, "Web Service Deployment");
+        assert_eq!(web_service_node.status, IntentStatus::Active);
+        assert_eq!(web_service_node.color, "#4CAF50"); // Green for Active
+        
+        let database_node = viz_data.nodes.iter().find(|n| n.id == intent2_id).unwrap();
+        assert_eq!(database_node.status, IntentStatus::Completed);
+        assert_eq!(database_node.color, "#2196F3"); // Blue for Completed
+        
+        // Verify edges
+        assert_eq!(viz_data.edges.len(), 1);
+        let edge = &viz_data.edges[0];
+        assert_eq!(edge.from, intent1_id);
+        assert_eq!(edge.to, intent2_id);
+        assert_eq!(edge.edge_type, EdgeType::DependsOn);
+        assert_eq!(edge.label, "depends on");
+        assert_eq!(edge.color, "#FF5722"); // Orange for DependsOn
+        
+        // Verify metadata
+        assert_eq!(viz_data.metadata.node_count, 2);
+        assert_eq!(viz_data.metadata.edge_count, 1);
+        assert_eq!(viz_data.metadata.statistics.status_distribution.get(&IntentStatus::Active), Some(&1));
+        assert_eq!(viz_data.metadata.statistics.status_distribution.get(&IntentStatus::Completed), Some(&1));
+    }
+
+    #[test]
+    fn test_export_formats() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create minimal test data
+        let intent1 = StorableIntent::new("Test Intent 1".to_string());
+        let intent2 = StorableIntent::new("Test Intent 2".to_string());
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.create_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test JSON export
+        let json_data = query_api.export_graph_data(ExportFormat::Json).unwrap();
+        assert!(json_data.contains("nodes"));
+        assert!(json_data.contains("edges"));
+        assert!(json_data.contains("metadata"));
+        
+        // Test Graphviz export
+        let dot_data = query_api.export_graph_data(ExportFormat::Graphviz).unwrap();
+        assert!(dot_data.starts_with("digraph IntentGraph"));
+        assert!(dot_data.contains(&intent1_id));
+        assert!(dot_data.contains(&intent2_id));
+        assert!(dot_data.contains("->"));
+        
+        // Test Mermaid export
+        let mermaid_data = query_api.export_graph_data(ExportFormat::Mermaid).unwrap();
+        assert!(mermaid_data.starts_with("graph TD"));
+        assert!(mermaid_data.contains("-->"));
+        
+        // Test Cytoscape export
+        let cytoscape_data = query_api.export_graph_data(ExportFormat::Cytoscape).unwrap();
+        assert!(cytoscape_data.contains("nodes"));
+        assert!(cytoscape_data.contains("edges"));
+        
+        // Test D3 Force export
+        let d3_data = query_api.export_graph_data(ExportFormat::D3Force).unwrap();
+        assert!(d3_data.contains("nodes"));
+        assert!(d3_data.contains("links"));
+    }
+
+    #[test]
+    fn test_graph_statistics() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create diverse test data
+        let mut intent1 = StorableIntent::new("Active Intent".to_string());
+        intent1.status = IntentStatus::Active;
+        let mut intent2 = StorableIntent::new("Completed Intent".to_string());
+        intent2.status = IntentStatus::Completed;
+        let mut intent3 = StorableIntent::new("Failed Intent".to_string());
+        intent3.status = IntentStatus::Failed;
+        let intent4 = StorableIntent::new("Isolated Intent".to_string()); // No connections
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        let intent4_id = intent4.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        graph.store_intent(intent4).unwrap();
+        
+        // Create connections (leaving intent4 isolated)
+        graph.create_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn).unwrap();
+        graph.create_edge(intent1_id.clone(), intent3_id.clone(), EdgeType::RelatedTo).unwrap();
+        graph.create_edge(intent2_id.clone(), intent3_id.clone(), EdgeType::ConflictsWith).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test statistics
+        let stats = query_api.get_graph_statistics().unwrap();
+        
+        // Status distribution
+        assert_eq!(stats.status_distribution.get(&IntentStatus::Active), Some(&2)); // intent1 and intent4 are both Active
+        assert_eq!(stats.status_distribution.get(&IntentStatus::Completed), Some(&1));
+        assert_eq!(stats.status_distribution.get(&IntentStatus::Failed), Some(&1));
+        assert_eq!(stats.status_distribution.get(&IntentStatus::Archived), None); // No archived intents, so not in HashMap
+        
+        // Edge type distribution
+        assert_eq!(stats.edge_type_distribution.get(&EdgeType::DependsOn), Some(&1));
+        assert_eq!(stats.edge_type_distribution.get(&EdgeType::RelatedTo), Some(&1));
+        assert_eq!(stats.edge_type_distribution.get(&EdgeType::ConflictsWith), Some(&1));
+        
+        // Isolated intents
+        assert_eq!(stats.isolated_intents.len(), 1);
+        assert!(stats.isolated_intents.contains(&intent4_id));
+        
+        // Highly connected intents
+        assert!(!stats.highly_connected_intents.is_empty());
+        let most_connected = &stats.highly_connected_intents[0];
+        assert_eq!(most_connected.1, 2); // Most connected intent should have 2 connections
+        // Verify that intent1_id is indeed the most connected one
+        assert!(stats.highly_connected_intents.iter().any(|(id, count)| id == &intent1_id && *count == 2));
+    }
+
+    #[test]
+    fn test_debug_info_and_health_score() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test scenario with some problems
+        let mut intent1 = StorableIntent::new("Working Intent".to_string());
+        intent1.status = IntentStatus::Active;
+        let mut intent2 = StorableIntent::new("Failed Intent".to_string());
+        intent2.status = IntentStatus::Failed;
+        let intent3 = StorableIntent::new("Isolated Intent".to_string());
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        
+        // Only connect intent1 and intent2
+        graph.create_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Get debug info
+        let debug_info = query_api.get_debug_info().unwrap();
+        
+        // Health score should be less than perfect due to failed intent and isolation
+        assert!(debug_info.health_score < 1.0);
+        assert!(debug_info.health_score > 0.0);
+        
+        // Should have recommendations
+        assert!(!debug_info.recommendations.is_empty());
+        let recommendations_text = debug_info.recommendations.join(" ");
+        assert!(recommendations_text.contains("isolated") || recommendations_text.contains("failed"));
+        
+        // Should detect orphaned intents
+        assert_eq!(debug_info.orphaned_intents.len(), 1);
+        assert!(debug_info.orphaned_intents.contains(&intent3_id));
+        
+        // Cycles should be empty for this simple graph
+        assert!(debug_info.cycles.is_empty());
+    }
+
+    #[test]
+    fn test_cycle_detection() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create intentional cycle: A -> B -> C -> A
+        let intent_a = StorableIntent::new("Intent A".to_string());
+        let intent_b = StorableIntent::new("Intent B".to_string());
+        let intent_c = StorableIntent::new("Intent C".to_string());
+        
+        let intent_a_id = intent_a.intent_id.clone();
+        let intent_b_id = intent_b.intent_id.clone();
+        let intent_c_id = intent_c.intent_id.clone();
+        
+        graph.store_intent(intent_a).unwrap();
+        graph.store_intent(intent_b).unwrap();
+        graph.store_intent(intent_c).unwrap();
+        
+        // Create cycle
+        graph.create_edge(intent_a_id.clone(), intent_b_id.clone(), EdgeType::DependsOn).unwrap();
+        
+        graph.create_edge(intent_b_id.clone(), intent_c_id.clone(), EdgeType::DependsOn).unwrap();
+        graph.create_edge(intent_c_id.clone(), intent_a_id.clone(), EdgeType::DependsOn).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        let debug_info = query_api.get_debug_info().unwrap();
+        
+        // Should detect the cycle
+        assert!(!debug_info.cycles.is_empty());
+        let cycle = &debug_info.cycles[0];
+        assert!(cycle.len() >= 3); // Should contain at least the 3 intents
+        
+        // Health score should be affected by the cycle
+        assert!(debug_info.health_score < 1.0);
+    }
+
+    #[test]
+    fn test_quick_search() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create searchable intents
+        let intent1 = StorableIntent::new("Deploy web service with monitoring".to_string());
+        let intent2 = StorableIntent::new("Setup database cluster".to_string());
+        let intent3 = StorableIntent::new("Configure web proxy".to_string());
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test quick search
+        let results = query_api.quick_search("web", None).unwrap();
+        assert_eq!(results.len(), 2); // Should find "web service" and "web proxy"
+        
+        let goals: Vec<String> = results.iter().map(|i| i.goal.clone()).collect();
+        assert!(goals.iter().any(|g| g.contains("service")));
+        assert!(goals.iter().any(|g| g.contains("proxy")));
+        
+        // Test with limit
+        let results = query_api.quick_search("web", Some(1)).unwrap();
+        assert_eq!(results.len(), 1);
+        
+        // Test search that should find nothing
+        let results = query_api.quick_search("nonexistent", None).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_related_intents() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create a network of related intents
+        let intent1 = StorableIntent::new("Root Intent".to_string());
+        let intent2 = StorableIntent::new("Direct Child".to_string());
+        let intent3 = StorableIntent::new("Grandchild".to_string());
+        let intent4 = StorableIntent::new("Sibling".to_string());
+        let intent5 = StorableIntent::new("Isolated Intent".to_string());
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        let intent4_id = intent4.intent_id.clone();
+        let intent5_id = intent5.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        graph.store_intent(intent4).unwrap();
+        graph.store_intent(intent5).unwrap();
+        
+        // Create relationships
+        graph.create_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn).unwrap();
+        graph.create_edge(intent2_id.clone(), intent3_id.clone(), EdgeType::DependsOn).unwrap();
+        graph.create_edge(intent1_id.clone(), intent4_id.clone(), EdgeType::RelatedTo).unwrap();
+        // intent5 remains isolated
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test related intents with depth 1
+        let related = query_api.get_related_intents(&intent1_id, 1).unwrap();
+        assert_eq!(related.len(), 2); // Should find intent2 and intent4
+        let related_ids: Vec<String> = related.iter().map(|i| i.intent_id.clone()).collect();
+        assert!(related_ids.contains(&intent2_id));
+        assert!(related_ids.contains(&intent4_id));
+        assert!(!related_ids.contains(&intent3_id)); // Too far (depth 2)
+        
+        // Test related intents with depth 2
+        let related = query_api.get_related_intents(&intent1_id, 2).unwrap();
+        assert_eq!(related.len(), 3); // Should find intent2, intent3, and intent4
+        let related_ids: Vec<String> = related.iter().map(|i| i.intent_id.clone()).collect();
+        assert!(related_ids.contains(&intent2_id));
+        assert!(related_ids.contains(&intent3_id));
+        assert!(related_ids.contains(&intent4_id));
+        assert!(!related_ids.contains(&intent5_id)); // Still isolated
+        
+        // Test from isolated intent
+        let related = query_api.get_related_intents(&intent5_id, 3).unwrap();
+        assert_eq!(related.len(), 0); // No connections
+    }
+
+    #[test]
+    fn test_filtered_visualization_export() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test data with different statuses
+        let mut intent1 = StorableIntent::new("Active Task".to_string());
+        intent1.status = IntentStatus::Active;
+        let mut intent2 = StorableIntent::new("Completed Task".to_string());
+        intent2.status = IntentStatus::Completed;
+        let mut intent3 = StorableIntent::new("Failed Task".to_string());
+        intent3.status = IntentStatus::Failed;
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        
+        // Create relationships
+        graph.create_edge(intent1_id.clone(), intent2_id.clone(), EdgeType::DependsOn).unwrap();
+        graph.create_edge(intent1_id.clone(), intent3_id.clone(), EdgeType::ConflictsWith).unwrap();
+        
+        // Create query API after graph setup
+        let query_api = IntentGraphQueryAPI::from_graph(graph);
+        
+        // Test filtered export - only active intents
+        let intent_filter = IntentQuery {
+            status_filter: Some(vec![IntentStatus::Active]),
+            ..Default::default()
+        };
+        
+        let viz_data = query_api.export_filtered_visualization_data(
+            Some(intent_filter),
+            None
+        ).unwrap();
+        
+        // Should only have active intents in nodes
+        assert_eq!(viz_data.nodes.len(), 1);
+        assert_eq!(viz_data.nodes[0].id, intent1_id);
+        assert_eq!(viz_data.nodes[0].status, IntentStatus::Active);
+        
+        // Test edge filtering - only ConflictsWith relationships
+        let edge_filter = EdgeQuery {
+            edge_types: Some(vec![EdgeType::ConflictsWith]),
+            ..Default::default()
+        };
+        
+        let viz_data = query_api.export_filtered_visualization_data(
+            None,
+            Some(edge_filter)
+        ).unwrap();
+        
+        // Should have all nodes but only ConflictsWith edges
+        assert_eq!(viz_data.nodes.len(), 3);
+        assert_eq!(viz_data.edges.len(), 1);
+        assert_eq!(viz_data.edges[0].edge_type, EdgeType::ConflictsWith);
+    }
+}
+
+#[derive(Debug)]
+pub struct IntentGraphQueryAPI {
+    // Store reference to graph instead of owning it
+    graph_ref: std::sync::Arc<IntentGraph>,
+}
+
+/// Comprehensive query structure for advanced Intent Graph queries
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IntentQuery {
+    /// Filter by intent status(es)
+    pub status_filter: Option<Vec<IntentStatus>>,
+    /// Filter by intent goals containing text
+    pub goal_contains: Option<String>,
+    /// Filter by metadata key-value pairs
+    pub metadata_filter: Option<HashMap<String, String>>,
+    /// Filter by creation date range
+    pub created_after: Option<u64>,
+    pub created_before: Option<u64>,
+    /// Filter by update date range
+    pub updated_after: Option<u64>,
+    pub updated_before: Option<u64>,
+    /// Filter by relationship types
+    pub has_relationship_types: Option<Vec<EdgeType>>,
+    /// Filter by connection to specific intent IDs
+    pub connected_to: Option<Vec<IntentId>>,
+    /// Semantic search query
+    pub semantic_query: Option<String>,
+    /// Maximum number of results
+    pub limit: Option<usize>,
+    /// Sort criteria
+    pub sort_by: Option<IntentSortCriteria>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum IntentSortCriteria {
+    CreatedDate(SortOrder),
+    UpdatedDate(SortOrder),
+    GoalAlphabetical(SortOrder),
+    ConnectionCount(SortOrder),
+    RelevanceScore(SortOrder),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+/// Edge/Relationship query structure
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EdgeQuery {
+    /// Filter by edge types
+    pub edge_types: Option<Vec<EdgeType>>,
+    /// Filter by weight range
+    pub min_weight: Option<f64>,
+    pub max_weight: Option<f64>,
+    /// Filter by metadata
+    pub metadata_filter: Option<HashMap<String, String>>,
+    /// Filter by source intent
+    pub from_intent: Option<IntentId>,
+    /// Filter by target intent
+    pub to_intent: Option<IntentId>,
+    /// Filter by any involvement of intent
+    pub involves_intent: Option<IntentId>,
+}
+
+/// Visualization export data structures
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphVisualizationData {
+    /// All nodes (intents) in the graph
+    pub nodes: Vec<VisualizationNode>,
+    /// All edges (relationships) in the graph
+    pub edges: Vec<VisualizationEdge>,
+    /// Metadata about the graph
+    pub metadata: GraphMetadata,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VisualizationNode {
+    /// Intent ID
+    pub id: IntentId,
+    /// Display label
+    pub label: String,
+    /// Node type/category
+    pub node_type: String,
+    /// Current status
+    pub status: IntentStatus,
+    /// Size hint for visualization (based on connections, importance, etc.)
+    pub size: f64,
+    /// Color hint for visualization
+    pub color: String,
+    /// Additional metadata for tooltips/details
+    pub metadata: HashMap<String, String>,
+    /// Position hints for layout algorithms
+    pub position: Option<VisualizationPosition>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VisualizationEdge {
+    /// Source intent ID
+    pub from: IntentId,
+    /// Target intent ID
+    pub to: IntentId,
+    /// Edge type
+    pub edge_type: EdgeType,
+    /// Visual weight/thickness hint
+    pub weight: Option<f64>,
+    /// Edge label
+    pub label: String,
+    /// Color hint for visualization
+    pub color: String,
+    /// Metadata for tooltips/details
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VisualizationPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphMetadata {
+    /// Total number of nodes
+    pub node_count: usize,
+    /// Total number of edges
+    pub edge_count: usize,
+    /// Graph statistics
+    pub statistics: GraphStatistics,
+    /// Layout hints
+    pub layout_hints: LayoutHints,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphStatistics {
+    /// Count by status
+    pub status_distribution: HashMap<IntentStatus, usize>,
+    /// Count by edge type
+    pub edge_type_distribution: HashMap<EdgeType, usize>,
+    /// Average connections per node
+    pub avg_connections_per_node: f64,
+    /// Most connected intents
+    pub highly_connected_intents: Vec<(IntentId, usize)>,
+    /// Isolated intents (no connections)
+    pub isolated_intents: Vec<IntentId>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LayoutHints {
+    /// Suggested layout algorithm
+    pub suggested_layout: String,
+    /// Whether graph has hierarchical structure
+    pub is_hierarchical: bool,
+    /// Suggested clustering
+    pub clusters: Vec<IntentCluster>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IntentCluster {
+    /// Cluster identifier
+    pub cluster_id: String,
+    /// Intents in this cluster
+    pub intent_ids: Vec<IntentId>,
+    /// Cluster center (most connected intent)
+    pub center_intent: Option<IntentId>,
+    /// Cluster theme/category
+    pub theme: String,
+}
+
+/// Query result structures
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IntentQueryResult {
+    /// Matching intents
+    pub intents: Vec<StorableIntent>,
+    /// Total count (may be higher than returned if limited)
+    pub total_count: usize,
+    /// Query execution time in milliseconds
+    pub execution_time_ms: u64,
+    /// Whether results were truncated
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EdgeQueryResult {
+    /// Matching edges
+    pub edges: Vec<Edge>,
+    /// Total count
+    pub total_count: usize,
+    /// Query execution time in milliseconds
+    pub execution_time_ms: u64,
+    /// Whether results were truncated
+    pub truncated: bool,
+}
+
+impl IntentGraphQueryAPI {
+    /// Create a new query API instance
+    pub fn new(graph: std::sync::Arc<IntentGraph>) -> Self {
+        Self { graph_ref: graph }
+    }
+    
+    /// Create a new query API instance from an IntentGraph
+    pub fn from_graph(graph: IntentGraph) -> Self {
+        Self { graph_ref: std::sync::Arc::new(graph) }
+    }
+
+    /// Execute an advanced intent query
+    pub fn query_intents(&self, query: IntentQuery) -> Result<IntentQueryResult, RuntimeError> {
+        let start_time = std::time::Instant::now();
+        
+        // Start with all intents
+        let all_intents = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.list_intents(IntentFilter::default()).await
+        })?;
+
+        let mut filtered_intents = all_intents;
+
+        // Apply status filter
+        if let Some(status_filter) = &query.status_filter {
+            filtered_intents.retain(|intent| status_filter.contains(&intent.status));
+        }
+
+        // Apply goal text filter
+        if let Some(goal_text) = &query.goal_contains {
+            let goal_text_lower = goal_text.to_lowercase();
+            filtered_intents.retain(|intent| 
+                intent.goal.to_lowercase().contains(&goal_text_lower)
+            );
+        }
+
+        // Apply metadata filter
+        if let Some(metadata_filter) = &query.metadata_filter {
+            filtered_intents.retain(|intent| {
+                metadata_filter.iter().all(|(key, value)| {
+                    intent.metadata.get(key)
+                        .map(|v| v.to_string().contains(value))
+                        .unwrap_or(false)
+                })
+            });
+        }
+
+        // Apply date filters
+        if let Some(created_after) = query.created_after {
+            filtered_intents.retain(|intent| intent.created_at >= created_after);
+        }
+        
+        if let Some(created_before) = query.created_before {
+            filtered_intents.retain(|intent| intent.created_at <= created_before);
+        }
+
+        if let Some(updated_after) = query.updated_after {
+            filtered_intents.retain(|intent| intent.updated_at >= updated_after);
+        }
+
+        if let Some(updated_before) = query.updated_before {
+            filtered_intents.retain(|intent| intent.updated_at <= updated_before);
+        }
+
+        // Apply relationship type filter
+        if let Some(relationship_types) = &query.has_relationship_types {
+            filtered_intents.retain(|intent| {
+                let edges = self.graph_ref.get_edges_for_intent(&intent.intent_id);
+                relationship_types.iter().any(|edge_type| {
+                    edges.iter().any(|edge| 
+                        &edge.edge_type == edge_type && &edge.from == &intent.intent_id
+                    )
+                })
+            });
+        }
+
+        // Apply connection filter
+        if let Some(connected_to) = &query.connected_to {
+            filtered_intents.retain(|intent| {
+                let edges = self.graph_ref.get_edges_for_intent(&intent.intent_id);
+                connected_to.iter().any(|target_id| {
+                    edges.iter().any(|edge| 
+                        &edge.from == target_id || &edge.to == target_id
+                    )
+                })
+            });
+        }
+
+        // Apply semantic search if specified
+        if let Some(semantic_query) = &query.semantic_query {
+            // For now, do a simple text-based search
+            // In a full implementation, this would use semantic embeddings
+            let semantic_lower = semantic_query.to_lowercase();
+            filtered_intents.retain(|intent| {
+                intent.goal.to_lowercase().contains(&semantic_lower) ||
+                intent.metadata.values().any(|v| v.to_string().to_lowercase().contains(&semantic_lower))
+            });
+        }
+
+        let total_count = filtered_intents.len();
+
+        // Apply sorting
+        if let Some(sort_criteria) = &query.sort_by {
+            match sort_criteria {
+                IntentSortCriteria::CreatedDate(order) => {
+                    filtered_intents.sort_by(|a, b| match order {
+                        SortOrder::Ascending => a.created_at.cmp(&b.created_at),
+                        SortOrder::Descending => b.created_at.cmp(&a.created_at),
+                    });
+                }
+                IntentSortCriteria::UpdatedDate(order) => {
+                    filtered_intents.sort_by(|a, b| match order {
+                        SortOrder::Ascending => a.updated_at.cmp(&b.updated_at),
+                        SortOrder::Descending => b.updated_at.cmp(&a.updated_at),
+                    });
+                }
+                IntentSortCriteria::GoalAlphabetical(order) => {
+                    filtered_intents.sort_by(|a, b| match order {
+                        SortOrder::Ascending => a.goal.cmp(&b.goal),
+                        SortOrder::Descending => b.goal.cmp(&a.goal),
+                    });
+                }
+                IntentSortCriteria::ConnectionCount(order) => {
+                    filtered_intents.sort_by(|a, b| {
+                        let count_a = self.graph_ref.get_edges_for_intent(&a.intent_id).len();
+                        let count_b = self.graph_ref.get_edges_for_intent(&b.intent_id).len();
+                        match order {
+                            SortOrder::Ascending => count_a.cmp(&count_b),
+                            SortOrder::Descending => count_b.cmp(&count_a),
+                        }
+                    });
+                }
+                IntentSortCriteria::RelevanceScore(_) => {
+                    // For now, keep original order
+                    // In a full implementation, this would use relevance scoring
+                }
+            }
+        }
+
+        // Apply limit
+        let truncated = if let Some(limit) = query.limit {
+            if filtered_intents.len() > limit {
+                filtered_intents.truncate(limit);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let execution_time_ms = start_time.elapsed().as_millis() as u64;
+
+        Ok(IntentQueryResult {
+            intents: filtered_intents,
+            total_count,
+            execution_time_ms,
+            truncated,
+        })
+    }
+
+    /// Execute an edge query
+    pub fn query_edges(&self, query: EdgeQuery) -> Result<EdgeQueryResult, RuntimeError> {
+        let start_time = std::time::Instant::now();
+
+        // Get all edges
+        let all_edges = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.get_edges().await
+        })?;
+
+        let mut filtered_edges = all_edges;
+
+        // Apply edge type filter
+        if let Some(edge_types) = &query.edge_types {
+            filtered_edges.retain(|edge| edge_types.contains(&edge.edge_type));
+        }
+
+        // Apply weight filters
+        if let Some(min_weight) = query.min_weight {
+            filtered_edges.retain(|edge| 
+                edge.weight.map_or(false, |w| w >= min_weight)
+            );
+        }
+
+        if let Some(max_weight) = query.max_weight {
+            filtered_edges.retain(|edge| 
+                edge.weight.map_or(true, |w| w <= max_weight)
+            );
+        }
+
+        // Apply metadata filter
+        if let Some(metadata_filter) = &query.metadata_filter {
+            filtered_edges.retain(|edge| {
+                metadata_filter.iter().all(|(key, value)| {
+                    edge.metadata.get(key)
+                        .map(|v| v.contains(value))
+                        .unwrap_or(false)
+                })
+            });
+        }
+
+        // Apply from_intent filter
+        if let Some(from_intent) = &query.from_intent {
+            filtered_edges.retain(|edge| &edge.from == from_intent);
+        }
+
+        // Apply to_intent filter
+        if let Some(to_intent) = &query.to_intent {
+            filtered_edges.retain(|edge| &edge.to == to_intent);
+        }
+
+        // Apply involves_intent filter
+        if let Some(involves_intent) = &query.involves_intent {
+            filtered_edges.retain(|edge| 
+                &edge.from == involves_intent || &edge.to == involves_intent
+            );
+        }
+
+        let total_count = filtered_edges.len();
+        let execution_time_ms = start_time.elapsed().as_millis() as u64;
+
+        Ok(EdgeQueryResult {
+            edges: filtered_edges,
+            total_count,
+            execution_time_ms,
+            truncated: false, // No limit applied for edges for now
+        })
+    }
+
+    /// Export visualization data for the entire graph
+    pub fn export_visualization_data(&self) -> Result<GraphVisualizationData, RuntimeError> {
+        self.export_filtered_visualization_data(None, None)
+    }
+
+    /// Export visualization data with optional filters
+    pub fn export_filtered_visualization_data(
+        &self,
+        intent_filter: Option<IntentQuery>,
+        edge_filter: Option<EdgeQuery>,
+    ) -> Result<GraphVisualizationData, RuntimeError> {
+        // Get filtered intents
+        let intents = if let Some(filter) = intent_filter {
+            self.query_intents(filter)?.intents
+        } else {
+            self.graph_ref.rt.block_on(async {
+                self.graph_ref.storage.list_intents(IntentFilter::default()).await
+            })?
+        };
+
+        // Get filtered edges
+        let edges = if let Some(filter) = edge_filter {
+            self.query_edges(filter)?.edges
+        } else {
+            self.graph_ref.rt.block_on(async {
+                self.graph_ref.storage.get_edges().await
+            })?
+        };
+
+        // Convert intents to visualization nodes
+        let nodes = intents
+            .iter()
+            .map(|intent| self.intent_to_visualization_node(intent, &edges))
+            .collect();
+
+        // Convert edges to visualization edges
+        let vis_edges = edges
+            .iter()
+            .map(|edge| self.edge_to_visualization_edge(edge))
+            .collect();
+
+        // Generate metadata
+        let metadata = self.generate_graph_metadata(&intents, &edges);
+
+        Ok(GraphVisualizationData {
+            nodes,
+            edges: vis_edges,
+            metadata,
+        })
+    }
+
+    /// Convert an intent to a visualization node
+    fn intent_to_visualization_node(&self, intent: &StorableIntent, all_edges: &[Edge]) -> VisualizationNode {
+        // Calculate connection count for size
+        let connection_count = all_edges
+            .iter()
+            .filter(|edge| edge.from == intent.intent_id || edge.to == intent.intent_id)
+            .count();
+
+        // Determine size based on connections (min 10, max 100)
+        let size = 10.0 + (connection_count as f64 * 5.0).min(90.0);
+
+        // Determine color based on status
+        let color = match intent.status {
+            IntentStatus::Active => "#4CAF50".to_string(),     // Green
+            IntentStatus::Completed => "#2196F3".to_string(),  // Blue
+            IntentStatus::Failed => "#F44336".to_string(),     // Red
+            IntentStatus::Archived => "#9E9E9E".to_string(),   // Gray
+            IntentStatus::Suspended => "#FF9800".to_string(),  // Orange
+        };
+
+        // Generate display label (truncate if too long)
+        let label = if intent.goal.len() > 50 {
+            format!("{}...", &intent.goal[..47])
+        } else {
+            intent.goal.clone()
+        };
+
+        // Build metadata for tooltips
+        let mut metadata = HashMap::new();
+        metadata.insert("goal".to_string(), intent.goal.clone());
+        metadata.insert("status".to_string(), format!("{:?}", intent.status));
+        metadata.insert("created_at".to_string(), intent.created_at.to_string());
+        metadata.insert("updated_at".to_string(), intent.updated_at.to_string());
+        metadata.insert("connections".to_string(), connection_count.to_string());
+
+        // Add custom metadata
+        for (key, value) in &intent.metadata {
+            metadata.insert(format!("meta_{}", key), value.to_string());
+        }
+
+        VisualizationNode {
+            id: intent.intent_id.clone(),
+            label,
+            node_type: "intent".to_string(),
+            status: intent.status.clone(),
+            size,
+            color,
+            metadata,
+            position: None, // Let visualization engine determine layout
+        }
+    }
+
+    /// Convert an edge to a visualization edge
+    fn edge_to_visualization_edge(&self, edge: &Edge) -> VisualizationEdge {
+        // Determine color and label based on edge type
+        let (color, label) = match edge.edge_type {
+            EdgeType::DependsOn => ("#FF5722".to_string(), "depends on".to_string()),
+            EdgeType::IsSubgoalOf => ("#3F51B5".to_string(), "subgoal of".to_string()),
+            EdgeType::ConflictsWith => ("#E91E63".to_string(), "conflicts with".to_string()),
+            EdgeType::Enables => ("#4CAF50".to_string(), "enables".to_string()),
+            EdgeType::RelatedTo => ("#607D8B".to_string(), "related to".to_string()),
+            EdgeType::TriggeredBy => ("#9C27B0".to_string(), "triggered by".to_string()),
+            EdgeType::Blocks => ("#FF9800".to_string(), "blocks".to_string()),
+        };
+
+        // Build metadata
+        let mut metadata = HashMap::new();
+        metadata.insert("edge_type".to_string(), format!("{:?}", edge.edge_type));
+        if let Some(weight) = edge.weight {
+            metadata.insert("weight".to_string(), weight.to_string());
+        }
+
+        // Add custom metadata
+        for (key, value) in &edge.metadata {
+            metadata.insert(format!("meta_{}", key), value.clone());
+        }
+
+        VisualizationEdge {
+            from: edge.from.clone(),
+            to: edge.to.clone(),
+            edge_type: edge.edge_type.clone(),
+            weight: edge.weight,
+            label,
+            color,
+            metadata,
+        }
+    }
+
+    /// Generate graph metadata and statistics
+    fn generate_graph_metadata(&self, intents: &[StorableIntent], edges: &[Edge]) -> GraphMetadata {
+        // Status distribution
+        let mut status_distribution = HashMap::new();
+        for intent in intents {
+            *status_distribution.entry(intent.status.clone()).or_insert(0) += 1;
+        }
+
+        // Edge type distribution
+        let mut edge_type_distribution = HashMap::new();
+        for edge in edges {
+            *edge_type_distribution.entry(edge.edge_type.clone()).or_insert(0) += 1;
+        }
+
+        // Calculate connection counts
+        let mut connection_counts: HashMap<IntentId, usize> = HashMap::new();
+        for edge in edges {
+            *connection_counts.entry(edge.from.clone()).or_insert(0) += 1;
+            *connection_counts.entry(edge.to.clone()).or_insert(0) += 1;
+        }
+
+        // Average connections per node
+        let avg_connections_per_node = if intents.is_empty() {
+            0.0
+        } else {
+            connection_counts.values().sum::<usize>() as f64 / intents.len() as f64
+        };
+
+        // Highly connected intents (top 10)
+        let mut highly_connected: Vec<_> = connection_counts.into_iter().collect();
+        highly_connected.sort_by(|a, b| b.1.cmp(&a.1));
+        highly_connected.truncate(10);
+
+        // Isolated intents (no connections)
+        let connected_intent_ids: HashSet<_> = edges
+            .iter()
+            .flat_map(|edge| vec![&edge.from, &edge.to])
+            .collect();
+        let isolated_intents: Vec<_> = intents
+            .iter()
+            .filter(|intent| !connected_intent_ids.contains(&intent.intent_id))
+            .map(|intent| intent.intent_id.clone())
+            .collect();
+
+        // Detect if graph is hierarchical
+        let is_hierarchical = edges
+            .iter()
+            .any(|edge| edge.edge_type == EdgeType::IsSubgoalOf);
+
+        // Generate clusters (simple implementation based on edge types)
+        let clusters = self.generate_simple_clusters(intents, edges);
+
+        GraphMetadata {
+            node_count: intents.len(),
+            edge_count: edges.len(),
+            statistics: GraphStatistics {
+                status_distribution,
+                edge_type_distribution,
+                avg_connections_per_node,
+                highly_connected_intents: highly_connected,
+                isolated_intents,
+            },
+            layout_hints: LayoutHints {
+                suggested_layout: if is_hierarchical {
+                    "hierarchical".to_string()
+                } else if intents.len() > 100 {
+                    "force-directed".to_string()
+                } else {
+                    "circular".to_string()
+                },
+                is_hierarchical,
+                clusters,
+            },
+        }
+    }
+
+    /// Generate simple clusters based on connectivity
+    fn generate_simple_clusters(&self, intents: &[StorableIntent], edges: &[Edge]) -> Vec<IntentCluster> {
+        // Simple clustering by connected components
+        let mut clusters = Vec::new();
+        let mut visited = HashSet::new();
+
+        for intent in intents {
+            if visited.contains(&intent.intent_id) {
+                continue;
+            }
+
+            let mut cluster_intents = Vec::new();
+            let mut stack = vec![intent.intent_id.clone()];
+
+            while let Some(current_id) = stack.pop() {
+                if visited.contains(&current_id) {
+                    continue;
+                }
+
+                visited.insert(current_id.clone());
+                cluster_intents.push(current_id.clone());
+
+                // Find connected intents
+                for edge in edges {
+                    if edge.from == current_id && !visited.contains(&edge.to) {
+                        stack.push(edge.to.clone());
+                    }
+                    if edge.to == current_id && !visited.contains(&edge.from) {
+                        stack.push(edge.from.clone());
+                    }
+                }
+            }
+
+            if !cluster_intents.is_empty() {
+                // Find center intent (most connected in cluster)
+                let center_intent = cluster_intents
+                    .iter()
+                    .max_by_key(|intent_id| {
+                        edges
+                            .iter()
+                            .filter(|edge| &edge.from == *intent_id || &edge.to == *intent_id)
+                            .count()
+                    })
+                    .cloned();
+
+                clusters.push(IntentCluster {
+                    cluster_id: format!("cluster_{}", clusters.len()),
+                    intent_ids: cluster_intents,
+                    center_intent,
+                    theme: "connected_group".to_string(),
+                });
+            }
+        }
+
+        clusters
+    }
+
+    /// Get aggregated statistics for the graph
+    pub fn get_graph_statistics(&self) -> Result<GraphStatistics, RuntimeError> {
+        let intents = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.list_intents(IntentFilter::default()).await
+        })?;
+
+        let edges = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.get_edges().await
+        })?;
+
+        Ok(self.generate_graph_metadata(&intents, &edges).statistics)
+    }
+
+    /// Get layout hints for visualization
+    pub fn get_layout_hints(&self) -> Result<LayoutHints, RuntimeError> {
+        let intents = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.list_intents(IntentFilter::default()).await
+        })?;
+
+        let edges = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.get_edges().await
+        })?;
+
+        Ok(self.generate_graph_metadata(&intents, &edges).layout_hints)
+    }
+
+    /// Export graph data in different formats for various visualization tools
+    pub fn export_graph_data(&self, format: ExportFormat) -> Result<String, RuntimeError> {
+        let visualization_data = self.export_visualization_data()?;
+        
+        match format {
+            ExportFormat::Json => {
+                serde_json::to_string_pretty(&visualization_data)
+                    .map_err(|e| RuntimeError::new(&format!("Serialization error: {}", e)))
+            }
+            ExportFormat::Graphviz => {
+                self.export_as_graphviz(&visualization_data)
+            }
+            ExportFormat::Cytoscape => {
+                self.export_as_cytoscape(&visualization_data)
+            }
+            ExportFormat::D3Force => {
+                self.export_as_d3_force(&visualization_data)
+            }
+            ExportFormat::Mermaid => {
+                self.export_as_mermaid(&visualization_data)
+            }
+        }
+    }
+
+    /// Export as Graphviz DOT format
+    fn export_as_graphviz(&self, data: &GraphVisualizationData) -> Result<String, RuntimeError> {
+        let mut dot = String::new();
+        dot.push_str("digraph IntentGraph {\n");
+        dot.push_str("  rankdir=TB;\n");
+        dot.push_str("  node [shape=box, style=rounded];\n");
+        
+        // Add nodes
+        for node in &data.nodes {
+            let escaped_label = node.label.replace("\"", "\\\"");
+            dot.push_str(&format!(
+                "  \"{}\" [label=\"{}\", fillcolor=\"{}\", style=filled];\n",
+                node.id, escaped_label, node.color
+            ));
+        }
+        
+        // Add edges
+        for edge in &data.edges {
+            dot.push_str(&format!(
+                "  \"{}\" -> \"{}\" [label=\"{}\", color=\"{}\"];\n",
+                edge.from, edge.to, edge.label, edge.color
+            ));
+        }
+        
+        dot.push_str("}\n");
+        Ok(dot)
+    }
+
+    /// Export as Cytoscape.js format
+    fn export_as_cytoscape(&self, data: &GraphVisualizationData) -> Result<String, RuntimeError> {
+        #[derive(serde::Serialize)]
+        struct CytoscapeData {
+            nodes: Vec<CytoscapeNode>,
+            edges: Vec<CytoscapeEdge>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct CytoscapeNode {
+            data: CytoscapeNodeData,
+        }
+
+        #[derive(serde::Serialize)]
+        struct CytoscapeNodeData {
+            id: String,
+            label: String,
+            #[serde(rename = "background-color")]
+            background_color: String,
+            width: f64,
+            height: f64,
+        }
+
+        #[derive(serde::Serialize)]
+        struct CytoscapeEdge {
+            data: CytoscapeEdgeData,
+        }
+
+        #[derive(serde::Serialize)]
+        struct CytoscapeEdgeData {
+            id: String,
+            source: String,
+            target: String,
+            label: String,
+            #[serde(rename = "line-color")]
+            line_color: String,
+        }
+
+        let cytoscape_nodes = data.nodes
+            .iter()
+            .map(|node| CytoscapeNode {
+                data: CytoscapeNodeData {
+                    id: node.id.clone(),
+                    label: node.label.clone(),
+                    background_color: node.color.clone(),
+                    width: node.size,
+                    height: node.size,
+                }
+            })
+            .collect();
+
+        let cytoscape_edges = data.edges
+            .iter()
+            .enumerate()
+            .map(|(i, edge)| CytoscapeEdge {
+                data: CytoscapeEdgeData {
+                    id: format!("edge_{}", i),
+                    source: edge.from.clone(),
+                    target: edge.to.clone(),
+                    label: edge.label.clone(),
+                    line_color: edge.color.clone(),
+                }
+            })
+            .collect();
+
+        let cytoscape_data = CytoscapeData {
+            nodes: cytoscape_nodes,
+            edges: cytoscape_edges,
+        };
+
+        serde_json::to_string_pretty(&cytoscape_data)
+            .map_err(|e| RuntimeError::new(&format!("Serialization error: {}", e)))
+    }
+
+    /// Export as D3.js force-directed graph format
+    fn export_as_d3_force(&self, data: &GraphVisualizationData) -> Result<String, RuntimeError> {
+        #[derive(serde::Serialize)]
+        struct D3Data {
+            nodes: Vec<D3Node>,
+            links: Vec<D3Link>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct D3Node {
+            id: String,
+            label: String,
+            group: String,
+            color: String,
+            size: f64,
+        }
+
+        #[derive(serde::Serialize)]
+        struct D3Link {
+            source: String,
+            target: String,
+            value: f64,
+            label: String,
+            color: String,
+        }
+
+        let d3_nodes = data.nodes
+            .iter()
+            .map(|node| D3Node {
+                id: node.id.clone(),
+                label: node.label.clone(),
+                group: format!("{:?}", node.status),
+                color: node.color.clone(),
+                size: node.size,
+            })
+            .collect();
+
+        let d3_links = data.edges
+            .iter()
+            .map(|edge| D3Link {
+                source: edge.from.clone(),
+                target: edge.to.clone(),
+                value: edge.weight.unwrap_or(1.0),
+                label: edge.label.clone(),
+                color: edge.color.clone(),
+            })
+            .collect();
+
+        let d3_data = D3Data {
+            nodes: d3_nodes,
+            links: d3_links,
+        };
+
+        serde_json::to_string_pretty(&d3_data)
+            .map_err(|e| RuntimeError::new(&format!("Serialization error: {}", e)))
+    }
+
+    /// Export as Mermaid diagram format
+    fn export_as_mermaid(&self, data: &GraphVisualizationData) -> Result<String, RuntimeError> {
+        let mut mermaid = String::new();
+        mermaid.push_str("graph TD\n");
+
+        // Add nodes with styling
+        for node in &data.nodes {
+            let safe_id = node.id.replace("-", "_");
+            let escaped_label = node.label.replace("\"", "&quot;");
+            mermaid.push_str(&format!("  {}[\"{}\"]\n", safe_id, escaped_label));
+        }
+
+        // Add edges
+        for edge in &data.edges {
+            let safe_from = edge.from.replace("-", "_");
+            let safe_to = edge.to.replace("-", "_");
+            let arrow = match edge.edge_type {
+                EdgeType::DependsOn => "-->",
+                EdgeType::IsSubgoalOf => "-.->",
+                EdgeType::ConflictsWith => "-.->",
+                EdgeType::Enables => "==>",
+                EdgeType::RelatedTo => "---",
+                EdgeType::TriggeredBy => "==>",
+                EdgeType::Blocks => "-.->",
+            };
+            mermaid.push_str(&format!("  {} {}|{}| {}\n", safe_from, arrow, edge.label, safe_to));
+        }
+
+        Ok(mermaid)
+    }
+
+    /// Get debugging information about the graph
+    pub fn get_debug_info(&self) -> Result<DebugInfo, RuntimeError> {
+        let statistics = self.get_graph_statistics()?;
+        let layout_hints = self.get_layout_hints()?;
+
+        // Additional debug information
+        let intents = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.list_intents(IntentFilter::default()).await
+        })?;
+
+        let edges = self.graph_ref.rt.block_on(async {
+            self.graph_ref.storage.get_edges().await
+        })?;
+
+        // Find cycles
+        let cycles = self.detect_cycles(&intents, &edges);
+
+        // Find orphaned intents
+        let orphaned = statistics.isolated_intents.clone();
+
+        // Calculate health metrics
+        let health_score = self.calculate_graph_health(&statistics, &cycles);
+
+        let recommendations = self.generate_recommendations(&statistics);
+        
+        Ok(DebugInfo {
+            statistics,
+            layout_hints,
+            cycles,
+            orphaned_intents: orphaned,
+            health_score,
+            recommendations,
+        })
+    }
+
+    /// Detect cycles in the graph
+    fn detect_cycles(&self, intents: &[StorableIntent], edges: &[Edge]) -> Vec<Vec<IntentId>> {
+        let mut cycles = Vec::new();
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+
+        for intent in intents {
+            if !visited.contains(&intent.intent_id) {
+                if let Some(cycle) = self.dfs_cycle_detection(
+                    &intent.intent_id,
+                    edges,
+                    &mut visited,
+                    &mut rec_stack,
+                    &mut Vec::new(),
+                ) {
+                    cycles.push(cycle);
+                }
+            }
+        }
+
+        cycles
+    }
+
+    /// DFS-based cycle detection
+    fn dfs_cycle_detection(
+        &self,
+        current: &IntentId,
+        edges: &[Edge],
+        visited: &mut HashSet<IntentId>,
+        rec_stack: &mut HashSet<IntentId>,
+        path: &mut Vec<IntentId>,
+    ) -> Option<Vec<IntentId>> {
+        visited.insert(current.clone());
+        rec_stack.insert(current.clone());
+        path.push(current.clone());
+
+        for edge in edges {
+            if &edge.from == current {
+                if !visited.contains(&edge.to) {
+                    if let Some(cycle) = self.dfs_cycle_detection(&edge.to, edges, visited, rec_stack, path) {
+                        return Some(cycle);
+                    }
+                } else if rec_stack.contains(&edge.to) {
+                    // Found a cycle
+                    let cycle_start = path.iter().position(|id| id == &edge.to).unwrap();
+                    return Some(path[cycle_start..].to_vec());
+                }
+            }
+        }
+
+        rec_stack.remove(current);
+        path.pop();
+        None
+    }
+
+    /// Calculate graph health score (0.0 to 1.0)
+    fn calculate_graph_health(&self, statistics: &GraphStatistics, cycles: &[Vec<IntentId>]) -> f64 {
+        let mut health_score = 1.0;
+
+        // Penalize cycles (severe penalty)
+        if !cycles.is_empty() {
+            health_score -= 0.4; // Significant penalty for cycles
+        }
+
+        // Penalize too many isolated nodes
+        let isolation_penalty = statistics.isolated_intents.len() as f64 * 0.1;
+        health_score -= isolation_penalty.min(0.3);
+
+        // Penalize very low connectivity
+        if statistics.avg_connections_per_node < 1.0 {
+            health_score -= 0.2;
+        }
+
+        // Penalize too many failed intents
+        let failed_count = statistics.status_distribution
+            .get(&IntentStatus::Failed)
+            .unwrap_or(&0);
+        let total_intents = statistics.status_distribution.values().sum::<usize>();
+        if total_intents > 0 {
+            let failure_rate = *failed_count as f64 / total_intents as f64;
+            health_score -= failure_rate * 0.3;
+        }
+
+        health_score.max(0.0).min(1.0)
+    }
+
+    /// Generate recommendations for graph improvement
+    fn generate_recommendations(&self, statistics: &GraphStatistics) -> Vec<String> {
+        let mut recommendations = Vec::new();
+
+        if !statistics.isolated_intents.is_empty() {
+            recommendations.push(format!(
+                "Consider connecting {} isolated intents to the main graph",
+                statistics.isolated_intents.len()
+            ));
+        }
+
+        if statistics.avg_connections_per_node < 1.0 {
+            recommendations.push(
+                "Graph connectivity is low. Consider adding more relationships between intents".to_string()
+            );
+        }
+
+        let failed_count = statistics.status_distribution
+            .get(&IntentStatus::Failed)
+            .unwrap_or(&0);
+        if *failed_count > 0 {
+            recommendations.push(format!(
+                "Review {} failed intents and consider archiving or reactivating them",
+                failed_count
+            ));
+        }
+
+        if statistics.highly_connected_intents.len() < 3 {
+            recommendations.push(
+                "Consider identifying key intents that could serve as hubs in the graph".to_string()
+            );
+        }
+
+        recommendations
+    }
+
+    /// Quick search for intents by text
+    pub fn quick_search(&self, query: &str, limit: Option<usize>) -> Result<Vec<StorableIntent>, RuntimeError> {
+        let intent_query = IntentQuery {
+            goal_contains: Some(query.to_string()),
+            limit,
+            sort_by: Some(IntentSortCriteria::RelevanceScore(SortOrder::Descending)),
+            ..Default::default()
+        };
+
+        Ok(self.query_intents(intent_query)?.intents)
+    }
+
+    /// Get related intents for a given intent ID
+    pub fn get_related_intents(&self, intent_id: &IntentId, max_depth: usize) -> Result<Vec<StorableIntent>, RuntimeError> {
+        let mut related = HashSet::new();
+        let mut to_explore = vec![(intent_id.clone(), 0)];
+        let mut explored = HashSet::new();
+
+        while let Some((current_id, depth)) = to_explore.pop() {
+            if depth >= max_depth || explored.contains(&current_id) {
+                continue;
+            }
+
+            explored.insert(current_id.clone());
+
+            // Get all edges involving this intent
+            let edges = self.graph_ref.get_edges_for_intent(&current_id);
+            
+            for edge in edges {
+                let related_id = if edge.from == current_id {
+                    &edge.to
+                } else {
+                    &edge.from
+                };
+
+                if !explored.contains(related_id) {
+                    related.insert(related_id.clone());
+                    to_explore.push((related_id.clone(), depth + 1));
+                }
+            }
+        }
+
+        // Convert to intents
+        let mut result_intents = Vec::new();
+        for intent_id in related {
+            if let Some(intent) = self.graph_ref.get_intent(&intent_id) {
+                result_intents.push(intent);
+            }
+        }
+
+        Ok(result_intents)
+    }
+}
+
+/// Export format enumeration
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum ExportFormat {
+    Json,
+    Graphviz,
+    Cytoscape,
+    D3Force,
+    Mermaid,
+}
+
+/// Debug information structure
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DebugInfo {
+    pub statistics: GraphStatistics,
+    pub layout_hints: LayoutHints,
+    pub cycles: Vec<Vec<IntentId>>,
+    pub orphaned_intents: Vec<IntentId>,
+    pub health_score: f64,
+    pub recommendations: Vec<String>,
+}
+
+impl Default for IntentQuery {
+    fn default() -> Self {
+        Self {
+            status_filter: None,
+            goal_contains: None,
+            metadata_filter: None,
+            created_after: None,
+            created_before: None,
+            updated_after: None,
+            updated_before: None,
+            has_relationship_types: None,
+            connected_to: None,
+            semantic_query: None,
+            limit: None,
+            sort_by: None,
+        }
+    }
+}
+
+impl Default for EdgeQuery {
+    fn default() -> Self {
+        Self {
+            edge_types: None,
+            min_weight: None,
+            max_weight: None,
+            metadata_filter: None,
+            from_intent: None,
+            to_intent: None,
+            involves_intent: None,
+        }
     }
 }
