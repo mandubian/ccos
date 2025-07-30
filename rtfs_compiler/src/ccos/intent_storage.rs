@@ -451,7 +451,13 @@ impl StorageFactory {
         match config {
             StorageConfig::InMemory => Self::in_memory(),
             StorageConfig::File { path } => {
-                Self::with_fallback(path)
+                match Self::file(path).await {
+                    Ok(storage) => storage,
+                    Err(_) => {
+                        eprintln!("Note: Using in-memory storage for fallback strategy");
+                        Self::with_fallback()
+                    }
+                }
             }
         }
     }
@@ -467,7 +473,7 @@ impl StorageFactory {
     }
     
     /// Create storage with fallback strategy (starts as in-memory, can be upgraded later)
-    pub fn with_fallback<P: AsRef<Path>>(_primary_path: P) -> Box<dyn IntentStorage> {
+    pub fn with_fallback() -> Box<dyn IntentStorage> {
         // For now, just return in-memory since async construction in sync context is complex
         eprintln!("Note: Using in-memory storage for fallback strategy");
         Box::new(InMemoryStorage::new())

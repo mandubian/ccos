@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
-use super::intent_graph::IntentGraph;
+    use super::intent_graph::{IntentGraph, IntentGraphConfig};
 use super::types::{Intent, Plan, PlanBody};
 
 /// The Arbiter - LLM kernel that converts natural language to structured intents and plans.
@@ -148,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_arbiter_proposes_plan() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new().unwrap()));
+        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
         let arbiter = Arbiter::new(ArbiterConfig::default(), intent_graph);
 
         // Test sentiment analysis request
