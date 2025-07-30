@@ -453,21 +453,37 @@ impl IntentGraph {
     }
 
     pub fn with_config(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
-        // Create a runtime for this instance if none exists
+        // For synchronous creation, we need to handle the case where no runtime exists
         let rt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle
         } else {
-            // Create a basic runtime for blocking operations
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| RuntimeError::StorageError(format!("Failed to create async runtime: {}", e)))?;
-            let handle = rt.handle().clone();
-            
-            // Keep the runtime alive by leaking it (not ideal but works for now)
-            std::mem::forget(rt);
+            // If no runtime exists, create a simple one for this instance
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|e| RuntimeError::StorageError(format!("Failed to create runtime: {}", e)))?;
+            let handle = runtime.handle().clone();
+            // Keep the runtime alive
+            std::mem::forget(runtime);
             handle
         };
 
+        // Create storage synchronously using the runtime
         let storage = rt.block_on(async { IntentGraphStorage::new(config).await });
+
+        Ok(Self {
+            storage,
+            virtualization: IntentGraphVirtualization::new(),
+            lifecycle: IntentLifecycleManager,
+            rt,
+        })
+    }
+
+    /// Create a new IntentGraph asynchronously (for use within existing async contexts)
+    pub async fn new_async(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
+        let storage = IntentGraphStorage::new(config).await;
+        
+        // Get the current runtime handle for future operations
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| RuntimeError::StorageError("No tokio runtime available".to_string()))?;
 
         Ok(Self {
             storage,
