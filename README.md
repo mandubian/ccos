@@ -8,6 +8,8 @@
 
 This project is a project written 99% by AI. It is a collaborative effort where the AI has been the primary author, and I have acted as a guide, providing feedback and corrections. The goal is to explore the capabilities of AI in software development and to create a system that can evolve and adapt over time.
 
+I also try to use AI in a "reasonable way" using basic subscription (copilot pro and cursor pro) and trying to optimize a bit my AI flow, stopping when AI is looping or diverging.
+
 This project began several months ago with a unique premise: to define a new language (RTFS, Reason about The Fucking Spec) and its compiler, not for humans, but for AI itself. My role has been that of a "human partner," guiding the process and providing feedback, but with a conscious effort to let the AI lead the architectural decisions. The goal was to see what kind of system an AI would build for itself. The language has evolved into a v2.0 specification but then we needed to define a full architecture for the AI to use this language in a self-governing way, leading to the Cognitive Computing Operating System (CCOS).
 
 The development process has been a rapid journey of discovery and iteration. For full transparency, the raw, unfiltered logs of my exchanges with the AI are available in the `chats` directory, documenting the project's evolution through both breakthroughs and challenges.
