@@ -278,7 +278,7 @@ impl RuntimeStrategy for IrWithFallbackStrategy {
                 // If IR fails, fall back to AST execution
                 match self.ast_strategy.run(program) {
                     Ok(result) => Ok(result),
-                    Err(ast_error) => {
+                    Err(_ast_error) => {
                         // If both fail, return the IR error (more specific)
                         Err(ir_error)
                     }
