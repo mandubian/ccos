@@ -101,12 +101,45 @@ Edges define how intents relate to one another, allowing for complex reasoning.
 -   `TriggeredBy`: Intent A was created as a direct result of Intent B's execution or completion.
 -   `Blocks`: Intent A prevents Intent B from proceeding.
 
-### 3.2. Edge Properties
+### 3.2. Enhanced Edge Properties
+
+Edges now support rich metadata and weighted relationships for advanced graph analysis:
 
 -   `from_intent` / `to_intent` (IntentId): The two intents connected by the edge.
 -   `edge_type` (Enum): The type of relationship.
--   `weight` (Float, Optional): The strength of the relationship.
--   `metadata` (Map<String, Value>): Additional context, such as an explanation for a conflict.
+-   `weight` (Float, Optional): The strength or importance of the relationship (0.0 to 1.0).
+-   `metadata` (Map<String, Value>): Additional context, such as:
+    -   `reason`: Explanation for the relationship
+    -   `severity`: Impact level for conflicts or dependencies
+    -   `confidence`: Confidence level in the inferred relationship
+    -   `created_by`: Source of the relationship (arbiter, user, inference)
+    -   `created_at`: Timestamp of relationship creation
+    -   `expires_at`: Optional expiration for temporary relationships
+
+### 3.3. Edge Creation and Management
+
+```clojure
+;; Basic edge creation
+(create-edge :intent-a :intent-b :depends-on)
+
+;; Weighted edge with metadata
+(create-weighted-edge :intent-a :intent-b :conflicts-with
+  :weight 0.8
+  :metadata {
+    :reason "Resource contention for database connections"
+    :severity :high
+    :confidence 0.95
+  })
+
+;; Edge with rich context
+(create-edge-with-metadata :intent-a :intent-b :enables
+  {
+    :reason "Infrastructure setup enables application deployment"
+    :created-by :arbiter-inference
+    :confidence 0.9
+    :temporary false
+  })
+```
 
 ## 4. Core Functionality
 
@@ -120,19 +153,133 @@ The Intent Graph component must provide APIs for:
 -   **Dynamic intent creation** during plan execution.
 -   **Re-parsing** stored RTFS intent sources with updated parsers for version migration.
 
-## 5. The Living Graph: A Dynamic System
+## 5. Enhanced Graph Operations
+
+### 5.1. Advanced Graph Traversal
+
+The Intent Graph now supports sophisticated traversal operations for complex relationship analysis:
+
+#### **Hierarchical Traversal**
+```clojure
+;; Get all parent intents (intents this intent depends on)
+(get-parent-intents :intent-id)
+
+;; Get all child intents (intents that depend on this intent)
+(get-child-intents :intent-id)
+
+;; Get complete hierarchy (parents + children + siblings)
+(get-intent-hierarchy :intent-id)
+
+;; Get strongly connected intents (bidirectional relationships)
+(get-strongly-connected-intents :intent-id)
+```
+
+#### **Relationship Analysis**
+```clojure
+;; Find intents by relationship type
+(find-intents-by-relationship :intent-id :depends-on)
+
+;; Get all edges for an intent
+(get-edges-for-intent :intent-id)
+
+;; Analyze relationship strength
+(get-relationship-strength :intent-a :intent-b)
+```
+
+### 5.2. Subgraph Storage and Restore
+
+The Intent Graph supports storing and restoring entire subgraphs in single operations, enabling efficient graph partitioning and context management:
+
+#### **Subgraph Storage**
+```clojure
+;; Store entire subgraph from root intent (includes all descendants)
+(store-subgraph-from-root :root-intent-id :path)
+
+;; Store entire subgraph from child intent (includes all ancestors)
+(store-subgraph-from-child :child-intent-id :path)
+
+;; Store complete graph backup
+(backup :path)
+```
+
+#### **Subgraph Restoration**
+```clojure
+;; Restore subgraph from file
+(restore-subgraph :path)
+
+;; Restore complete graph backup
+(restore :path)
+```
+
+#### **Subgraph Data Format**
+```clojure
+(deftype SubgraphBackupData (Map Keyword Any)
+  {
+    :intents (Map IntentId StorableIntent)    ; All intents in subgraph
+    :edges (Vec Edge)                         ; All edges in subgraph
+    :root-intent-id IntentId                  ; Reference point
+    :version String                           ; Format version
+    :timestamp U64                            ; Creation timestamp
+  })
+```
+
+### 5.3. Weighted Edge Analysis
+
+Enhanced edge weighting enables sophisticated graph analysis:
+
+```clojure
+;; Create weighted edge
+(create-weighted-edge :intent-a :intent-b :depends-on
+  :weight 0.8)
+
+;; Analyze relationship strength
+(let [strength (get-edge-weight :intent-a :intent-b)]
+  (if (> strength 0.7)
+    (mark-critical-dependency :intent-a :intent-b)
+    (mark-optional-dependency :intent-a :intent-b)))
+
+;; Find critical paths
+(find-critical-paths :root-intent-id)
+```
+
+### 5.4. Metadata-Enhanced Queries
+
+Rich metadata support enables advanced querying and filtering:
+
+```clojure
+;; Find intents by metadata
+(find-intents-by-metadata {
+  :priority :high
+  :domain :infrastructure
+  :created-by :user
+})
+
+;; Query edges by metadata
+(find-edges-by-metadata {
+  :severity :high
+  :confidence (> 0.8)
+})
+
+;; Filter by relationship context
+(filter-relationships {
+  :edge-type :conflicts-with
+  :metadata {:severity :high}
+})
+```
+
+## 6. The Living Graph: A Dynamic System
 
 The Intent Graph is not a static data structure; it is a "living" system that evolves through interaction with the Arbiter and the user. This dynamic nature is what elevates it from a simple task list to a map of a user's strategic landscape.
 
-### 5.1. Negotiated Goals
+### 6.1. Negotiated Goals
 
 The Arbiter uses the graph to reason about potential conflicts or misalignments with a user's long-term goals. If a new request conflicts with a pre-existing, high-priority intent, the Arbiter can initiate a clarification dialogue with the user rather than proceeding blindly. For example: *"I see you've asked to minimize all cloud costs this month. Your new request to process this large dataset will incur significant cost. Shall I proceed anyway?"*
 
-### 5.2. Inferred Relationships
+### 6.2. Inferred Relationships
 
 The Arbiter can proactively analyze the graph to infer new relationships. For example, if it notices that two different intents both depend on a capability that is currently unavailable, it can create a new `BlockedBy` edge, providing deeper insight into the system's state.
 
-### 5.3. Dynamic Intent Creation During Plan Execution
+### 6.3. Dynamic Intent Creation During Plan Execution
 
 Plans can dynamically create new intents during execution. This happens when:
 
@@ -165,11 +312,87 @@ Example of plan-triggered intent creation:
 
 This "living" aspect transforms the Intent Graph from a passive record into an active, collaborative partner in achieving the user's goals.
 
-## 6. Intent vs Plan Steps: Architectural Decision Guidelines
+## 7. Graph Partitioning and Context Management
+
+### 7.1. Subgraph Isolation
+
+The enhanced subgraph functionality enables logical partitioning of the Intent Graph for context-specific operations:
+
+```clojure
+;; Isolate infrastructure-related intents
+(let [infra-subgraph (store-subgraph-from-root :infrastructure-root :infra-path)]
+  ;; Work with isolated infrastructure context
+  (analyze-infrastructure-dependencies infra-subgraph))
+
+;; Create project-specific context
+(let [project-subgraph (store-subgraph-from-child :project-goal :project-path)]
+  ;; Manage project in isolation
+  (manage-project-context project-subgraph))
+```
+
+### 7.2. Context Switching
+
+Subgraph operations enable seamless context switching for complex multi-project scenarios:
+
+```clojure
+;; Switch to production context
+(restore-subgraph :production-context-path)
+
+;; Execute production-specific operations
+(execute-production-plan)
+
+;; Switch back to development context
+(restore-subgraph :development-context-path)
+```
+
+### 7.3. Graph Merging and Conflict Resolution
+
+Future enhancements will support merging subgraphs with conflict resolution:
+
+```clojure
+;; Merge development and production contexts
+(merge-subgraphs {
+  :source-1 :dev-context-path
+  :source-2 :prod-context-path
+  :conflict-resolution :user-prompt
+  :output :merged-context-path
+})
+```
+
+## 8. Performance and Scalability
+
+### 8.1. Efficient Traversal
+
+The enhanced graph operations use optimized algorithms for large-scale graphs:
+
+- **Cycle Detection**: Prevents infinite recursion in complex graphs
+- **Visited Tracking**: O(1) lookup for traversal optimization
+- **Async Support**: Non-blocking operations for large graphs
+- **Memory Management**: Efficient collection and serialization
+
+### 8.2. Storage Optimization
+
+Subgraph storage is optimized for performance and space efficiency:
+
+- **Incremental Storage**: Only store changed portions of graphs
+- **Compression**: Efficient serialization formats
+- **Caching**: Frequently accessed subgraphs cached in memory
+- **Lazy Loading**: Load subgraphs on demand
+
+### 8.3. Query Optimization
+
+Advanced query capabilities with performance considerations:
+
+- **Indexed Queries**: Fast lookup by intent properties
+- **Semantic Search**: Efficient similarity-based queries
+- **Relationship Caching**: Cached relationship analysis results
+- **Batch Operations**: Efficient bulk operations on large graphs
+
+## 9. Intent vs Plan Steps: Architectural Decision Guidelines
 
 A fundamental question in CCOS is when to create a new Intent versus when to create a Plan step. This decision affects the strategic vs tactical nature of the system's reasoning.
 
-### 6.1. Create New Intent When:
+### 9.1. Create New Intent When:
 
 - **Strategic significance**: The problem requires goal-level reasoning and constraint evaluation
 - **Persistent concern**: The issue may persist beyond the current plan execution
@@ -178,7 +401,7 @@ A fundamental question in CCOS is when to create a new Intent versus when to cre
 - **Complex constraints**: The problem has its own success criteria and constraints that need validation
 - **External dependencies**: The solution depends on external resources or events outside the current plan's scope
 
-### 6.2. Create Plan Step When:
+### 9.2. Create Plan Step When:
 
 - **Tactical execution**: The action is a direct implementation detail of the current intent
 - **Transient operation**: The action is part of a linear sequence with no independent strategic value
@@ -186,7 +409,7 @@ A fundamental question in CCOS is when to create a new Intent versus when to cre
 - **Atomic operation**: The action is indivisible and doesn't warrant separate constraint validation
 - **Immediate execution**: The action can and should be completed within the current plan's execution context
 
-### 6.3. Relationship to Causal Chain
+### 9.3. Relationship to Causal Chain
 
 Both Intent creation and Plan steps are recorded in the Causal Chain (SEP-003), but they serve different purposes:
 
@@ -196,7 +419,7 @@ Both Intent creation and Plan steps are recorded in the Causal Chain (SEP-003), 
 
 This creates a complete audit trail showing both tactical execution (steps) and strategic evolution (intents).
 
-### 6.4. Example: When to Choose
+### 9.4. Example: When to Choose
 
 **Scenario**: During web service deployment, database connection fails.
 
@@ -221,3 +444,123 @@ This creates a complete audit trail showing both tactical execution (steps) and 
 - If this requires investigating infrastructure, changing configurations, or affects other services → New intent
 
 This distinction ensures that the Intent Graph captures strategic concerns while the Causal Chain captures all execution details.
+
+## 10. Implementation Status
+
+### 10.1. Completed Features
+
+✅ **Core Intent Graph Operations**
+- Intent storage and retrieval
+- Basic edge creation and management
+- Graph traversal and querying
+- Status management and lifecycle
+
+✅ **Enhanced Edge System**
+- Weighted edges with configurable importance
+- Rich metadata support for relationships
+- Multiple edge types (DependsOn, IsSubgoalOf, ConflictsWith, etc.)
+- Edge validation and constraint checking
+
+✅ **Advanced Graph Traversal**
+- Hierarchical relationship traversal (parents/children)
+- Strongly connected component detection
+- Relationship analysis and filtering
+- Cycle detection and prevention
+
+✅ **Subgraph Storage and Restore**
+- Store subgraphs from root or child intents
+- Complete subgraph restoration with relationship preservation
+- JSON-based serialization format
+- Context isolation and management
+
+✅ **Performance Optimizations**
+- Efficient traversal algorithms
+- Async support for large graphs
+- Memory management and caching
+- Optimized storage formats
+
+### 10.2. Future Enhancements
+
+🔄 **Planned Features**
+- Graph merging and conflict resolution
+- Incremental subgraph updates
+- Advanced visualization capabilities
+- Real-time graph synchronization
+- Machine learning-based relationship inference
+- Graph analytics and metrics
+
+### 10.3. Testing and Validation
+
+✅ **Comprehensive Test Coverage**
+- 18 Intent Graph tests covering all functionality
+- Subgraph storage and restore validation
+- Edge weight and metadata testing
+- Performance and scalability testing
+- Error handling and edge case coverage
+
+## 11. Integration with CCOS Architecture
+
+### 11.1. Arbiter Integration
+
+The Intent Graph integrates with the Arbiter for intelligent goal management:
+
+```clojure
+;; Arbiter creates and manages intents
+(arbiter/create-intent {
+  :goal "Deploy production web service"
+  :constraints {:availability (> 0.99)}
+  :triggered-by :human-request
+})
+
+;; Arbiter analyzes relationships
+(arbiter/analyze-conflicts :new-intent-id)
+
+;; Arbiter infers new relationships
+(arbiter/infer-relationships :intent-id)
+```
+
+### 11.2. Causal Chain Integration
+
+All Intent Graph operations are recorded in the Causal Chain for audit and replay:
+
+```clojure
+;; Intent creation recorded in Causal Chain
+(causal-chain/record-action {
+  :action-type :intent-created
+  :intent-id :new-intent-id
+  :triggering-plan :plan-id
+  :timestamp :now
+})
+
+;; Relationship changes recorded
+(causal-chain/record-action {
+  :action-type :relationship-created
+  :from-intent :intent-a
+  :to-intent :intent-b
+  :edge-type :depends-on
+  :weight 0.8
+})
+```
+
+### 11.3. Plan Execution Integration
+
+Plans can dynamically interact with the Intent Graph:
+
+```clojure
+(plan "dynamic-plan"
+  (step "Check Intent Dependencies"
+    (let [dependencies (get-parent-intents :current-intent)]
+      (if (empty? dependencies)
+        (continue)
+        (wait-for-dependencies dependencies))))
+  
+  (step "Create Sub-Intent if Needed"
+    (if (needs-sub-intent? :current-context)
+      (create-intent {
+        :goal "Handle sub-problem"
+        :parent :current-intent
+        :triggered-by :plan-execution
+      }))))
+```
+
+This comprehensive integration ensures that the Intent Graph serves as the central nervous system of CCOS, connecting strategic goals with tactical execution while maintaining a complete audit trail of all system behavior.
