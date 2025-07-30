@@ -1,0 +1,56 @@
+;; GitHub MCP Capability Demo
+;; This RTFS program demonstrates how to use the GitHub MCP capability
+;; to manage GitHub issues programmatically.
+
+;; First, let's list the current open issues
+(step "List Open Issues" 
+  (call :github_mcp.list_issues {
+    :owner "mandubian"
+    :repo "ccos"
+    :state "open"
+    :per_page 5
+  }))
+
+;; Now let's create a test issue to demonstrate the capability
+(step "Create Test Issue"
+  (call :github_mcp.create_issue {
+    :owner "mandubian"
+    :repo "ccos"
+    :title "Test Issue from RTFS MCP Demo"
+    :body "This issue was created automatically by the RTFS GitHub MCP capability demo.
+
+## Purpose
+This demonstrates how RTFS programs can interact with GitHub through MCP capabilities.
+
+## Features Demonstrated
+- Issue creation via MCP
+- Structured input/output handling
+- Error handling and validation
+- Integration with CCOS capability system
+
+## Next Steps
+This issue will be closed automatically by the demo program."
+    :labels ["demo" "rtfs" "mcp" "test"]
+    :assignees ["mandubian"]
+  }))
+
+;; Let's also demonstrate how to close an issue (commented out for safety)
+;; Uncomment and replace ISSUE_NUMBER with an actual issue number to test
+;; (step "Close Test Issue"
+;;   (call :github_mcp.close_issue {
+;;     :owner "mandubian"
+;;     :repo "ccos"
+;;     :issue_number ISSUE_NUMBER
+;;     :comment "Closed automatically by RTFS MCP demo program. This demonstrates the capability working correctly!"
+;;   }))
+
+;; Return a summary of what we accomplished
+"GitHub MCP capability demo completed! 🎉
+
+The demo has:
+- Listed current open issues
+- Created a test issue to demonstrate the capability
+- Shown how to structure MCP capability calls in RTFS
+
+This demonstrates how RTFS programs can seamlessly integrate with external services
+like GitHub through the MCP (Model Context Protocol) capability system." 

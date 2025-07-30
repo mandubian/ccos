@@ -23,6 +23,10 @@ name = "rtfs-repl"
 path = "src/bin/rtfs_repl.rs"
 required-features = ["repl"]
 
+[[bin]]
+name = "github_issue_manager"
+path = "src/bin/github_issue_manager.rs"
+
 [dependencies]
 # Parser dependencies
 pest = { version = "2.7", optional = true }

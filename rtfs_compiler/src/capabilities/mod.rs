@@ -1,15 +1,14 @@
 // RTFS Capabilities Module
 pub mod weather_mcp;
+pub mod github_mcp;
+
+pub use weather_mcp::WeatherMCPCapability;
+pub use github_mcp::GitHubMCPCapability;
+
 // pub mod http_api;
 // pub mod local_llm;
 // pub mod collaboration;
 // pub mod demo_provider;
-
-// pub use weather_mcp::WeatherMCPCapability;
-// pub use http_api::HttpApiProvider;
-// pub use local_llm::LocalLlmProvider;
-// pub use collaboration::CollaborationProvider;
-// pub use demo_provider::DemoProvider;
 
 // // Re-export core capability types from runtime
 // pub use crate::runtime::capability_provider::{
