@@ -147,17 +147,30 @@ pub struct Action {
 /// Categorizes the type of event being recorded in the Causal Chain.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ActionType {
+    // Plan Lifecycle
     PlanStarted,
     PlanCompleted,
     PlanAborted,
     PlanPaused,
     PlanResumed,
+    
+    // Step Lifecycle
     PlanStepStarted,
     PlanStepCompleted,
     PlanStepFailed,
     PlanStepRetrying,
+    
+    // Execution
     CapabilityCall,
     InternalStep,
+    
+    // Intent Lifecycle (new)
+    IntentCreated,
+    IntentStatusChanged,
+    IntentRelationshipCreated,
+    IntentRelationshipModified,
+    IntentArchived,
+    IntentReactivated,
 }
 
 /// Represents the outcome of an executed action or plan.

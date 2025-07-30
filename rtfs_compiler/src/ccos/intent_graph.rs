@@ -377,6 +377,7 @@ impl GraphTraversalEngine {
 pub struct IntentLifecycleManager;
 
 impl IntentLifecycleManager {
+    /// Archive completed intents (existing functionality)
     pub async fn archive_completed_intents(
         &self,
         storage: &mut IntentGraphStorage,
@@ -389,18 +390,413 @@ impl IntentLifecycleManager {
         let completed_intents = storage.list_intents(completed_filter).await?;
 
         for mut intent in completed_intents {
-            intent.status = IntentStatus::Archived;
-            intent.updated_at = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            
-            storage.update_intent(&intent).await?;
+            self.transition_intent_status(
+                storage,
+                None, // causal_chain - will be added when IntentGraph has access
+                &mut intent,
+                IntentStatus::Archived,
+                "Auto-archived completed intent".to_string(),
+                None, // triggering_plan_id - will be enhanced later
+            ).await?;
         }
 
         Ok(())
     }
 
+    /// Transition an intent to a new status with audit trail
+    pub async fn transition_intent_status(
+        &self,
+        storage: &mut IntentGraphStorage,
+        causal_chain: Option<&mut crate::ccos::causal_chain::CausalChain>,
+        intent: &mut StorableIntent,
+        new_status: IntentStatus,
+        reason: String,
+        triggering_plan_id: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        let old_status = intent.status.clone();
+        
+        // Validate the transition
+        self.validate_status_transition(&old_status, &new_status)?;
+        
+        // Update the intent
+        intent.status = new_status.clone();
+        intent.updated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        // Add audit trail to metadata
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        // Count existing transitions to ensure unique keys
+        let transition_count = intent.metadata
+            .keys()
+            .filter(|key| key.starts_with("status_transition_"))
+            .count();
+        
+        let audit_entry = format!(
+            "{}: {} -> {} (reason: {})",
+            timestamp,
+            self.status_to_string(&old_status),
+            self.status_to_string(&new_status),
+            reason
+        );
+        
+        let audit_key = format!("status_transition_{}_{}", timestamp, transition_count);
+        intent.metadata.insert(audit_key, audit_entry);
+        
+        // Store the updated intent
+        storage.update_intent(intent).await?;
+        
+        // Log to Causal Chain if available
+        if let Some(chain) = causal_chain {
+            let plan_id = triggering_plan_id.unwrap_or("intent-lifecycle-manager");
+            chain.log_intent_status_change(
+                &plan_id.to_string(),
+                &intent.intent_id,
+                self.status_to_string(&old_status),
+                self.status_to_string(&new_status),
+                &reason,
+                None, // triggering_action_id - could be enhanced later
+            )?;
+        }
+        
+        Ok(())
+    }
+
+    /// Complete an intent (transition to Completed status)
+    pub async fn complete_intent(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        result: &ExecutionResult,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        let reason = if result.success {
+            "Intent completed successfully".to_string()
+        } else {
+            format!("Intent completed with errors: {:?}", result.value)
+        };
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            IntentStatus::Completed,
+            reason,
+            None, // triggering_plan_id - will be enhanced later
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Fail an intent (transition to Failed status)
+    pub async fn fail_intent(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        error_message: String,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            IntentStatus::Failed,
+            format!("Intent failed: {}", error_message),
+            None, // triggering_plan_id - will be enhanced later
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Suspend an intent (transition to Suspended status)
+    pub async fn suspend_intent(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            IntentStatus::Suspended,
+            format!("Intent suspended: {}", reason),
+            None, // triggering_plan_id - will be enhanced later
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Resume a suspended intent (transition to Active status)
+    pub async fn resume_intent(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            IntentStatus::Active,
+            format!("Intent resumed: {}", reason),
+            None, // triggering_plan_id - will be enhanced later
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Archive an intent (transition to Archived status)
+    pub async fn archive_intent(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            IntentStatus::Archived,
+            format!("Intent archived: {}", reason),
+            None, // triggering_plan_id - will be enhanced later
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Reactivate an archived intent (transition to Active status)
+    pub async fn reactivate_intent(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            IntentStatus::Active,
+            format!("Intent reactivated: {}", reason),
+            None, // triggering_plan_id - will be enhanced later
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Get intents by status
+    pub async fn get_intents_by_status(
+        &self,
+        storage: &IntentGraphStorage,
+        status: IntentStatus,
+    ) -> Result<Vec<StorableIntent>, RuntimeError> {
+        let filter = IntentFilter {
+            status: Some(status),
+            ..Default::default()
+        };
+        
+        storage.list_intents(filter).await
+    }
+
+    /// Get intent status transition history
+    pub async fn get_status_history(
+        &self,
+        storage: &IntentGraphStorage,
+        intent_id: &IntentId,
+    ) -> Result<Vec<String>, RuntimeError> {
+        let intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        let mut history = Vec::new();
+        
+        // Extract status transition entries from metadata
+        for (key, value) in &intent.metadata {
+            if key.starts_with("status_transition_") {
+                history.push(value.clone());
+            }
+        }
+        
+        // Sort by timestamp (extracted from key)
+        history.sort_by(|a, b| {
+            let timestamp_a = a.split(':').next().unwrap_or("0").parse::<u64>().unwrap_or(0);
+            let timestamp_b = b.split(':').next().unwrap_or("0").parse::<u64>().unwrap_or(0);
+            timestamp_a.cmp(&timestamp_b)
+        });
+        
+        Ok(history)
+    }
+
+    /// Validate if a status transition is allowed
+    fn validate_status_transition(
+        &self,
+        from: &IntentStatus,
+        to: &IntentStatus,
+    ) -> Result<(), RuntimeError> {
+        match (from, to) {
+            // Active can transition to any other status
+            (IntentStatus::Active, _) => Ok(()),
+            
+            // Completed can only transition to Archived
+            (IntentStatus::Completed, IntentStatus::Archived) => Ok(()),
+            (IntentStatus::Completed, _) => Err(RuntimeError::Generic(
+                format!("Cannot transition from Completed to {:?}", to)
+            )),
+            
+            // Failed can transition to Active (retry) or Archived
+            (IntentStatus::Failed, IntentStatus::Active) => Ok(()),
+            (IntentStatus::Failed, IntentStatus::Archived) => Ok(()),
+            (IntentStatus::Failed, _) => Err(RuntimeError::Generic(
+                format!("Cannot transition from Failed to {:?}", to)
+            )),
+            
+            // Suspended can transition to Active (resume) or Archived
+            (IntentStatus::Suspended, IntentStatus::Active) => Ok(()),
+            (IntentStatus::Suspended, IntentStatus::Archived) => Ok(()),
+            (IntentStatus::Suspended, _) => Err(RuntimeError::Generic(
+                format!("Cannot transition from Suspended to {:?}", to)
+            )),
+            
+            // Archived can transition to Active (reactivate)
+            (IntentStatus::Archived, IntentStatus::Active) => Ok(()),
+            (IntentStatus::Archived, _) => Err(RuntimeError::Generic(
+                format!("Cannot transition from Archived to {:?}", to)
+            )),
+        }
+    }
+
+    /// Convert status to string for audit trail
+    fn status_to_string(&self, status: &IntentStatus) -> &'static str {
+        match status {
+            IntentStatus::Active => "Active",
+            IntentStatus::Completed => "Completed",
+            IntentStatus::Failed => "Failed",
+            IntentStatus::Archived => "Archived",
+            IntentStatus::Suspended => "Suspended",
+        }
+    }
+
+    /// Get intents that are ready for processing (Active status)
+    pub async fn get_ready_intents(
+        &self,
+        storage: &IntentGraphStorage,
+    ) -> Result<Vec<StorableIntent>, RuntimeError> {
+        self.get_intents_by_status(storage, IntentStatus::Active).await
+    }
+
+    /// Get intents that need attention (Failed or Suspended status)
+    pub async fn get_intents_needing_attention(
+        &self,
+        storage: &IntentGraphStorage,
+    ) -> Result<Vec<StorableIntent>, RuntimeError> {
+        let failed = self.get_intents_by_status(storage, IntentStatus::Failed).await?;
+        let suspended = self.get_intents_by_status(storage, IntentStatus::Suspended).await?;
+        
+        let mut needing_attention = failed;
+        needing_attention.extend(suspended);
+        
+        Ok(needing_attention)
+    }
+
+    /// Get intents that can be archived (Completed for more than specified days)
+    pub async fn get_intents_ready_for_archival(
+        &self,
+        storage: &IntentGraphStorage,
+        days_threshold: u64,
+    ) -> Result<Vec<StorableIntent>, RuntimeError> {
+        let completed_intents = self.get_intents_by_status(storage, IntentStatus::Completed).await?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let threshold_seconds = days_threshold * 24 * 60 * 60;
+        
+        let ready_for_archival = completed_intents
+            .into_iter()
+            .filter(|intent| {
+                let time_since_completion = now.saturating_sub(intent.updated_at);
+                time_since_completion >= threshold_seconds
+            })
+            .collect();
+        
+        Ok(ready_for_archival)
+    }
+
+    /// Bulk transition intents by status
+    pub async fn bulk_transition_intents(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_ids: &[IntentId],
+        new_status: IntentStatus,
+        reason: String,
+    ) -> Result<Vec<IntentId>, RuntimeError> {
+        let mut successful_transitions = Vec::new();
+        let mut errors = Vec::new();
+        
+        for intent_id in intent_ids {
+            match self.transition_intent_by_id(storage, intent_id, new_status.clone(), reason.clone()).await {
+                Ok(()) => successful_transitions.push(intent_id.clone()),
+                Err(e) => errors.push((intent_id.clone(), e)),
+            }
+        }
+        
+        if !errors.is_empty() {
+            let error_summary = errors
+                .iter()
+                .map(|(id, e)| format!("{}: {}", id, e))
+                .collect::<Vec<_>>()
+                .join(", ");
+            
+            return Err(RuntimeError::Generic(
+                format!("Some transitions failed: {}", error_summary)
+            ));
+        }
+        
+        Ok(successful_transitions)
+    }
+
+    /// Helper method to transition intent by ID
+    async fn transition_intent_by_id(
+        &self,
+        storage: &mut IntentGraphStorage,
+        intent_id: &IntentId,
+        new_status: IntentStatus,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
+        let mut intent = storage.get_intent(intent_id).await?
+            .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
+        
+        self.transition_intent_status(
+            storage,
+            None, // causal_chain - will be added when IntentGraph has access
+            &mut intent,
+            new_status,
+            reason,
+            None, // triggering_plan_id - will be enhanced later
+        ).await
+    }
+
+    /// Infer edges between intents (existing functionality)
     pub async fn infer_edges(&self, storage: &mut IntentGraphStorage) -> Result<(), RuntimeError> {
         // Simple edge inference based on goal similarity
         // In a full implementation, this would use more sophisticated NLP
@@ -607,13 +1003,6 @@ impl IntentGraph {
     pub fn get_conflicting_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         self.rt.block_on(async {
             self.storage.get_conflicting_intents(intent_id).await.unwrap_or_default()
-        })
-    }
-
-    /// Archive completed intents
-    pub fn archive_completed_intents(&mut self) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
-            self.lifecycle.archive_completed_intents(&mut self.storage).await
         })
     }
 
@@ -1064,6 +1453,102 @@ impl IntentGraph {
         }
         
         Ok(())
+    }
+
+    /// Archive completed intents
+    pub fn archive_completed_intents(&mut self) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.archive_completed_intents(&mut self.storage).await
+        })
+    }
+
+    /// Complete an intent with execution result
+    pub fn complete_intent(&mut self, intent_id: &IntentId, result: &ExecutionResult) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.complete_intent(&mut self.storage, intent_id, result).await
+        })
+    }
+
+    /// Fail an intent with error message
+    pub fn fail_intent(&mut self, intent_id: &IntentId, error_message: String) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.fail_intent(&mut self.storage, intent_id, error_message).await
+        })
+    }
+
+    /// Suspend an intent with reason
+    pub fn suspend_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.suspend_intent(&mut self.storage, intent_id, reason).await
+        })
+    }
+
+    /// Resume a suspended intent
+    pub fn resume_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.resume_intent(&mut self.storage, intent_id, reason).await
+        })
+    }
+
+    /// Archive an intent with reason
+    pub fn archive_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.archive_intent(&mut self.storage, intent_id, reason).await
+        })
+    }
+
+    /// Reactivate an archived intent
+    pub fn reactivate_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.reactivate_intent(&mut self.storage, intent_id, reason).await
+        })
+    }
+
+    /// Get intents by status
+    pub fn get_intents_by_status(&self, status: IntentStatus) -> Vec<StorableIntent> {
+        self.rt.block_on(async {
+            self.lifecycle.get_intents_by_status(&self.storage, status).await.unwrap_or_default()
+        })
+    }
+
+    /// Get intent status transition history
+    pub fn get_status_history(&self, intent_id: &IntentId) -> Vec<String> {
+        self.rt.block_on(async {
+            self.lifecycle.get_status_history(&self.storage, intent_id).await.unwrap_or_default()
+        })
+    }
+
+    /// Get intents that are ready for processing (Active status)
+    pub fn get_ready_intents(&self) -> Vec<StorableIntent> {
+        self.rt.block_on(async {
+            self.lifecycle.get_ready_intents(&self.storage).await.unwrap_or_default()
+        })
+    }
+
+    /// Get intents that need attention (Failed or Suspended status)
+    pub fn get_intents_needing_attention(&self) -> Vec<StorableIntent> {
+        self.rt.block_on(async {
+            self.lifecycle.get_intents_needing_attention(&self.storage).await.unwrap_or_default()
+        })
+    }
+
+    /// Get intents that can be archived (Completed for more than specified days)
+    pub fn get_intents_ready_for_archival(&self, days_threshold: u64) -> Vec<StorableIntent> {
+        self.rt.block_on(async {
+            self.lifecycle.get_intents_ready_for_archival(&self.storage, days_threshold).await.unwrap_or_default()
+        })
+    }
+
+    /// Bulk transition intents by status
+    pub fn bulk_transition_intents(
+        &mut self,
+        intent_ids: &[IntentId],
+        new_status: IntentStatus,
+        reason: String,
+    ) -> Result<Vec<IntentId>, RuntimeError> {
+        self.rt.block_on(async {
+            self.lifecycle.bulk_transition_intents(&mut self.storage, intent_ids, new_status, reason).await
+        })
     }
 }
 
@@ -1739,5 +2224,464 @@ mod tests {
         // Verify related intents are preserved
         let related_to_child1 = new_graph.find_intents_by_relationship(&restored_child1.intent_id, EdgeType::RelatedTo);
         assert_eq!(related_to_child1.len(), 1); // child1 is related to child2
+    }
+
+    #[test]
+    fn test_intent_lifecycle_management() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test intent
+        let intent = StorableIntent::new("Test lifecycle intent".to_string());
+        let intent_id = intent.intent_id.clone();
+        
+        graph.store_intent(intent).unwrap();
+        
+        // Initially should be Active
+        let retrieved = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(retrieved.status, IntentStatus::Active);
+        
+        // Test suspend
+        graph.suspend_intent(&intent_id, "Waiting for resources".to_string()).unwrap();
+        let suspended = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(suspended.status, IntentStatus::Suspended);
+        
+        // Test resume
+        graph.resume_intent(&intent_id, "Resources available".to_string()).unwrap();
+        let resumed = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(resumed.status, IntentStatus::Active);
+        
+        // Test fail
+        graph.fail_intent(&intent_id, "Network timeout".to_string()).unwrap();
+        let failed = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(failed.status, IntentStatus::Failed);
+        
+        // Test retry (failed -> active)
+        graph.resume_intent(&intent_id, "Retrying after failure".to_string()).unwrap();
+        let retried = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(retried.status, IntentStatus::Active);
+        
+        // Test complete
+        let result = ExecutionResult {
+            success: true,
+            value: Value::String("Success".to_string()),
+            metadata: HashMap::new(),
+        };
+        graph.complete_intent(&intent_id, &result).unwrap();
+        let completed = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(completed.status, IntentStatus::Completed);
+        
+        // Test archive
+        graph.archive_intent(&intent_id, "No longer needed".to_string()).unwrap();
+        let archived = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(archived.status, IntentStatus::Archived);
+        
+        // Test reactivate
+        graph.reactivate_intent(&intent_id, "Need to work on this again".to_string()).unwrap();
+        let reactivated = graph.get_intent(&intent_id).unwrap();
+        assert_eq!(reactivated.status, IntentStatus::Active);
+    }
+
+    #[test]
+    fn test_status_transition_validation() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test intent
+        let intent = StorableIntent::new("Test validation intent".to_string());
+        let intent_id = intent.intent_id.clone();
+        
+        graph.store_intent(intent).unwrap();
+        
+        // Test invalid transitions
+        let execution_result = ExecutionResult {
+            success: true,
+            value: Value::String("Success".to_string()),
+            metadata: HashMap::new(),
+        };
+        graph.complete_intent(&intent_id, &execution_result).unwrap();
+        
+        // Completed -> Active should fail
+        let result = graph.resume_intent(&intent_id, "Invalid transition".to_string());
+        assert!(result.is_err());
+        
+        // Completed -> Failed should fail
+        let result = graph.fail_intent(&intent_id, "Invalid transition".to_string());
+        assert!(result.is_err());
+        
+        // Completed -> Suspended should fail
+        let result = graph.suspend_intent(&intent_id, "Invalid transition".to_string());
+        assert!(result.is_err());
+        
+        // Completed -> Completed should fail (same status)
+        let completion_result = graph.complete_intent(&intent_id, &execution_result);
+        assert!(completion_result.is_err());
+        
+        // Only Completed -> Archived should work
+        let result = graph.archive_intent(&intent_id, "Valid transition".to_string());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_status_history_audit_trail() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create test intent
+        let intent = StorableIntent::new("Test audit intent".to_string());
+        let intent_id = intent.intent_id.clone();
+        
+        graph.store_intent(intent).unwrap();
+        
+        // Perform several status transitions
+        graph.suspend_intent(&intent_id, "Waiting for approval".to_string()).unwrap();
+        graph.resume_intent(&intent_id, "Approved".to_string()).unwrap();
+        graph.fail_intent(&intent_id, "Database error".to_string()).unwrap();
+        graph.resume_intent(&intent_id, "Retrying".to_string()).unwrap();
+        
+        let result = ExecutionResult {
+            success: true,
+            value: Value::String("Success".to_string()),
+            metadata: HashMap::new(),
+        };
+        graph.complete_intent(&intent_id, &result).unwrap();
+        graph.archive_intent(&intent_id, "Project completed".to_string()).unwrap();
+        
+        // Get status history
+        let history = graph.get_status_history(&intent_id);
+        assert_eq!(history.len(), 6); // 6 transitions: Active->Suspended->Active->Failed->Active->Completed->Archived
+        
+        // Verify history entries contain expected information
+        assert!(history.iter().any(|entry| entry.contains("Active -> Suspended")));
+        assert!(history.iter().any(|entry| entry.contains("Suspended -> Active")));
+        assert!(history.iter().any(|entry| entry.contains("Active -> Failed")));
+        assert!(history.iter().any(|entry| entry.contains("Failed -> Active")));
+        assert!(history.iter().any(|entry| entry.contains("Active -> Completed")));
+        assert!(history.iter().any(|entry| entry.contains("Completed -> Archived")));
+        
+        // Verify reasons are included
+        assert!(history.iter().any(|entry| entry.contains("Waiting for approval")));
+        assert!(history.iter().any(|entry| entry.contains("Database error")));
+        assert!(history.iter().any(|entry| entry.contains("Project completed")));
+    }
+
+    #[test]
+    fn test_get_intents_by_status() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create intents with different statuses
+        let mut active_intent = StorableIntent::new("Active intent".to_string());
+        active_intent.status = IntentStatus::Active;
+        
+        let mut completed_intent = StorableIntent::new("Completed intent".to_string());
+        completed_intent.status = IntentStatus::Completed;
+        
+        let mut failed_intent = StorableIntent::new("Failed intent".to_string());
+        failed_intent.status = IntentStatus::Failed;
+        
+        let mut suspended_intent = StorableIntent::new("Suspended intent".to_string());
+        suspended_intent.status = IntentStatus::Suspended;
+        
+        let mut archived_intent = StorableIntent::new("Archived intent".to_string());
+        archived_intent.status = IntentStatus::Archived;
+        
+        graph.store_intent(active_intent).unwrap();
+        graph.store_intent(completed_intent).unwrap();
+        graph.store_intent(failed_intent).unwrap();
+        graph.store_intent(suspended_intent).unwrap();
+        graph.store_intent(archived_intent).unwrap();
+        
+        // Test getting intents by status
+        let active_intents = graph.get_intents_by_status(IntentStatus::Active);
+        assert_eq!(active_intents.len(), 1);
+        assert_eq!(active_intents[0].goal, "Active intent");
+        
+        let completed_intents = graph.get_intents_by_status(IntentStatus::Completed);
+        assert_eq!(completed_intents.len(), 1);
+        assert_eq!(completed_intents[0].goal, "Completed intent");
+        
+        let failed_intents = graph.get_intents_by_status(IntentStatus::Failed);
+        assert_eq!(failed_intents.len(), 1);
+        assert_eq!(failed_intents[0].goal, "Failed intent");
+        
+        let suspended_intents = graph.get_intents_by_status(IntentStatus::Suspended);
+        assert_eq!(suspended_intents.len(), 1);
+        assert_eq!(suspended_intents[0].goal, "Suspended intent");
+        
+        let archived_intents = graph.get_intents_by_status(IntentStatus::Archived);
+        assert_eq!(archived_intents.len(), 1);
+        assert_eq!(archived_intents[0].goal, "Archived intent");
+    }
+
+    #[test]
+    fn test_get_ready_intents() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create intents with different statuses
+        let mut active_intent1 = StorableIntent::new("Active intent 1".to_string());
+        active_intent1.status = IntentStatus::Active;
+        
+        let mut active_intent2 = StorableIntent::new("Active intent 2".to_string());
+        active_intent2.status = IntentStatus::Active;
+        
+        let mut completed_intent = StorableIntent::new("Completed intent".to_string());
+        completed_intent.status = IntentStatus::Completed;
+        
+        let mut failed_intent = StorableIntent::new("Failed intent".to_string());
+        failed_intent.status = IntentStatus::Failed;
+        
+        graph.store_intent(active_intent1).unwrap();
+        graph.store_intent(active_intent2).unwrap();
+        graph.store_intent(completed_intent).unwrap();
+        graph.store_intent(failed_intent).unwrap();
+        
+        // Test getting ready intents (Active status)
+        let ready_intents = graph.get_ready_intents();
+        assert_eq!(ready_intents.len(), 2);
+        let goals: Vec<String> = ready_intents.iter().map(|i| i.goal.clone()).collect();
+        assert!(goals.contains(&"Active intent 1".to_string()));
+        assert!(goals.contains(&"Active intent 2".to_string()));
+    }
+
+    #[test]
+    fn test_get_intents_needing_attention() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create intents with different statuses
+        let mut active_intent = StorableIntent::new("Active intent".to_string());
+        active_intent.status = IntentStatus::Active;
+        
+        let mut failed_intent1 = StorableIntent::new("Failed intent 1".to_string());
+        failed_intent1.status = IntentStatus::Failed;
+        
+        let mut failed_intent2 = StorableIntent::new("Failed intent 2".to_string());
+        failed_intent2.status = IntentStatus::Failed;
+        
+        let mut suspended_intent = StorableIntent::new("Suspended intent".to_string());
+        suspended_intent.status = IntentStatus::Suspended;
+        
+        let mut completed_intent = StorableIntent::new("Completed intent".to_string());
+        completed_intent.status = IntentStatus::Completed;
+        
+        graph.store_intent(active_intent).unwrap();
+        graph.store_intent(failed_intent1).unwrap();
+        graph.store_intent(failed_intent2).unwrap();
+        graph.store_intent(suspended_intent).unwrap();
+        graph.store_intent(completed_intent).unwrap();
+        
+        // Test getting intents needing attention (Failed or Suspended)
+        let needing_attention = graph.get_intents_needing_attention();
+        assert_eq!(needing_attention.len(), 3); // 2 failed + 1 suspended
+        let goals: Vec<String> = needing_attention.iter().map(|i| i.goal.clone()).collect();
+        assert!(goals.contains(&"Failed intent 1".to_string()));
+        assert!(goals.contains(&"Failed intent 2".to_string()));
+        assert!(goals.contains(&"Suspended intent".to_string()));
+    }
+
+    #[test]
+    fn test_bulk_transition_intents() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create multiple intents
+        let intent1 = StorableIntent::new("Intent 1".to_string());
+        let intent2 = StorableIntent::new("Intent 2".to_string());
+        let intent3 = StorableIntent::new("Intent 3".to_string());
+        
+        let intent1_id = intent1.intent_id.clone();
+        let intent2_id = intent2.intent_id.clone();
+        let intent3_id = intent3.intent_id.clone();
+        
+        graph.store_intent(intent1).unwrap();
+        graph.store_intent(intent2).unwrap();
+        graph.store_intent(intent3).unwrap();
+        
+        // Bulk suspend all intents
+        let intent_ids = vec![intent1_id.clone(), intent2_id.clone(), intent3_id.clone()];
+        let result = graph.bulk_transition_intents(
+            &intent_ids,
+            IntentStatus::Suspended,
+            "System maintenance".to_string(),
+        );
+        assert!(result.is_ok());
+        
+        let successful = result.unwrap();
+        assert_eq!(successful.len(), 3);
+        assert!(successful.contains(&intent1_id));
+        assert!(successful.contains(&intent2_id));
+        assert!(successful.contains(&intent3_id));
+        
+        // Verify all intents are suspended
+        let suspended_intents = graph.get_intents_by_status(IntentStatus::Suspended);
+        assert_eq!(suspended_intents.len(), 3);
+        
+        // Bulk resume all intents
+        let result = graph.bulk_transition_intents(
+            &intent_ids,
+            IntentStatus::Active,
+            "Maintenance complete".to_string(),
+        );
+        assert!(result.is_ok());
+        
+        // Verify all intents are active
+        let active_intents = graph.get_intents_by_status(IntentStatus::Active);
+        assert_eq!(active_intents.len(), 3);
+    }
+
+    #[test]
+    fn test_get_intents_ready_for_archival() {
+        let mut graph = IntentGraph::new().unwrap();
+        
+        // Create completed intents with different timestamps
+        let mut old_completed = StorableIntent::new("Old completed intent".to_string());
+        old_completed.status = IntentStatus::Completed;
+        old_completed.updated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() - (30 * 24 * 60 * 60); // 30 days ago
+        
+        let mut recent_completed = StorableIntent::new("Recent completed intent".to_string());
+        recent_completed.status = IntentStatus::Completed;
+        recent_completed.updated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() - (5 * 24 * 60 * 60); // 5 days ago
+        
+        let mut active_intent = StorableIntent::new("Active intent".to_string());
+        active_intent.status = IntentStatus::Active;
+        
+        graph.store_intent(old_completed).unwrap();
+        graph.store_intent(recent_completed).unwrap();
+        graph.store_intent(active_intent).unwrap();
+        
+        // Test getting intents ready for archival (older than 7 days)
+        let ready_for_archival = graph.get_intents_ready_for_archival(7);
+        assert_eq!(ready_for_archival.len(), 1);
+        assert_eq!(ready_for_archival[0].goal, "Old completed intent");
+        
+        // Test with 1 day threshold (should include recent completed)
+        let ready_for_archival = graph.get_intents_ready_for_archival(1);
+        assert_eq!(ready_for_archival.len(), 2); // Both completed intents
+    }
+
+    #[test]
+    fn test_causal_chain_integration() {
+        let mut graph = IntentGraph::new().unwrap();
+        let mut causal_chain = crate::ccos::causal_chain::CausalChain::new().unwrap();
+        
+        // Create test intent
+        let intent = StorableIntent::new("Test intent for causal chain integration".to_string());
+        let intent_id = intent.intent_id.clone();
+        
+        graph.store_intent(intent).unwrap();
+        
+        // Test transition with causal chain logging
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut intent = graph.storage.get_intent(&intent_id).await.unwrap().unwrap();
+            
+            // Perform a status transition with causal chain logging
+            graph.lifecycle.transition_intent_status(
+                &mut graph.storage,
+                Some(&mut causal_chain),
+                &mut intent,
+                IntentStatus::Suspended,
+                "Testing causal chain integration".to_string(),
+                Some("test-plan-123"),
+            ).await.unwrap();
+            
+            // Verify intent metadata contains audit trail
+            let updated_intent = graph.storage.get_intent(&intent_id).await.unwrap().unwrap();
+            let has_audit_entry = updated_intent.metadata
+                .keys()
+                .any(|key| key.starts_with("status_transition_"));
+            assert!(has_audit_entry, "Intent should have audit trail in metadata");
+            
+            // Verify causal chain contains the action
+            let actions_for_intent = causal_chain.get_actions_for_intent(&intent_id);
+            assert!(!actions_for_intent.is_empty(), "Causal chain should contain actions for intent");
+            
+            // Find the status change action
+            let status_change_action = actions_for_intent.iter()
+                .find(|action| action.action_type == crate::ccos::types::ActionType::IntentStatusChanged);
+            assert!(status_change_action.is_some(), "Should have status change action in causal chain");
+            
+            let action = status_change_action.unwrap();
+            assert_eq!(action.intent_id, intent_id);
+            assert_eq!(action.plan_id, "test-plan-123");
+            
+            // Verify metadata contains transition details
+            assert!(action.metadata.contains_key("old_status"));
+            assert!(action.metadata.contains_key("new_status"));
+            assert!(action.metadata.contains_key("reason"));
+            assert_eq!(action.metadata.get("old_status").unwrap(), &crate::runtime::Value::String("Active".to_string()));
+            assert_eq!(action.metadata.get("new_status").unwrap(), &crate::runtime::Value::String("Suspended".to_string()));
+            assert_eq!(action.metadata.get("reason").unwrap(), &crate::runtime::Value::String("Testing causal chain integration".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_dual_audit_trail_consistency() {
+        let mut graph = IntentGraph::new().unwrap();
+        let mut causal_chain = crate::ccos::causal_chain::CausalChain::new().unwrap();
+        
+        // Create test intent
+        let intent = StorableIntent::new("Test dual audit trail".to_string());
+        let intent_id = intent.intent_id.clone();
+        
+        graph.store_intent(intent).unwrap();
+        
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // Perform multiple transitions
+            let transitions = vec![
+                (IntentStatus::Suspended, "First transition"),
+                (IntentStatus::Active, "Resume after approval"),
+                (IntentStatus::Failed, "Encountered error"),
+                (IntentStatus::Active, "Retry after fix"),
+                (IntentStatus::Completed, "Successfully completed"),
+                (IntentStatus::Archived, "Project finished"),
+            ];
+            
+            for (new_status, reason) in transitions {
+                let mut intent = graph.storage.get_intent(&intent_id).await.unwrap().unwrap();
+                
+                graph.lifecycle.transition_intent_status(
+                    &mut graph.storage,
+                    Some(&mut causal_chain),
+                    &mut intent,
+                    new_status,
+                    reason.to_string(),
+                    Some("test-plan-456"),
+                ).await.unwrap();
+            }
+            
+            // Verify consistency between metadata and causal chain
+            let final_intent = graph.storage.get_intent(&intent_id).await.unwrap().unwrap();
+            let metadata_transitions: Vec<_> = final_intent.metadata
+                .keys()
+                .filter(|key| key.starts_with("status_transition_"))
+                .collect();
+            
+            let causal_chain_actions = causal_chain.get_actions_for_intent(&intent_id);
+            let status_change_actions: Vec<_> = causal_chain_actions.iter()
+                .filter(|action| action.action_type == crate::ccos::types::ActionType::IntentStatusChanged)
+                .collect();
+            
+            // Should have same number of transitions in both audit trails
+            assert_eq!(metadata_transitions.len(), status_change_actions.len(), 
+                      "Metadata and causal chain should have same number of transitions");
+            
+            // Verify all transitions are recorded in both places
+            assert_eq!(metadata_transitions.len(), 6, "Should have 6 transitions in metadata");
+            assert_eq!(status_change_actions.len(), 6, "Should have 6 transitions in causal chain");
+            
+            // Verify final status consistency
+            assert_eq!(final_intent.status, IntentStatus::Archived);
+            
+            // Verify causal chain actions have proper metadata
+            for action in &status_change_actions {
+                assert!(action.metadata.contains_key("old_status"));
+                assert!(action.metadata.contains_key("new_status"));
+                assert!(action.metadata.contains_key("reason"));
+                assert!(action.metadata.contains_key("signature"), "All actions should be cryptographically signed");
+            }
+        });
     }
 }

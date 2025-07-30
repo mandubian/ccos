@@ -701,6 +701,203 @@ impl CausalChain {
     }
 
     // ---------------------------------------------------------------------
+    // Intent lifecycle logging
+    // ---------------------------------------------------------------------
+
+    /// Log Intent creation in the causal chain
+    pub fn log_intent_created(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        goal: &str,
+        triggered_by: Option<&str>,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+
+        let mut action = Action::new(
+            ActionType::IntentCreated,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("create_intent")
+        .with_args(vec![Value::String(goal.to_string())]);
+
+        // Add metadata
+        if let Some(trigger) = triggered_by {
+            action.metadata.insert("triggered_by".to_string(), Value::String(trigger.to_string()));
+        }
+        action.metadata.insert("goal".to_string(), Value::String(goal.to_string()));
+
+        // Sign and record
+        let signature = self.signing.sign_action(&action);
+        action.metadata.insert("signature".to_string(), Value::String(signature));
+
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
+
+        Ok(action)
+    }
+
+    /// Log Intent status change in the causal chain
+    pub fn log_intent_status_change(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        old_status: &str,
+        new_status: &str,
+        reason: &str,
+        triggering_action_id: Option<&str>,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+
+        let mut action = Action::new(
+            ActionType::IntentStatusChanged,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("change_intent_status")
+        .with_args(vec![
+            Value::String(old_status.to_string()),
+            Value::String(new_status.to_string()),
+            Value::String(reason.to_string()),
+        ]);
+
+        // Add rich metadata for audit trail
+        action.metadata.insert("old_status".to_string(), Value::String(old_status.to_string()));
+        action.metadata.insert("new_status".to_string(), Value::String(new_status.to_string()));
+        action.metadata.insert("reason".to_string(), Value::String(reason.to_string()));
+        
+        if let Some(triggering_id) = triggering_action_id {
+            action.metadata.insert("triggering_action_id".to_string(), Value::String(triggering_id.to_string()));
+        }
+
+        // Add timestamp for audit trail correlation
+        action.metadata.insert("transition_timestamp".to_string(), Value::String(action.timestamp.to_string()));
+
+        // Sign and record
+        let signature = self.signing.sign_action(&action);
+        action.metadata.insert("signature".to_string(), Value::String(signature));
+
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
+
+        Ok(action)
+    }
+
+    /// Log Intent relationship creation in the causal chain
+    pub fn log_intent_relationship_created(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        from_intent: &IntentId,
+        to_intent: &IntentId,
+        relationship_type: &str,
+        weight: Option<f64>,
+        metadata: Option<&HashMap<String, Value>>,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+
+        let mut action = Action::new(
+            ActionType::IntentRelationshipCreated,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("create_intent_relationship")
+        .with_args(vec![
+            Value::String(from_intent.clone()),
+            Value::String(to_intent.clone()),
+            Value::String(relationship_type.to_string()),
+        ]);
+
+        // Add relationship metadata
+        action.metadata.insert("from_intent".to_string(), Value::String(from_intent.clone()));
+        action.metadata.insert("to_intent".to_string(), Value::String(to_intent.clone()));
+        action.metadata.insert("relationship_type".to_string(), Value::String(relationship_type.to_string()));
+        
+        if let Some(w) = weight {
+            action.metadata.insert("weight".to_string(), Value::Float(w));
+        }
+
+        // Add any additional metadata
+        if let Some(meta) = metadata {
+            for (key, value) in meta {
+                action.metadata.insert(format!("rel_{}", key), value.clone());
+            }
+        }
+
+        // Sign and record
+        let signature = self.signing.sign_action(&action);
+        action.metadata.insert("signature".to_string(), Value::String(signature));
+
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
+
+        Ok(action)
+    }
+
+    /// Log Intent archival in the causal chain
+    pub fn log_intent_archived(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        reason: &str,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+
+        let mut action = Action::new(
+            ActionType::IntentArchived,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("archive_intent")
+        .with_args(vec![Value::String(reason.to_string())]);
+
+        // Add metadata
+        action.metadata.insert("reason".to_string(), Value::String(reason.to_string()));
+        action.metadata.insert("archived_at".to_string(), Value::String(action.timestamp.to_string()));
+
+        // Sign and record
+        let signature = self.signing.sign_action(&action);
+        action.metadata.insert("signature".to_string(), Value::String(signature));
+
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
+
+        Ok(action)
+    }
+
+    /// Log Intent reactivation in the causal chain
+    pub fn log_intent_reactivated(
+        &mut self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        reason: &str,
+    ) -> Result<Action, RuntimeError> {
+        use super::types::ActionType;
+
+        let mut action = Action::new(
+            ActionType::IntentReactivated,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("reactivate_intent")
+        .with_args(vec![Value::String(reason.to_string())]);
+
+        // Add metadata
+        action.metadata.insert("reason".to_string(), Value::String(reason.to_string()));
+        action.metadata.insert("reactivated_at".to_string(), Value::String(action.timestamp.to_string()));
+
+        // Sign and record
+        let signature = self.signing.sign_action(&action);
+        action.metadata.insert("signature".to_string(), Value::String(signature));
+
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
+
+        Ok(action)
+    }
+
+    // ---------------------------------------------------------------------
     // Capability call logging
     // ---------------------------------------------------------------------
 
