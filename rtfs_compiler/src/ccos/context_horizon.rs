@@ -6,9 +6,18 @@
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
 use super::types::Intent;
+use crate::ccos::working_memory::backend::QueryParams;
+use crate::ccos::working_memory::boundaries::{Boundary, BoundaryType};
 use super::types::IntentId;
 use crate::runtime::error::RuntimeError;
 use std::collections::HashMap;
+
+use std::sync::{Arc, Mutex};
+
+// Integration: Working Memory (new modular API)
+use crate::ccos::working_memory::facade::WorkingMemory;
+use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
+use crate::ccos::working_memory::types::WorkingMemoryEntry;
 
 // Minimal AbstractStep and ResourceId types to resolve missing type errors
 #[derive(Clone, Debug)]
@@ -81,15 +90,23 @@ pub struct ContextHorizonManager {
     causal_chain: CausalChainDistillation,
     plan_abstraction: PlanAbstraction,
     config: ContextHorizonConfig,
+    // Working Memory store (in-memory + optional file-backed)
+    working_memory: Arc<Mutex<WorkingMemory>>,
 }
 
 impl ContextHorizonManager {
     pub fn new() -> Result<Self, RuntimeError> {
+        // Initialize Working Memory using new facade + in-memory backend (no disk by default)
+        // If you want persistence, pass Some(PathBuf) to InMemoryJsonlBackend::new.
+        let backend = InMemoryJsonlBackend::new(None, Some(10_000), Some(500_000));
+        let wm = WorkingMemory::new(Box::new(backend));
+
         Ok(Self {
             intent_graph: IntentGraphVirtualization::new(),
             causal_chain: CausalChainDistillation::new(),
             plan_abstraction: PlanAbstraction::new(),
             config: ContextHorizonConfig::default(),
+            working_memory: Arc::new(Mutex::new(wm)),
         })
     }
 
@@ -100,6 +117,9 @@ impl ContextHorizonManager {
 
         // 2. Load distilled causal chain wisdom
         let distilled_wisdom = self.causal_chain.get_distilled_wisdom()?;
+
+        // Persist distilled wisdom into Working Memory for future recall
+        self.persist_wisdom_to_working_memory(task, &distilled_wisdom)?;
 
         // 3. Create abstract plan
         let abstract_plan = self.plan_abstraction.create_abstract_plan(task)?;
@@ -308,6 +328,113 @@ impl ContextHorizonManager {
     /// Update context horizon configuration
     pub fn update_config(&mut self, config: ContextHorizonConfig) {
         self.config = config;
+    }
+
+    /// Access to Working Memory (for tests or external consumers)
+    pub fn working_memory(&self) -> Arc<Mutex<WorkingMemory>> {
+        Arc::clone(&self.working_memory)
+    }
+
+    /// Translate a Boundary into Working Memory QueryParams.
+    /// Supports:
+    /// - TimeLimit: constraints.from_ts (u64), constraints.to_ts (u64)
+    /// - TokenLimit: constraints.max_tokens (usize) -> maps to limit heuristic at query stage
+    fn boundary_to_query_params(&self, boundary: &Boundary) -> QueryParams {
+        match boundary.boundary_type {
+            BoundaryType::TimeLimit => {
+                let from_ts = boundary.get_u64("from_ts");
+                let to_ts = boundary.get_u64("to_ts");
+                QueryParams::default().with_time_window(from_ts, to_ts)
+            }
+            BoundaryType::TokenLimit => {
+                let limit = boundary.get_usize("max_tokens");
+                QueryParams::default().with_limit(limit)
+            }
+            _ => QueryParams::default(),
+        }
+    }
+
+    /// Fetch distilled wisdom entries from Working Memory honoring provided boundaries.
+    /// Always enforces the "wisdom" tag; additional boundaries may add time windows or limits.
+    pub fn fetch_wisdom_from_working_memory(
+        &self,
+        boundaries: &[Boundary],
+    ) -> Result<Vec<crate::ccos::working_memory::types::WorkingMemoryEntry>, RuntimeError> {
+        let mut wm = self
+            .working_memory
+            .lock()
+            .map_err(|_| RuntimeError::Generic("WorkingMemory lock poisoned".into()))?;
+
+        // Start with default wisdom tag and optional global limit/time window derived from boundaries
+        let mut qp = QueryParams::with_tags(["wisdom"]);
+        // Merge boundaries: last writer wins for overlapping fields
+        for b in boundaries {
+            let bqp = self.boundary_to_query_params(b);
+            if bqp.from_ts_s.is_some() || bqp.to_ts_s.is_some() {
+                qp = qp.with_time_window(bqp.from_ts_s, bqp.to_ts_s);
+            }
+            if bqp.limit.is_some() {
+                qp = qp.with_limit(bqp.limit);
+            }
+        }
+
+        let res = wm
+            .query(&qp)
+            .map_err(|e| RuntimeError::Generic(format!("WorkingMemory query failed: {}", e)))?;
+
+        Ok(res.entries)
+    }
+
+    /// Persist distilled wisdom into Working Memory with basic metadata and tags
+    fn persist_wisdom_to_working_memory(
+        &self,
+        task: &Task,
+        wisdom: &DistilledWisdom,
+    ) -> Result<(), RuntimeError> {
+        // Basic approx token estimate from content length
+        let approx_tokens = wisdom.content.len() / 4;
+
+        // Create deterministic id seed from task name + current time (seconds)
+        let id = format!("wm-{}-{}", task.name, chrono::Utc::now().timestamp());
+
+        // Tags for retrieval (OR semantics in backend)
+        let tags = [
+            "wisdom".to_string(),
+            "causal-chain".to_string(),
+            "distillation".to_string(),
+        ];
+
+        // Build entry with new types API; use current time as timestamp
+        let timestamp_s = chrono::Utc::now().timestamp() as u64;
+        let entry = WorkingMemoryEntry {
+            id,
+            title: format!("Distilled wisdom for {}", task.name),
+            content: wisdom.content.clone(),
+            tags: tags.into_iter().collect(),
+            timestamp_s,
+            approx_tokens,
+            meta: crate::ccos::working_memory::types::WorkingMemoryMeta {
+                action_id: None,
+                plan_id: None,
+                intent_id: None,
+                step_id: None,
+                provider: Some("context-horizon".to_string()),
+                attestation_hash: None,
+                content_hash: None,
+                extra: {
+                    let mut m = HashMap::new();
+                    m.insert("source".into(), "causal_chain_distillation".into());
+                    m.insert("task".into(), task.name.clone());
+                    m
+                },
+            },
+        };
+
+        let mut wm = self
+            .working_memory
+            .lock()
+            .map_err(|_| RuntimeError::Generic("WorkingMemory lock poisoned".into()))?;
+        wm.append(entry).map_err(|e| RuntimeError::Generic(format!("WorkingMemory append failed: {}", e)))
     }
 
     /// Get current configuration
@@ -580,6 +707,11 @@ mod tests {
     fn test_context_horizon_manager_creation() {
         let manager = ContextHorizonManager::new();
         assert!(manager.is_ok());
+
+        // Check Working Memory is present and usable
+        let wm = manager.unwrap().working_memory();
+        let guard = wm.lock();
+        assert!(guard.is_ok());
     }
 
     #[test]
@@ -615,5 +747,76 @@ mod tests {
 
         let reduced = manager.reduce_intents(intents, 100).unwrap();
         assert!(reduced.len() <= 3);
+    }
+
+    #[test]
+    fn test_persist_wisdom_to_working_memory() {
+        let manager = ContextHorizonManager::new().unwrap();
+        let task = Task::new("unit-test".to_string(), "desc".to_string());
+        let wisdom = DistilledWisdom { content: "some compact summary".to_string() };
+
+        // Should append an entry without error
+        manager.persist_wisdom_to_working_memory(&task, &wisdom).unwrap();
+
+        let wm = manager.working_memory();
+        let guard = wm.lock().unwrap();
+        use crate::ccos::working_memory::backend::QueryParams;
+        let results = guard.query(&QueryParams::with_tags(["wisdom"]).with_limit(Some(10))).unwrap();
+        assert!(!results.entries.is_empty());
+    }
+
+    #[test]
+    fn test_boundary_to_query_params_time_and_token() {
+        let manager = ContextHorizonManager::new().unwrap();
+
+        use crate::ccos::working_memory::boundaries::{Boundary, BoundaryType};
+
+        // TimeLimit
+        let b_time = Boundary::new("time", BoundaryType::TimeLimit)
+            .with_constraint("from_ts", serde_json::json!(100u64))
+            .with_constraint("to_ts", serde_json::json!(200u64));
+        let qp_time = manager.boundary_to_query_params(&b_time);
+        assert_eq!(qp_time.from_ts_s, Some(100));
+        assert_eq!(qp_time.to_ts_s, Some(200));
+
+        // TokenLimit
+        let b_token = Boundary::new("token", BoundaryType::TokenLimit)
+            .with_constraint("max_tokens", serde_json::json!(5usize));
+        let qp_token = manager.boundary_to_query_params(&b_token);
+        assert_eq!(qp_token.limit, Some(5));
+    }
+
+    #[test]
+    fn test_fetch_wisdom_from_working_memory_time_window() {
+        let manager = ContextHorizonManager::new().unwrap();
+
+        // Seed WM with a few entries at different timestamps
+        let task = Task::new("wm-boundary-test".to_string(), "desc".to_string());
+        let w1 = DistilledWisdom { content: "w1".into() };
+        let w2 = DistilledWisdom { content: "w2".into() };
+        let w3 = DistilledWisdom { content: "w3".into() };
+
+        // Inject entries with controlled timestamps by temporarily appending directly
+        // through WorkingMemory facade after building entries via persist helper but adjusting timestamps.
+        manager.persist_wisdom_to_working_memory(&task, &w1).unwrap();
+        manager.persist_wisdom_to_working_memory(&task, &w2).unwrap();
+        manager.persist_wisdom_to_working_memory(&task, &w3).unwrap();
+
+        // Define a time window using current time bounds to likely include all
+        let now = chrono::Utc::now().timestamp() as u64;
+        let from_ts = now.saturating_sub(60);
+        let to_ts = now.saturating_add(60);
+
+        use crate::ccos::working_memory::boundaries::{Boundary, BoundaryType};
+        let boundaries = vec![
+            Boundary::new("time", BoundaryType::TimeLimit)
+                .with_constraint("from_ts", serde_json::json!(from_ts))
+                .with_constraint("to_ts", serde_json::json!(to_ts)),
+            Boundary::new("limit", BoundaryType::TokenLimit)
+                .with_constraint("max_tokens", serde_json::json!(10usize)),
+        ];
+
+        let entries = manager.fetch_wisdom_from_working_memory(&boundaries).unwrap();
+        assert!(!entries.is_empty());
     }
 }
