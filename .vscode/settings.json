@@ -4,4 +4,6 @@
         "**/.cargo/git/checkouts/**/*.rs": true,
         "**/lib/rustlib/src/rust/library/**/*.rs": true,
     },
+    "github.copilot.chat.agent.thinkingTool": true,
+    "chat.tools.autoApprove": true,
 }
