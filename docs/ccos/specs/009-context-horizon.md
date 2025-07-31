@@ -41,7 +41,7 @@ The Context Horizon can analyze how data is accessed over time to optimize conte
 
 ### 4.1. Position in the Execution Flow
 
-The Context Horizon is invoked by the **Orchestrator** *before* a plan or sub-task is handed to the **Arbiter** or any other cognitive component. Its primary role is to prepare the information environment for cognitive work.
+The Context Horizon is invoked by the **Orchestrator** before delegating a plan/sub-task to the **Arbiter** or any cognitive component. Its role is to prepare a token-aware, relevant context based on defined boundaries and policies.
 
 ```mermaid
 graph TD
@@ -58,32 +58,34 @@ graph TD
     end
 
     Orch -- "1. Receives task for Arbiter" --> CH;
-    CH -- "2. Queries Working Memory for relevant data" --> WM;
-    CH -- "3. Applies boundaries (e.g., token limit)" --> CH;
-    CH -- "4. Constructs Final Payload" --> Payload((Payload));
+    CH -- "2. Queries Working Memory for relevant wisdom (tags/time)" --> WM;
+    CH -- "3. Applies boundaries (Token/Time/Memory/Semantic)" --> CH;
+    CH -- "4. Reduces & assembles Final Payload" --> Payload((Payload));
     Payload -- "5. Sends to" --> Arbiter;
 ```
 
 ### 4.2. Relationship with Working Memory
 
-The Context Horizon is the primary consumer of the **Working Memory (`SEP-013`)**. It is responsible for querying the indexed and summarized data in the Working Memory to efficiently assemble a relevant, token-aware context payload. This separation of concerns is critical:
+The Context Horizon is the primary consumer of **Working Memory (`SEP-013`)**. It queries WM for relevant distilled wisdom within specified boundaries, optionally merges with fresh distillation outputs, deduplicates (e.g., by content hash), ranks, and reduces to meet token constraints. This separation of concerns is critical:
 
--   **Working Memory**: Manages the long-term storage and indexing of digested information.
--   **Context Horizon**: Manages the real-time, task-specific *retrieval and assembly* of that information into a final context payload.
+-   **Working Memory**: Long-lived, rebuildable store of digested information with pluggable backends (in-memory/JSONL, vector, graph, time-series).
+-   **Context Horizon**: Real-time, task-specific retrieval, ranking, boundary enforcement, and payload assembly.
 
-It no longer needs to query the raw `Causal Chain`, relying instead on the much more efficient `Working Memory`.
+Direct raw `Causal Chain` queries are avoided in favor of WM.
 
-## 5. Data Structures
+## 5. Boundary Model and Data Structures
 
-The core data structures include:
+Introduce an explicit boundary model to support governance-managed constraints and extensibility.
 
 ```rust
-// The main container for a set of context rules.
+// The main container for context construction rules/policies.
 pub struct ContextHorizon {
     pub horizon_id: HorizonId,
     pub name: String,
     pub boundaries: HashMap<String, Boundary>,
-    // ... and other metadata
+    // Optional: strategy weights for ranking and reduction
+    pub strategy: ReductionStrategy,
+    // Other metadata and execution hints...
 }
 
 // A specific rule or constraint on the context.
@@ -91,15 +93,46 @@ pub struct Boundary {
     pub boundary_id: BoundaryId,
     pub name: String,
     pub boundary_type: BoundaryType,
-    pub constraints: HashMap<String, Value>, // e.g., "max_tokens": 8192
+    pub constraints: HashMap<String, Value>, // e.g., {"max_tokens": 8192, "from_ts": 1719772800}
 }
 
 pub enum BoundaryType {
-    TokenLimit,
-    TimeLimit,
-    MemoryLimit,
-    SemanticLimit,
+    TokenLimit,   // e.g., max_tokens for overall payload or per-section allocations
+    TimeLimit,    // e.g., from_ts, to_ts to constrain recall window
+    MemoryLimit,  // e.g., max_bytes for payload footprint
+    SemanticLimit // e.g., min_relevance_score, tag allow/deny lists
+}
+
+// Optional ranking/reduction configuration.
+pub struct ReductionStrategy {
+    pub enable_semantic_scoring: bool,
+    pub time_decay_half_life_s: Option<u64>,
+    pub per_section_budgets: HashMap<String, usize>, // e.g., {"intents": 4000, "wisdom": 2000, "plan": 2000}
 }
 ```
 
-This system allows the Orchestrator to manage complex information flows to diverse execution targets in a structured and efficient manner.
+### 5.1. Retrieval and Reduction Flow
+
+1) Retrieve
+- Query WM for wisdom entries using:
+  - tags_any: e.g., ["wisdom","distillation"] + task/domain tags
+  - time window: derived from TimeLimit (from_ts/to_ts)
+  - limit: coarse cap guided by TokenLimit
+
+2) Merge and Deduplicate
+- Merge retrieved WM entries with any fresh distillation outputs from the current causal analysis.
+- Deduplicate by content hash or title/content equivalence.
+
+3) Rank
+- Apply semantic scoring (if enabled) and time-decay ranking to prioritize relevance and recency.
+
+4) Reduce
+- Estimate tokens and reduce per-section according to per_section_budgets and overall TokenLimit:
+  - reduce_intents
+  - reduce_wisdom (from WM + fresh)
+  - reduce_plan
+
+5) Assemble
+- Build the final payload for Arbiter with provenance-preserving slices and metadata.
+
+This model enables the Orchestrator to manage complex information flows with policy-driven, auditable constraints across diverse execution targets.

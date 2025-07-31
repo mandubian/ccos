@@ -26,8 +26,8 @@ The Working Memory architecture consists of two new elements and one modified ex
 graph TD
     subgraph "Data & State Layer"
         CC[Causal Chain (Source of Truth)];
-        MI["Memory Ingestor (Async Process)"];
-        WM[Working Memory (Indexed Store)];
+        MI["Memory Ingestor (Async Subscriber)"];
+        WM[Working Memory (Pluggable Indexed Store)];
     end
 
     subgraph "Orchestration Layer"
@@ -38,32 +38,45 @@ graph TD
         Arbiter[Arbiter];
     end
 
-    CC -- "1. Raw Actions are written to" --> Orch((Orchestrator));
-    Orch -- "2. Ingestor reads from" --> MI;
-    MI -- "3. Processes & populates" --> WM;
-    CH -- "4. Queries for relevant context" --> WM;
-    CH -- "5. Builds payload for" --> Arbiter;
+    CC -- "1. Actions appended" --> Orch((Orchestrator));
+    Orch -- "2. Ingestor subscribes to append feed" --> MI;
+    MI -- "3. Derives & persists distilled entries" --> WM;
+    CH -- "4. Queries for relevant wisdom" --> WM;
+    CH -- "5. Builds token-aware payload" --> Arbiter;
 ```
 
 ### 3.1. The Memory Ingestor
 
--   The **Memory Ingestor** is a background, asynchronous system process.
--   It subscribes to the `Causal Chain` and processes new `Action` entries as they are committed.
--   Its role is to transform the raw log data into structured, indexed formats suitable for the Working Memory store. For example, it might extract user preferences, summarize conversations, or calculate relationship strengths in the Intent Graph.
+-   The **Memory Ingestor** is a background, asynchronous subscriber to the Causal Chain append feed.
+-   On each `Action` committed, it derives one or more `WorkingMemoryEntry` items with strong provenance.
+-   Responsibilities:
+    - Normalize action data and optionally summarize long content.
+    - Derive tags from action type (e.g., `capability-call`, `plan-lifecycle`, `policy-violation`) and domain.
+    - Populate `meta` with provenance: `action_id`, `plan_id`, `intent_id`, optional `step_id`, `provider`, `attestation_hash`, `content_hash`.
+    - Compute `approx_tokens` for budget-aware retrieval and compaction.
+    - Persist via a pluggable `WorkingMemoryBackend`.
+-   Delivery semantics:
+    - At-least-once; idempotency ensured by combining `(action_id, content_hash, timestamp)`.
+    - Rebuild mode: replay full Causal Chain from genesis to reconstruct WM.
 
 ### 3.2. The Working Memory Store
 
--   This is not a single database but a logical component that may be implemented using multiple specialized databases optimized for different types of queries.
--   **Key-Value Store**: For storing discrete facts like user settings (e.g., `user:jane.prefers_dark_mode = true`).
--   **Vector Database**: For storing embeddings of conversations and documents, enabling fast semantic search and retrieval of relevant memories.
--   **Graph Database**: For maintaining an indexed and easily traversable copy of the `Living Intent Graph`, including inferred relationships.
--   **Time-Series Database**: For tracking resource usage and system metrics over time.
-
-The Working Memory is considered ephemeral and rebuildable. If the store is corrupted or lost, it can be completely reconstructed by re-running the Memory Ingestor over the entire Causal Chain.
+-   Logical component with pluggable backends specialized for query patterns.
+-   Backends:
+    - In-memory + JSONL append-only persistence (default, rebuildable).
+    - Vector backend (optional) for semantic retrieval over embeddings.
+    - Graph backend (optional) for relationship traversal.
+    - Time-series backend (optional) for temporal analytics.
+-   Query semantics:
+    - Time-windowed queries, tag-based selection (extendable to AND/NOT), recency-based ranking; future scoring/time-decay.
+-   Compaction:
+    - Enforce `max_entries_in_memory` and `max_tokens_in_memory` with oldest-first eviction.
+-   Rebuildability:
+    - Entire WM can be reconstructed by re-running the Memory Ingestor over the Causal Chain.
 
 ## 4. Impact on System Components
 
--   **Causal Chain (`SEP-003`)**: Its role is unchanged. It remains the immutable, permanent source of truth for the system's history.
--   **Context Horizon (`SEP-009`)**: Its role is significantly clarified. The Context Horizon is now the primary *consumer* of the Working Memory. Its main function is to query the various stores within the Working Memory to assemble a concise, relevant, and token-aware context payload for the Arbiter. It no longer needs to perform complex queries on the raw Causal Chain.
--   **Arbiter (`SEP-006`)**: The Arbiter benefits from much faster and more relevant context, leading to higher quality and more efficient planning and interaction.
--   **System Architecture (`SEP-000`)**: The master architecture must be updated to include the `Memory Ingestor` and `Working Memory` as key components of the Data & State Layer.
+-   Causal Chain (`SEP-003`): Unchanged as the immutable source of truth.
+-   Context Horizon (`SEP-009`): Becomes the primary consumer of WM. It queries WM for relevant distilled wisdom within defined boundaries (e.g., time window, token budgets), merges with any fresh distillation, deduplicates, then reduces to fit token constraints. It avoids direct complex queries over the raw chain.
+-   Arbiter (`SEP-006`): Receives faster, more relevant, and token-constrained context, improving quality and efficiency.
+-   System Architecture (`SEP-000`): The Data & State Layer includes `Memory Ingestor` and `Working Memory` as first-class components with pluggable backends. Governance can enforce provenance and attestation checks on WM derivations.
