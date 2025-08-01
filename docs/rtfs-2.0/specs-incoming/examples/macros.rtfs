@@ -1,0 +1,85 @@
+; RTFS examples for MicroVM profiles (aligned with 19-microvm-deployment-profile.md)
+; These are copy-pastable macro-style functions for agents or tooling to emit configs.
+; Updated to comply with rtfs_compiler/src/rtfs.pest grammar:
+; - No use of threading macros like (-> ...)
+; - No reliance on assoc/assoc-in (not special forms)
+; - Single-expression map construction inside (agent.config ...)
+
+(def profile:minimal
+  (fn [agent-id]
+    (agent.config
+      :version "0.1"
+      :agent-id agent-id
+      :profile :minimal
+      :features []
+      :capabilities {:http {:enabled false}
+                     :fs   {:enabled false}
+                     :llm  {:enabled false}}
+      :governance {:policies {:default {:risk_tier :low
+                                        :requires_approvals 0}}}
+      :orchestrator {:isolation {:mode :wasm}}
+      :causal_chain {:storage {:mode :in_memory}}
+      :marketplace {:registry_paths []}}))
+
+; Minimal MicroVM profile (no NIC). Air-gapped; control via vsock only.
+(def profile:microvm-min
+  (fn [agent-id]
+    (agent.config
+      :version "0.1"
+      :agent-id agent-id
+      :profile :minimal
+      :features []
+      :capabilities {:http {:enabled false}
+                     :fs   {:enabled false}
+                     :llm  {:enabled false}}
+      :governance {:policies {:default {:risk_tier :low
+                                        :requires_approvals 0}}}
+      :orchestrator {:isolation {:mode :microvm
+                                 :fs {:ephemeral true
+                                      :mounts {:capabilities {:mode :ro}}}}
+                     :dlp {:enabled true :policy :strict}}
+      :network {:enabled false}
+      :microvm {:kernel     {:image "kernels/vmlinuz-min" :cmdline "console=none"}
+                :rootfs     {:image "images/agent-rootfs.img" :ro true}
+                :resources  {:vcpus 1 :mem_mb 256}
+                :devices    {:nic {:enabled false}
+                             :vsock {:enabled true :cid 3}}
+                :attestation {:enabled true}}
+      :causal_chain {:storage {:mode :in_memory}}
+      :marketplace {:registry_paths []}}))
+
+; Networked MicroVM profile with proxy egress and TLS pinning.
+(def profile:microvm-networked
+  (fn [agent-id allowed-domains]
+    (agent.config
+      :version "0.1"
+      :agent-id agent-id
+      :profile :minimal
+      :features []
+      :capabilities {:http {:enabled true}
+                     :fs   {:enabled false}
+                     :llm  {:enabled false}}
+      :governance {:policies {:default {:risk_tier :low
+                                        :requires_approvals 0}}}
+      :orchestrator {:isolation {:mode :microvm
+                                 :fs {:ephemeral true
+                                      :mounts {:capabilities {:mode :ro}}}}
+                     :dlp {:enabled true :policy :strict}}
+      :network {:enabled true
+                :egress {:via :proxy
+                         :allow-domains allowed-domains
+                         :mtls true
+                         :tls_pins ["sha256/REPLACE_ME"]}}
+      :microvm {:kernel     {:image "kernels/vmlinuz-min" :cmdline "console=none"}
+                :rootfs     {:image "images/agent-rootfs.img" :ro true}
+                :resources  {:vcpus 1 :mem_mb 256}
+                :devices    {:nic {:enabled true :proxy_ns "egress-proxy-ns"}
+                             :vsock {:enabled true :cid 3}}
+                :attestation {:enabled true}}
+      :causal_chain {:storage {:mode :in_memory}}
+      :marketplace {:registry_paths []}}))
+
+; Notes:
+; - Replace tls_pins with the actual pin(s).
+; - Adjust vsock cid and proxy_ns as needed per host.
+; - For GPU/LLM features, extend :features and :capabilities blocks accordingly.
