@@ -1,3 +1,7 @@
+
+
+
+
 // Network capability implementations will be handled by the marketplace
 //! CCOS Capability Registry
 //!
@@ -300,13 +304,16 @@ impl CapabilityRegistry {
         // Create execution context
         let execution_context = ExecutionContext {
             execution_id: format!("exec_{}", uuid::Uuid::new_v4()),
-            capability_id: capability_id.to_string(),
+            program: None,
+            capability_id: Some(capability_id.to_string()),
+            capability_permissions: vec![capability_id.to_string()],
             args,
             config: MicroVMConfig::default(),
+            runtime_context: None,
         };
         
         // Execute in the MicroVM
-        let result = provider.execute(execution_context)?;
+        let result = provider.execute_capability(execution_context)?;
         Ok(result.value)
     }
     

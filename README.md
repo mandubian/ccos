@@ -293,6 +293,20 @@ This means an agent built on CCOS can be a fully-fledged, compliant citizen in a
 | **RTFS 2.0 Language**     | 🟡 In Progress    | Decoupling from the legacy `Task` object is underway. |
 | **Marketplace / GFM**     | 📋 Planned        | Discovery and dynamic routing are future work.   |
 
+---
+
+## More Scenarios (What CCOS/RTFS Enables)
+
+- SRE autopilot: self-heal latency spikes with compensations, approvals, and full audit. See: [Showcase Scenarios §1](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#1-autonomous-incident-response-sre-self-healing)
+- Regulated analytics: DP budgets, IFC labels, and declassification gates with provenance. See: [§2](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#2-regulated-analytics-with-ifcdp-hipaagdrp-grade)
+- Trading guardrails: quorum of specialist Arbiters, dry-run cost simulation, idempotent execution. See: [§3](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#3-trading-with-quorum-and-simulation)
+- Secure supply chain: CVE→attested build→canary→rollout with rollback and Causal Chain proofs. See: [§4](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#4-secure-supply-chain-patch-and-rollout)
+- Legal workflows: human-in-the-loop approvals, DLP post-filters, clause provenance. See: [§5](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#5-legal-workflow-with-human-approval-and-dlp)
+- DR drills: provable RPO/RTO with reversible failovers and EU-only data enforcement. See: [§6](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#6-disaster-recovery-drill-with-provable-rporto)
+- Generative capabilities: compose, test, attest, and publish new tools back to the Marketplace. See: [§7](./docs/rtfs-2.0/specs-incoming/15-showcase-scenarios.md#7-generative-capability-creation-and-publish)
+
+These scenarios collectively demonstrate CCOS/RTFS’s core strengths: intent/plan/action separation, effect/resource typing and governance, IFC and data-locality, human approvals and federation, deterministic execution and replay, compensations and idempotency, supply-chain attestation, and end-to-end auditability via the Causal Chain.
+
 ## The Vision: A New Computing Paradigm
 
 We're not just building another framework or language. We're pioneering a new paradigm where:
