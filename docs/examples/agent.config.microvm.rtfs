@@ -1,0 +1,83 @@
+;; RTFS Agent Configuration for MicroVM Deployment Profile
+;; This example demonstrates the MicroVM deployment profile as defined in
+;; docs/rtfs-2.0/specs-incoming/19-microvm-deployment-profile.md
+;;
+;; This configuration shows:
+;; - MicroVM isolation mode with ephemeral filesystem
+;; - Proxy-based egress control with domain allowlisting
+;; - Read-only capability mounts for security
+;; - VSock control plane for host communication
+;; - Attestation and measured boot support
+
+(agent.config
+  ;; Basic agent identification and version
+  :version "0.1"
+  :agent-id "agent.microvm.example"
+  :profile :microvm
+  
+  ;; Orchestrator configuration - MicroVM isolation mode
+  ;; Maps to §4 "RTFS Config Extensions for MicroVM" in the spec
+  :orchestrator
+    {:isolation
+      {:mode :microvm  ;; Maps to Acceptance Criteria: "Given an agent.config with :microvm mode"
+       :fs {:ephemeral true  ;; Maps to §2 "Filesystem" - ephemeral by default
+            :mounts {:capabilities {:mode :ro}}}}  ;; Maps to §2 "Filesystem" - RO capability store
+     :dlp {:enabled true :policy :strict}}  ;; Maps to §7 "Egress/DLP Proxy" - DLP filters
+  
+  ;; Network configuration with proxy egress control
+  ;; Maps to §3 "Host Firecracker/Cloud Hypervisor Setup" - Networking section
+  :network
+    {:enabled true
+     :egress {:via :proxy  ;; Maps to §3 "NIC bridged to egress proxy namespace"
+              :allow-domains ["example.com" "api.example.com"]  ;; Maps to §7 "Domain allowlist per-agent"
+              :mtls true  ;; Maps to §7 "TLS pinning/mTLS with SPIFFE IDs"
+              :tls_pins ["sha256/abc123def456789..."]}}  ;; Maps to §7 "TLS pinning"
+  
+  ;; MicroVM-specific configuration block
+  ;; Maps to §4 "RTFS Config Extensions for MicroVM" - Type schema
+  :microvm
+    {:kernel {:image "kernels/vmlinuz-min"  ;; Maps to §2 "Kernel: minimal, static"
+              :cmdline "console=none"}  ;; Maps to §2 "No serial console in prod"
+     :rootfs {:image "images/agent-rootfs.img"  ;; Maps to §2 "Rootfs: read-only where possible"
+              :ro true}  ;; Maps to §2 "Rootfs: read-only where possible"
+     :resources {:vcpus 1 :mem_mb 256}  ;; Maps to §3 "VM spec" - vCPU: 1–2, Memory: 128–512 MB
+     :devices {:nic {:enabled true :proxy_ns "egress-proxy-ns"}  ;; Maps to §3 "NIC bridged to egress proxy namespace"
+               :vsock {:enabled true :cid 3}}  ;; Maps to §3 "Control plane (vsock)"
+     :attestation {:enabled true :expect_rootfs_hash "sha256:..."}}  ;; Maps to §3 "Attestation" - measured boot
+  
+  ;; Capability configuration - minimal set for MicroVM
+  ;; Maps to §2 "Filesystem" - capabilities/ (contracts + wasm modules)
+  :capabilities
+    {:http {:enabled true
+            :egress {:allow-domains ["example.com"] :mtls true}}
+     :fs {:enabled false}  ;; Disabled for MicroVM - use RO mounts only
+     :llm {:enabled false}}  ;; Disabled for minimal MicroVM profile
+  
+  ;; Governance configuration - strict policies for MicroVM
+  ;; Maps to §5 "Execution Semantics inside the MicroVM" - step-level profile derivation
+  :governance
+    {:policies
+      {:default {:risk_tier :high  ;; Maps to §1 "Threat Model" - high isolation requirements
+                 :requires_approvals 1
+                 :budgets {:max_cost_usd 10 :token_budget 1e5}}
+       :network_access {:risk_tier :high
+                        :requires_approvals 2
+                        :budgets {:max_cost_usd 5 :token_budget 5e4}}}
+     :keys {:verify "pubkey-pem"}}
+  
+  ;; Causal Chain configuration - vsock streaming
+  ;; Maps to §3 "Control plane (vsock)" - Causal Chain event streaming
+  :causal_chain
+    {:storage {:mode :vsock_stream  ;; Maps to §3 "Causal Chain event streaming (append-only)"
+               :buffer_local true}  ;; Maps to §5 "Logging and Causal Chain" - buffer locally if backpressure
+     :anchor {:enabled true}}
+  
+  ;; Marketplace configuration - local RO capability store
+  ;; Maps to §2 "Filesystem" - capabilities/ (contracts + wasm modules) — RO image segment
+  :marketplace
+    {:registry_paths ["./capabilities/"]  ;; Maps to §2 "capabilities/ (contracts + wasm modules)"
+     :readonly true})  ;; Maps to §2 "RO image segment or verifiable store"
+  
+  ;; Feature flags - minimal set for MicroVM
+  ;; Maps to §1 "Minimal Agent Runtime Profile" - Tiny core + optional modules
+  :features [:network :attestation])  ;; Only essential features for MicroVM deployment 
