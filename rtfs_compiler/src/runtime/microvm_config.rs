@@ -2,7 +2,7 @@
 //!
 //! This module provides configuration management for MicroVM providers and security policies.
 
-use crate::runtime::microvm::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
+use crate::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;

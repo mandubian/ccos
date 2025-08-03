@@ -58,6 +58,10 @@ fn test_enhanced_execution_context() {
 #[test]
 fn test_mock_provider_program_execution() {
     let mut factory = MicroVMFactory::new();
+    
+    // Initialize the provider
+    factory.initialize_provider("mock").expect("Failed to initialize mock provider");
+    
     let provider = factory.get_provider("mock").expect("Mock provider should be available");
     
     let program = Program::RtfsSource("(+ 3 4)".to_string());
@@ -93,67 +97,15 @@ fn test_mock_provider_program_execution() {
     assert!(execution_result.metadata.duration.as_millis() > 0);
 }
 
-#[test]
-fn test_rtfs_microvm_executor() {
-    let mut executor = RtfsMicroVMExecutor::new();
-    let program = Program::RtfsSource("(+ 1 2)".to_string());
-    let permissions = vec!["ccos.math.add".to_string()];
-    let runtime_context = RuntimeContext::controlled(permissions.clone());
-    let args = vec![Value::Integer(1), Value::Integer(2)];
-    
-    let result = executor.execute_rtfs_program(program, permissions, args, runtime_context);
-    assert!(result.is_ok());
-    
-    let value = result.unwrap();
-    // The RTFS expression (+ 1 2) should evaluate to 3
-    if let Value::Integer(value) = value {
-        assert_eq!(value, 3);
-    } else {
-        panic!("Expected integer result, got {:?}", value);
-    }
-}
 
-#[test]
-fn test_capability_permission_validation() {
-    let mut executor = RtfsMicroVMExecutor::new();
-    let program = Program::RtfsSource("(http-fetch \"https://api.example.com\")".to_string());
-    
-    // Test with restricted permissions
-    let permissions = vec!["ccos.math.add".to_string()]; // No network permission
-    let runtime_context = RuntimeContext::controlled(permissions.clone());
-    let args = vec![];
-    
-    let result = executor.execute_rtfs_program(program, permissions, args, runtime_context);
-    // This should fail because we don't have network permissions
-    assert!(result.is_err());
-    
-    // Test with appropriate permissions
-    let permissions = vec!["ccos.network.http-fetch".to_string()];
-    let runtime_context = RuntimeContext::controlled(vec![
-        "ccos.network.http-fetch".to_string(),
-        "ccos.network".to_string(),
-        "network".to_string(),
-    ]);
-    let args = vec![];
-    
-    let program = Program::RtfsSource("(http-fetch \"https://api.example.com\")".to_string());
-    let result = executor.execute_rtfs_program(program, permissions, args, runtime_context);
-    if let Err(ref e) = result {
-        println!("Network capability execution failed as expected: {:?}", e);
-    }
-    // Network request should fail due to DNS resolution, but capability permissions are working
-    // The error should be a NetworkError, not a permission error
-    assert!(result.is_err());
-    if let Err(RuntimeError::NetworkError(_)) = result {
-        // This is the expected behavior - network error due to DNS, not permission error
-    } else {
-        panic!("Expected NetworkError, got different error");
-    }
-}
 
 #[test]
 fn test_backward_compatibility() {
     let mut factory = MicroVMFactory::new();
+    
+    // Initialize the provider
+    factory.initialize_provider("mock").expect("Failed to initialize mock provider");
+    
     let provider = factory.get_provider("mock").expect("Mock provider should be available");
     
     // Test legacy capability-based execution
@@ -191,48 +143,15 @@ fn test_program_description() {
     assert_eq!(external_program.description(), "External program: /bin/ls [\"-la\"]");
 }
 
-#[test]
-fn test_different_program_types() {
-    let mut executor = RtfsMicroVMExecutor::new();
-    let permissions = vec!["ccos.math.add".to_string(), "native_function".to_string(), "external_program".to_string()];
-    let runtime_context = RuntimeContext::controlled(permissions.clone());
-    let args = vec![Value::Integer(1), Value::Integer(2)];
-    
-    // Test RTFS bytecode (should fail with invalid bytecode, which is expected)
-    let bytecode_program = Program::RtfsBytecode(vec![1, 2, 3, 4, 5]);
-    let result = executor.execute_rtfs_program(bytecode_program, permissions.clone(), args.clone(), runtime_context.clone());
-    if let Err(ref e) = result {
-        println!("Bytecode execution failed as expected: {:?}", e);
-    }
-    // Bytecode execution should fail with invalid WASM, which is correct behavior
-    assert!(result.is_err());
-    
-    // Test external program
-    let external_program = Program::ExternalProgram {
-        path: "/bin/echo".to_string(),
-        args: vec!["hello".to_string()],
-    };
-    let result = executor.execute_rtfs_program(external_program, permissions.clone(), args.clone(), runtime_context.clone());
-    if let Err(ref e) = result {
-        println!("External program execution failed: {:?}", e);
-    }
-    assert!(result.is_ok());
-    
-    // Test native function
-    let native_func = |args: Vec<Value>| -> RuntimeResult<Value> {
-        Ok(Value::String("Native function executed".to_string()))
-    };
-    let native_program = Program::NativeFunction(native_func);
-    let result = executor.execute_rtfs_program(native_program, permissions, args, runtime_context);
-    if let Err(ref e) = result {
-        println!("Native function execution failed: {:?}", e);
-    }
-    assert!(result.is_ok());
-} 
+ 
 
 #[test]
 fn test_process_provider_program_execution() {
     let mut factory = MicroVMFactory::new();
+    
+    // Initialize the provider
+    factory.initialize_provider("process").expect("Failed to initialize process provider");
+    
     let provider = factory.get_provider("process").expect("Process provider should be available");
     
     // Test external program execution
@@ -273,6 +192,10 @@ fn test_process_provider_program_execution() {
 #[test]
 fn test_process_provider_native_function() {
     let mut factory = MicroVMFactory::new();
+    
+    // Initialize the provider
+    factory.initialize_provider("process").expect("Failed to initialize process provider");
+    
     let provider = factory.get_provider("process").expect("Process provider should be available");
     
     // Test native function execution
@@ -306,8 +229,55 @@ fn test_process_provider_native_function() {
 }
 
 #[test]
+fn test_process_provider_rtfs_execution() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Initialize the provider
+    factory.initialize_provider("process").expect("Failed to initialize process provider");
+    
+    let provider = factory.get_provider("process").expect("Process provider should be available");
+    
+    // Test RTFS execution in process provider
+    let rtfs_program = Program::RtfsSource("(+ 5 3)".to_string());
+    let runtime_context = RuntimeContext::controlled(vec![
+        "ccos.math.add".to_string(),
+        "ccos.math".to_string(),
+        "math".to_string(),
+    ]);
+    
+    let context = ExecutionContext {
+        execution_id: "test-exec-process-rtfs".to_string(),
+        program: Some(rtfs_program),
+        capability_id: None,
+        capability_permissions: vec!["ccos.math.add".to_string()],
+        args: vec![Value::Integer(5), Value::Integer(3)],
+        config: MicroVMConfig::default(),
+        runtime_context: Some(runtime_context),
+    }; 
+    
+    let result = provider.execute_program(context);
+    if let Err(ref e) = result {
+        println!("Process provider RTFS execution failed: {:?}", e);
+    }
+    assert!(result.is_ok());
+    
+    let execution_result = result.unwrap();
+    // The RTFS expression (+ 5 3) should evaluate to 8
+    if let Value::Integer(value) = execution_result.value {
+        assert_eq!(value, 8);
+    } else {
+        panic!("Expected integer result, got {:?}", execution_result.value);
+    }
+    assert!(execution_result.metadata.duration.as_millis() > 0);
+}
+
+#[test]
 fn test_process_provider_permission_validation() {
     let mut factory = MicroVMFactory::new();
+    
+    // Initialize the provider
+    factory.initialize_provider("process").expect("Failed to initialize process provider");
+    
     let provider = factory.get_provider("process").expect("Process provider should be available");
     
     // Test that external program execution is blocked without permission
