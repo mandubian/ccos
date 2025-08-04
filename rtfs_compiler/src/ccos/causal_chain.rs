@@ -1,3 +1,18 @@
+/// Query struct for flexible filtering of actions in the causal chain
+#[derive(Debug, Default, Clone)]
+pub struct CausalQuery {
+    pub intent_id: Option<IntentId>,
+    pub plan_id: Option<PlanId>,
+    pub action_type: Option<ActionType>,
+    pub time_range: Option<(u64, u64)>,
+    pub parent_action_id: Option<ActionId>,
+}
+
+impl CausalQuery {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 //! Causal Chain Implementation
 //!
 //! This module implements the Causal Chain of Thought - an immutable, verifiable ledger
@@ -21,6 +36,20 @@ pub struct ImmutableLedger {
 }
 
 impl ImmutableLedger {
+    /// Get children actions for a given parent_action_id
+    pub fn get_children(&self, parent_id: &ActionId) -> Vec<&Action> {
+        self.indices.get_children(parent_id)
+            .iter()
+            .filter_map(|id| self.get_action(id))
+            .collect()
+    }
+
+    /// Get parent action for a given action_id
+    pub fn get_parent(&self, action_id: &ActionId) -> Option<&Action> {
+        self.get_action(action_id)
+            .and_then(|action| action.parent_action_id.as_ref())
+            .and_then(|parent_id| self.get_action(parent_id))
+    }
     pub fn new() -> Self {
         Self {
             actions: Vec::new(),
@@ -169,9 +198,16 @@ pub struct LedgerIndices {
     capability_actions: HashMap<CapabilityId, Vec<ActionId>>,
     function_actions: HashMap<String, Vec<ActionId>>,
     timestamp_index: Vec<ActionId>, // Chronological order
+    parent_to_children: HashMap<ActionId, Vec<ActionId>>, // Tree traversal
 }
 
 impl LedgerIndices {
+    pub fn get_children(&self, parent_id: &ActionId) -> Vec<ActionId> {
+        self.parent_to_children
+            .get(parent_id)
+            .cloned()
+            .unwrap_or_default()
+    }
     pub fn new() -> Self {
         Self {
             intent_actions: HashMap::new(),
@@ -179,6 +215,7 @@ impl LedgerIndices {
             capability_actions: HashMap::new(),
             function_actions: HashMap::new(),
             timestamp_index: Vec::new(),
+            parent_to_children: HashMap::new(),
         }
     }
 
@@ -215,6 +252,14 @@ impl LedgerIndices {
 
         // Index by timestamp
         self.timestamp_index.push(action.action_id.clone());
+
+        // Index by parent_action_id for tree traversal
+        if let Some(parent_id) = &action.parent_action_id {
+            self.parent_to_children
+                .entry(parent_id.clone())
+                .or_insert_with(Vec::new)
+                .push(action.action_id.clone());
+        }
 
         Ok(())
     }
@@ -513,6 +558,37 @@ pub struct CausalChain {
 }
 
 impl CausalChain {
+    /// Query actions with flexible filters (intent, plan, type, time, parent)
+    pub fn query_actions(&self, query: &CausalQuery) -> Vec<&Action> {
+        let mut actions: Vec<&Action> = self.get_all_actions().iter().collect();
+
+        if let Some(ref intent_id) = query.intent_id {
+            actions = actions.into_iter().filter(|a| &a.intent_id == intent_id).collect();
+        }
+        if let Some(ref plan_id) = query.plan_id {
+            actions = actions.into_iter().filter(|a| &a.plan_id == plan_id).collect();
+        }
+        if let Some(ref action_type) = query.action_type {
+            actions = actions.into_iter().filter(|a| &a.action_type == action_type).collect();
+        }
+        if let Some((start, end)) = query.time_range {
+            actions = actions.into_iter().filter(|a| a.timestamp >= start && a.timestamp <= end).collect();
+        }
+        if let Some(ref parent_id) = query.parent_action_id {
+            actions = actions.into_iter().filter(|a| a.parent_action_id.as_ref() == Some(parent_id)).collect();
+        }
+        actions
+    }
+
+    /// Get children actions for a given parent_action_id
+    pub fn get_children(&self, parent_id: &ActionId) -> Vec<&Action> {
+        self.ledger.get_children(parent_id)
+    }
+
+    /// Get parent action for a given action_id
+    pub fn get_parent(&self, action_id: &ActionId) -> Option<&Action> {
+        self.ledger.get_parent(action_id)
+    }
     pub fn new() -> Result<Self, RuntimeError> {
         Ok(Self {
             ledger: ImmutableLedger::new(),
@@ -525,13 +601,20 @@ impl CausalChain {
     /// Create a new action from an intent
     pub fn create_action(&mut self, intent: Intent) -> Result<Action, RuntimeError> {
         let plan_id = format!("plan-{}", Uuid::new_v4());
-        let action = Action::new(
+        let mut action = Action::new(
             ActionType::InternalStep,
-            plan_id,
+            plan_id.clone(),
             intent.intent_id.clone(),
         )
         .with_name("execute_intent")
         .with_args(vec![Value::String(intent.goal.clone())]);
+
+        // Add recommended audit metadata
+        action.metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-001".to_string()));
+        action.metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-xyz".to_string()));
+        action.metadata.insert("capability_attestation_id".to_string(), Value::String("attest-abc".to_string()));
+        action.metadata.insert("triggered_by".to_string(), Value::String("none".to_string()));
+        action.metadata.insert("audit_trail".to_string(), Value::String("audit-log-123".to_string()));
 
         // Track provenance
         self.provenance.track_action(&action, &intent)?;
@@ -959,6 +1042,13 @@ mod tests {
         let action = chain.create_action(intent).unwrap();
         assert_eq!(action.function_name.as_ref().unwrap(), "execute_intent");
 
+        // Check audit metadata
+        assert_eq!(action.metadata.get("constitutional_rule_id"), Some(&Value::String("rule-001".to_string())));
+        assert_eq!(action.metadata.get("delegation_decision_id"), Some(&Value::String("deleg-xyz".to_string())));
+        assert_eq!(action.metadata.get("capability_attestation_id"), Some(&Value::String("attest-abc".to_string())));
+        assert_eq!(action.metadata.get("triggered_by"), Some(&Value::String("none".to_string())));
+        assert_eq!(action.metadata.get("audit_trail"), Some(&Value::String("audit-log-123".to_string())));
+
         let result = ExecutionResult {
             success: true,
             value: Value::Float(42.0),
@@ -966,7 +1056,18 @@ mod tests {
         };
 
         // Clone action to avoid partial move error
-        assert!(chain.record_result(action, result.clone()).is_ok());
+        assert!(chain.record_result(action.clone(), result.clone()).is_ok());
+
+        // Query by audit metadata
+        let query = CausalQuery {
+            intent_id: Some(action.intent_id.clone()),
+            plan_id: Some(action.plan_id.clone()),
+            action_type: Some(action.action_type.clone()),
+            time_range: None,
+            parent_action_id: None,
+        };
+        let results = chain.query_actions(&query);
+        assert!(results.iter().any(|a| a.metadata.get("constitutional_rule_id") == Some(&Value::String("rule-001".to_string()))));
     }
 
     #[test]

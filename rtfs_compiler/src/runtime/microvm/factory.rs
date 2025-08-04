@@ -37,7 +37,7 @@ impl MicroVMFactory {
         }
         
         // Register gvisor provider (if available)
-        let gvisor_provider = crate::runtime::microvm::providers::gvisor::GvisorMicroVMProvider::new();
+        let gvisor_provider = crate::runtime::microvm::providers::gvisor::GvisorMicroVMProvider::default();
         if gvisor_provider.is_available() {
             self.register_provider("gvisor", Box::new(gvisor_provider));
         }
