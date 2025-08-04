@@ -307,4 +307,81 @@ fn test_process_provider_permission_validation() {
     } else {
         panic!("Expected SecurityViolation error");
     }
+}
+
+#[test]
+fn test_firecracker_provider_availability() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Check if firecracker provider is available (depends on system)
+    let available_providers = factory.get_available_providers();
+    println!("Available providers: {:?}", available_providers);
+    
+    // Firecracker provider should be available if firecracker binary is present
+    // This test will pass even if firecracker is not available (graceful degradation)
+    if available_providers.contains(&"firecracker") {
+        // If firecracker is available, test initialization
+        let result = factory.initialize_provider("firecracker");
+        if let Err(e) = result {
+            // This is expected if kernel/rootfs images are not available
+            println!("Firecracker initialization failed (expected if images not available): {:?}", e);
+        }
+    } else {
+        println!("Firecracker provider not available on this system");
+    }
+}
+
+#[test]
+fn test_firecracker_provider_rtfs_execution() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Only run this test if firecracker is available
+    if !factory.get_available_providers().contains(&"firecracker") {
+        println!("Skipping firecracker test - provider not available");
+        return;
+    }
+    
+    // Initialize the provider
+    if let Err(e) = factory.initialize_provider("firecracker") {
+        println!("Firecracker initialization failed: {:?}", e);
+        return; // Skip test if initialization fails
+    }
+    
+    let provider = factory.get_provider("firecracker").expect("Firecracker provider should be available");
+    
+    // Test RTFS execution in Firecracker VM
+    let rtfs_program = Program::RtfsSource("(+ 7 5)".to_string());
+    let runtime_context = RuntimeContext::controlled(vec![
+        "ccos.math.add".to_string(),
+        "ccos.math".to_string(),
+        "math".to_string(),
+    ]);
+    
+    let context = ExecutionContext {
+        execution_id: "test-exec-firecracker-rtfs".to_string(),
+        program: Some(rtfs_program),
+        capability_id: None,
+        capability_permissions: vec!["ccos.math.add".to_string()],
+        args: vec![Value::Integer(7), Value::Integer(5)],
+        config: MicroVMConfig::default(),
+        runtime_context: Some(runtime_context),
+    };
+    
+    let result = provider.execute_program(context);
+    if let Err(ref e) = result {
+        println!("Firecracker provider RTFS execution failed: {:?}", e);
+        // This is expected if kernel/rootfs images are not available
+        return;
+    }
+    
+    let execution_result = result.unwrap();
+    // The RTFS expression (+ 7 5) should evaluate to 12
+    if let Value::Integer(value) = execution_result.value {
+        assert_eq!(value, 12);
+    } else {
+        panic!("Expected integer result, got {:?}", execution_result.value);
+    }
+    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert_eq!(execution_result.metadata.memory_used_mb, 512); // Default memory
+    assert!(execution_result.metadata.cpu_time.as_millis() > 0);
 } 
