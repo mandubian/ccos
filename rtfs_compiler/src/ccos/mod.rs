@@ -12,6 +12,10 @@ pub mod types;
 pub mod governance_kernel;
 pub mod orchestrator;
 pub mod arbiter;
+pub mod storage;           // Unified storage abstraction
+pub mod archivable_types;  // Serializable versions of CCOS types
+pub mod plan_archive;     // Plan archiving functionality
+pub mod archive_manager;   // Unified archive coordination
 
 // Delegation and execution stack
 pub mod delegation;
