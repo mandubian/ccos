@@ -24,6 +24,7 @@ pub mod host_interface;
 pub mod ir_runtime;
 pub mod microvm;
 pub mod microvm_config;
+#[cfg(test)]
 pub mod microvm_tests;
 pub mod module_runtime;
 pub mod stdlib;
