@@ -51,6 +51,17 @@ pub enum IntentStatus {
     Suspended,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlanStatus {
+    Draft,
+    Active,
+    Completed,
+    Failed,
+    Paused,
+    Aborted,
+    Archived,
+}
+
 /// Defines the relationship between two Intents.
 #[derive(Debug, Clone)]
 pub struct IntentEdge {
@@ -115,6 +126,7 @@ pub struct Plan {
     pub intent_ids: Vec<IntentId>,
     pub language: PlanLanguage,
     pub body: PlanBody, // Flexible body representation
+    pub status: PlanStatus,
     pub created_at: u64,
     pub metadata: HashMap<String, Value>,
 }
@@ -283,6 +295,7 @@ impl Plan {
             intent_ids,
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_code),
+            status: PlanStatus::Draft,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             metadata: HashMap::new(),
         }
