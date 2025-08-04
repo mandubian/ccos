@@ -13,10 +13,6 @@ impl CausalQuery {
         Self::default()
     }
 }
-//! Causal Chain Implementation
-//!
-//! This module implements the Causal Chain of Thought - an immutable, verifiable ledger
-//! that records every significant action with its complete audit trail.
 
 use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
 use crate::runtime::error::RuntimeError;
@@ -598,8 +594,12 @@ impl CausalChain {
         })
     }
 
-    /// Create a new action from an intent
-    pub fn create_action(&mut self, intent: Intent) -> Result<Action, RuntimeError> {
+    /// Create a new action from an intent, with audit metadata provided by privileged system components
+    pub fn create_action(
+        &mut self,
+        intent: Intent,
+        audit_metadata: Option<HashMap<String, Value>>,
+    ) -> Result<Action, RuntimeError> {
         let plan_id = format!("plan-{}", Uuid::new_v4());
         let mut action = Action::new(
             ActionType::InternalStep,
@@ -609,12 +609,12 @@ impl CausalChain {
         .with_name("execute_intent")
         .with_args(vec![Value::String(intent.goal.clone())]);
 
-        // Add recommended audit metadata
-        action.metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-001".to_string()));
-        action.metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-xyz".to_string()));
-        action.metadata.insert("capability_attestation_id".to_string(), Value::String("attest-abc".to_string()));
-        action.metadata.insert("triggered_by".to_string(), Value::String("none".to_string()));
-        action.metadata.insert("audit_trail".to_string(), Value::String("audit-log-123".to_string()));
+        // Insert provided audit metadata if present
+        if let Some(meta) = audit_metadata {
+            for (key, value) in meta {
+                action.metadata.insert(key, value);
+            }
+        }
 
         // Track provenance
         self.provenance.track_action(&action, &intent)?;
@@ -1039,15 +1039,23 @@ mod tests {
         let mut chain = CausalChain::new().unwrap();
         let intent = Intent::new("Test goal".to_string());
 
-        let action = chain.create_action(intent).unwrap();
+        // Simulate privileged system providing real audit metadata
+        let mut audit_metadata = HashMap::new();
+        audit_metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-777".to_string()));
+        audit_metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-abc123".to_string()));
+        audit_metadata.insert("capability_attestation_id".to_string(), Value::String("attest-xyz789".to_string()));
+        audit_metadata.insert("triggered_by".to_string(), Value::String("system-orchestrator".to_string()));
+        audit_metadata.insert("audit_trail".to_string(), Value::String("audit-log-999".to_string()));
+
+        let action = chain.create_action(intent, Some(audit_metadata.clone())).unwrap();
         assert_eq!(action.function_name.as_ref().unwrap(), "execute_intent");
 
         // Check audit metadata
-        assert_eq!(action.metadata.get("constitutional_rule_id"), Some(&Value::String("rule-001".to_string())));
-        assert_eq!(action.metadata.get("delegation_decision_id"), Some(&Value::String("deleg-xyz".to_string())));
-        assert_eq!(action.metadata.get("capability_attestation_id"), Some(&Value::String("attest-abc".to_string())));
-        assert_eq!(action.metadata.get("triggered_by"), Some(&Value::String("none".to_string())));
-        assert_eq!(action.metadata.get("audit_trail"), Some(&Value::String("audit-log-123".to_string())));
+        assert_eq!(action.metadata.get("constitutional_rule_id"), Some(&Value::String("rule-777".to_string())));
+        assert_eq!(action.metadata.get("delegation_decision_id"), Some(&Value::String("deleg-abc123".to_string())));
+        assert_eq!(action.metadata.get("capability_attestation_id"), Some(&Value::String("attest-xyz789".to_string())));
+        assert_eq!(action.metadata.get("triggered_by"), Some(&Value::String("system-orchestrator".to_string())));
+        assert_eq!(action.metadata.get("audit_trail"), Some(&Value::String("audit-log-999".to_string())));
 
         let result = ExecutionResult {
             success: true,
@@ -1067,14 +1075,20 @@ mod tests {
             parent_action_id: None,
         };
         let results = chain.query_actions(&query);
-        assert!(results.iter().any(|a| a.metadata.get("constitutional_rule_id") == Some(&Value::String("rule-001".to_string()))));
+        assert!(results.iter().any(|a| a.metadata.get("constitutional_rule_id") == Some(&Value::String("rule-777".to_string()))));
     }
 
     #[test]
     fn test_ledger_integrity() {
         let mut chain = CausalChain::new().unwrap();
         let intent = Intent::new("Test goal".to_string());
-        let action = chain.create_action(intent).unwrap();
+        let mut audit_metadata = HashMap::new();
+        audit_metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-888".to_string()));
+        audit_metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-xyz888".to_string()));
+        audit_metadata.insert("capability_attestation_id".to_string(), Value::String("attest-abc888".to_string()));
+        audit_metadata.insert("triggered_by".to_string(), Value::String("test-integrity".to_string()));
+        audit_metadata.insert("audit_trail".to_string(), Value::String("audit-log-888".to_string()));
+        let action = chain.create_action(intent, Some(audit_metadata)).unwrap();
 
         let result = ExecutionResult {
             success: true,
@@ -1091,7 +1105,13 @@ mod tests {
     fn test_metrics_tracking() {
         let mut chain = CausalChain::new().unwrap();
         let intent = Intent::new("Test goal".to_string());
-        let action = chain.create_action(intent).unwrap();
+        let mut audit_metadata = HashMap::new();
+        audit_metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-999".to_string()));
+        audit_metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-xyz999".to_string()));
+        audit_metadata.insert("capability_attestation_id".to_string(), Value::String("attest-abc999".to_string()));
+        audit_metadata.insert("triggered_by".to_string(), Value::String("test-metrics".to_string()));
+        audit_metadata.insert("audit_trail".to_string(), Value::String("audit-log-999".to_string()));
+        let action = chain.create_action(intent, Some(audit_metadata)).unwrap();
 
         let result = ExecutionResult {
             success: true,
