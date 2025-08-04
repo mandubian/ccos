@@ -14,6 +14,11 @@ impl CausalQuery {
     }
 }
 
+//! Causal Chain Implementation
+//!
+//! This module implements the Causal Chain of Thought - an immutable, verifiable ledger
+//! that records every significant action with its complete audit trail.
+
 use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
