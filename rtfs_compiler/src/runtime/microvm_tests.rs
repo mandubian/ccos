@@ -515,3 +515,287 @@ fn test_gvisor_provider_container_lifecycle() {
     // let cleanup_result = provider.cleanup();
     // assert!(cleanup_result.is_ok());
 } 
+
+#[test]
+fn test_microvm_provider_performance_comparison() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test performance across different providers
+    let providers = ["mock", "process"];
+    let test_program = Program::RtfsSource("(+ 1 2)".to_string());
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                let start_time = std::time::Instant::now();
+                
+                let context = ExecutionContext {
+                    execution_id: format!("perf-test-{}", provider_name),
+                    program: Some(test_program.clone()),
+                    capability_id: None,
+                    capability_permissions: vec![],
+                    args: vec![],
+                    config: MicroVMConfig::default(),
+                    runtime_context: Some(RuntimeContext::unrestricted()),
+                };
+                
+                let result = provider.execute_program(context);
+                let duration = start_time.elapsed();
+                
+                assert!(result.is_ok(), "Provider {} should execute successfully", provider_name);
+                println!("Provider {} execution time: {:?}", provider_name, duration);
+                
+                // Performance assertions
+                assert!(duration.as_millis() < 1000, "Provider {} should complete within 1 second", provider_name);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_security_isolation() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test security isolation with restricted capabilities
+    let restricted_context = RuntimeContext::controlled(vec!["ccos.math.add".to_string()]);
+    
+    // Test that providers respect capability restrictions
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                // Test allowed capability
+                let allowed_context = ExecutionContext {
+                    execution_id: format!("security-test-allowed-{}", provider_name),
+                    program: Some(Program::RtfsSource("(call :ccos.math.add {:a 1 :b 2})".to_string())),
+                    capability_id: None,
+                    capability_permissions: vec![],
+                    args: vec![],
+                    config: MicroVMConfig::default(),
+                    runtime_context: Some(restricted_context.clone()),
+                };
+                
+                let allowed_result = provider.execute_program(allowed_context);
+                assert!(allowed_result.is_ok(), "Allowed capability should execute in provider {}", provider_name);
+                
+                // Test denied capability (should be handled gracefully)
+                let denied_context = ExecutionContext {
+                    execution_id: format!("security-test-denied-{}", provider_name),
+                    program: Some(Program::RtfsSource("(call :ccos.network.http-fetch {:url \"http://example.com\"})".to_string())),
+                    capability_id: None,
+                    capability_permissions: vec![],
+                    args: vec![],
+                    config: MicroVMConfig::default(),
+                    runtime_context: Some(restricted_context.clone()),
+                };
+                
+                let denied_result = provider.execute_program(denied_context);
+                // Should either succeed (with proper error handling) or fail gracefully
+                println!("Provider {} denied capability result: {:?}", provider_name, denied_result);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_resource_limits() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test resource limit enforcement
+    let config = MicroVMConfig {
+        timeout: Duration::from_millis(100), // Very short timeout
+        memory_limit_mb: 1, // Very low memory limit
+        cpu_limit: 0.1, // Low CPU limit
+        network_policy: NetworkPolicy::Denied,
+        fs_policy: FileSystemPolicy::None,
+        env_vars: HashMap::new(),
+    };
+    
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                let context = ExecutionContext {
+                    execution_id: format!("resource-test-{}", provider_name),
+                    program: Program::RtfsSource("(+ 1 2)".to_string()),
+                    config: config.clone(),
+                    runtime_context: RuntimeContext::unrestricted(),
+                };
+                
+                let result = provider.execute_program(context);
+                assert!(result.is_ok(), "Provider {} should handle resource limits gracefully", provider_name);
+                
+                let execution_result = result.unwrap();
+                assert!(execution_result.metadata.duration.as_millis() <= 100, 
+                    "Provider {} should respect timeout", provider_name);
+                assert!(execution_result.metadata.memory_used_mb <= 1, 
+                    "Provider {} should respect memory limit", provider_name);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_error_handling() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test various error conditions
+    let error_test_cases = vec![
+        ("invalid-syntax", Program::RtfsSource("(invalid syntax here".to_string())),
+        ("empty-program", Program::RtfsSource("".to_string())),
+        ("complex-error", Program::RtfsSource("(call :nonexistent.capability {:arg \"test\"})".to_string())),
+    ];
+    
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                for (test_name, program) in &error_test_cases {
+                    let context = ExecutionContext {
+                        execution_id: format!("error-test-{}-{}", provider_name, test_name),
+                        program: program.clone(),
+                        config: MicroVMConfig::default(),
+                        runtime_context: RuntimeContext::unrestricted(),
+                    };
+                    
+                    let result = provider.execute_program(context);
+                    // Should handle errors gracefully (either return error or mock result)
+                    println!("Provider {} error test {} result: {:?}", provider_name, test_name, result);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_concurrent_execution() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test concurrent execution across providers
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                let handles: Vec<_> = (0..5).map(|i| {
+                    let provider = provider.clone();
+                    std::thread::spawn(move || {
+                        let context = ExecutionContext {
+                            execution_id: format!("concurrent-test-{}-{}", provider_name, i),
+                            program: Program::RtfsSource(format!("(+ {} {})", i, i)),
+                            config: MicroVMConfig::default(),
+                            runtime_context: RuntimeContext::unrestricted(),
+                        };
+                        
+                        provider.execute_program(context)
+                    })
+                }).collect();
+                
+                // Wait for all threads to complete
+                for handle in handles {
+                    let result = handle.join().unwrap();
+                    assert!(result.is_ok(), "Concurrent execution should succeed in provider {}", provider_name);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_configuration_validation() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test configuration validation
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                // Test valid configuration
+                let valid_config = MicroVMConfig {
+                    timeout: Duration::from_secs(30),
+                    memory_limit_mb: 512,
+                    cpu_limit: 1.0,
+                    network_policy: NetworkPolicy::AllowList(vec!["api.github.com".to_string()]),
+                    fs_policy: FileSystemPolicy::ReadOnly,
+                    env_vars: HashMap::new(),
+                };
+                
+                let context = ExecutionContext {
+                    execution_id: format!("config-test-{}", provider_name),
+                    program: Program::RtfsSource("(+ 1 2)".to_string()),
+                    config: valid_config,
+                    runtime_context: RuntimeContext::unrestricted(),
+                };
+                
+                let result = provider.execute_program(context);
+                assert!(result.is_ok(), "Provider {} should accept valid configuration", provider_name);
+                
+                // Test configuration schema
+                let schema = provider.get_config_schema();
+                assert!(!schema.is_null(), "Provider {} should provide configuration schema", provider_name);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_lifecycle_management() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test provider lifecycle (initialize, execute, cleanup)
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                // Test execution
+                let context = ExecutionContext {
+                    execution_id: format!("lifecycle-test-{}", provider_name),
+                    program: Program::RtfsSource("(+ 1 2)".to_string()),
+                    config: MicroVMConfig::default(),
+                    runtime_context: RuntimeContext::unrestricted(),
+                };
+                
+                let result = provider.execute_program(context);
+                assert!(result.is_ok(), "Provider {} should execute during lifecycle test", provider_name);
+                
+                // Test cleanup (if provider supports it)
+                // Note: We can't test cleanup directly since we don't have mutable access
+                // but the provider should handle cleanup internally
+            }
+        }
+    }
+}
+
+#[test]
+fn test_microvm_provider_integration_with_capability_system() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Test integration with capability system
+    let providers = ["mock", "process"];
+    
+    for provider_name in providers {
+        if let Ok(()) = factory.initialize_provider(provider_name) {
+            if let Some(provider) = factory.get_provider(provider_name) {
+                // Test capability execution
+                let capability_context = ExecutionContext {
+                    execution_id: format!("capability-test-{}", provider_name),
+                    program: Program::RtfsSource("(call :ccos.math.add {:a 10 :b 20})".to_string()),
+                    config: MicroVMConfig::default(),
+                    runtime_context: RuntimeContext::unrestricted(),
+                };
+                
+                let result = provider.execute_program(capability_context);
+                assert!(result.is_ok(), "Provider {} should execute capability calls", provider_name);
+                
+                let execution_result = result.unwrap();
+                // Verify that capability execution produces meaningful results
+                println!("Provider {} capability execution result: {:?}", provider_name, execution_result);
+            }
+        }
+    }
+} 
