@@ -308,10 +308,7 @@ impl From<Expression> for Value {
                 // Return the resource name as a string
                 Value::String(format!("@{}", resource_name))
             }
-            Expression::TaskContextAccess(task_context) => {
-                // Return a placeholder for task context access
-                Value::String(format!("#<task-context: {}>", task_context.field.0))
-            }
+
             Expression::LogStep(log_expr) => {
                 // For now, return a placeholder for log step expressions
                 Value::String("#<log-step>".to_string())

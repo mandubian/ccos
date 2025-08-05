@@ -35,7 +35,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
         Rule::resource_ref => build_resource_ref(pair),
-        Rule::task_context_access => build_task_context_access(pair),
+
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
                 .map(build_expression)
@@ -132,42 +132,7 @@ fn build_resource_ref(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
     Ok(Expression::ResourceRef(unescaped_content))
 }
 
-fn build_task_context_access(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
-    let pair_span = pair_to_source_span(&pair);
-    let mut inner = pair.into_inner();
 
-    // The task_context_access rule contains the identifier directly
-    let identifier_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "Expected an identifier in task context access".to_string(),
-        span: Some(pair_span),
-    })?;
-
-    // Parse the identifier as either a symbol or keyword
-    let identifier = match identifier_pair.as_rule() {
-        Rule::symbol => build_symbol(identifier_pair)?,
-        Rule::keyword => {
-            let keyword = build_keyword(identifier_pair)?;
-            // Convert keyword to symbol for task context access
-            Symbol(keyword.0)
-        },
-        Rule::identifier => {
-            // Handle identifier as a symbol
-            Symbol(identifier_pair.as_str().to_string())
-        },
-        Rule::namespaced_identifier => {
-            // Handle namespaced identifier as a symbol
-            Symbol(identifier_pair.as_str().to_string())
-        },
-        _ => return Err(PestParseError::InvalidInput {
-            message: "Expected symbol, keyword, identifier, or namespaced_identifier in task context access".to_string(),
-            span: Some(pair_to_source_span(&identifier_pair)),
-        }),
-    };
-
-    // For now, we'll represent task context access as a special symbol
-    // In the future, this might be a dedicated AST node type
-    Ok(Expression::Symbol(identifier))
-}
 
 pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>, PestParseError> {
     if pair.as_rule() != Rule::map {

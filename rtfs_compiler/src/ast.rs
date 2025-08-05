@@ -500,11 +500,11 @@ pub enum Expression {
     WithResource(#[validate] WithResourceExpr),
     Match(#[validate] MatchExpr),
     ResourceRef(String),                      // Added
-    TaskContextAccess(TaskContextAccessExpr), // Added for @context-key syntax
+
 }
 
 impl Validate for Expression {
-    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+    fn validate(&self) -> Result<(), validator::VaidationErrors> {
         match self {
             Expression::List(items) | Expression::Vector(items) => {
                 for item in items {
@@ -824,12 +824,7 @@ pub struct DiscoverAgentsExpr {
     pub options: Option<Box<Expression>>, // Optional Map expression
 }
 
-/// Task context access expression (@context-key)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
-pub struct TaskContextAccessExpr {
-    pub field: Keyword, // The field name to access from task context
-}
+
 
 // --- Delegation Hint ---
 /// Optional compile-time hint that instructs the runtime where a function

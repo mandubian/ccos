@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use super::storage::Archivable;
+use super::types::Plan;
 
 /// Simplified Plan for archiving 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,5 +16,14 @@ impl Archivable for ArchivablePlan {
     
     fn entity_type(&self) -> &'static str {
         "ArchivablePlan"
+    }
+}
+
+impl From<&Plan> for ArchivablePlan {
+    fn from(plan: &Plan) -> Self {
+        ArchivablePlan {
+            plan_id: plan.plan_id.clone(),
+            name: plan.name.clone(),
+        }
     }
 }

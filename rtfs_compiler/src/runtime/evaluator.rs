@@ -28,7 +28,6 @@ pub struct Evaluator {
     pub env: Environment,
     recursion_depth: usize,
     max_recursion_depth: usize,
-    task_context: Option<Value>,
     pub delegation_engine: Arc<dyn DelegationEngine>,
     pub model_registry: Arc<ModelRegistry>,
     /// Security context for capability execution
@@ -81,7 +80,6 @@ impl Evaluator {
             env,
             recursion_depth: 0,
             max_recursion_depth: 1000,
-            task_context: None,
             delegation_engine,
             model_registry,
             security_context,
@@ -93,31 +91,7 @@ impl Evaluator {
     }
 
     /// Create a new evaluator with task context and security
-    pub fn new_with_task_context(
-        module_registry: Rc<ModuleRegistry>, 
-        task_context: Value,
-        delegation_engine: Arc<dyn DelegationEngine>,
-        security_context: RuntimeContext,
-        host: Rc<dyn HostInterface>,
-    ) -> Self {
-        let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
-        let model_registry = Arc::new(ModelRegistry::with_defaults());
 
-        Evaluator {
-            module_registry,
-            env,
-            recursion_depth: 0,
-            max_recursion_depth: 1000,
-            task_context: Some(task_context),
-            delegation_engine,
-            model_registry,
-            security_context,
-            host,
-            special_forms: Self::default_special_forms(),
-            type_validator: Arc::new(TypeValidator::new()),
-            type_config: TypeCheckingConfig::default(),
-        }
-    }
 
     /// Create a new evaluator with default security context (pure)
     pub fn new_with_defaults(
@@ -133,14 +107,7 @@ impl Evaluator {
         )
     }
 
-    /// Set the task context for the evaluator
-    pub fn set_task_context(&mut self, context: Value) {
-        self.task_context = Some(context);
-    }
-    /// Get the current task context
-    pub fn get_task_context(&self) -> Option<Value> {
-        self.task_context.clone()
-    }
+
 
     /// Configure type checking behavior
     pub fn set_type_checking_config(&mut self, config: TypeCheckingConfig) {
@@ -476,9 +443,6 @@ impl Evaluator {
                 self.eval_discover_agents(discover_expr, env)
             }
             Expression::ResourceRef(s) => Ok(Value::String(s.clone())),
-            Expression::TaskContextAccess(task_context) => {
-                self.eval_task_context(task_context, env)
-            }
         }
     }
 
@@ -945,8 +909,7 @@ impl Evaluator {
             | Expression::Vector(_)
             | Expression::Map(_)
             | Expression::List(_)
-            | Expression::ResourceRef(_)
-            | Expression::TaskContextAccess(_) => false,
+            | Expression::ResourceRef(_) => false,
         }
     }
 
@@ -1760,30 +1723,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_task_context(
-        &self,
-        task_context: &crate::ast::TaskContextAccessExpr,
-        _env: &mut Environment,
-    ) -> RuntimeResult<Value> {
-        // Access task context field by name
-        if let Some(context) = &self.task_context {
-            match context {
-                Value::Map(context_map) => {
-                    let field_key = crate::ast::MapKey::Keyword(task_context.field.clone());
-                    Ok(context_map.get(&field_key).cloned().unwrap_or(Value::Nil))
-                }
-                _ => Err(RuntimeError::TypeError {
-                    expected: "map".to_string(),
-                    actual: format!("{:?}", context),
-                    operation: "task context access".to_string(),
-                }),
-            }
-        } else {
-            Err(RuntimeError::Generic(
-                "No task context available".to_string(),
-            ))
-        }
-    }
+
 
     fn execute_model_call(
         &self,
@@ -1929,7 +1869,7 @@ impl Evaluator {
             env: self.env.clone(),
             recursion_depth: 0,
             max_recursion_depth: self.max_recursion_depth,
-            task_context: self.task_context.clone(),
+
             delegation_engine: self.delegation_engine.clone(),
             model_registry: self.model_registry.clone(),
             security_context,
@@ -1952,7 +1892,7 @@ impl Evaluator {
             env,
             recursion_depth: 0,
             max_recursion_depth: 1000,
-            task_context: None,
+
             delegation_engine,
             model_registry: Arc::new(ModelRegistry::with_defaults()),
             security_context,

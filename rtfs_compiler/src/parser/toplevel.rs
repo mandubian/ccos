@@ -32,7 +32,7 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         | Rule::log_step_expr
         | Rule::discover_agents_expr
         | Rule::resource_ref
-        | Rule::task_context_access
+
         | Rule::identifier
         | Rule::namespaced_identifier => build_expression(pair).map(TopLevel::Expression),
         Rule::module_definition => build_module_definition(pair).map(TopLevel::Module),

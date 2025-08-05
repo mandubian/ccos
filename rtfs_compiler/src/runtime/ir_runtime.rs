@@ -363,10 +363,7 @@ impl IrRuntime {
                 // For now, just return the last value
                 Ok(log_values.last().cloned().unwrap_or(Value::Nil))
             }
-            IrNode::TaskContextAccess { field_name, .. } => {
-                // For now, return a placeholder value
-                Ok(Value::String(format!("@{}", field_name.0)))
-            }
+
             IrNode::DiscoverAgents { criteria, .. } => {
                 // Execute criteria and return empty vector for now
                 self.execute_node(criteria, env, false, module_registry)?;

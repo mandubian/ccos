@@ -259,12 +259,7 @@ pub enum IrNode {
         source_location: Option<SourceLocation>,
     },
 
-    TaskContextAccess {
-        id: NodeId,
-        field_name: Keyword,
-        ir_type: IrType,
-        source_location: Option<SourceLocation>,
-    },
+
 
     DiscoverAgents {
         id: NodeId,
@@ -387,7 +382,7 @@ impl IrNode {
             IrNode::Module { id, .. } => *id,
             IrNode::Import { id, .. } => *id,
             IrNode::Task { id, .. } => *id,
-            IrNode::TaskContextAccess { id, .. } => *id,
+
             IrNode::DiscoverAgents { id, .. } => *id,
             IrNode::Destructure { id, .. } => *id,
         }
@@ -417,7 +412,7 @@ impl IrNode {
             IrNode::Vector { ir_type, .. } => Some(ir_type),
             IrNode::Map { ir_type, .. } => Some(ir_type),
             IrNode::Task { ir_type, .. } => Some(ir_type),
-            IrNode::TaskContextAccess { ir_type, .. } => Some(ir_type),
+
             IrNode::DiscoverAgents { ir_type, .. } => Some(ir_type),
             IrNode::Destructure { ir_type, .. } => Some(ir_type),
             _ => None,
@@ -493,9 +488,7 @@ impl IrNode {
             IrNode::Task {
                 source_location, ..
             } => source_location.as_ref(),
-            IrNode::TaskContextAccess {
-                source_location, ..
-            } => source_location.as_ref(),
+
             IrNode::DiscoverAgents {
                 source_location, ..
             } => source_location.as_ref(),
