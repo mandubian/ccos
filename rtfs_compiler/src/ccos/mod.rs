@@ -29,7 +29,7 @@ pub mod caching;
  // Advanced components
 pub mod context_horizon;
 pub mod subconscious;
-pub mod task_context;
+
 
  // New modular Working Memory (single declaration)
 pub mod working_memory;

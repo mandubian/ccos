@@ -1001,15 +1001,7 @@ impl<'a> IrConverter<'a> {
                     })
                 }
             }
-            Expression::TaskContextAccess(task_context) => {
-                let id = self.next_id();
-                Ok(IrNode::TaskContextAccess {
-                    id,
-                    field_name: task_context.field.clone(),
-                    ir_type: IrType::Any,  // Type depends on context
-                    source_location: None, // TODO: Add source location
-                })
-            }
+
         }
     }
 
@@ -2216,7 +2208,7 @@ impl<'a> IrConverter<'a> {
             | IrNode::Parallel { .. }
             | IrNode::Module { .. }
             | IrNode::Import { .. }
-            | IrNode::TaskContextAccess { .. }
+
             | IrNode::Program { .. } => {
                 // No variable references in these node types
             }

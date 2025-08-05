@@ -13,7 +13,7 @@ This file summarizes all GitHub issues created for the CCOS migration, grouped b
 - [Causal Chain distillation and summarization (for working memory/context horizon)](https://github.com/mandubian/rtfs-ai/issues/6)
 - [Efficient querying and filtering for Causal Chain](https://github.com/mandubian/rtfs-ai/issues/7)
 - [Content-addressable, immutable storage for all plans (Plan Archive)](https://github.com/mandubian/rtfs-ai/issues/9)
-- [Implement @context-key access and context propagation (Task Context System)](https://github.com/mandubian/rtfs-ai/issues/10)
+- ~~[Implement @context-key access and context propagation (Task Context System)](https://github.com/mandubian/rtfs-ai/issues/10)~~ **OBSOLETE** - Superseded by RTFS 2.0 CCOS architecture
 - [Working Memory: Index and summarize causal chain for fast recall](https://github.com/mandubian/rtfs-ai/issues/11)
 
 ## 2. Orchestration Layer

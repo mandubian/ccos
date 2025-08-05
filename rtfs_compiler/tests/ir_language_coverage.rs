@@ -223,19 +223,7 @@ fn test_ir_conversion_try_catch() {
         if try_body.len() == 1));
 }
 
-#[test]
-fn test_ir_conversion_context_access() {
-    let mut converter = setup_converter();
-    
-    // TaskContextAccess expression
-    let context_expr = TaskContextAccessExpr {
-        field: Keyword::new("user-id"),
-    };
-    let ast = Expression::TaskContextAccess(context_expr);
-    let ir = converter.convert_expression(ast).expect("Should convert task context access");
-    assert!(matches!(ir, IrNode::TaskContextAccess { field_name, .. } 
-        if field_name.0 == "user-id"));
-}
+
 
 #[test]
 fn test_ir_conversion_discover_agents() {

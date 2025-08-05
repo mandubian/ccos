@@ -48,7 +48,7 @@ impl PlanArchive {
     pub fn get_plan_by_id(&self, plan_id: &PlanId) -> Option<ArchivablePlan> {
         let plan_index = self.plan_id_index.lock().unwrap();
         if let Some(hash) = plan_index.get(plan_id) {
-            self.storage.retrieve(hash)
+            self.storage.retrieve(hash).ok().flatten()
         } else {
             None
         }
@@ -59,7 +59,7 @@ impl PlanArchive {
         let intent_index = self.intent_id_index.lock().unwrap();
         if let Some(hashes) = intent_index.get(intent_id) {
             hashes.iter()
-                .filter_map(|hash| self.storage.retrieve(hash))
+                .filter_map(|hash| self.storage.retrieve(hash).ok().flatten())
                 .collect()
         } else {
             Vec::new()
@@ -144,9 +144,8 @@ mod tests {
 
         // Retrieve the plan
         let retrieved = archive.get_plan_by_id(&plan_id).unwrap();
-        assert_eq!(retrieved.id, plan.plan_id);
-        assert_eq!(retrieved.status, plan.status);
-        assert_eq!(retrieved.body.name, plan.name.unwrap_or_default());
+        assert_eq!(retrieved.plan_id, plan.plan_id);
+        assert_eq!(retrieved.name, plan.name);
     }
 
     #[test]
@@ -167,7 +166,7 @@ mod tests {
         let plans = archive.get_plans_for_intent(&intent_id);
         assert_eq!(plans.len(), 2);
 
-        let plan_ids: Vec<String> = plans.iter().map(|p| p.id.clone()).collect();
+        let plan_ids: Vec<String> = plans.iter().map(|p| p.plan_id.clone()).collect();
         assert!(plan_ids.contains(&plan1.plan_id));
         assert!(plan_ids.contains(&plan2.plan_id));
     }
