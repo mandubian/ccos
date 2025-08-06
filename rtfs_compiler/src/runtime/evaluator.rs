@@ -61,6 +61,9 @@ impl Evaluator {
     fn default_special_forms() -> HashMap<String, SpecialFormHandler> {
         let mut special_forms: HashMap<String, SpecialFormHandler> = HashMap::new();
         special_forms.insert("step".to_string(), Self::eval_step_form);
+        special_forms.insert("step.if".to_string(), Self::eval_step_if_form);
+        special_forms.insert("step.loop".to_string(), Self::eval_step_loop_form);
+        special_forms.insert("step.parallel".to_string(), Self::eval_step_parallel_form);
         // Add other evaluator-level special forms here in the future
         special_forms
     }
@@ -491,7 +494,128 @@ impl Evaluator {
         Ok(final_value)
     }
 
-    
+    fn eval_step_if_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Validate arguments: condition then-branch [else-branch]
+        if args.len() < 2 {
+            return Err(RuntimeError::InvalidArguments {
+                expected: "at least 2 (condition then-branch [else-branch])".to_string(),
+                actual: args.len().to_string(),
+            });
+        }
+
+        // Extract condition and branches
+        let condition_expr = &args[0];
+        let then_branch = &args[1];
+        let else_branch = args.get(2);
+
+        // Evaluate the condition
+        let condition_value = self.eval_expr(condition_expr, env)?;
+        
+        // Convert condition to boolean
+        let condition_bool = match condition_value {
+            Value::Boolean(b) => b,
+            Value::Nil => false,
+            Value::Integer(0) => false,
+            Value::Float(f) if f == 0.0 => false,
+            Value::String(s) if s.is_empty() => false,
+            Value::Vector(v) if v.is_empty() => false,
+            Value::Map(m) if m.is_empty() => false,
+            _ => true, // Any other value is considered true
+        };
+
+        // Execute the appropriate branch
+        let branch_to_execute = if condition_bool { then_branch } else { else_branch.unwrap_or(&Expression::Literal(crate::ast::Literal::Nil)) };
+        
+        self.eval_expr(branch_to_execute, env)
+    }
+
+    fn eval_step_loop_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Validate arguments: condition body
+        if args.len() != 2 {
+            return Err(RuntimeError::InvalidArguments {
+                expected: "exactly 2 (condition body)".to_string(),
+                actual: args.len().to_string(),
+            });
+        }
+
+        let condition_expr = &args[0];
+        let body_expr = &args[1];
+        
+        let mut last_result = Value::Nil;
+        let mut iteration_count = 0;
+        const MAX_ITERATIONS: usize = 10000; // Safety limit to prevent infinite loops
+
+        loop {
+            // Check iteration limit
+            if iteration_count >= MAX_ITERATIONS {
+                return Err(RuntimeError::Generic(format!("Loop exceeded maximum iterations ({})", MAX_ITERATIONS)));
+            }
+
+            // Evaluate the condition
+            let condition_value = self.eval_expr(condition_expr, env)?;
+            
+            // Convert condition to boolean
+            let condition_bool = match condition_value {
+                Value::Boolean(b) => b,
+                Value::Nil => false,
+                Value::Integer(0) => false,
+                Value::Float(f) if f == 0.0 => false,
+                Value::String(s) if s.is_empty() => false,
+                Value::Vector(v) if v.is_empty() => false,
+                Value::Map(m) if m.is_empty() => false,
+                _ => true, // Any other value is considered true
+            };
+
+            // If condition is false, break the loop
+            if !condition_bool {
+                break;
+            }
+
+            // Execute the body
+            last_result = self.eval_expr(body_expr, env)?;
+            iteration_count += 1;
+        }
+
+        Ok(last_result)
+    }
+
+    fn eval_step_parallel_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Validate arguments: at least one expression to execute in parallel
+        if args.is_empty() {
+            return Err(RuntimeError::InvalidArguments {
+                expected: "at least 1 expression to execute in parallel".to_string(),
+                actual: "0".to_string(),
+            });
+        }
+
+        // For now, implement sequential execution with proper error handling
+        // TODO: Implement true parallel execution with threads/tasks
+        let mut results = Vec::new();
+        let mut last_error = None;
+
+        for (index, expr) in args.iter().enumerate() {
+            match self.eval_expr(expr, env) {
+                Ok(result) => {
+                    results.push(result);
+                }
+                Err(e) => {
+                    // Store the first error encountered
+                    if last_error.is_none() {
+                        last_error = Some(e);
+                    }
+                    // Continue evaluating other expressions for better error reporting
+                }
+            }
+        }
+
+        // If there was an error, return it
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+
+        // Return the results as a vector
+        Ok(Value::Vector(results))
+    }
 
     /// Evaluate an expression in the global environment
     pub fn evaluate(&self, expr: &Expression) -> RuntimeResult<Value> {

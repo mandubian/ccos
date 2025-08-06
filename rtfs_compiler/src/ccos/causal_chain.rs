@@ -19,11 +19,13 @@ impl CausalQuery {
 /// This module implements the Causal Chain of Thought - an immutable, verifiable ledger
 /// that records every significant action with its complete audit trail.
 
+use super::event_sink::CausalChainEventSink;
 use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -556,6 +558,7 @@ pub struct CausalChain {
     signing: CryptographicSigning,
     provenance: ProvenanceTracker,
     metrics: PerformanceMetrics,
+    event_sinks: Vec<Arc<dyn CausalChainEventSink>>,
 }
 
 impl CausalChain {
@@ -596,7 +599,20 @@ impl CausalChain {
             signing: CryptographicSigning::new(),
             provenance: ProvenanceTracker::new(),
             metrics: PerformanceMetrics::new(),
+            event_sinks: Vec::new(),
         })
+    }
+
+    /// Register an event sink to be notified of action appends
+    pub fn register_event_sink(&mut self, sink: Arc<dyn CausalChainEventSink>) {
+        self.event_sinks.push(sink);
+    }
+
+    /// Notify all registered event sinks of an action append
+    fn notify_sinks(&self, action: &Action) {
+        for sink in &self.event_sinks {
+            sink.on_action_appended(action);
+        }
     }
 
     /// Create a new action from an intent, with audit metadata provided by privileged system components
@@ -655,6 +671,9 @@ impl CausalChain {
 
         // Record cost
         self.metrics.cost_tracking.record_action_cost(&action);
+
+        // Notify event sinks
+        self.notify_sinks(&action);
 
         Ok(())
     }
@@ -756,6 +775,9 @@ impl CausalChain {
         // Append to ledger & metrics
         self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
+
+        // Notify event sinks
+        self.notify_sinks(&signed_action);
 
         Ok(signed_action)
     }
@@ -1023,9 +1045,36 @@ impl CausalChain {
         Ok(signed_action)
     }
 
-    pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
-        self.ledger.append(action)
+pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
+    // Append to ledger
+    self.ledger.append_action(action)?;
+    
+    // Record metrics
+    self.metrics.record_action(action)?;
+    
+    // Notify event sinks
+    self.notify_sinks(action);
+    
+    Ok(action.action_id.clone())
+}
+
+// Summarize recent actions for fast recall.
+pub fn summarize_recent(&self, count: usize) -> String {
+    let total = self.ledger.actions.len();
+    let start = if count > total { 0 } else { total - count };
+    let mut summary = String::new();
+    for action in &self.ledger.actions[start..] {
+        summary.push_str(&format!(
+            "Action {}: type={:?}, intent={}, plan={}, timestamp={}\n",
+            action.action_id,
+            action.action_type,
+            action.intent_id,
+            action.plan_id,
+            action.timestamp
+        ));
     }
+    summary
+}
 }
 
 #[cfg(test)]

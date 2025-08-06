@@ -504,7 +504,7 @@ pub enum Expression {
 }
 
 impl Validate for Expression {
-    fn validate(&self) -> Result<(), validator::VaidationErrors> {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
         match self {
             Expression::List(items) | Expression::Vector(items) => {
                 for item in items {
