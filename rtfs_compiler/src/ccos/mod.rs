@@ -6,6 +6,8 @@
 
  // Core CCOS Data Structures
 pub mod causal_chain;
+pub mod event_sink;
+pub mod wm_integration;
 pub mod intent_graph;
 pub mod intent_storage;
 pub mod types;

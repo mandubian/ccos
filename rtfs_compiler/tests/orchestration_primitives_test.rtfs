@@ -1,0 +1,69 @@
+;; Test file for CCOS Orchestration Primitives
+;; Tests step.if, step.loop, and step.parallel special forms
+
+;; Test 1: Basic step.if with true condition
+(step "Test step.if true" 
+  (step.if true 
+    "condition was true"
+    "condition was false"))
+
+;; Test 2: Basic step.if with false condition
+(step "Test step.if false" 
+  (step.if false 
+    "condition was true"
+    "condition was false"))
+
+;; Test 3: step.if with numeric condition (non-zero is true)
+(step "Test step.if numeric true" 
+  (step.if 42 
+    "non-zero number is true"
+    "zero number is false"))
+
+;; Test 4: step.if with zero condition (zero is false)
+(step "Test step.if numeric false" 
+  (step.if 0 
+    "non-zero number is true"
+    "zero number is false"))
+
+;; Test 5: step.if without else branch (should return nil)
+(step "Test step.if without else" 
+  (step.if false "this should not execute"))
+
+;; Test 6: Basic step.loop with counter
+(step "Test step.loop counter" 
+  (let [counter 0]
+    (step.loop (< counter 3)
+      (do 
+        (let [counter (+ counter 1)]
+          counter)))))
+
+;; Test 7: step.loop with empty condition (should not execute)
+(step "Test step.loop empty condition" 
+  (step.loop false "this should not execute"))
+
+;; Test 8: Basic step.parallel with multiple expressions
+(step "Test step.parallel" 
+  (step.parallel 
+    "result1"
+    "result2"
+    "result3"))
+
+;; Test 9: step.parallel with function calls
+(step "Test step.parallel with functions" 
+  (step.parallel 
+    (+ 1 2)
+    (* 3 4)
+    (str "hello" " " "world")))
+
+;; Test 10: Complex nested orchestration
+(step "Test complex nested orchestration" 
+  (step.if (> 10 5)
+    (step.parallel 
+      (step.loop (< 0 2) 
+        (do 
+          "loop iteration"))
+      "parallel branch 2")
+    "this should not execute"))
+
+;; Return success message
+"All orchestration primitive tests completed!" 

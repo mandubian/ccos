@@ -237,7 +237,7 @@ Update
 - Given an agent.config with :microvm mode, the supervisor can launch a Firecracker VM with RO rootfs, vsock, and proxy-bridged NIC.
 - The Orchestrator enforces per-step profiles derived from effects/resources, communicated to the proxy/DLP.
 - No direct internet from the MicroVM; all traffic is via proxy with domain/method pinning and TLS pinning.
-- Capabilities store mounted RO; attempts to write or escape FS rejected.
+- Capabilities store mounted RO check that spec with respect to your implementation; attempts to write or escape FS rejected.
 - Causal Chain events streamed via vsock; on outage, buffered locally and flushed on reconnect.
 - Full start→execute→stop cycle within seconds; memory and CPU overhead within profile’s bounds.
 
