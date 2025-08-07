@@ -1,0 +1,41 @@
+;; Test orchestration primitives without step wrapper
+;; Tests step-if, step-loop, and step-parallel special forms
+
+(do
+  ;; Test 1: Basic step-if with true condition
+  (step-if true 
+    "condition was true"
+    "condition was false")
+
+  ;; Test 2: Basic step-if with false condition
+  (step-if false 
+    "condition was true"
+    "condition was false")
+
+  ;; Test 3: step-if with numeric condition (non-zero is true)
+  (step-if 42 
+    "non-zero number is true"
+    "zero number is false")
+
+  ;; Test 4: step-if with zero condition (zero is false)
+  (step-if 0 
+    "non-zero number is true"
+    "zero number is false")
+
+  ;; Test 5: step-if without else branch (should return nil)
+  (step-if false "this should not execute")
+
+  ;; Test 6: Basic step-parallel with multiple expressions
+  (step-parallel 
+    "result1"
+    "result2"
+    "result3")
+
+  ;; Test 7: step-parallel with function calls
+  (step-parallel 
+    (+ 1 2)
+    (* 3 4)
+    (str "hello" " " "world"))
+
+  ;; Return success message
+  "All orchestration primitive tests completed!") 

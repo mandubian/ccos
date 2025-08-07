@@ -61,10 +61,11 @@ impl Evaluator {
     fn default_special_forms() -> HashMap<String, SpecialFormHandler> {
         let mut special_forms: HashMap<String, SpecialFormHandler> = HashMap::new();
         special_forms.insert("step".to_string(), Self::eval_step_form);
-        special_forms.insert("step.if".to_string(), Self::eval_step_if_form);
-        special_forms.insert("step.loop".to_string(), Self::eval_step_loop_form);
-        special_forms.insert("step.parallel".to_string(), Self::eval_step_parallel_form);
+        special_forms.insert("step-if".to_string(), Self::eval_step_if_form);
+        special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
+        special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
         // Add other evaluator-level special forms here in the future
+
         special_forms
     }
 
@@ -366,6 +367,7 @@ impl Evaluator {
 
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> RuntimeResult<Value> {
+
         match expr {
             Expression::Literal(lit) => self.eval_literal(lit),
             Expression::Symbol(sym) => env
@@ -406,6 +408,13 @@ impl Evaluator {
                 Ok(Value::Map(result))
             }
             Expression::FunctionCall { callee, arguments } => {
+                // Check if this is a special form before evaluating the callee
+                if let Expression::Symbol(s) = &**callee {
+                    if let Some(handler) = self.special_forms.get(&s.0) {
+                        return handler(self, arguments, env);
+                    }
+                }
+                
                 let func_value = self.eval_expr(callee, env)?;
 
                 match &func_value {
@@ -508,8 +517,19 @@ impl Evaluator {
         let then_branch = &args[1];
         let else_branch = args.get(2);
 
-        // Evaluate the condition
-        let condition_value = self.eval_expr(condition_expr, env)?;
+        // 1. Notify host that step-if has started
+        let step_name = "step-if";
+        let step_action_id = self.host.notify_step_started(step_name)?;
+
+        // 2. Evaluate the condition
+        let condition_value = match self.eval_expr(condition_expr, env) {
+            Ok(value) => value,
+            Err(e) => {
+                // On failure, notify host and propagate the error
+                self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                return Err(e);
+            }
+        };
         
         // Convert condition to boolean
         let condition_bool = match condition_value {
@@ -523,10 +543,27 @@ impl Evaluator {
             _ => true, // Any other value is considered true
         };
 
-        // Execute the appropriate branch
+        // 3. Execute the appropriate branch
         let branch_to_execute = if condition_bool { then_branch } else { else_branch.unwrap_or(&Expression::Literal(crate::ast::Literal::Nil)) };
         
-        self.eval_expr(branch_to_execute, env)
+        let result = match self.eval_expr(branch_to_execute, env) {
+            Ok(value) => value,
+            Err(e) => {
+                // On failure, notify host and propagate the error
+                self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                return Err(e);
+            }
+        };
+
+        // 4. Notify host of successful completion
+        let exec_result = ExecutionResult {
+            success: true,
+            value: result.clone(),
+            metadata: Default::default(),
+        };
+        self.host.notify_step_completed(&step_action_id, &exec_result)?;
+
+        Ok(result)
     }
 
     fn eval_step_loop_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
@@ -541,6 +578,10 @@ impl Evaluator {
         let condition_expr = &args[0];
         let body_expr = &args[1];
         
+        // 1. Notify host that step-loop has started
+        let step_name = "step-loop";
+        let step_action_id = self.host.notify_step_started(step_name)?;
+        
         let mut last_result = Value::Nil;
         let mut iteration_count = 0;
         const MAX_ITERATIONS: usize = 10000; // Safety limit to prevent infinite loops
@@ -548,11 +589,20 @@ impl Evaluator {
         loop {
             // Check iteration limit
             if iteration_count >= MAX_ITERATIONS {
-                return Err(RuntimeError::Generic(format!("Loop exceeded maximum iterations ({})", MAX_ITERATIONS)));
+                let error_msg = format!("Loop exceeded maximum iterations ({})", MAX_ITERATIONS);
+                self.host.notify_step_failed(&step_action_id, &error_msg)?;
+                return Err(RuntimeError::Generic(error_msg));
             }
 
             // Evaluate the condition
-            let condition_value = self.eval_expr(condition_expr, env)?;
+            let condition_value = match self.eval_expr(condition_expr, env) {
+                Ok(value) => value,
+                Err(e) => {
+                    // On failure, notify host and propagate the error
+                    self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                    return Err(e);
+                }
+            };
             
             // Convert condition to boolean
             let condition_bool = match condition_value {
@@ -572,9 +622,24 @@ impl Evaluator {
             }
 
             // Execute the body
-            last_result = self.eval_expr(body_expr, env)?;
+            last_result = match self.eval_expr(body_expr, env) {
+                Ok(value) => value,
+                Err(e) => {
+                    // On failure, notify host and propagate the error
+                    self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                    return Err(e);
+                }
+            };
             iteration_count += 1;
         }
+
+        // 2. Notify host of successful completion
+        let exec_result = ExecutionResult {
+            success: true,
+            value: last_result.clone(),
+            metadata: Default::default(),
+        };
+        self.host.notify_step_completed(&step_action_id, &exec_result)?;
 
         Ok(last_result)
     }
@@ -587,6 +652,10 @@ impl Evaluator {
                 actual: "0".to_string(),
             });
         }
+
+        // 1. Notify host that step-parallel has started
+        let step_name = "step-parallel";
+        let step_action_id = self.host.notify_step_started(step_name)?;
 
         // For now, implement sequential execution with proper error handling
         // TODO: Implement true parallel execution with threads/tasks
@@ -608,13 +677,23 @@ impl Evaluator {
             }
         }
 
-        // If there was an error, return it
+        // If there was an error, notify host and return it
         if let Some(error) = last_error {
+            self.host.notify_step_failed(&step_action_id, &error.to_string())?;
             return Err(error);
         }
 
+        // 2. Notify host of successful completion
+        let final_result = Value::Vector(results);
+        let exec_result = ExecutionResult {
+            success: true,
+            value: final_result.clone(),
+            metadata: Default::default(),
+        };
+        self.host.notify_step_completed(&step_action_id, &exec_result)?;
+
         // Return the results as a vector
-        Ok(Value::Vector(results))
+        Ok(final_result)
     }
 
     /// Evaluate an expression in the global environment
