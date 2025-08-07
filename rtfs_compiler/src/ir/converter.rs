@@ -1113,6 +1113,15 @@ impl<'a> IrConverter<'a> {
                 "lambda" => {
                     return self.convert_lambda_special_form(arguments);
                 }
+                "step-if" => {
+                    return self.convert_step_if_special_form(arguments);
+                }
+                "step-loop" => {
+                    return self.convert_step_loop_special_form(arguments);
+                }
+                "step-parallel" => {
+                    return self.convert_step_parallel_special_form(arguments);
+                }
                 _ => {}
             }
         }
@@ -1239,6 +1248,136 @@ impl<'a> IrConverter<'a> {
             body: body_exprs,
             captures,
             ir_type: function_type,
+            source_location: None,
+        })
+    }
+
+    /// Convert step-if special form: (step-if condition then-branch else-branch?)
+    fn convert_step_if_special_form(
+        &mut self,
+        arguments: Vec<Expression>,
+    ) -> IrConversionResult<IrNode> {
+        if arguments.len() < 2 {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "step-if".to_string(),
+                message: "step-if requires at least 2 arguments: condition and then-branch".to_string(),
+            });
+        }
+
+        let id = self.next_id();
+        let condition = Box::new(self.convert_expression(arguments[0].clone())?);
+        let then_branch = Box::new(self.convert_expression(arguments[1].clone())?);
+        let else_branch = if arguments.len() > 2 {
+            Some(Box::new(self.convert_expression(arguments[2].clone())?))
+        } else {
+            None
+        };
+
+        // Infer result type as union of branches
+        let result_type = match (
+            then_branch.ir_type(),
+            else_branch.as_ref().and_then(|e| e.ir_type()),
+        ) {
+            (Some(then_type), Some(else_type)) if then_type == else_type => then_type.clone(),
+            (Some(then_type), Some(else_type)) => {
+                IrType::Union(vec![then_type.clone(), else_type.clone()])
+            }
+            (Some(then_type), None) => IrType::Union(vec![then_type.clone(), IrType::Nil]),
+            _ => IrType::Any,
+        };
+
+        Ok(IrNode::If {
+            id,
+            condition,
+            then_branch,
+            else_branch,
+            ir_type: result_type,
+            source_location: None,
+        })
+    }
+
+    /// Convert step-loop special form: (step-loop condition body...)
+    fn convert_step_loop_special_form(
+        &mut self,
+        arguments: Vec<Expression>,
+    ) -> IrConversionResult<IrNode> {
+        if arguments.len() < 2 {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "step-loop".to_string(),
+                message: "step-loop requires at least 2 arguments: condition and body".to_string(),
+            });
+        }
+
+        let id = self.next_id();
+        let condition = Box::new(self.convert_expression(arguments[0].clone())?);
+        
+        // Convert body expressions
+        let body_exprs: Vec<IrNode> = arguments[1..]
+            .iter()
+            .map(|expr| self.convert_expression(expr.clone()))
+            .collect::<Result<_, _>>()?;
+
+        // Create a do block for the body
+        let body_do = IrNode::Do {
+            id: self.next_id(),
+            expressions: body_exprs,
+            ir_type: IrType::Any,
+            source_location: None,
+        };
+
+        // For now, we'll create a simple if that evaluates the condition
+        // In a full implementation, this would need to be a proper loop construct
+        // For the IR runtime, we'll just evaluate the condition and return the body result
+        let then_branch = Box::new(body_do);
+        let else_branch = None; // No else branch for step-loop
+
+        Ok(IrNode::If {
+            id,
+            condition,
+            then_branch,
+            else_branch,
+            ir_type: IrType::Any,
+            source_location: None,
+        })
+    }
+
+    /// Convert step-parallel special form: (step-parallel expr1 expr2 ...)
+    fn convert_step_parallel_special_form(
+        &mut self,
+        arguments: Vec<Expression>,
+    ) -> IrConversionResult<IrNode> {
+        if arguments.is_empty() {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "step-parallel".to_string(),
+                message: "step-parallel requires at least one argument".to_string(),
+            });
+        }
+
+        let id = self.next_id();
+        let mut bindings = Vec::new();
+
+        // Convert each argument to a parallel binding
+        for (i, arg) in arguments.iter().enumerate() {
+            let init_expr = self.convert_expression(arg.clone())?;
+            let binding_name = format!("parallel_{}", i);
+            
+            let binding_node = IrNode::VariableBinding {
+                id: self.next_id(),
+                name: binding_name.clone(),
+                ir_type: init_expr.ir_type().cloned().unwrap_or(IrType::Any),
+                source_location: None,
+            };
+            
+            bindings.push(IrParallelBinding {
+                binding: binding_node,
+                init_expr,
+            });
+        }
+
+        Ok(IrNode::Parallel {
+            id,
+            bindings,
+            ir_type: IrType::Vector(Box::new(IrType::Any)),
             source_location: None,
         })
     }

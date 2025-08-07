@@ -145,17 +145,18 @@ impl CCOSEnvironment {
     
     /// Execute a single RTFS expression
     pub fn execute_expression(&self, expr: &Expression) -> RuntimeResult<Value> {
-        // TODO: Call host.prepare_execution() when method is implemented
-        // self.host.prepare_execution(
-        //     "repl-session".to_string(),
-        //     vec!["interactive".to_string()],
-        // );
+        // Set up execution context for CCOS integration
+        self.host.set_execution_context(
+            "repl-session".to_string(),
+            vec!["interactive".to_string()],
+            "root-action".to_string()
+        );
         
         // Execute the expression
         let result = self.evaluator.evaluate(expr);
         
-        // TODO: Call host.cleanup_execution() when method is implemented
-        // self.host.cleanup_execution();
+        // Clean up execution context
+        self.host.clear_execution_context();
         
         result
     }
@@ -168,31 +169,35 @@ impl CCOSEnvironment {
         
         let mut last_result = Value::Nil;
         
-        // TODO: Call host.prepare_execution() when method is implemented
-        // self.host.prepare_execution(
-        //     "code-execution".to_string(),
-        //     vec!["batch".to_string()],
-        // );
+        // Set up execution context for CCOS integration
+        self.host.set_execution_context(
+            "repl-execution".to_string(),
+            vec!["repl-intent".to_string()],
+            "root-action".to_string()
+        );
         
         // Execute each top-level item
-        for item in parsed {
-            match item {
-                TopLevel::Expression(expr) => {
-                    last_result = self.evaluator.evaluate(&expr)?;
-                }
-                _ => {
-                    // For other top-level items, we could extend this to handle them
-                    if self.config.verbose {
-                        println!("Skipping non-expression top-level item");
+        let execution_result = (|| -> RuntimeResult<Value> {
+            for item in parsed {
+                match item {
+                    TopLevel::Expression(expr) => {
+                        last_result = self.evaluator.evaluate(&expr)?;
+                    }
+                    _ => {
+                        // For other top-level items, we could extend this to handle them
+                        if self.config.verbose {
+                            println!("Skipping non-expression top-level item");
+                        }
                     }
                 }
             }
-        }
+            Ok(last_result)
+        })();
         
-        // TODO: Call host.cleanup_execution() when method is implemented
-        // self.host.cleanup_execution();
+        // Clean up execution context
+        self.host.clear_execution_context();
         
-        Ok(last_result)
+        execution_result
     }
     
     /// Execute RTFS code from a file

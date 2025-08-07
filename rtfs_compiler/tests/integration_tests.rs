@@ -703,3 +703,26 @@ fn test_rtfs2_binaries() {
         ..TestConfig::new("test_rtfs2_binaries")
     });
 }
+
+#[test]
+fn test_orchestration_primitives() {
+    // Orchestration primitives require CCOS integration
+    // Use CCOS environment instead of basic runtime
+    use rtfs_compiler::runtime::{CCOSEnvironment, CCOSBuilder, SecurityLevel};
+    
+    let env = CCOSBuilder::new()
+        .security_level(SecurityLevel::Standard)
+        .build()
+        .expect("Failed to create CCOS environment");
+    
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let test_file_path = format!("{}/tests/rtfs_files/orchestration_primitives_test.rtfs", manifest_dir);
+    
+    let result = env.execute_file(&test_file_path)
+        .expect("Failed to execute orchestration primitives test");
+    
+    let expected = r#"String("All orchestration primitive tests completed!")"#;
+    let actual = format!("{:?}", result);
+    
+    assert_eq!(actual, expected, "Orchestration primitives test result mismatch");
+}

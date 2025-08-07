@@ -1,6 +1,0 @@
-;; Plan execution steps with correct capability names
-(let [user-input (call "ccos.agent.ask-human" "What emotions do you notice in your daily interactions?")
-      log-result1 (call "ccos.io.log" "Starting emotional analysis")
-      log-result2 (call "ccos.io.log" (str "User input: " user-input))
-      log-result3 (call "ccos.io.log" "Analysis complete")]
-     "Emotional analysis plan completed successfully")
