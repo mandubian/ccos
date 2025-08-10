@@ -21,6 +21,7 @@ use crate::ast::{Expression, TopLevel};
 use crate::parser;
 use std::sync::Arc;
 use std::rc::Rc;
+#[allow(unused_imports)]
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -97,6 +98,7 @@ pub struct CCOSEnvironment {
     config: CCOSConfig,
     host: Rc<RuntimeHost>,
     evaluator: Evaluator,
+    #[allow(dead_code)]
     marketplace: Arc<CapabilityMarketplace>,
     registry: crate::runtime::capability_registry::CapabilityRegistry,
 }
@@ -151,6 +153,14 @@ impl CCOSEnvironment {
             vec!["interactive".to_string()],
             "root-action".to_string()
         );
+
+        // Ensure hierarchical execution context is initialized
+        {
+            let mut cm = self.evaluator.context_manager.borrow_mut();
+            if cm.current_context_id().is_none() {
+                cm.initialize(Some("repl-session".to_string()));
+            }
+        }
         
         // Execute the expression
         let result = self.evaluator.evaluate(expr);
@@ -175,6 +185,14 @@ impl CCOSEnvironment {
             vec!["repl-intent".to_string()],
             "root-action".to_string()
         );
+
+        // Ensure hierarchical execution context is initialized
+        {
+            let mut cm = self.evaluator.context_manager.borrow_mut();
+            if cm.current_context_id().is_none() {
+                cm.initialize(Some("repl-execution".to_string()));
+            }
+        }
         
         // Execute each top-level item
         let execution_result = (|| -> RuntimeResult<Value> {

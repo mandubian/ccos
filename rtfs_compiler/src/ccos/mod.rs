@@ -18,6 +18,7 @@ pub mod storage;           // Unified storage abstraction
 pub mod archivable_types;  // Serializable versions of CCOS types
 pub mod plan_archive;     // Plan archiving functionality
 pub mod archive_manager;   // Unified archive coordination
+pub mod execution_context; // Hierarchical execution context management
 
 // Delegation and execution stack
 pub mod delegation;

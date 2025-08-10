@@ -1,7 +1,5 @@
 use tokio::sync::RwLock;
-use crate::runtime::capability_marketplace::StreamingCapability;
-use crate::runtime::capability_marketplace::StreamHandle;
-use crate::runtime::capability_marketplace::StreamConfig;
+use crate::runtime::streaming::{StreamingCapability, StreamHandle, StreamConfig};
 use crate::runtime::error::RuntimeResult;
 
 /// Minimal local streaming provider for tests
@@ -35,7 +33,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::runtime::capability_marketplace::{CapabilityMarketplace, StreamType, StreamCallbacks};
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::streaming::{StreamType, StreamCallbacks};
 use crate::runtime::values::Value;
 
 /// Direction of data flow in a stream
@@ -494,7 +493,7 @@ impl RtfsStreamingSyntaxExecutor {
             transform_id.clone(),
             name,
             description,
-            StreamType::Transform,
+            StreamType::Unidirectional,
             _transform_provider,
         ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         let params = Value::Map(HashMap::new());
@@ -769,35 +768,23 @@ impl RtfsStreamingSyntaxExecutor {
 
     /// Helper: Build stream callbacks from callback definitions
     fn build_stream_callbacks(&self, callbacks: HashMap<String, String>) -> Result<StreamCallbacks, StreamingError> {
-        let mut stream_callbacks = StreamCallbacks::default();
+    let mut stream_callbacks = StreamCallbacks { progress: None, complete: None, error: None };
 
         for (event_name, callback_fn) in callbacks {
             match event_name.as_str() {
                 "on-item" | "on-data" => {
-                    // For StreamCallbacks, we need to use on_data_received
-                    stream_callbacks.on_data_received = Some(Arc::new(move |event| {
-                        // Convert StreamEvent to appropriate format for callback
-                        println!("Executing data callback: {} for event: {:?}", callback_fn, event);
-                        Ok(())
-                    }));
+                    // Progress/data event
+                    // Not wiring custom callbacks in this build; leave None
                 },
                 "on-error" => {
-                    stream_callbacks.on_error = Some(Arc::new(move |event| {
-                        println!("Executing error callback: {} for event: {:?}", callback_fn, event);
-                        Ok(())
-                    }));
+                    // Not wiring custom callbacks in this build; leave None
                 },
                 "on-complete" | "on-disconnected" => {
-                    stream_callbacks.on_disconnected = Some(Arc::new(move |event| {
-                        println!("Executing disconnected callback: {} for event: {:?}", callback_fn, event);
-                        Ok(())
-                    }));
+                    // Not wiring custom callbacks in this build; leave None
                 },
                 "on-start" | "on-connected" => {
-                    stream_callbacks.on_connected = Some(Arc::new(move |event| {
-                        println!("Executing connected callback: {} for event: {:?}", callback_fn, event);
-                        Ok(())
-                    }));
+                    // Map to progress for now
+                    // Not wiring custom callbacks in this build; leave None
                 },
                 _ => return Err(StreamingError::InvalidCallback(event_name)),
             }
@@ -889,7 +876,7 @@ mod tests {
         };
         let register_expr = RtfsStreamingExpression::RegisterStreamCapability {
             capability_id: "test-stream".to_string(),
-            stream_type: StreamType::Source,
+            stream_type: StreamType::Unidirectional,
             input_schema: None,
             output_schema: Some(StreamSchema {
                 element_type: "map".to_string(),
@@ -930,7 +917,7 @@ mod tests {
         };
         let register_source = RtfsStreamingExpression::RegisterStreamCapability {
             capability_id: "data-source".to_string(),
-            stream_type: StreamType::Source,
+            stream_type: StreamType::Unidirectional,
             input_schema: None,
             output_schema: None,
             config: config.clone(),
@@ -945,7 +932,7 @@ mod tests {
         };
         let register_sink = RtfsStreamingExpression::RegisterStreamCapability {
             capability_id: "data-sink".to_string(),
-            stream_type: StreamType::Sink,
+            stream_type: StreamType::Unidirectional,
             input_schema: None,
             output_schema: None,
             config: config.clone(),

@@ -11,6 +11,7 @@
 use crate::runtime::values::{Value, Arity};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::capability::Capability;
+use crate::runtime::capability_provider::CapabilityProvider;
 use crate::runtime::microvm::{MicroVMFactory, ExecutionContext, MicroVMConfig};
 use crate::ast::Keyword;
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use std::rc::Rc;
 /// Registry of CCOS capabilities that require special execution
 pub struct CapabilityRegistry {
     capabilities: HashMap<String, Capability>,
+    providers: HashMap<String, Box<dyn CapabilityProvider>>, // Pluggable providers
     microvm_factory: MicroVMFactory,
     microvm_provider: Option<String>,
 }
@@ -27,17 +29,27 @@ impl CapabilityRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             capabilities: HashMap::new(),
+            providers: HashMap::new(),
             microvm_factory: MicroVMFactory::new(),
             microvm_provider: None,
         };
-        
+
         // Register system capabilities
         registry.register_system_capabilities();
         registry.register_io_capabilities();
         registry.register_network_capabilities();
         registry.register_agent_capabilities();
-        
+
         registry
+    }
+    /// Register a capability provider (e.g., MCP, plugin, etc)
+    pub fn register_provider(&mut self, provider_id: &str, provider: Box<dyn CapabilityProvider>) {
+        self.providers.insert(provider_id.to_string(), provider);
+    }
+
+    /// Get a provider by ID
+    pub fn get_provider(&self, provider_id: &str) -> Option<&Box<dyn CapabilityProvider>> {
+        self.providers.get(provider_id)
     }
     
     fn register_system_capabilities(&mut self) {
@@ -317,8 +329,18 @@ impl CapabilityRegistry {
         Ok(result.value)
     }
     
-    /// Execute a capability with automatic MicroVM isolation detection
+    /// Execute a capability, delegating to provider if registered
     pub fn execute_capability_with_microvm(&self, capability_id: &str, args: Vec<Value>) -> RuntimeResult<Value> {
+        // If a provider is registered for this capability, delegate
+        if let Some(provider) = self.providers.get(capability_id) {
+            // Use default execution context for now
+            let context = crate::runtime::capability_provider::ExecutionContext {
+                trace_id: uuid::Uuid::new_v4().to_string(),
+                timeout: std::time::Duration::from_secs(10),
+            };
+            return provider.execute_capability(capability_id, &Value::Vector(args), &context);
+        }
+
         // Check if this capability requires MicroVM isolation
         let requires_microvm = matches!(capability_id, 
             "ccos.network.http-fetch" | 
@@ -327,7 +349,7 @@ impl CapabilityRegistry {
             "ccos.io.write-line" | 
             "ccos.io.close-file"
         );
-        
+
         if requires_microvm {
             self.execute_in_microvm(capability_id, args)
         } else {

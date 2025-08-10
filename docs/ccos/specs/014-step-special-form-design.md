@@ -53,6 +53,19 @@ The possibility of adding a full-fledged, Lisp-style macro system (`defmacro`) w
 
 **Decision**: A user-definable macro system is fundamentally incompatible with the CCOS zero-trust security model. The ability for the Governance Kernel to statically analyze a plan relies on the language's evaluation rules being a fixed, known, and trusted set.
 
-## 6. Final Rationale
+## 6. Execution Context Integration
+
+The `(step ...)` family integrates with hierarchical execution contexts (see [SEP-015: Execution Contexts](./015-execution-contexts.md)):
+
+- On step entry, the evaluator enters a child `ExecutionContext` with an appropriate `IsolationLevel`.
+- Step body may `set` values into the current context; reads follow isolation semantics.
+- On step completion/failure, the evaluator exits the child context. Merges to parent are explicit.
+- `step-parallel` executes each branch in an isolated child context to avoid cross-branch interference.
+
+Note: current implementation uses a default parent-wins merge when consolidating branch context data. Configurable `:merge-policy` (e.g., `:overwrite`, `:merge`) is planned.
+
+This separation keeps audit logging (via Host) distinct from data flow (via ExecutionContext), aligning with CCOS principles.
+
+## 7. Final Rationale
 
 Implementing `(step ...)` as a **built-in special form** provides the necessary control over evaluation order in a way that is simple, performant, and, most importantly, **secure and auditable**. It maintains a clear boundary between the fixed rules of the language and the dynamic capabilities it can orchestrate, which is the foundational architectural pattern of CCOS.

@@ -1,4 +1,3 @@
-
 //! Secure Runtime Configuration
 //!
 //! This module defines security policies and execution contexts for RTFS programs.
@@ -109,6 +108,8 @@ impl SecurityPolicies {
             "ccos.io.log".to_string(),
             "ccos.data.parse-json".to_string(),
             "ccos.data.serialize-json".to_string(),
+            // Allow safe LLM calls in user code
+            "ccos.ai.llm-execute".to_string(),
         ])
     }
     
@@ -123,6 +124,8 @@ impl SecurityPolicies {
             "ccos.data.serialize-json".to_string(),
             "ccos.system.current-time".to_string(),
             "ccos.system.current-timestamp-ms".to_string(),
+            // Allow LLM calls for system prompts (audited)
+            "ccos.ai.llm-execute".to_string(),
         ])
     }
     
@@ -136,6 +139,8 @@ impl SecurityPolicies {
             "ccos.echo".to_string(),
             "ccos.math.add".to_string(),
             "ccos.ask-human".to_string(),
+            // Allow LLM calls for summarization/extraction
+            "ccos.ai.llm-execute".to_string(),
         ])
     }
     
@@ -148,6 +153,8 @@ impl SecurityPolicies {
             "ccos.agent.ask-human".to_string(),
             "ccos.agent.discover-and-assess-agents".to_string(),
             "ccos.agent.establish-system-baseline".to_string(),
+            // Allow LLM calls for negotiation/coordination
+            "ccos.ai.llm-execute".to_string(),
         ])
     }
     
@@ -160,6 +167,7 @@ impl SecurityPolicies {
             "ccos.io.read-line".to_string(),
             "ccos.io.write-line".to_string(),
             "ccos.io.close-file".to_string(),
+            // LLM execution disabled here by default for tighter isolation
         ]);
         
         // Force microVM for all file operations
@@ -179,6 +187,8 @@ impl SecurityPolicies {
             "ccos.io.log".to_string(),
             "ccos.data.parse-json".to_string(),
             "ccos.data.serialize-json".to_string(),
+            // Enable LLM for tests
+            "ccos.ai.llm-execute".to_string(),
         ])
     }
 }
@@ -244,6 +254,9 @@ impl SecurityValidator {
             
             // Time capabilities
             "ccos.system.current-time" | "ccos.system.current-timestamp-ms" => SecurityLevel::Controlled,
+            
+            // LLM execution is controlled with auditing
+            "ccos.ai.llm-execute" => SecurityLevel::Controlled,
             
             // Dangerous capabilities
             "ccos.io.open-file" | "ccos.io.read-line" | "ccos.io.write-line" | "ccos.io.close-file" |

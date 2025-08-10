@@ -1,11 +1,10 @@
 // rtfs_compiler/src/tests/test_utils.rs
 // This file will contain common utilities for setting up test environments.
 
-use crate::agent::registry;
 use crate::ir::converter::IrConverter;
 use crate::parser;
 use crate::runtime::{
-    evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry, stdlib,
+    evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value,
 };
 use std::rc::Rc;
@@ -34,7 +33,44 @@ pub fn create_test_evaluator() -> Evaluator {
         capability_marketplace,
         security_context.clone(),
     ));
+    // Set a default execution context for tests so HostInterface methods can operate
+    host.set_execution_context(
+        "test-plan".to_string(),
+        vec!["test-intent".to_string()],
+        "root-action".to_string(),
+    );
     Evaluator::new(Rc::new(module_registry), de, security_context, host)
+}
+
+/// Creates a new AST evaluator with a provided RuntimeContext.
+pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::RuntimeContext) -> Evaluator {
+    let module_registry = ModuleRegistry::new();
+    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        ctx.clone(),
+    ));
+    // Set a default execution context for tests so HostInterface methods can operate
+    host.set_execution_context(
+        "test-plan".to_string(),
+        vec!["test-intent".to_string()],
+        "root-action".to_string(),
+    );
+    Evaluator::new(Rc::new(module_registry), de, ctx, host)
+}
+
+/// Creates a new AST evaluator with LLM capability enabled (Controlled context)
+pub fn create_llm_test_evaluator() -> Evaluator {
+    let ctx = crate::runtime::security::RuntimeContext::controlled(vec![
+        "ccos.ai.llm-execute".to_string(),
+        // Minimal extras often used in tests
+        "ccos.io.log".to_string(),
+    ]);
+    create_test_evaluator_with_context(ctx)
 }
 
 /// Creates a new IR runtime.

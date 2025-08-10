@@ -15,7 +15,7 @@ use crate::runtime::security::RuntimeContext;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
 
 #[derive(Debug, Clone)]
-struct ExecutionContext {
+struct HostPlanContext {
     plan_id: String,
     intent_ids: Vec<String>,
     parent_action_id: String,
@@ -28,7 +28,7 @@ pub struct RuntimeHost {
     security_context: RuntimeContext,
     // The execution context is stored in a RefCell to allow for interior mutability
     // during the evaluation of a plan.
-    execution_context: RefCell<Option<ExecutionContext>>,
+    execution_context: RefCell<Option<HostPlanContext>>,
 }
 
 impl RuntimeHost {
@@ -47,7 +47,7 @@ impl RuntimeHost {
 
     /// Sets the context for a new plan execution.
     pub fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String) {
-        *self.execution_context.borrow_mut() = Some(ExecutionContext {
+        *self.execution_context.borrow_mut() = Some(HostPlanContext {
             plan_id,
             intent_ids,
             parent_action_id,
@@ -63,7 +63,7 @@ impl RuntimeHost {
         self.causal_chain.lock().map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))
     }
 
-    fn get_context(&self) -> RuntimeResult<std::cell::Ref<ExecutionContext>> {
+    fn get_context(&self) -> RuntimeResult<std::cell::Ref<HostPlanContext>> {
         let context_ref = self.execution_context.borrow();
         if context_ref.is_none() {
             return Err(RuntimeError::Generic("FATAL: Host method called without a valid execution context".to_string()));
@@ -161,11 +161,13 @@ impl HostInterface for RuntimeHost {
     }
 
     fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String) {
-        self.set_execution_context(plan_id, intent_ids, parent_action_id);
+        // Call inherent method explicitly to avoid trait-method recursion
+        RuntimeHost::set_execution_context(self, plan_id, intent_ids, parent_action_id);
     }
 
     fn clear_execution_context(&self) {
-        self.clear_execution_context();
+        // Call inherent method explicitly to avoid trait-method recursion
+        RuntimeHost::clear_execution_context(self);
     }
 }
 
