@@ -57,6 +57,11 @@ fn test_checkpoint_and_resume_helpers() {
         .resume_plan(&plan.plan_id, &plan.intent_ids[0], &evaluator, &serialized)
         .expect("resume should succeed");
 
+    // Also resume via checkpoint id persisted in archive
+    orchestrator
+        .resume_plan_from_checkpoint(&plan.plan_id, &plan.intent_ids[0], &evaluator, &checkpoint_id)
+        .expect("resume by id should succeed");
+
     // After resume, context should be restored from serialized snapshot
     let val = evaluator
         .context_manager

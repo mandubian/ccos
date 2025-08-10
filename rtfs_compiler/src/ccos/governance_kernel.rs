@@ -1,4 +1,3 @@
-
 //! CCOS Governance Kernel
 //!
 //! This module defines the Governance Kernel, the high-privilege, secure component
@@ -81,11 +80,19 @@ impl GovernanceKernel {
 
     /// Retrieves the primary intent associated with the plan.
     fn get_intent(&self, plan: &Plan) -> RuntimeResult<StorableIntent> {
-        let _intent_id = plan.intent_ids.first().ok_or_else(|| RuntimeError::Generic("Plan has no associated intent".to_string()))?;
-        
-        // TODO: This should be made async and properly implemented 
-        // The intent graph's get_intent method is now async
-        Err(RuntimeError::Generic("get_intent temporarily disabled due to async refactoring".to_string()))
+        let intent_id = plan
+            .intent_ids
+            .first()
+            .ok_or_else(|| RuntimeError::Generic("Plan has no associated intent".to_string()))?;
+
+        let graph = self
+            .intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+        graph
+            .get_intent(intent_id)
+            .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", intent_id)))
     }
 
     /// Checks the plan and its originating intent for malicious patterns.
@@ -127,13 +134,10 @@ impl GovernanceKernel {
             format!("(do {})", original_body)
         };
 
-        // TODO: The resource limits and failure handler should be loaded from the Constitution.
-        let scaffolded_body = format!(
-            "(with-resource-limits (cpu 1s) (memory 256mb)\n  (on-failure (log-and-revert)\n    {}\n  )\n)",
-            wrapped_body
-        );
-
-        plan.body = PlanBody::Rtfs(scaffolded_body);
+        // NOTE: Previously we injected unimplemented forms like `(with-resource-limits ...)` and `(on-failure ...)`.
+        // Those forms are not yet supported by the parser/runtime, causing execution failures.
+        // For now, keep the plan safely wrapped with `do` only.
+        plan.body = PlanBody::Rtfs(wrapped_body);
         Ok(plan)
     }
 

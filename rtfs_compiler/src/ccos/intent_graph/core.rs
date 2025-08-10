@@ -56,8 +56,8 @@ impl IntentGraph {
         // Create storage synchronously using the runtime.
         // If we are already inside a Tokio runtime, avoid blocking the worker thread directly.
         let storage = if tokio::runtime::Handle::try_current().is_ok() {
-            // Safe to block here on a multi-thread runtime; tasks will be moved off this thread.
-            tokio::task::block_in_place(|| rt.block_on(async { IntentGraphStorage::new(config).await }))
+            // Use a lightweight futures executor which is safe even on current-thread runtimes
+            futures::executor::block_on(async { IntentGraphStorage::new(config).await })
         } else {
             rt.block_on(async { IntentGraphStorage::new(config).await })
         };
@@ -135,50 +135,91 @@ impl IntentGraph {
             IntentStatus::Failed
         };
 
-        self.rt.block_on(async {
-            self.storage.update_intent(&intent).await
-        })
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async { self.storage.update_intent(&intent).await })
+        } else {
+            self.rt.block_on(async { self.storage.update_intent(&intent).await })
+        }
     }
 
     /// Find relevant intents for a query
     pub fn find_relevant_intents(&self, query: &str) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
-            let filter = IntentFilter {
-                goal_contains: Some(query.to_string()),
-                ..Default::default()
-            };
-            self.storage.list_intents(filter).await.unwrap_or_default()
-        })
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async {
+                let filter = IntentFilter {
+                    goal_contains: Some(query.to_string()),
+                    ..Default::default()
+                };
+                self.storage.list_intents(filter).await.unwrap_or_default()
+            })
+        } else {
+            self.rt.block_on(async {
+                let filter = IntentFilter {
+                    goal_contains: Some(query.to_string()),
+                    ..Default::default()
+                };
+                self.storage.list_intents(filter).await.unwrap_or_default()
+            })
+        }
     }
 
     /// Load context window for a set of intent IDs
     pub fn load_context_window(&self, intent_ids: &[IntentId]) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
-            let mut context_intents = Vec::new();
-            let mut loaded_ids = HashSet::new();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async {
+                let mut context_intents = Vec::new();
+                let mut loaded_ids = HashSet::new();
 
-            // Load primary intents
-            for intent_id in intent_ids {
-                if let Ok(Some(intent)) = self.storage.get_intent(intent_id).await {
-                    context_intents.push(intent);
-                    loaded_ids.insert(intent_id.clone());
+                // Load primary intents
+                for intent_id in intent_ids {
+                    if let Ok(Some(intent)) = self.storage.get_intent(intent_id).await {
+                        context_intents.push(intent);
+                        loaded_ids.insert(intent_id.clone());
+                    }
                 }
-            }
 
-            // Load related intents (dependencies, etc.)
-            for intent_id in intent_ids {
-                if let Ok(dependent) = self.storage.get_dependent_intents(intent_id).await {
-                    for dep_intent in dependent {
-                        if !loaded_ids.contains(&dep_intent.intent_id) {
-                            context_intents.push(dep_intent.clone());
-                            loaded_ids.insert(dep_intent.intent_id);
+                // Load related intents (dependencies, etc.)
+                for intent_id in intent_ids {
+                    if let Ok(dependent) = self.storage.get_dependent_intents(intent_id).await {
+                        for dep_intent in dependent {
+                            if !loaded_ids.contains(&dep_intent.intent_id) {
+                                context_intents.push(dep_intent.clone());
+                                loaded_ids.insert(dep_intent.intent_id);
+                            }
                         }
                     }
                 }
-            }
 
-            context_intents
-        })
+                context_intents
+            })
+        } else {
+            self.rt.block_on(async {
+                let mut context_intents = Vec::new();
+                let mut loaded_ids = HashSet::new();
+
+                // Load primary intents
+                for intent_id in intent_ids {
+                    if let Ok(Some(intent)) = self.storage.get_intent(intent_id).await {
+                        context_intents.push(intent);
+                        loaded_ids.insert(intent_id.clone());
+                    }
+                }
+
+                // Load related intents (dependencies, etc.)
+                for intent_id in intent_ids {
+                    if let Ok(dependent) = self.storage.get_dependent_intents(intent_id).await {
+                        for dep_intent in dependent {
+                            if !loaded_ids.contains(&dep_intent.intent_id) {
+                                context_intents.push(dep_intent.clone());
+                                loaded_ids.insert(dep_intent.intent_id);
+                            }
+                        }
+                    }
+                }
+
+                context_intents
+            })
+        }
     }
 
     /// Create a virtualized view of the intent graph

@@ -109,31 +109,30 @@ impl Arbiter {
 
         let plan_body = match intent.name.as_deref() {
             Some("analyze_user_sentiment") => {
+                // Use built-in echo capability to simulate steps deterministically
                 r#"
                 (do
-                    (step "Fetch Data" (let [user-data (call :data.fetch-user-interactions :limit 100)]))
-                    (step "Analyze Sentiment" (let [sentiment (call :ml.analyze-sentiment user-data)]))
-                    (step "Generate Report" (call :reporting.generate-sentiment-report sentiment))
+                    (step "Fetch Data" (call :ccos.echo "fetched user interactions"))
+                    (step "Analyze Sentiment" (call :ccos.echo "sentiment: positive"))
+                    (step "Generate Report" (call :ccos.echo "report generated"))
                 )
                 "#
             }
             Some("optimize_response_time") => {
+                // Simulate optimization workflow with echo
                 r#"
                 (do
-                    (step "Get Metrics" (let [metrics (call :monitoring.get-system-metrics)]))
-                    (step "Identify Bottlenecks" (let [bottlenecks (call :analysis.identify-bottlenecks metrics)]))
-                    (step.if (not (empty? bottlenecks))
-                        (step "Apply Optimizations" (call :system.apply-optimizations bottlenecks))
-                        (step "Log No-Op" (call :logging.log "No bottlenecks found"))
-                    )
+                    (step "Get Metrics" (call :ccos.echo "metrics collected"))
+                    (step "Identify Bottlenecks" (call :ccos.echo "bottlenecks identified"))
+                    (step "Apply Optimizations" (call :ccos.echo "optimizations applied"))
                 )
                 "#
             }
             _ => {
-                // A generic plan for simple requests.
+                // A generic plan for simple requests using echo
                 r#"
                 (do
-                    (step "Process Generic Request" (call :generic.process-request goal))
+                    (step "Process Generic Request" (call :ccos.echo "ok"))
                 )
                 "#
             }
@@ -174,7 +173,7 @@ mod tests {
 
         assert_eq!(plan.name, Some("analyze_user_sentiment".to_string()));
         if let PlanBody::Rtfs(body_text) = &plan.body {
-            assert!(body_text.contains(":ml.analyze-sentiment"));
+            assert!(body_text.contains(":ccos.echo"));
         } else {
             panic!("Plan body is not textual");
         }
@@ -187,7 +186,7 @@ mod tests {
 
         assert_eq!(plan.name, Some("optimize_response_time".to_string()));
         if let PlanBody::Rtfs(body_text) = &plan.body {
-            assert!(body_text.contains(":monitoring.get-system-metrics"));
+            assert!(body_text.contains(":ccos.echo"));
         } else {
             panic!("Plan body is not textual");
         }
