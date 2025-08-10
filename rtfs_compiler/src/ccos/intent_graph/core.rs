@@ -53,8 +53,14 @@ impl IntentGraph {
             handle
         };
 
-        // Create storage synchronously using the runtime
-        let storage = rt.block_on(async { IntentGraphStorage::new(config).await });
+        // Create storage synchronously using the runtime.
+        // If we are already inside a Tokio runtime, avoid blocking the worker thread directly.
+        let storage = if tokio::runtime::Handle::try_current().is_ok() {
+            // Safe to block here on a multi-thread runtime; tasks will be moved off this thread.
+            tokio::task::block_in_place(|| rt.block_on(async { IntentGraphStorage::new(config).await }))
+        } else {
+            rt.block_on(async { IntentGraphStorage::new(config).await })
+        };
 
         Ok(Self {
             storage,
@@ -82,18 +88,30 @@ impl IntentGraph {
 
     /// Store a new intent in the graph
     pub fn store_intent(&mut self, intent: StorableIntent) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
-            self.storage.store_intent(intent).await?;
-            self.lifecycle.infer_edges(&mut self.storage).await?;
-            Ok(())
-        })
+        // If we're already inside a Tokio runtime, avoid block_in_place which requires multi-thread flavor.
+        // Instead, use a lightweight futures executor to drive the future to completion.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async {
+                self.storage.store_intent(intent).await?;
+                self.lifecycle.infer_edges(&mut self.storage).await?;
+                Ok(())
+            })
+        } else {
+            self.rt.block_on(async {
+                self.storage.store_intent(intent).await?;
+                self.lifecycle.infer_edges(&mut self.storage).await?;
+                Ok(())
+            })
+        }
     }
 
     /// Get an intent by ID
     pub fn get_intent(&self, intent_id: &IntentId) -> Option<StorableIntent> {
-        self.rt.block_on(async {
-            self.storage.get_intent(intent_id).await.unwrap_or(None)
-        })
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+        } else {
+            self.rt.block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+        }
     }
 
     /// Update an intent with execution results
