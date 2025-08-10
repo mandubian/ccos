@@ -141,7 +141,22 @@ impl Orchestrator {
         Ok(execution_result)
     }
 
-    
+    /// Serialize the current execution context from an evaluator (checkpoint helper)
+    pub fn serialize_context(&self, evaluator: &Evaluator) -> RuntimeResult<String> {
+        evaluator
+            .context_manager
+            .borrow()
+            .serialize()
+    }
+
+    /// Restore a serialized execution context into an evaluator (resume helper)
+    pub fn deserialize_context(&self, evaluator: &Evaluator, data: &str) -> RuntimeResult<()> {
+        evaluator
+            .context_manager
+            .borrow_mut()
+            .deserialize(data)
+    }
+
 
     /// Helper to log an action to the Causal Chain.
     fn log_action(&self, action: Action) -> RuntimeResult<String> {
