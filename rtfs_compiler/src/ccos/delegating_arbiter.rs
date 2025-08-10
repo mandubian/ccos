@@ -11,6 +11,7 @@ use super::arbiter_engine::ArbiterEngine;
 use super::types::{ExecutionResult, Intent, Plan};
 use super::arbiter::Arbiter as BaseArbiter;
 use super::delegation::{ModelRegistry};
+use super::types::StorableIntent;
 
 /// An Arbiter implementation that uses the CCOS DelegationEngine + ModelRegistry to
 /// ask a language model for both Intent extraction and Plan generation.
@@ -93,9 +94,19 @@ impl ArbiterEngine for DelegatingArbiter {
                             }
                         }
                         // Store via base intent_graph
-                        // let graph_arc = self.base.get_intent_graph();
-                        // let mut graph = graph_arc.lock().unwrap();
-                        // graph.store_intent(intent.clone())?;
+                        let graph_arc = self.base.get_intent_graph();
+                        if let Ok(mut graph) = graph_arc.lock() {
+                            let mut st = StorableIntent::new(intent.goal.clone());
+                            st.intent_id = intent.intent_id.clone();
+                            st.name = intent.name.clone();
+                            st.original_request = intent.original_request.clone();
+                            st.status = super::types::IntentStatus::Active;
+                            if let Err(e) = graph.store_intent(st) {
+                                return Err(e);
+                            }
+                        } else {
+                            return Err(RuntimeError::Generic("Failed to lock IntentGraph".to_string()));
+                        }
                         Ok(intent)
                     }
                     Err(_) => {
@@ -187,8 +198,8 @@ STRICT RULES:
         }
     }
 
-    async fn execute_plan(&self, plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
+    async fn execute_plan(&self, _plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
         // self.base.execute_plan(plan).await
         Err(RuntimeError::Generic("DelegatingArbiter does not support execute_plan directly".to_string()))
     }
-} 
+}

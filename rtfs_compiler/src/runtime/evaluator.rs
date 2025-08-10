@@ -12,6 +12,7 @@ use crate::runtime::values::{Arity, Function, Value};
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, ValidationLevel, VerificationContext};
 use crate::ccos::types::ExecutionResult;
+use crate::ccos::execution_context::{ContextManager, IsolationLevel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -40,6 +41,8 @@ pub struct Evaluator {
     pub type_validator: Arc<TypeValidator>,
     /// Type checking configuration for optimization
     pub type_config: TypeCheckingConfig,
+    /// Context manager for hierarchical execution context
+    pub context_manager: RefCell<ContextManager>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -65,6 +68,9 @@ impl Evaluator {
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
         // Add other evaluator-level special forms here in the future
+        
+        // LLM execution bridge (M1)
+        special_forms.insert("llm-execute".to_string(), Self::eval_llm_execute_form);
 
         special_forms
     }
@@ -91,6 +97,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
+            context_manager: RefCell::new(ContextManager::new()),
         }
     }
 
@@ -475,10 +482,15 @@ impl Evaluator {
             }),
         };
 
-        // 2. Notify host that step has started
+        // 2. Enter step context
+        let mut context_manager = self.context_manager.borrow_mut();
+        let _ = context_manager.enter_step(&step_name, IsolationLevel::Inherit)?;
+        drop(context_manager); // Release borrow before calling host
+
+        // 3. Notify host that step has started
         let step_action_id = self.host.notify_step_started(&step_name)?;
 
-        // 3. Evaluate the body of the step
+        // 4. Evaluate the body of the step
         let body_exprs = &args[1..];
         let mut last_result = Ok(Value::Nil);
 
@@ -487,11 +499,15 @@ impl Evaluator {
             if let Err(e) = &last_result {
                 // On failure, notify host and propagate the error
                 self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                
+                // Exit step context on failure
+                let mut context_manager = self.context_manager.borrow_mut();
+                context_manager.exit_step()?;
                 return last_result;
             }
         }
 
-        // 4. Notify host of successful completion
+        // 5. Notify host of successful completion
         let final_value = last_result?;
         let exec_result = ExecutionResult {
             success: true,
@@ -499,6 +515,10 @@ impl Evaluator {
             metadata: Default::default(),
         };
         self.host.notify_step_completed(&step_action_id, &exec_result)?;
+
+        // 6. Exit step context
+        let mut context_manager = self.context_manager.borrow_mut();
+        context_manager.exit_step()?;
 
         Ok(final_value)
     }
@@ -657,33 +677,44 @@ impl Evaluator {
         let step_name = "step-parallel";
         let step_action_id = self.host.notify_step_started(step_name)?;
 
-        // For now, implement sequential execution with proper error handling
-        // TODO: Implement true parallel execution with threads/tasks
-        let mut results = Vec::new();
-        let mut last_error = None;
+        // 2. Create and use isolated contexts per branch on demand
 
+        // Sequential execution with isolation, plus deterministic merging after each branch
+        let mut results: Vec<Value> = Vec::with_capacity(args.len());
+        let mut last_error: Option<RuntimeError> = None;
         for (index, expr) in args.iter().enumerate() {
+            // Create and switch to an isolated child context for this branch
+            let child_id = {
+                let mut mgr = self.context_manager.borrow_mut();
+                mgr.create_parallel_context(Some(format!("parallel-{}", index)))?
+            };
+            {
+                let mut mgr = self.context_manager.borrow_mut();
+                mgr.switch_to(&child_id)?;
+            }
             match self.eval_expr(expr, env) {
-                Ok(result) => {
-                    results.push(result);
+                Ok(v) => {
+                    results.push(v);
+                    // Merge child to parent with KeepExisting policy
+                    let mut mgr = self.context_manager.borrow_mut();
+                    let _ = mgr.merge_child_to_parent(
+                        &child_id,
+                        crate::ccos::execution_context::ConflictResolution::KeepExisting,
+                    );
                 }
                 Err(e) => {
-                    // Store the first error encountered
                     if last_error.is_none() {
                         last_error = Some(e);
                     }
-                    // Continue evaluating other expressions for better error reporting
                 }
             }
         }
-
-        // If there was an error, notify host and return it
-        if let Some(error) = last_error {
-            self.host.notify_step_failed(&step_action_id, &error.to_string())?;
-            return Err(error);
+        if let Some(err) = last_error {
+            self.host.notify_step_failed(&step_action_id, &err.to_string())?;
+            return Err(err);
         }
 
-        // 2. Notify host of successful completion
+        // 3. Notify host of successful completion
         let final_result = Value::Vector(results);
         let exec_result = ExecutionResult {
             success: true,
@@ -692,8 +723,125 @@ impl Evaluator {
         };
         self.host.notify_step_completed(&step_action_id, &exec_result)?;
 
-        // Return the results as a vector
         Ok(final_result)
+    }
+
+    /// LLM execution bridge special form
+    /// Usage:
+    ///   (llm-execute "model-id" "prompt")
+    ///   (llm-execute :model "model-id" :prompt "prompt text" [:system "system prompt"]) 
+    fn eval_llm_execute_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Enforce security policy
+        let capability_id = "ccos.ai.llm-execute";
+        if !self.security_context.is_capability_allowed(capability_id) {
+            return Err(RuntimeError::SecurityViolation {
+                operation: "llm-execute".to_string(),
+                capability: capability_id.to_string(),
+                context: "capability not allowed in current RuntimeContext".to_string(),
+            });
+        }
+
+        // Parse arguments
+        let mut model_id: Option<String> = None;
+        let mut prompt: Option<String> = None;
+        let mut system_prompt: Option<String> = None;
+
+        if args.len() == 2 {
+            let m = self.eval_expr(&args[0], env)?;
+            let p = self.eval_expr(&args[1], env)?;
+            match (m, p) {
+                (Value::String(mstr), Value::String(pstr)) => {
+                    model_id = Some(mstr);
+                    prompt = Some(pstr);
+                }
+                (mv, pv) => {
+                    return Err(RuntimeError::InvalidArguments {
+                        expected: "(llm-execute \"model-id\" \"prompt\") with both arguments as strings".to_string(),
+                        actual: format!("model={:?}, prompt={:?}", mv, pv),
+                    });
+                }
+            }
+        } else if !args.is_empty() {
+            // Parse keyword arguments: :model, :prompt, optional :system
+            let mut i = 0;
+            while i < args.len() {
+                // Expect a keyword
+                let key = match &args[i] {
+                    Expression::Literal(Literal::Keyword(k)) => k.0.clone(),
+                    other => {
+                        return Err(RuntimeError::InvalidArguments {
+                            expected: "keyword-value pairs (e.g., :model \"id\" :prompt \"text\")".to_string(),
+                            actual: format!("{:?}", other),
+                        });
+                    }
+                };
+                i += 1;
+                if i >= args.len() {
+                    return Err(RuntimeError::InvalidArguments {
+                        expected: format!("a value after keyword {}", key),
+                        actual: "end-of-list".to_string(),
+                    });
+                }
+                let val = self.eval_expr(&args[i], env)?;
+                match (key.as_str(), val) {
+                    ("model", Value::String(s)) => model_id = Some(s),
+                    ("prompt", Value::String(s)) => prompt = Some(s),
+                    ("system", Value::String(s)) => system_prompt = Some(s),
+                    (k, v) => {
+                        return Err(RuntimeError::InvalidArguments {
+                            expected: format!("string value for {}", k),
+                            actual: format!("{:?}", v),
+                        });
+                    }
+                }
+                i += 1;
+            }
+        } else {
+            return Err(RuntimeError::InvalidArguments {
+                expected: "either 2 positional args or keyword args (:model, :prompt)".to_string(),
+                actual: "0".to_string(),
+            });
+        }
+
+        let model_id = model_id.unwrap_or_else(|| "echo-model".to_string());
+        let prompt = match prompt {
+            Some(p) => p,
+            None => {
+                return Err(RuntimeError::InvalidArguments {
+                    expected: "a :prompt string".to_string(),
+                    actual: "missing".to_string(),
+                })
+            }
+        };
+
+        // Notify host that llm-execute has started
+        let step_action_id = self.host.notify_step_started("llm-execute")?;
+
+        // Compose final prompt
+        let final_prompt = if let Some(sys) = system_prompt {
+            format!("System:\n{}\n\nUser:\n{}", sys, prompt)
+        } else {
+            prompt.clone()
+        };
+
+        // Resolve provider and execute
+        let provider = self.model_registry.get(&model_id).ok_or_else(|| {
+            RuntimeError::UnknownCapability(format!("Model provider not found: {}", model_id))
+        })?;
+
+        match provider.infer(&final_prompt) {
+            Ok(output) => {
+                let value = Value::String(output);
+                let exec_result = ExecutionResult { success: true, value: value.clone(), metadata: Default::default() };
+                self.host.notify_step_completed(&step_action_id, &exec_result)?;
+                Ok(value)
+            }
+            Err(e) => {
+                let msg = format!("LLM provider '{}' error: {}", model_id, e);
+                self.host.notify_step_failed(&step_action_id, &msg)?;
+                Err(RuntimeError::Generic(msg))
+            }
+        }
     }
 
     /// Evaluate an expression in the global environment
@@ -1873,7 +2021,7 @@ impl Evaluator {
 
                     // Process each destructuring entry
                     for entry in entries {
-                        match entry {
+                                               match entry {
                             crate::ast::MapDestructuringEntry::KeyBinding { key, pattern } => {
                                 bound_keys.insert(key.clone());
                                 // Look up the key in the map
@@ -2065,6 +2213,26 @@ impl Evaluator {
         &self.security_context
     }
 
+    /// Gets a value from the current execution context
+    pub fn get_context_value(&self, key: &str) -> Option<Value> {
+        self.context_manager.borrow().get(key)
+    }
+
+    /// Sets a value in the current execution context
+    pub fn set_context_value(&self, key: String, value: Value) -> RuntimeResult<()> {
+        self.context_manager.borrow_mut().set(key, value)
+    }
+
+    /// Gets the current context depth
+    pub fn context_depth(&self) -> usize {
+        self.context_manager.borrow().depth()
+    }
+
+    /// Gets the current context ID
+    pub fn current_context_id(&self) -> Option<String> {
+        self.context_manager.borrow().current_context_id().map(|s| s.to_string())
+    }
+
     /// Create a new evaluator with updated security context
     pub fn with_security_context(&self, security_context: RuntimeContext) -> Self {
         Self {
@@ -2080,6 +2248,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: self.type_validator.clone(),
             type_config: self.type_config.clone(),
+            context_manager: RefCell::new(ContextManager::new()),
         }
     }
 
@@ -2103,6 +2272,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
+            context_manager: RefCell::new(ContextManager::new()),
         }
     }
 }

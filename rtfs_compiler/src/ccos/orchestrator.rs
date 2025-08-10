@@ -22,6 +22,7 @@ use crate::ast::Expression;
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
 use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody};
+use super::execution_context::ContextManager;
 
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
@@ -80,6 +81,12 @@ impl Orchestrator {
         let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let host_iface: Rc<dyn HostInterface> = host.clone();
         let mut evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);
+        
+        // Initialize context manager for the plan execution
+        {
+            let mut context_manager = evaluator.context_manager.borrow_mut();
+            context_manager.initialize(Some(format!("plan-{}", plan_id)));
+        }
 
         // --- 3. Parse and Execute the Plan Body ---
         let final_result = match &plan.language {

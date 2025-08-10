@@ -8,13 +8,15 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use async_trait::async_trait;
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
-    use super::intent_graph::{IntentGraph, IntentGraphConfig};
-use super::types::{Intent, Plan, PlanBody};
+use super::intent_graph::IntentGraph;
+use super::types::{Intent, Plan};
+#[allow(unused_imports)]
+use super::types::PlanBody;
+use super::types::StorableIntent;
 
 /// The Arbiter - LLM kernel that converts natural language to structured intents and plans.
 pub struct Arbiter {
@@ -40,6 +42,11 @@ impl Arbiter {
             intent_graph,
             config,
         }
+    }
+
+    /// Expose the IntentGraph so other engines (e.g., DelegatingArbiter) can store intents
+    pub fn get_intent_graph(&self) -> Arc<Mutex<IntentGraph>> {
+        Arc::clone(&self.intent_graph)
     }
 
     /// Main entry point: Convert natural language to a `Plan`.
@@ -81,8 +88,15 @@ impl Arbiter {
         {
             let mut graph = self.intent_graph.lock()
                 .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
-            // TODO: Implement storing logic in IntentGraph.
-            // graph.store_intent(intent.clone())?;
+
+            // Minimal StorableIntent mapping; RTFS-specific fields remain empty for now
+            let mut st = StorableIntent::new(intent.goal.clone());
+            st.intent_id = intent.intent_id.clone();
+            st.name = intent.name.clone();
+            st.original_request = intent.original_request.clone();
+            st.status = super::types::IntentStatus::Active;
+
+            graph.store_intent(st)?;
         }
 
         Ok(intent)
@@ -145,6 +159,7 @@ impl Default for ArbiterConfig {
 mod tests {
     use super::*;
     use crate::ccos::intent_graph::IntentGraph;
+    use crate::ccos::intent_graph::IntentGraphConfig;
 
     #[tokio::test]
     async fn test_arbiter_proposes_plan() {

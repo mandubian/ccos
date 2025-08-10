@@ -27,6 +27,8 @@ required-features = ["repl"]
 name = "github_issue_manager"
 path = "src/bin/github_issue_manager.rs"
 
+
+
 [dependencies]
 # Parser dependencies
 pest = { version = "2.7", optional = true }
@@ -88,6 +90,14 @@ futures = "0.3"
 pretty_assertions = "1.4.0"
 wat = "1.0"
 tempfile = "3.8"
+
+[[example]]
+name = "hierarchical_context_demo"
+path = "examples/hierarchical_context_demo.rs"
+
+[[example]]
+name = "context_types_demo"
+path = "examples/context_types_demo.rs"
 
 [build-dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -98,3 +98,32 @@ The following example shows how a plan can use one step to generate a sub-plan a
 -   **Recursive CCOS**: A delegated call to another CCOS instance creates its own nested Causal Chain. The parent action in the calling system can store the `plan_id` of the sub-plan, creating a verifiable link between the two execution histories.
 -   **Human-in-the-Loop**: A call to a human-in-the-loop capability (e.g., `human.ask-question`) would pause the plan's execution (`PlanPaused` action) until the human provides a response, at which point a `PlanResumed` action is logged and execution continues.
 -   **Specialized Agents**: Allows the main orchestrator to act as a generalist that delegates complex, domain-specific tasks to expert agents (e.g., a coding agent, a data analysis agent).
+ 
+## 6. Execution Path and Executors
+
+### 6.1. Provider Types and Built-in Executors
+
+A `CapabilityManifest` declares a concrete `Provider` (e.g., MCP, A2A, Local, HTTP, Stream). The runtime ships with built-in executors for core provider families, ensuring a zero-config path for standard capability execution.
+
+### 6.2. Dyn-safe Executor Registry (Enum-based)
+
+To enable lightweight pluggability without the pitfalls of `async fn` in object-safe traits, the runtime uses an enum-based registry:
+
+- Executors are represented by an `ExecutorVariant` enum which wraps concrete executors (e.g., MCP, A2A, Local, HTTP)
+- `CapabilityMarketplace` maintains a map from `TypeId` of provider to `ExecutorVariant`
+- On `(call ...)`, marketplace resolves manifest -> provider -> executor and dispatches
+- If no executor is found, it falls back to built-in provider-specific methods
+
+This approach avoids dyn-trait vtable issues for async methods while preserving extensibility and determinism.
+
+### 6.3. Execution Flow
+
+1. Resolve capability ID to `CapabilityManifest`
+2. Determine provider type (e.g., `ProviderType::Http`)
+3. Check the enum-based executor registry for a matching executor
+4. If present, dispatch via the executor; otherwise, use direct provider execution
+5. Record `CapabilityCall` in the Causal Chain
+
+### 6.4. Future: Full Plugin Registry
+
+When broader third-party plugin support is required, the enum-based registry can be upgraded to an object-safe trait returning boxed futures, or a code-generated adapter layer that reifies async into sync trait methods. Until then, the current approach is simple, robust, and avoids unsound dyn patterns.

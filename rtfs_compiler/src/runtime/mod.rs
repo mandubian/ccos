@@ -12,6 +12,7 @@ pub use rtfs_streaming_syntax::{
 // This module contains the evaluator, standard library, and runtime value system
 
 pub mod capability;
+pub mod streaming;
 pub mod capability_registry;
 pub mod capability_provider;
 pub mod capability_marketplace;
@@ -44,11 +45,11 @@ pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};  // Export type validator
 pub use values::{Function, Value};
 pub use ccos_environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory};
+pub use security::RuntimeContext;
 
 use crate::ast::Expression;
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
-use crate::runtime::security::{RuntimeContext};
 use crate::runtime::host::RuntimeHost;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::capability_registry::CapabilityRegistry;

@@ -38,6 +38,7 @@ graph TD
         CC[Causal Chain]
         CM[Capability Marketplace]
         RC[Runtime Context]
+        EC[Execution Contexts]
         P[Plan]
     end
 
@@ -50,6 +51,7 @@ graph TD
     Orchestrator -- "Resolves functions via" --> GFM
     GFM -- "Discovers in" --> CM
     Orchestrator -- "Constrained by" --> RC
+    Orchestrator -- "Data Flow via" --> EC
     Orchestrator -- "Records to" --> CC
     
     Orchestrator -- "4. Reports Outcome (Success/Failure)" --> Arbiter
@@ -74,7 +76,8 @@ graph TD
 -   **Causal Chain**: The immutable, long-term memory ledger. Records "what happened." See [SEP-003: Causal Chain](./003-causal-chain.md).
 -   **Working Memory**: A high-performance cache and index of the Causal Chain for efficient recall. See [SEP-013: Working Memory](./013-working-memory.md).
 -   **Capability Marketplace**: A registry of all concrete `Capability` providers available to the Orchestrator. See [SEP-004: Capabilities and Marketplace](./004-capabilities-and-marketplace.md).
--   **Runtime Context**: Enforces security policies and resource constraints. See [SEP-005: Security and Context](./005-security-and-context.md).
+ -   **Runtime Context**: Enforces security policies and resource constraints. See [SEP-005: Security and Context](./005-security-and-context.md).
+ -   **Execution Contexts**: Hierarchical execution data/state. See [SEP-015: Execution Contexts](./015-execution-contexts.md).
 
 ## 4. High-Level Execution Flow & Security
 

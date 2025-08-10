@@ -3,15 +3,14 @@
 
 use std::sync::Arc;
 
-// Import the streaming types from the capability marketplace
-use rtfs_compiler::runtime::capability_marketplace::{
-    CapabilityMarketplace, StreamType, StreamingProvider, StreamingCapability,
-    StreamConfig, StreamHandle
-};
+// Import marketplace and streaming types
+use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::runtime::streaming::{StreamType, StreamingProvider, StreamingCapability, StreamConfig, StreamHandle};
 use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::error::RuntimeResult;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use async_trait::async_trait;
 
 // Simple streaming capability implementation for demonstration
@@ -71,7 +70,7 @@ impl StreamingCapability for SimpleStreamCapability {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
-    let registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+    let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     
     // Example 1: Register a simple streaming capability
@@ -106,9 +105,7 @@ fn demonstrate_stream_patterns() {
     
     // Example configurations for each pattern
     let patterns = vec![
-        ("Source (SSE)", StreamType::Source),
-        ("Sink (Logs)", StreamType::Sink),
-        ("Transform (Processing)", StreamType::Transform),
+        ("Source (SSE)", StreamType::Unidirectional),
         ("Bidirectional (Chat)", StreamType::Bidirectional),
         ("Duplex (Pipeline)", StreamType::Duplex),
     ];

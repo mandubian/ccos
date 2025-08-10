@@ -49,7 +49,7 @@ To enable orchestration, RTFS is extended with a conceptual library of special f
     3.  If the body executes successfully, logs a `PlanStepCompleted` action with the result.
     4.  If the body fails, logs a `PlanStepFailed` action with the error and proceeds based on the retry/error handling policy.
 
-### 3.2. `(step.if <condition> <then-branch> <else-branch>)`
+### 3.2. `(step-if <condition> <then-branch> <else-branch>)`
 
 -   **Purpose**: Defines a major strategic branch in the plan.
 -   **Orchestrator Behavior**:
@@ -60,8 +60,8 @@ To enable orchestration, RTFS is extended with a conceptual library of special f
 ### 3.3. Other Primitives
 
 The `step` model is extensible to other control flow structures, such as:
--   `(step.loop <condition> <body>)`: Loops through a block of steps.
--   `(step.parallel <step1> <step2> ...)`: Executes a set of steps concurrently, waiting for all to complete.
+   `(step-loop <condition> <body>)`: Loops through a block of steps.
+   `(step-parallel <step1> <step2> ...)`: Executes a set of steps concurrently, waiting for all to complete.
 
 ## 4. The Orchestrator
 
