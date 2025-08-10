@@ -100,6 +100,7 @@ pub struct CCOSEnvironment {
     evaluator: Evaluator,
     #[allow(dead_code)]
     marketplace: Arc<CapabilityMarketplace>,
+    // TODO: Remove this field once we have a proper capability marketplace
     registry: crate::runtime::capability_registry::CapabilityRegistry,
 }
 

@@ -29,6 +29,8 @@ use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
 use crate::runtime::host_interface::HostInterface;
 use std::rc::Rc;
 use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use crate::runtime::values::Value as RtfsValue;
 
 /// The Orchestrator is the stateful engine that drives plan execution.
 pub struct Orchestrator {
@@ -155,6 +157,55 @@ impl Orchestrator {
             .context_manager
             .borrow_mut()
             .deserialize(data)
+    }
+
+    /// Create a checkpoint: serialize context and log PlanPaused with checkpoint id
+    pub fn checkpoint_plan(
+        &self,
+        plan_id: &str,
+        intent_id: &str,
+        evaluator: &Evaluator,
+    ) -> RuntimeResult<(String, String)> {
+        let serialized = self.serialize_context(evaluator)?;
+        let mut hasher = Sha256::new();
+        hasher.update(serialized.as_bytes());
+        let checkpoint_id = format!("cp-{:x}", hasher.finalize());
+
+        // Log lifecycle event with checkpoint metadata
+        let mut chain = self.causal_chain.lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
+        let action = Action::new(super::types::ActionType::PlanPaused, plan_id.to_string(), intent_id.to_string())
+            .with_name("checkpoint")
+            .with_args(vec![RtfsValue::String(checkpoint_id.clone())]);
+        let _ = chain.append(&action)?;
+
+        Ok((checkpoint_id, serialized))
+    }
+
+    /// Resume from a checkpoint: restore context and log PlanResumed with checkpoint id
+    pub fn resume_plan(
+        &self,
+        plan_id: &str,
+        intent_id: &str,
+        evaluator: &Evaluator,
+        serialized_context: &str,
+    ) -> RuntimeResult<()> {
+        // Restore
+        self.deserialize_context(evaluator, serialized_context)?;
+
+        // Compute checkpoint id for audit linkage
+        let mut hasher = Sha256::new();
+        hasher.update(serialized_context.as_bytes());
+        let checkpoint_id = format!("cp-{:x}", hasher.finalize());
+
+        // Log resume event
+        let mut chain = self.causal_chain.lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
+        let action = Action::new(super::types::ActionType::PlanResumed, plan_id.to_string(), intent_id.to_string())
+            .with_name("resume_from_checkpoint")
+            .with_args(vec![RtfsValue::String(checkpoint_id)]);
+        let _ = chain.append(&action)?;
+        Ok(())
     }
 
 

@@ -42,6 +42,7 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 
 ### 6) Tests
 - Added `execution_context_tests.rs` covering creation, isolation behavior, basic serialization, child/parent visibility, and merge behavior (parent-wins default, overwrite manual)
+- Added `orchestrator_checkpoint_tests.rs` verifying checkpoint/resume helpers serialize/restore context and log `PlanPaused`/`PlanResumed` events
 
 ## Detailed Results
 
@@ -102,7 +103,7 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 
 3. Checkpoint/Resume
    - Persist checkpoints in Plan Archive; log resume points in Causal Chain
-   - Orchestrator API to resume from checkpoint with reconciled context
+   - Orchestrator API to resume from checkpoint with reconciled context (Phase 1 delivered helpers; full wiring next)
 
 4. Capability Context Access
    - Read-only context exposure to capabilities via `CallContext`/`HostInterface`
