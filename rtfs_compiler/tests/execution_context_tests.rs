@@ -191,6 +191,73 @@ fn test_parent_wins_merge_policy_default() -> RuntimeResult<()> {
 }
 
 #[test]
+fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
+    use rtfs_compiler::runtime::evaluator::Evaluator;
+    use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+    use rtfs_compiler::runtime::security::RuntimeContext;
+    use rtfs_compiler::runtime::host::RuntimeHost;
+    use rtfs_compiler::ccos::causal_chain::CausalChain;
+    use rtfs_compiler::ast::{Expression, Literal};
+
+    // Minimal evaluator setup
+    let module_registry = Rc::new(ModuleRegistry::new());
+    let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
+    let capability_marketplace = {
+        use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+        use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+        use tokio::sync::RwLock;
+        Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(CapabilityRegistry::new()))))
+    };
+    let host = Rc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), RuntimeContext::pure(), host);
+
+    // Initialize root context and set parent value :k = "parent"
+    {
+        let mut mgr = evaluator.context_manager.borrow_mut();
+        mgr.initialize(Some("root".to_string()));
+        mgr.set("k".to_string(), Value::String("parent".to_string()))?;
+    }
+
+    // Build a step-parallel expression with :merge-policy :overwrite
+    // (step-parallel :merge-policy :overwrite (do (quote nil)) (do (quote nil)))
+    let expr = Expression::List(vec![
+        Expression::Symbol(rtfs_compiler::ast::Symbol("step-parallel".to_string())),
+        Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword("merge-policy".to_string()))),
+        Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword("overwrite".to_string()))),
+        Expression::Do(rtfs_compiler::ast::DoExpr { expressions: vec![
+            // Simulate child setting k = "child-a"
+            Expression::List(vec![
+                Expression::Symbol(rtfs_compiler::ast::Symbol("set-context".to_string())),
+                Expression::Literal(Literal::String("k".to_string())),
+                Expression::Literal(Literal::String("child-a".to_string())),
+            ])
+        ]}),
+        Expression::Do(rtfs_compiler::ast::DoExpr { expressions: vec![
+            // Simulate child setting k = "child-b"
+            Expression::List(vec![
+                Expression::Symbol(rtfs_compiler::ast::Symbol("set-context".to_string())),
+                Expression::Literal(Literal::String("k".to_string())),
+                Expression::Literal(Literal::String("child-b".to_string())),
+            ])
+        ]}),
+    ]);
+
+    // Since we don't have a real (set-context ...) special form hooked,
+    // directly simulate two branches using the ContextManager API.
+    {
+        let mut mgr = evaluator.context_manager.borrow_mut();
+        let c1 = mgr.create_parallel_context(Some("b1".to_string()))?; mgr.switch_to(&c1)?; mgr.set("k".to_string(), Value::String("child-a".to_string()))?; mgr.merge_child_to_parent(&c1, ConflictResolution::Overwrite)?; mgr.switch_to("root")?;
+        let c2 = mgr.create_parallel_context(Some("b2".to_string()))?; mgr.switch_to(&c2)?; mgr.set("k".to_string(), Value::String("child-b".to_string()))?; mgr.merge_child_to_parent(&c2, ConflictResolution::Overwrite)?;
+        mgr.switch_to("root")?;
+        assert_eq!(mgr.get("k"), Some(Value::String("child-b".to_string())));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_manual_overwrite_merge_policy() -> RuntimeResult<()> {
     let mut manager = ContextManager::new();
     manager.initialize(Some("root".to_string()));

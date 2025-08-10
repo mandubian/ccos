@@ -677,30 +677,81 @@ impl Evaluator {
         let step_name = "step-parallel";
         let step_action_id = self.host.notify_step_started(step_name)?;
 
-        // 2. Create and use isolated contexts per branch on demand
+        // 2. Parse optional keyword arguments (e.g., :merge-policy :overwrite)
+        use crate::ast::Literal as Lit;
+        let mut i: usize = 0;
+        let mut merge_policy = crate::ccos::execution_context::ConflictResolution::KeepExisting;
+        while i + 1 < args.len() {
+            match &args[i] {
+                Expression::Literal(Lit::Keyword(k)) => {
+                    let key = k.0.as_str();
+                    // Read value expression
+                    let val_expr = &args[i + 1];
+                    // Evaluate simple literal/string/keyword values only
+                    let val = match val_expr {
+                        Expression::Literal(Lit::Keyword(kw)) => Value::Keyword(kw.clone()),
+                        Expression::Literal(Lit::String(s)) => Value::String(s.clone()),
+                        other => {
+                            // Stop parsing options if non-literal encountered to avoid
+                            // consuming actual branch expressions
+                            if i == 0 {
+                                // Unknown option style; treat as invalid args
+                                return Err(RuntimeError::InvalidArguments {
+                                    expected: "keyword-value pairs (e.g., :merge-policy :overwrite) followed by branch expressions".to_string(),
+                                    actual: format!("{:?}", other),
+                                });
+                            }
+                            break;
+                        }
+                    };
+
+                    if key == "merge-policy" || key == "merge_policy" {
+                        // Map value to ConflictResolution
+                        merge_policy = match val {
+                            Value::Keyword(crate::ast::Keyword(s)) | Value::String(s) => {
+                                match s.as_str() {
+                                    "keep-existing" | "keep_existing" | "parent-wins" | "parent_wins" => crate::ccos::execution_context::ConflictResolution::KeepExisting,
+                                    "overwrite" | "child-wins" | "child_wins" => crate::ccos::execution_context::ConflictResolution::Overwrite,
+                                    "merge" => crate::ccos::execution_context::ConflictResolution::Merge,
+                                    other => {
+                                        return Err(RuntimeError::InvalidArguments {
+                                            expected: ":keep-existing | :overwrite | :merge".to_string(),
+                                            actual: other.to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                            _ => crate::ccos::execution_context::ConflictResolution::KeepExisting,
+                        };
+                        i += 2;
+                        continue;
+                    } else {
+                        // Unknown option - stop parsing and treat as branch start
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // 3. Create and use isolated contexts per branch on demand
 
         // Sequential execution with isolation, plus deterministic merging after each branch
-        let mut results: Vec<Value> = Vec::with_capacity(args.len());
+        let mut results: Vec<Value> = Vec::with_capacity(args.len().saturating_sub(i));
         let mut last_error: Option<RuntimeError> = None;
-        for (index, expr) in args.iter().enumerate() {
-            // Create and switch to an isolated child context for this branch
+        for (rel_index, expr) in args[i..].iter().enumerate() {
+            let index = i + rel_index;
+            // Begin isolated child context for this branch (also switches into it)
             let child_id = {
                 let mut mgr = self.context_manager.borrow_mut();
-                mgr.create_parallel_context(Some(format!("parallel-{}", index)))?
+                mgr.begin_isolated(&format!("parallel-{}", index))?
             };
-            {
-                let mut mgr = self.context_manager.borrow_mut();
-                mgr.switch_to(&child_id)?;
-            }
             match self.eval_expr(expr, env) {
                 Ok(v) => {
                     results.push(v);
-                    // Merge child to parent with KeepExisting policy
+                    // Merge child to parent with selected policy and switch back to parent
                     let mut mgr = self.context_manager.borrow_mut();
-                    let _ = mgr.merge_child_to_parent(
-                        &child_id,
-                        crate::ccos::execution_context::ConflictResolution::KeepExisting,
-                    );
+                    let _ = mgr.end_isolated(&child_id, merge_policy);
                 }
                 Err(e) => {
                     if last_error.is_none() {
