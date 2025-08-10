@@ -528,7 +528,16 @@ impl ContextManager {
 
     /// Convenience: end an isolated child context and merge back to parent
     pub fn end_isolated(&mut self, child_id: &str, policy: ConflictResolution) -> RuntimeResult<()> {
-        self.stack.merge_child_to_parent(child_id, policy)
+        // Capture parent before merge
+        let parent_id_opt = self.stack
+            .get(child_id)
+            .and_then(|c| c.parent_id.clone());
+        self.stack.merge_child_to_parent(child_id, policy)?;
+        if let Some(parent_id) = parent_id_opt {
+            // Switch current context back to parent after merge
+            let _ = self.stack.switch_to(&parent_id);
+        }
+        Ok(())
     }
 
     /// Gets the current context depth
