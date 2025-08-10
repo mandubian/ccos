@@ -346,6 +346,41 @@ impl ModelProvider for RemoteArbiterModel {
     }
 }
 
+/// Deterministic stub model for CI/tests: returns predictable JSON/RTFS
+#[derive(Debug)]
+pub struct DeterministicStubModel;
+
+impl DeterministicStubModel {
+    pub fn new() -> Self { Self }
+}
+
+impl ModelProvider for DeterministicStubModel {
+    fn id(&self) -> &'static str { "stub-model" }
+
+    fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // If prompt asks for USER_REQUEST -> JSON intent
+        if prompt.contains("USER_REQUEST:") {
+            // Extract a simple goal by taking the text after USER_REQUEST: (best-effort, still deterministic)
+            let goal = prompt.split("USER_REQUEST:").nth(1)
+                .map(|s| s.trim())
+                .unwrap_or("generic-task");
+            let json = format!("{{\"name\":\"delegated_task\",\"goal\":\"{}\"}}", goal.replace('"', "'"));
+            return Ok(json);
+        }
+        // If prompt contains INTENT_JSON, return a minimal valid RTFS plan using built-in capabilities
+        if prompt.contains("INTENT_JSON:") {
+            let rtfs = r#"(do
+  (call \"ccos.echo\" \"delegating arbiter stub start\")
+  (call \"ccos.math.add\" {:a 2 :b 3})
+  (call \"ccos.echo\" \"delegating arbiter stub done\")
+)"#;
+            return Ok(rtfs.to_string());
+        }
+        // Default deterministic echo
+        Ok("deterministic-stub-default".to_string())
+    }
+}
+
 /// Global registry.  In real code this might live elsewhere; kept here for
 /// convenience while the API stabilises.
 #[derive(Default, Debug)]
@@ -374,6 +409,8 @@ impl ModelRegistry {
         let registry = Self::new();
         registry.register(LocalEchoModel::default());
         registry.register(RemoteArbiterModel::default());
+        // Deterministic stub suitable for CI/integration tests
+        registry.register(DeterministicStubModel::new());
         
         // Try to register realistic local model if available
         if let Ok(model_path) = std::env::var("RTFS_LOCAL_MODEL_PATH") {
@@ -493,6 +530,7 @@ mod tests {
         let registry = ModelRegistry::with_defaults();
         assert!(registry.get("echo-model").is_some());
         assert!(registry.get("arbiter-remote").is_some());
+        assert!(registry.get("stub-model").is_some());
         assert!(registry.get("non-existent").is_none());
     }
 

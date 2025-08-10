@@ -17,6 +17,7 @@ pub mod arbiter;
 pub mod storage;           // Unified storage abstraction
 pub mod archivable_types;  // Serializable versions of CCOS types
 pub mod plan_archive;     // Plan archiving functionality
+pub mod checkpoint_archive; // Checkpoint storage for execution contexts
 // pub mod archive_manager;   // Unified archive coordination (not yet present)
 pub mod execution_context; // Hierarchical execution context management
 
@@ -51,6 +52,8 @@ use std::sync::{Arc, Mutex};
 use std::rc::Rc;
 
 use crate::ccos::arbiter::{Arbiter, ArbiterConfig};
+use crate::ccos::delegating_arbiter::DelegatingArbiter;
+use crate::ccos::delegation::ModelRegistry;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::{RTFSRuntime, Runtime, ModuleRegistry};
 use crate::runtime::error::RuntimeResult;
@@ -71,20 +74,25 @@ pub struct CCOS {
     arbiter: Arc<Arbiter>,
     governance_kernel: Arc<GovernanceKernel>,
     // The following components are shared across the system
-    intent_graph: Arc<Mutex<IntentGraph>>,
-    causal_chain: Arc<Mutex<CausalChain>>,
+    intent_graph: Arc<Mutex<IntentGraph>>, 
+    causal_chain: Arc<Mutex<CausalChain>>, 
     capability_marketplace: Arc<CapabilityMarketplace>,
-    rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
+    rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>, 
+    // Optional LLM-driven engine
+    delegating_arbiter: Option<Arc<DelegatingArbiter>>, 
 }
 
 impl CCOS {
     /// Creates and initializes a new CCOS instance.
-    pub fn new() -> RuntimeResult<Self> {
+    pub async fn new() -> RuntimeResult<Self> {
         // 1. Initialize shared, stateful components
         let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
         let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
         // TODO: The marketplace should be initialized with discovered capabilities.
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
+
+        // Register built-in capabilities required by default plans (await using ambient runtime)
+        crate::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
 
         // 2. Initialize architectural components, injecting dependencies
         let orchestrator = Arc::new(Orchestrator::new(
@@ -100,6 +108,15 @@ impl CCOS {
             Arc::clone(&intent_graph),
         ));
 
+        // Optional: delegating arbiter behind feature flag/env var
+        let delegating_arbiter = if std::env::var("CCOS_USE_DELEGATING_ARBITER").ok().as_deref() == Some("1") {
+            let registry = Arc::new(ModelRegistry::with_defaults());
+            match DelegatingArbiter::with_base(Arc::clone(&arbiter), registry, &std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "echo-model".to_string())) {
+                Ok(da) => Some(Arc::new(da)),
+                Err(_) => None,
+            }
+        } else { None };
+
         Ok(Self {
             arbiter,
             governance_kernel,
@@ -107,6 +124,7 @@ impl CCOS {
             causal_chain,
             capability_marketplace,
             rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(Rc::new(ModuleRegistry::new())))),
+            delegating_arbiter,
         })
     }
 
@@ -121,9 +139,18 @@ impl CCOS {
         security_context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
         // 1. Arbiter: Generate a plan from the natural language request.
-        let proposed_plan = self.arbiter
-            .process_natural_language(natural_language_request, None)
-            .await?;
+        let proposed_plan = if let Some(da) = &self.delegating_arbiter {
+            // Use delegating arbiter to produce a plan via its engine API
+            use crate::ccos::arbiter_engine::ArbiterEngine;
+            let intent = da
+                .natural_language_to_intent(natural_language_request, None)
+                .await?;
+            da.intent_to_plan(&intent).await?
+        } else {
+            self.arbiter
+                .process_natural_language(natural_language_request, None)
+                .await?
+        };
 
         // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
         let result = self.governance_kernel
@@ -157,15 +184,14 @@ mod tests {
         // to a final (simulated) execution result.
 
         // 1. Create the CCOS instance
-        let ccos = CCOS::new().unwrap();
+        let ccos = CCOS::new().await.unwrap();
 
         // 2. Define a security context for the request
         let context = RuntimeContext {
             security_level: SecurityLevel::Controlled,
             allowed_capabilities: vec![
-                ":data.fetch-user-interactions".to_string(),
-                ":ml.analyze-sentiment".to_string(),
-                ":reporting.generate-sentiment-report".to_string(),
+                "ccos.echo".to_string(),
+                "ccos.math.add".to_string(),
             ].into_iter().collect(),
             ..RuntimeContext::pure()
         };
@@ -174,14 +200,16 @@ mod tests {
         let request = "Could you please analyze the sentiment of our recent users?";
         let result = ccos.process_request(request, &context).await;
 
-        // 4. Assert the outcome
-        assert!(result.is_ok());
-        let execution_result = result.unwrap();
-        assert!(execution_result.success);
+        // 4. Assert the outcome with detailed error on failure
+        let execution_result = match result {
+            Ok(r) => r,
+            Err(e) => panic!("process_request error: {e:?}"),
+        };
+        assert!(execution_result.success, "execution_result indicates failure");
 
         // 5. Verify the Causal Chain for auditability
         let causal_chain_arc = ccos.get_causal_chain();
-        let chain = causal_chain_arc.lock().unwrap();
+        let _chain = causal_chain_arc.lock().unwrap();
         // If CausalChain doesn't expose an iterator, just assert we can lock it for now.
         // TODO: adapt when CausalChain exposes public read APIs.
         let actions_len = 3usize; // placeholder expectation for compilation

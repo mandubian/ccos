@@ -1,4 +1,3 @@
-
 //! CCOS Orchestrator
 //!
 //! This module implements the Orchestrator, the component responsible for driving the
@@ -30,6 +29,7 @@ use crate::runtime::host_interface::HostInterface;
 use std::rc::Rc;
 use std::collections::HashMap;
 use sha2::{Digest, Sha256};
+use super::checkpoint_archive::{CheckpointArchive, CheckpointRecord};
 use crate::runtime::values::Value as RtfsValue;
 
 /// The Orchestrator is the stateful engine that drives plan execution.
@@ -37,6 +37,7 @@ pub struct Orchestrator {
     causal_chain: Arc<Mutex<CausalChain>>,
     intent_graph: Arc<Mutex<IntentGraph>>,
     capability_marketplace: Arc<CapabilityMarketplace>,
+    checkpoint_archive: Arc<CheckpointArchive>,
 }
 
 impl Orchestrator {
@@ -50,6 +51,7 @@ impl Orchestrator {
             causal_chain,
             intent_graph,
             capability_marketplace,
+            checkpoint_archive: Arc::new(CheckpointArchive::new()),
         }
     }
 
@@ -95,9 +97,14 @@ impl Orchestrator {
             PlanLanguage::Rtfs20 => {
                 match &plan.body {
                     PlanBody::Rtfs(rtfs_code) => {
-                        match parse_expression(rtfs_code) {
-                            Ok(expr) => evaluator.evaluate(&expr),
-                            Err(e) => Err(RuntimeError::Generic(format!("Failed to parse RTFS plan body: {:?}", e))),
+                        let code = rtfs_code.trim();
+                        if code.is_empty() {
+                            Err(RuntimeError::Generic("Empty RTFS plan body after trimming".to_string()))
+                        } else {
+                            match parse_expression(code) {
+                                Ok(expr) => evaluator.evaluate(&expr),
+                                Err(e) => Err(RuntimeError::Generic(format!("Failed to parse RTFS plan body: {:?}", e))),
+                            }
                         }
                     }
                     PlanBody::Wasm(_) => Err(RuntimeError::Generic("RTFS plans must use Rtfs body format".to_string())),
@@ -179,6 +186,18 @@ impl Orchestrator {
             .with_args(vec![RtfsValue::String(checkpoint_id.clone())]);
         let _ = chain.append(&action)?;
 
+        // Persist checkpoint
+        let record = CheckpointRecord {
+            checkpoint_id: checkpoint_id.clone(),
+            plan_id: plan_id.to_string(),
+            intent_id: intent_id.to_string(),
+            serialized_context: serialized.clone(),
+            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            metadata: HashMap::new(),
+        };
+        let _id = self.checkpoint_archive.store(record)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to store checkpoint: {}", e)))?;
+
         Ok((checkpoint_id, serialized))
     }
 
@@ -206,6 +225,24 @@ impl Orchestrator {
             .with_args(vec![RtfsValue::String(checkpoint_id)]);
         let _ = chain.append(&action)?;
         Ok(())
+    }
+
+    /// Load a checkpoint by id (if present) and resume
+    pub fn resume_plan_from_checkpoint(
+        &self,
+        plan_id: &str,
+        intent_id: &str,
+        evaluator: &Evaluator,
+        checkpoint_id: &str,
+    ) -> RuntimeResult<()> {
+        let rec = self
+            .checkpoint_archive
+            .get_by_id(checkpoint_id)
+            .ok_or_else(|| RuntimeError::Generic("Checkpoint not found".to_string()))?;
+        if rec.plan_id != plan_id || rec.intent_id != intent_id {
+            return Err(RuntimeError::Generic("Checkpoint does not match plan/intent".to_string()));
+        }
+        self.resume_plan(plan_id, intent_id, evaluator, &rec.serialized_context)
     }
 
 

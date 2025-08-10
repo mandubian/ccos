@@ -13,6 +13,7 @@ use crate::ccos::causal_chain::CausalChain;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::security::RuntimeContext;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
+use futures::executor;
 
 #[derive(Debug, Clone)]
 struct HostPlanContext {
@@ -99,13 +100,11 @@ impl HostInterface for RuntimeHost {
         let action_id = self.get_causal_chain()?.append(&action)?;
 
         // 3. Execute the capability via the marketplace
-        // Note: This is a blocking call to bridge the async marketplace with the sync evaluator.
-        // A production system might use a more sophisticated async bridge.
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e)))?;
-
-        let result = rt.block_on(async {
-            self.capability_marketplace.execute_capability(name, &capability_args).await
+        // Bridge async marketplace to sync evaluator using futures::executor::block_on
+        let result = futures::executor::block_on(async {
+            self.capability_marketplace
+                .execute_capability(name, &capability_args)
+                .await
         });
 
         // 4. Log the result to the Causal Chain

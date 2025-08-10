@@ -42,6 +42,15 @@ impl DelegatingArbiter {
         })
     }
 
+    /// Create a DelegatingArbiter that reuses an existing base Arbiter (and its IntentGraph).
+    pub fn with_base(base: Arc<BaseArbiter>, model_registry: Arc<ModelRegistry>, model_id: &str) -> Result<Self, RuntimeError> {
+        Ok(Self {
+            base,
+            model_registry,
+            model_id: model_id.to_string(),
+        })
+    }
+
     /// Helper: run the configured model synchronously.
     fn run_model(&self, prompt: &str) -> Result<String, RuntimeError> {
         if let Some(provider) = self.model_registry.get(&self.model_id) {

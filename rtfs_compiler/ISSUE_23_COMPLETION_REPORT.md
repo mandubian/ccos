@@ -23,6 +23,9 @@ The Arbiter module exists with a minimal NL→Intent→Plan pipeline and unit te
   - LLM-driven JSON→Intent and RTFS plan generation code-paths prepared; integration tests pending
 - Capability Marketplace
   - Refactored into modular registry/executors with schema-aware validation
+- Host bridge fix
+  - `RuntimeHost::execute_capability` now uses `futures::executor::block_on` to bridge async capabilities from a sync evaluator safely
+  - E2E + integration tests pass with this approach
 
 ## Checklist (mirrors issue)
 
@@ -70,8 +73,12 @@ The Arbiter module exists with a minimal NL→Intent→Plan pipeline and unit te
 ## Next Steps (immediate)
 
 1) Switch NL→Intent to schema-driven LLM (behind a feature flag) and wire DelegatingArbiter via config toggle in CCOS
-2) Add integration tests validating DelegatingArbiter with a deterministic stub provider (Intent JSON + RTFS plan)
+   - Toggle: `CCOS_USE_DELEGATING_ARBITER=1`, `CCOS_DELEGATING_MODEL=stub-model`
+   - Register deterministic `stub-model` in `ModelRegistry::with_defaults()`
+2) Add integration tests validating DelegatingArbiter with the deterministic stub provider (Intent JSON + RTFS plan)
+   - Assert: Intent stored in IntentGraph; plan executes successfully using built-ins; CausalChain records success
 3) Validate generated plans against Capability Marketplace (M3 pre-work) and surface deterministic errors
+   - Preflight parse RTFS; verify `:module.fn` existence
 4) Keep unrelated failing areas deferred per scope (parser complex types, streaming, microvm, e2e)
 
 ## References
@@ -79,3 +86,5 @@ The Arbiter module exists with a minimal NL→Intent→Plan pipeline and unit te
 - Issue: https://github.com/mandubian/ccos/issues/23
 - Tracker: `docs/archive/ccos/CCOS_MIGRATION_TRACKER.md` (3.1 Arbiter V1)
 - Arbiter: `rtfs_compiler/src/ccos/arbiter.rs`
+- Delegating Arbiter: `rtfs_compiler/src/ccos/delegating_arbiter.rs`
+- Host bridge: `rtfs_compiler/src/runtime/host.rs`
