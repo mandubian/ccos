@@ -20,7 +20,7 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 
 ### 2) Evaluator Integration
 - `(step ...)` enters a child context with appropriate isolation and exits on completion
-- `(step.parallel ...)` runs sequential branches with isolated child contexts (ready for true parallelism). Merge is currently parent-wins (keep existing); configurable merge policy is planned.
+- `(step.parallel ...)` runs sequential branches with isolated child contexts (ready for true parallelism). Merge policy implemented via `:merge-policy` keyword: `:keep-existing` (default), `:overwrite`, `:merge`.
 - Added context-aware helpers `begin_isolated`/`end_isolated` to streamline branch execution and merge
 
 ### 3) Orchestrator & Host Clarity
@@ -30,19 +30,21 @@ Phase 1 delivers a working hierarchical execution context system integrated with
   - `CCOSEnvironment` (runtime container)
   - `ExecutionContext` (hierarchical execution data)
   - `HostPlanContext` (host-side plan metadata for logging)
+ - Checkpointing helpers: `serialize_context`/`deserialize_context`, `checkpoint_plan` (logs PlanPaused) and `resume_plan` (logs PlanResumed)
+ - Persistence: added `CheckpointArchive` and `resume_plan_from_checkpoint` to load by checkpoint id (in-memory for now)
 
 ### 4) Capability Marketplace Hardening (related, unblock build)
 - Introduced dyn-safe, enum-based executor registry (`ExecutorVariant`) with dispatch in `CapabilityMarketplace`
 - Build restored to green; registry documented in spec 004
 
 ### 5) Documentation Delivered
-- New spec: `docs/ccos/specs/015-execution-contexts.md` (roles, lifecycle, isolation, integration; notes planned merge-policy)
-- Cross-links: `000-ccos-architecture.md`, `014-step-special-form-design.md` (notes planned `:merge-policy`)
+- New spec: `docs/ccos/specs/015-execution-contexts.md` (roles, lifecycle, isolation, integration; includes merge-policy examples)
+- Cross-links: `000-ccos-architecture.md`, `014-step-special-form-design.md` (documents `:merge-policy`)
 - Updated: `docs/ccos/specs/004-capabilities-and-marketplace.md` (executor registry design)
 
 ### 6) Tests
-- Added `execution_context_tests.rs` covering creation, isolation behavior, basic serialization, child/parent visibility, and merge behavior (parent-wins default, overwrite manual)
-- Added `orchestrator_checkpoint_tests.rs` verifying checkpoint/resume helpers serialize/restore context and log `PlanPaused`/`PlanResumed` events
+- Added `execution_context_tests.rs` covering creation, isolation behavior, basic serialization, child/parent visibility, and merge behavior (parent-wins default, overwrite manual, keyword-driven overwrite via `:merge-policy`)
+- Added `orchestrator_checkpoint_tests.rs` verifying checkpoint/resume helpers serialize/restore context, log `PlanPaused`/`PlanResumed`, and resume via stored checkpoint id
 
 ## Detailed Results
 
@@ -102,8 +104,9 @@ Phase 1 delivers a working hierarchical execution context system integrated with
    - Explicit merge at step completion and policy selection in RTFS
 
 3. Checkpoint/Resume
-   - Persist checkpoints in Plan Archive; log resume points in Causal Chain
-   - Orchestrator API to resume from checkpoint with reconciled context (Phase 1 delivered helpers; full wiring next)
+   - In-memory `CheckpointArchive` implemented with id-based lookup; integrate durable Plan Archive next
+   - Expose orchestrator resume entrypoint to load checkpoint by id across process boundaries
+   - Governance on checkpoint creation/resume (policy hooks)
 
 4. Capability Context Access
    - Read-only context exposure to capabilities via `CallContext`/`HostInterface`
