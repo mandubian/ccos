@@ -2,11 +2,20 @@
 
 - Issue: #23 — [CCOS] Arbiter V1: LLM execution bridge and NL-to-intent/plan conversion
 - Status: In Progress
-- Report Date: August 10, 2025
+- Report Date: August 11, 2025
 
 ## Executive Summary
 
 The Arbiter module exists with a minimal NL→Intent→Plan pipeline and unit tests. Core V1 features from the issue checklist (LLM execution bridge, LLM-driven intent/plan, dynamic capability resolution, agent registry, task delegation) are being implemented iteratively. The LLM bridge is complete and integrated; IntentGraph storage is wired with a runtime-safe sync wrapper. Remaining work focuses on DelegatingArbiter integration and end-to-end tests.
+
+## Recent Changes (Aug 11, 2025)
+
+- CCOS: async init with built-in capabilities registered at startup
+- Orchestrator: trim RTFS plan body before parsing to avoid leading-whitespace parse errors
+- RuntimeHost: bridge async capability calls via `futures::executor::block_on` to avoid nested Tokio runtime panics
+- DelegatingArbiter: integrated behind env toggle; shares base Arbiter IntentGraph; model selected via `CCOS_DELEGATING_MODEL`
+- ModelRegistry: added deterministic `stub-model` for CI and deterministic tests
+- Tooling: VS Code test task fixed to run in `rtfs_compiler/` cwd
 
 ## Current Implementation
 
@@ -26,6 +35,17 @@ The Arbiter module exists with a minimal NL→Intent→Plan pipeline and unit te
 - Host bridge fix
   - `RuntimeHost::execute_capability` now uses `futures::executor::block_on` to bridge async capabilities from a sync evaluator safely
   - E2E + integration tests pass with this approach
+
+## Environment / Configuration
+
+- Enable DelegatingArbiter: `CCOS_USE_DELEGATING_ARBITER=1`
+- Select model for delegation: `CCOS_DELEGATING_MODEL=stub-model` (deterministic) or `echo-model`
+
+## Testing Status
+
+- E2E: `ccos::tests::test_ccos_end_to_end_flow` — passing
+- Integration suite: passing on last run (52 passed; 0 failed; 2 ignored)
+- Deterministic stub model available for DelegatingArbiter tests
 
 ## Checklist (mirrors issue)
 
