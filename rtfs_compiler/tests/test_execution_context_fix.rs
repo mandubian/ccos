@@ -67,7 +67,7 @@ fn test_execution_context_validation() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = Arc::new(CapabilityMarketplace::new(registry));
     
-    let host = Rc::new(RuntimeHost::new(
+    let host = std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         marketplace,
         security_context.clone(),
@@ -80,7 +80,7 @@ fn test_execution_context_validation() {
         stdlib_env,
         delegation_engine,
         security_context,
-        host.clone() as Rc<dyn HostInterface>,
+        host.clone() as std::sync::Arc<dyn HostInterface>,
     );
     
     // Test simple RTFS code that doesn't require capability execution
