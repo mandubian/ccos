@@ -75,7 +75,7 @@ impl Orchestrator {
         )?;
 
         // --- 2. Set up the Host and Evaluator ---
-        let host = Rc::new(RuntimeHost::new(
+        let host = Arc::new(RuntimeHost::new(
             self.causal_chain.clone(),
             self.capability_marketplace.clone(),
             context.clone(),
@@ -83,7 +83,7 @@ impl Orchestrator {
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), plan_action_id.clone());
         let module_registry = Rc::new(ModuleRegistry::new());
         let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let host_iface: Rc<dyn HostInterface> = host.clone();
+        let host_iface: Arc<dyn HostInterface> = host.clone();
         let mut evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);
         
         // Initialize context manager for the plan execution
