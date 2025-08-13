@@ -410,7 +410,7 @@ COMMON PATTERNS:
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
 
     // Evaluator (we won't actually evaluate the generated intent here, but set up for future)
-    let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),

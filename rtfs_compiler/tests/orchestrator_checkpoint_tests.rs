@@ -18,7 +18,7 @@ fn test_checkpoint_and_resume_helpers() {
     // Minimal plan and evaluator
     let plan = Plan::new_rtfs("(+ 1 1)".to_string(), vec!["intent-1".to_string()]);
     let runtime_context = RuntimeContext::pure();
-    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         causal_chain.clone(),
         Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
             Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()))
