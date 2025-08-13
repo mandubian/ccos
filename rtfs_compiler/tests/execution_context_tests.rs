@@ -210,7 +210,7 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
         use tokio::sync::RwLock;
         Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(CapabilityRegistry::new()))))
     };
-    let host = Rc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
+    let host = std::sync::Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
     let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), RuntimeContext::pure(), host);
 
     // Initialize root context and set parent value :k = "parent"

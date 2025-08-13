@@ -60,7 +60,7 @@ pub fn create_module_registry() -> Rc<ModuleRegistry> {
 }
 
 /// Creates a runtime host with the specified security context
-pub fn create_runtime_host(security_context: RuntimeContext) -> Rc<RuntimeHost> {
+pub fn create_runtime_host(security_context: RuntimeContext) -> std::sync::Arc<RuntimeHost> {
     let marketplace = Arc::new(create_capability_marketplace());
     let causal_chain = create_causal_chain();
     
@@ -68,7 +68,7 @@ pub fn create_runtime_host(security_context: RuntimeContext) -> Rc<RuntimeHost> 
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
@@ -80,10 +80,10 @@ pub fn create_runtime_host(security_context: RuntimeContext) -> Rc<RuntimeHost> 
 pub fn create_runtime_host_with_marketplace(
     capability_marketplace: Arc<CapabilityMarketplace>,
     security_context: RuntimeContext,
-) -> Rc<RuntimeHost> {
+) -> std::sync::Arc<RuntimeHost> {
     
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
-    let host = std::rc::Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),

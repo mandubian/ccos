@@ -4,7 +4,6 @@
 //! to the CCOS stateful components like the Causal Chain and Capability Marketplace.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::cell::RefCell;
 
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::values::Value;
@@ -27,9 +26,9 @@ pub struct RuntimeHost {
     causal_chain: Arc<Mutex<CausalChain>>,
     capability_marketplace: Arc<CapabilityMarketplace>,
     security_context: RuntimeContext,
-    // The execution context is stored in a RefCell to allow for interior mutability
-    // during the evaluation of a plan.
-    execution_context: RefCell<Option<HostPlanContext>>,
+    // The execution context is protected by a Mutex to allow safe concurrent access
+    // from multiple threads while evaluating a plan.
+    execution_context: Mutex<Option<HostPlanContext>>,
 }
 
 impl RuntimeHost {
@@ -42,13 +41,17 @@ impl RuntimeHost {
             causal_chain,
             capability_marketplace,
             security_context,
-            execution_context: RefCell::new(None),
+            execution_context: Mutex::new(None),
         }
     }
 
     /// Sets the context for a new plan execution.
     pub fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String) {
-        *self.execution_context.borrow_mut() = Some(HostPlanContext {
+        let mut guard = self
+            .execution_context
+            .lock()
+            .expect("Failed to lock execution_context mutex");
+        *guard = Some(HostPlanContext {
             plan_id,
             intent_ids,
             parent_action_id,
@@ -57,19 +60,29 @@ impl RuntimeHost {
 
     /// Clears the execution context after a plan has finished.
     pub fn clear_execution_context(&self) {
-        *self.execution_context.borrow_mut() = None;
+        let mut guard = self
+            .execution_context
+            .lock()
+            .expect("Failed to lock execution_context mutex");
+        *guard = None;
     }
 
     fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<CausalChain>> {
         self.causal_chain.lock().map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))
     }
 
-    fn get_context(&self) -> RuntimeResult<std::cell::Ref<HostPlanContext>> {
-        let context_ref = self.execution_context.borrow();
-        if context_ref.is_none() {
-            return Err(RuntimeError::Generic("FATAL: Host method called without a valid execution context".to_string()));
+    fn get_context(&self) -> RuntimeResult<HostPlanContext> {
+        let guard = self
+            .execution_context
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock execution context".to_string()))?;
+        if let Some(ctx) = guard.as_ref() {
+            Ok(ctx.clone())
+        } else {
+            Err(RuntimeError::Generic(
+                "FATAL: Host method called without a valid execution context".to_string(),
+            ))
         }
-        Ok(std::cell::Ref::map(context_ref, |c| c.as_ref().unwrap()))
     }
 }
 
@@ -172,9 +185,15 @@ impl HostInterface for RuntimeHost {
 
 impl std::fmt::Debug for RuntimeHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid locking issues in Debug; only show whether context is set
+        let ctx_state = self
+            .execution_context
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
         f.debug_struct("RuntimeHost")
-         .field("security_context", &self.security_context)
-         .field("execution_context", &self.execution_context.borrow())
-         .finish()
+            .field("security_context", &self.security_context)
+            .field("has_execution_context", &ctx_state)
+            .finish()
     }
 }

@@ -96,7 +96,7 @@ impl Default for CCOSConfig {
 /// CCOS execution environment that manages the complete runtime
 pub struct CCOSEnvironment {
     config: CCOSConfig,
-    host: Rc<RuntimeHost>,
+    host: Arc<RuntimeHost>,
     evaluator: Evaluator,
     #[allow(dead_code)]
     marketplace: Arc<CapabilityMarketplace>,
@@ -120,7 +120,7 @@ impl CCOSEnvironment {
             SecurityLevel::Paranoid => RuntimeContext::pure(),
         };
         // Create runtime host
-        let host = Rc::new(RuntimeHost::new(
+        let host = Arc::new(RuntimeHost::new(
             causal_chain,
             marketplace.clone(),
             runtime_context.clone(),

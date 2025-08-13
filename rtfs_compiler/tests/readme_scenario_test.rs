@@ -42,7 +42,7 @@ async fn test_readme_scenario() {
         capability_marketplace,
         security_context.clone(),
     );
-    let host = Rc::new(runtime_host);
+    let host = std::sync::Arc::new(runtime_host);
     
     // Create evaluator
     let evaluator = Evaluator::new(

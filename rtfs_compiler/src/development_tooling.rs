@@ -92,7 +92,7 @@ impl RtfsRepl {
         let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         
-        let host = Rc::new(RuntimeHost::new(
+        let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
@@ -123,7 +123,7 @@ impl RtfsRepl {
                 let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
                 let security_context = crate::runtime::security::RuntimeContext::pure();
                 
-                let host = Rc::new(RuntimeHost::new(
+                let host = std::sync::Arc::new(RuntimeHost::new(
                     causal_chain,
                     capability_marketplace,
                     security_context.clone(),
@@ -247,7 +247,7 @@ impl RtfsRepl {
                 let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
                 let security_context = crate::runtime::security::RuntimeContext::pure();
                 
-                let host = Rc::new(RuntimeHost::new(
+                let host = std::sync::Arc::new(RuntimeHost::new(
                     causal_chain,
                     capability_marketplace,
                     security_context.clone(),
@@ -533,7 +533,7 @@ impl RtfsTestFramework {
         let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         
-        let host = Rc::new(RuntimeHost::new(
+        let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),

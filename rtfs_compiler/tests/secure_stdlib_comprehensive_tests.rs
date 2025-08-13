@@ -27,7 +27,7 @@ impl SecureStdlibTestRunner {
             rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()
         ));
         let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-        let host = Rc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
