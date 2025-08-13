@@ -162,8 +162,8 @@ impl ImmutableLedger {
         hasher.update(action.timestamp.to_string().as_bytes());
 
         // Hash arguments
-        for arg in &action.arguments {
-            hasher.update(format!("{:?}", arg).as_bytes());
+        if let Some(args) = &action.arguments {
+            for arg in args { hasher.update(format!("{:?}", arg).as_bytes()); }
         }
 
         // Hash result
@@ -315,7 +315,7 @@ impl ProvenanceTracker {
         }
     }
 
-    pub fn track_action(&mut self, action: &Action, intent: &Intent) -> Result<(), RuntimeError> {
+    pub fn track_action(&mut self, action: &Action, _intent: &Intent) -> Result<(), RuntimeError> {
         let provenance = ActionProvenance {
             action_id: action.action_id.clone(),
             intent_id: action.intent_id.clone(),
@@ -757,7 +757,6 @@ impl CausalChain {
         intent_id: &IntentId,
         action_type: super::types::ActionType,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
         // Create lifecycle action
         let action = Action::new(
             action_type,
@@ -822,8 +821,6 @@ impl CausalChain {
         goal: &str,
         triggered_by: Option<&str>,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
-
         let mut action = Action::new(
             ActionType::IntentCreated,
             plan_id.clone(),
@@ -858,8 +855,6 @@ impl CausalChain {
         reason: &str,
         triggering_action_id: Option<&str>,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
-
         let mut action = Action::new(
             ActionType::IntentStatusChanged,
             plan_id.clone(),
@@ -905,8 +900,6 @@ impl CausalChain {
         weight: Option<f64>,
         metadata: Option<&HashMap<String, Value>>,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
-
         let mut action = Action::new(
             ActionType::IntentRelationshipCreated,
             plan_id.clone(),
@@ -952,8 +945,6 @@ impl CausalChain {
         intent_id: &IntentId,
         reason: &str,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
-
         let mut action = Action::new(
             ActionType::IntentArchived,
             plan_id.clone(),
@@ -983,8 +974,6 @@ impl CausalChain {
         intent_id: &IntentId,
         reason: &str,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
-
         let mut action = Action::new(
             ActionType::IntentReactivated,
             plan_id.clone(),
@@ -1016,12 +1005,10 @@ impl CausalChain {
         &mut self,
         plan_id: &PlanId,
         intent_id: &IntentId,
-        capability_id: &CapabilityId,
+        _capability_id: &CapabilityId,
         function_name: &str,
         args: Vec<Value>,
     ) -> Result<Action, RuntimeError> {
-        use super::types::ActionType;
-
         // Build action
         let action = Action::new(
             ActionType::CapabilityCall,
@@ -1045,36 +1032,62 @@ impl CausalChain {
         Ok(signed_action)
     }
 
-pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
-    // Append to ledger
-    self.ledger.append_action(action)?;
-    
-    // Record metrics
-    self.metrics.record_action(action)?;
-    
-    // Notify event sinks
-    self.notify_sinks(action);
-    
-    Ok(action.action_id.clone())
-}
-
-// Summarize recent actions for fast recall.
-pub fn summarize_recent(&self, count: usize) -> String {
-    let total = self.ledger.actions.len();
-    let start = if count > total { 0 } else { total - count };
-    let mut summary = String::new();
-    for action in &self.ledger.actions[start..] {
-        summary.push_str(&format!(
-            "Action {}: type={:?}, intent={}, plan={}, timestamp={}\n",
-            action.action_id,
-            action.action_type,
-            action.intent_id,
-            action.plan_id,
-            action.timestamp
-        ));
+    pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
+        // Append to ledger
+        self.ledger.append_action(action)?;
+        
+        // Record metrics
+        self.metrics.record_action(action)?;
+        
+        // Notify event sinks
+        self.notify_sinks(action);
+        
+        Ok(action.action_id.clone())
     }
-    summary
-}
+
+    // Summarize recent actions for fast recall.
+    pub fn summarize_recent(&self, count: usize) -> String {
+        let total = self.ledger.actions.len();
+        let start = if count > total { 0 } else { total - count };
+        let mut summary = String::new();
+        for action in &self.ledger.actions[start..] {
+            summary.push_str(&format!(
+                "Action {}: type={:?}, intent={}, plan={}, timestamp={}\n",
+                action.action_id,
+                action.action_type,
+                action.intent_id,
+                action.plan_id,
+                action.timestamp
+            ));
+        }
+        summary
+    }
+
+    /// Record a delegation lifecycle event (helper for M4)
+    pub fn record_delegation_event(&mut self, intent_id: &IntentId, event_kind: &str, metadata: std::collections::HashMap<String, Value>) -> Result<(), RuntimeError> {
+        let mut action = Action {
+            action_id: uuid::Uuid::new_v4().to_string(),
+            parent_action_id: None,
+            plan_id: "delegation".to_string(),
+            intent_id: intent_id.clone(),
+            action_type: ActionType::InternalStep,
+            function_name: Some(format!("delegation.{}", event_kind)),
+            arguments: None,
+            result: None,
+            cost: None,
+            duration_ms: None,
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            metadata,
+        };
+        // Sign & attach
+        let signature = self.signing.sign_action(&action);
+        action.metadata.insert("signature".to_string(), Value::String(signature));
+        // Append, record metrics (internal step), notify sinks
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
+        self.notify_sinks(&action);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
