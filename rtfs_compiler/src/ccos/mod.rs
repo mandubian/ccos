@@ -43,8 +43,7 @@ pub mod working_memory;
 // pub mod orchestrator;      // commented: module not present in tree
 pub mod delegating_arbiter;
 pub mod arbiter_engine;
-
-pub mod loaders;
+pub mod agent_registry;
 
 // --- Core CCOS System ---
 
@@ -54,6 +53,8 @@ use std::rc::Rc;
 use crate::ccos::arbiter::{Arbiter, ArbiterConfig};
 use crate::ccos::delegating_arbiter::DelegatingArbiter;
 use crate::ccos::delegation::ModelRegistry;
+use crate::config::types::AgentConfig;
+use crate::ccos::agent_registry::AgentRegistry; // bring trait into scope for record_feedback
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::{RTFSRuntime, Runtime, ModuleRegistry};
 use crate::runtime::error::RuntimeResult;
@@ -80,6 +81,8 @@ pub struct CCOS {
     rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>, 
     // Optional LLM-driven engine
     delegating_arbiter: Option<Arc<DelegatingArbiter>>, 
+    agent_registry: Arc<std::sync::RwLock<crate::ccos::agent_registry::InMemoryAgentRegistry>>, // M4
+    agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
 }
 
 impl CCOS {
@@ -90,6 +93,9 @@ impl CCOS {
         let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
         // TODO: The marketplace should be initialized with discovered capabilities.
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
+
+    // Load agent configuration (placeholder: default; future: parse RTFS (agent.config ...) form)
+    let agent_config = Arc::new(AgentConfig::default());
 
         // Register built-in capabilities required by default plans (await using ambient runtime)
         crate::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
@@ -108,10 +114,21 @@ impl CCOS {
             Arc::clone(&intent_graph),
         ));
 
+        // Initialize AgentRegistry (M4)
+        let agent_registry = Arc::new(std::sync::RwLock::new(crate::ccos::agent_registry::InMemoryAgentRegistry::new()));
+
         // Optional: delegating arbiter behind feature flag/env var
-        let delegating_arbiter = if std::env::var("CCOS_USE_DELEGATING_ARBITER").ok().as_deref() == Some("1") {
+    let delegating_arbiter = if std::env::var("CCOS_USE_DELEGATING_ARBITER").ok().as_deref() == Some("1") {
             let registry = Arc::new(ModelRegistry::with_defaults());
-            match DelegatingArbiter::with_base(Arc::clone(&arbiter), registry, &std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "echo-model".to_string())) {
+            match DelegatingArbiter::with_base(
+                Arc::clone(&arbiter),
+                registry,
+                Some(Arc::clone(&agent_registry)),
+                Some(Arc::clone(&causal_chain)),
+                Some(Arc::clone(&governance_kernel)),
+                Some(Arc::clone(&agent_config)),
+                &std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "echo-model".to_string())
+            ) {
                 Ok(da) => Some(Arc::new(da)),
                 Err(_) => None,
             }
@@ -125,7 +142,43 @@ impl CCOS {
             capability_marketplace,
             rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(Rc::new(ModuleRegistry::new())))),
             delegating_arbiter,
+            agent_registry,
+            agent_config,
         })
+    }
+
+    /// Preflight validation (M3 pre-work): ensure all referenced capabilities exist in marketplace
+    pub async fn preflight_validate_capabilities(&self, plan: &self::types::Plan) -> RuntimeResult<()> {
+        use self::types::PlanBody;
+        if let PlanBody::Rtfs(body) = &plan.body {
+            // Very lightweight tokenizer – split on whitespace & parens
+            let mut caps: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut current = String::new();
+            for ch in body.chars() {
+                if ch.is_whitespace() || ch == '(' || ch == ')' { 
+                    if !current.is_empty() { caps.insert(current.clone()); current.clear(); }
+                } else { current.push(ch); }
+            }
+            if !current.is_empty() { caps.insert(current); }
+            // Extract capability ids from keyword (:ccos.echo) or string ("ccos.echo") tokens that follow a call form
+            // Simplicity: just look for tokens starting with :ccos. or ccos.
+            let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for tok in caps {
+                if let Some(stripped) = tok.strip_prefix(":ccos.") { referenced.insert(format!("ccos.{}", stripped)); continue; }
+                if tok.starts_with("ccos.") { referenced.insert(tok.clone()); continue; }
+                if tok.starts_with("\"ccos.") { // string literal token
+                    let trimmed = tok.trim_matches('"');
+                    referenced.insert(trimmed.to_string());
+                }
+            }
+            // Validate each capability exists
+            for cap in referenced {
+                if self.capability_marketplace.get_capability(&cap).await.is_none() {
+                    return Err(crate::runtime::error::RuntimeError::Generic(format!("Unknown capability referenced in plan: {}", cap)));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The main entry point for processing a user request.
@@ -152,10 +205,45 @@ impl CCOS {
                 .await?
         };
 
+        // 1.5 Preflight capability validation (M3)
+        self.preflight_validate_capabilities(&proposed_plan).await?;
+
         // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
         let result = self.governance_kernel
             .validate_and_execute(proposed_plan, security_context)
             .await?;
+
+        // Delegation completion feedback (M4 extension)
+        if self.delegating_arbiter.is_some() {
+            use crate::runtime::values::Value;
+            // Heuristic: search recent intents matching words from request
+            if let Ok(graph) = self.intent_graph.lock() {
+                let recent = graph.find_relevant_intents(natural_language_request);
+                if let Some(stored) = recent.last() {
+                    // Stored intent metadata is HashMap<String,String>; check delegation key presence
+                    if stored.metadata.get("delegation.selected_agent").is_some() {
+                        let agent_id = stored.metadata.get("delegation.selected_agent").cloned().unwrap_or_default();
+                        // Record completed event
+                        if let Ok(mut chain) = self.causal_chain.lock() {
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert("selected_agent".to_string(), Value::String(agent_id.clone()));
+                            meta.insert("success".to_string(), Value::Boolean(result.success));
+                            let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        }
+                        // Feedback update (rolling average) via registry
+                        if result.success {
+                            if let Ok(mut reg) = self.agent_registry.write() {
+                                reg.record_feedback(&agent_id, true);
+                            }
+                        } else {
+                            if let Ok(mut reg) = self.agent_registry.write() {
+                                reg.record_feedback(&agent_id, false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(result)
     }
@@ -169,6 +257,16 @@ impl CCOS {
     pub fn get_causal_chain(&self) -> Arc<Mutex<CausalChain>> {
         Arc::clone(&self.causal_chain)
     }
+
+    pub fn get_agent_registry(&self) -> Arc<std::sync::RwLock<crate::ccos::agent_registry::InMemoryAgentRegistry>> {
+        Arc::clone(&self.agent_registry)
+    }
+
+    pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
+        self.delegating_arbiter.as_ref().map(Arc::clone)
+    }
+
+    pub fn get_agent_config(&self) -> Arc<AgentConfig> { Arc::clone(&self.agent_config) }
 }
 
 // --- Tests ---

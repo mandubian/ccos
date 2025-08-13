@@ -90,9 +90,8 @@ map_entry = { map_key ~ expression }
 map_key = { keyword | string | integer }
 
 // --- Type Expressions (Based on grammar_spec.md) ---
-primitive_type = { symbol }
-// Symbols like int, float, string, bool, nil, keyword, symbol, any, never
-// Changed from keyword to symbol for consistency
+primitive_type = { symbol | keyword }
+// Accept both bare symbols (int) and keyword forms (:int) for primitive types for backward compatibility
 
 // Complex Type Rules (assuming list-based syntax like [:vector T], [:map ...], etc.)
 optional_marker = { "?" }
@@ -105,13 +104,17 @@ map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ (map_type_wildcard | map_t
 tuple_type          = { "[" ~ ":tuple" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 param_type          = { type_expr }
 variadic_param_type = { "&" ~ WHITESPACE* ~ type_expr }
-function_type       = { "[" ~ ":fn" ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ param_type)* ~ (WHITESPACE* ~ variadic_param_type)? ~ WHITESPACE* ~ "]" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
+function_type       = { "[" ~ (":fn" | ":=>") ~ WHITESPACE* ~ "[" ~ (WHITESPACE* ~ param_type)* ~ (WHITESPACE* ~ variadic_param_type)? ~ WHITESPACE* ~ "]" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
 // [:fn [Params...] Variadic? Return]
 resource_type     = { "[" ~ ":resource" ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ "]" }
 enum_type         = { "[" ~ ":enum" ~ (WHITESPACE* ~ literal)+ ~ WHITESPACE* ~ "]" }
 union_type        = { "[" ~ ":union" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 // Using :union for mathematical consistency and brevity
-intersection_type = { "[" ~ ":and" ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ predicate_expr)* ~ WHITESPACE* ~ "]" }
+// Allow a primitive_type (which can be a bare symbol) or general type_expr as the base of an intersection
+// Intersection / refinement: first element is base type; following elements may be predicates
+// Intersection or refined type. Base followed by one or more predicates or additional types.
+// We first try to parse predicates; if non-predicate type_exprs appear they are treated as intersection members.
+intersection_type = { "[" ~ ":and" ~ WHITESPACE* ~ (primitive_type | type_expr) ~ (WHITESPACE* ~ (predicate_expr | type_expr))+ ~ WHITESPACE* ~ "]" }
 literal_type      = { "[" ~ ":val" ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ "]" }
 
 // Also add array shapes support (mentioned in specs but missing from grammar)
@@ -136,6 +139,7 @@ type_expr = _{
 }
 
 // Optional type: T? (sugar for [:union T :nil])
+// Allow either primitive symbol, keyword primitive, or general symbol before '?'
 optional_type = { (primitive_type | symbol) ~ optional_marker }
 
 // Add schema predicate support for type refinements
@@ -150,26 +154,33 @@ predicate_expr = {
     custom_predicate 
 }
 
-// Comparison predicates: [:> value], [:>= value], etc.
-comparison_predicate = { "[" ~ (":" ~ (">" | ">=" | "<" | "<=" | "=" | "!=")) ~ WHITESPACE* ~ literal ~ "]" }
+// Predicate operator helper rules (captured for easier parsing)
+comparison_operator = { ":>" | ":>=" | ":<" | ":<=" | ":=" | ":!=" }
+length_operator     = { ":min-length" | ":max-length" | ":length" }
+regex_operator      = { ":matches-regex" }
+range_operator      = { ":in-range" }
+collection_operator = { ":min-count" | ":max-count" | ":count" | ":non-empty" }
+map_operator        = { ":has-key" | ":required-keys" }
 
-// Length predicates: [:min-length n], [:max-length n], [:length n]  
-length_predicate = { "[" ~ (":" ~ ("min-length" | "max-length" | "length")) ~ WHITESPACE* ~ integer ~ "]" }
+// Comparison predicates: [:> value], [:>= value], etc.
+comparison_predicate = { "[" ~ comparison_operator ~ WHITESPACE* ~ literal ~ "]" }
+
+// Length predicates: [:min-length n], [:max-length n], [:length n]
+length_predicate = { "[" ~ length_operator ~ WHITESPACE* ~ integer ~ "]" }
 
 // Regex predicate: [:matches-regex "pattern"]
-regex_predicate = { "[" ~ ":matches-regex" ~ WHITESPACE* ~ string ~ "]" }
+// Use literal so parser's build_literal helper can process it (must be a string literal at runtime)
+regex_predicate = { "[" ~ regex_operator ~ WHITESPACE* ~ literal ~ "]" }
 
 // Range predicate: [:in-range min max]
-range_predicate = { "[" ~ ":in-range" ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ literal ~ "]" }
+range_predicate = { "[" ~ range_operator ~ WHITESPACE* ~ literal ~ WHITESPACE* ~ literal ~ "]" }
 
 // Collection predicates: [:min-count n], [:max-count n], [:non-empty], etc.
-collection_predicate = { "[" ~ (":" ~ ("min-count" | "max-count" | "count" | "non-empty")) ~ (WHITESPACE* ~ integer)? ~ "]" }
+collection_predicate = { "[" ~ collection_operator ~ (WHITESPACE* ~ integer)? ~ "]" }
 
 // Map predicates: [:has-key :key], [:required-keys [:k1 :k2]]
-map_predicate = { 
-    "[" ~ ":has-key" ~ WHITESPACE* ~ keyword ~ "]" |
-    "[" ~ ":required-keys" ~ WHITESPACE* ~ "[" ~ keyword* ~ "]" ~ "]"
-}
+keys_list = { "[" ~ (WHITESPACE* ~ keyword)* ~ WHITESPACE* ~ "]" }
+map_predicate = { "[" ~ map_operator ~ WHITESPACE* ~ (keyword | keys_list) ~ "]" }
 
 // Custom/fallback predicate: any other predicate format
 custom_predicate = { "[" ~ predicate_name ~ literal* ~ "]" }

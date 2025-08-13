@@ -38,11 +38,46 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 }
             }        }
         Rule::primitive_type => {
-            // primitive_type = { symbol } according to grammar
-            let symbol_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
-                PestParseError::MissingToken { token: "expected symbol in primitive_type".to_string(), span: None }
+            // primitive_type now allows either symbol or keyword (grammar permits both)
+            let inner_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
+                PestParseError::MissingToken { token: "expected primitive token".to_string(), span: None }
             })?;
-            Ok(TypeExpr::Alias(build_symbol(symbol_pair)?))
+            match inner_pair.as_rule() {
+                Rule::symbol => {
+                    // Map common primitive symbol names to PrimitiveType; fall back to alias
+                    match inner_pair.as_str() {
+                        "int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+                        "float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+                        "string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+                        "bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+                        "nil" => Ok(TypeExpr::Primitive(PrimitiveType::Nil)),
+                        "keyword" => Ok(TypeExpr::Primitive(PrimitiveType::Keyword)),
+                        "symbol" => Ok(TypeExpr::Primitive(PrimitiveType::Symbol)),
+                        "any" => Ok(TypeExpr::Any),
+                        "never" => Ok(TypeExpr::Never),
+                        _ => Ok(TypeExpr::Alias(build_symbol(inner_pair)?)),
+                    }
+                }
+                Rule::keyword => {
+                    // Handle :int style inside primitive_type wrapper
+                    match inner_pair.as_str() {
+                        ":int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+                        ":float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+                        ":string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+                        ":bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+                        ":nil" => Ok(TypeExpr::Primitive(PrimitiveType::Nil)),
+                        ":keyword" => Ok(TypeExpr::Primitive(PrimitiveType::Keyword)),
+                        ":symbol" => Ok(TypeExpr::Primitive(PrimitiveType::Symbol)),
+                        ":any" => Ok(TypeExpr::Any),
+                        ":never" => Ok(TypeExpr::Never),
+                        _ => {
+                            let kw = build_keyword(inner_pair)?;
+                            Ok(TypeExpr::Alias(Symbol(kw.0)))
+                        }
+                    }
+                }
+                _ => Err(PestParseError::UnexpectedRule { expected: "symbol or keyword primitive".to_string(), found: format!("{:?}", inner_pair.as_rule()), rule_text: inner_pair.as_str().to_string(), span: None })
+            }
         }
         Rule::symbol => Ok(TypeExpr::Alias(build_symbol(actual_type_pair)?)),Rule::vector_type => {
             let inner_type_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
@@ -175,14 +210,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 .collect();
             Ok(TypeExpr::Union(type_pairs?))
         }
-        Rule::intersection_type => {
-            let type_pairs: Result<Vec<TypeExpr>, PestParseError> = actual_type_pair
-                .into_inner()
-                .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-                .map(build_type_expr)
-                .collect();
-            Ok(TypeExpr::Intersection(type_pairs?))
-        }        Rule::literal_type => {
+    Rule::literal_type => {
             let literal_pair = actual_type_pair.into_inner().next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected literal in literal type".to_string(), span: None }
             })?;
@@ -213,19 +241,22 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 if shape_pair.as_rule() == Rule::shape {
                     for dimension_pair in shape_pair.into_inner() {
                         if dimension_pair.as_rule() == Rule::dimension {
-                            let dimension_inner = dimension_pair.into_inner().next().ok_or_else(|| {
-                                PestParseError::MissingToken { token: "expected dimension content".to_string(), span: None }
-                            })?;
-                            
-                            match dimension_inner.as_str() {
-                                "?" => shape.push(ArrayDimension::Variable),
-                                n => {
-                                    let size = n.parse::<usize>().map_err(|_| PestParseError::InvalidInput {
-                                        message: format!("Invalid array dimension: {}", n),
-                                        span: None,
-                                    })?;
-                                    shape.push(ArrayDimension::Fixed(size));
-                                }
+                            // dimension = { integer | "?" } so when it's an integer pest will
+                            // produce an inner pair (integer). For the literal '?' alternative
+                            // there is NO inner pair; we must read the text directly.
+                            let text = if let Some(inner) = dimension_pair.clone().into_inner().next() {
+                                inner.as_str()
+                            } else {
+                                dimension_pair.as_str()
+                            };
+                            if text == "?" {
+                                shape.push(ArrayDimension::Variable);
+                            } else {
+                                let size = text.parse::<usize>().map_err(|_| PestParseError::InvalidInput {
+                                    message: format!("Invalid array dimension: {}", text),
+                                    span: None,
+                                })?;
+                                shape.push(ArrayDimension::Fixed(size));
                             }
                         }
                     }
@@ -253,31 +284,44 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
             Ok(TypeExpr::Optional(Box::new(base_type)))
         }
         Rule::intersection_type => {
-            let mut inner = actual_type_pair.into_inner();
-            let mut types = Vec::new();
+            let pairs: Vec<_> = actual_type_pair
+                .into_inner()
+                .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+                .collect();
+            if pairs.is_empty() {
+                return Err(PestParseError::MissingToken { token: "base type in intersection".to_string(), span: None });
+            }
+            // First is base or another type
+            let mut idx = 0;
+            let base_pair = &pairs[0];
+            let mut additional_types = Vec::new();
             let mut predicates = Vec::new();
-            
-            for pair in inner {
-                if pair.as_rule() != Rule::WHITESPACE && pair.as_rule() != Rule::COMMENT {
-                    if is_predicate_rule(&pair) {
-                        predicates.push(build_predicate_expr(pair)?);
-                    } else {
-                        types.push(build_type_expr(pair)?);
-                    }
+
+            // Build base type
+            let base_type = build_type_expr(base_pair.clone())?;
+            idx += 1;
+            while idx < pairs.len() {
+                let p = &pairs[idx];
+                if is_predicate_rule(p) {
+                    predicates.push(build_predicate_expr(p.clone())?);
+                } else {
+                    additional_types.push(build_type_expr(p.clone())?);
                 }
+                idx += 1;
             }
-            
-            // If we have predicates, create a refined type
-            if !predicates.is_empty() && types.len() == 1 {
-                Ok(TypeExpr::Refined {
-                    base_type: Box::new(types.into_iter().next().unwrap()),
-                    predicates,
-                })
-            } else {
-                // Otherwise, create an intersection type
-                Ok(TypeExpr::Intersection(types))
+            if !predicates.is_empty() && additional_types.is_empty() {
+                return Ok(TypeExpr::Refined { base_type: Box::new(base_type), predicates });
             }
-        }        s => Err(PestParseError::UnexpectedRule {
+            if additional_types.is_empty() {
+                // Degenerate [:and T] => T
+                return Ok(base_type);
+            }
+            // Intersection of multiple types (ignoring predicates if mixed)
+            let mut types = vec![base_type];
+            types.extend(additional_types);
+            Ok(TypeExpr::Intersection(types))
+        }
+        s => Err(PestParseError::UnexpectedRule {
             expected: "valid type expression".to_string(),
             found: format!("{:?}", s),
             rule_text: actual_type_pair.as_str().to_string(),
@@ -315,7 +359,7 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
             let mut inner = actual_predicate_pair.into_inner();
             let operator_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected operator in comparison".to_string(), span: None }
-            })?;
+            })?; // operator is now a direct token (comparison_operator)
             let value_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected value in comparison".to_string(), span: None }
             })?;
@@ -340,7 +384,7 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
             let mut inner = actual_predicate_pair.into_inner();
             let operator_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected operator in length predicate".to_string(), span: None }
-            })?;
+            })?; // length_operator
             let value_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected value in length predicate".to_string(), span: None }
             })?;
@@ -364,7 +408,7 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
         
         Rule::regex_predicate => {
             let mut inner = actual_predicate_pair.into_inner();
-            let _keyword = inner.next(); // Skip :matches-regex keyword
+            let _operator = inner.next(); // regex_operator
             let pattern_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected pattern in regex predicate".to_string(), span: None }
             })?;
@@ -381,7 +425,7 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
         
         Rule::range_predicate => {
             let mut inner = actual_predicate_pair.into_inner();
-            let _keyword = inner.next(); // Skip :in-range keyword
+            let _operator = inner.next(); // range_operator
             let min_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected min value in range predicate".to_string(), span: None }
             })?;
@@ -399,7 +443,7 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
             let mut inner = actual_predicate_pair.into_inner();
             let operator_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected operator in collection predicate".to_string(), span: None }
-            })?;
+            })?; // collection_operator
             
             match operator_pair.as_str() {
                 ":non-empty" => Ok(TypePredicate::NonEmpty),
@@ -432,7 +476,7 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
             let mut inner = actual_predicate_pair.into_inner();
             let operator_pair = inner.next().ok_or_else(|| {
                 PestParseError::MissingToken { token: "expected operator in map predicate".to_string(), span: None }
-            })?;
+            })?; // map_operator
             
             match operator_pair.as_str() {
                 ":has-key" => {
@@ -443,13 +487,13 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
                     Ok(TypePredicate::HasKey(key))
                 }
                 ":required-keys" => {
+                    // keys_list structure: '[' keyword* ']'
                     let keys_list_pair = inner.next().ok_or_else(|| {
                         PestParseError::MissingToken { token: "expected keys list in required-keys predicate".to_string(), span: None }
                     })?;
-                    
                     let mut keys = Vec::new();
                     for key_pair in keys_list_pair.into_inner() {
-                        if key_pair.as_rule() != Rule::WHITESPACE && key_pair.as_rule() != Rule::COMMENT {
+                        if key_pair.as_rule() == Rule::keyword {
                             keys.push(build_keyword(key_pair)?);
                         }
                     }
