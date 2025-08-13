@@ -235,10 +235,14 @@ impl Orchestrator {
         evaluator: &Evaluator,
         checkpoint_id: &str,
     ) -> RuntimeResult<()> {
-        let rec = self
-            .checkpoint_archive
-            .get_by_id(checkpoint_id)
-            .ok_or_else(|| RuntimeError::Generic("Checkpoint not found".to_string()))?;
+        // Try in-memory first, then disk fallback
+        let rec = if let Some(rec) = self.checkpoint_archive.get_by_id(checkpoint_id) {
+            rec
+        } else {
+            self.checkpoint_archive
+                .load_from_disk(checkpoint_id)
+                .ok_or_else(|| RuntimeError::Generic("Checkpoint not found".to_string()))?
+        };
         if rec.plan_id != plan_id || rec.intent_id != intent_id {
             return Err(RuntimeError::Generic("Checkpoint does not match plan/intent".to_string()));
         }

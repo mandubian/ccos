@@ -139,7 +139,11 @@ Parallel with isolation:
 ```
 - Each branch runs in an isolated child context; parent context is not mutated until an explicit merge.
 
-Note: current implementation merges child data back to the parent using a default parent-wins policy (keep existing). Policy selection (e.g., child-wins/overwrite, merge) is planned (see Future Work).
+Note: current implementation supports configurable merge policies when consolidating branch context data:
+
+- `:keep-existing` (default): parent-wins; child-only keys are added
+- `:overwrite` (child-wins): child values overwrite parent values
+- `:merge`: deep merge; maps are merged key-wise recursively and vectors are concatenated
 
 ### Merge behavior examples
 
@@ -166,7 +170,7 @@ Manual overwrite today (explicit parent write after branches):
   (set! :candidate (if (some-condition) "a" "b")))
 ```
 
-Planned: configurable `:merge-policy` to allow child-wins/overwrite or structural merge.
+Implemented: configurable `:merge-policy` including `:keep-existing`, `:overwrite`, and `:merge` (deep merge for maps/vectors).
 
 Conditional step:
 ```clojure
@@ -181,6 +185,18 @@ Conditional step:
 - `Isolated` can read from parent; `Sandboxed` cannot read from parent
 - Automatic checkpointing via `ContextManager::with_checkpointing(interval_ms)`
 - Serialization uses `serde_json` for both single context and stack
+ - Read-only context exposure to capabilities is security-gated. The runtime exposes a sanitized snapshot
+   only when policy allows it for the specific capability. Defaults are off; exposure requires both a global flag
+   and a per-capability allowlist match.
+
+### Dynamic Exposure Policy
+
+- **Exact IDs**: Allow specific capability IDs.
+- **Prefixes**: Allow namespaces (e.g., `ccos.ai.`) without listing each capability.
+- **Tags**: Allow capabilities that declare specific metadata tags (e.g., `needs-context`).
+- **Step overrides**: Plans may request exposure for a step with `:expose-context` and restrict keys via `:context-keys`.
+
+The Host evaluates exposure at call-time using the active `RuntimeContext` policy and capability manifest metadata.
 
 ## Backward Compatibility
 

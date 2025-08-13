@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Phase 1 delivers a working hierarchical execution context system integrated with the evaluator, documented in specs, and validated with tests. It introduces step-scoped context entry/exit, isolation semantics, and an initial checkpoint interface, while keeping host/orchestrator audit logging separate and clean. Build is green and the system is ready for incremental adoption.
+Phase 1 delivers a working hierarchical execution context system integrated with the evaluator, documented in specs, and validated with tests. It introduces step-scoped context entry/exit, isolation semantics, and an initial checkpoint interface, while keeping host/orchestrator audit logging separate and clean. Additional polish since initial submission: step-if/step-loop now enter/exit child contexts like step, and the Merge policy performs deep merge (maps merged key-wise, vectors concatenated). Build is green and the system is ready for incremental adoption.
 
 ## Key Achievements
 
@@ -20,7 +20,9 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 
 ### 2) Evaluator Integration
 - `(step ...)` enters a child context with appropriate isolation and exits on completion
-- `(step.parallel ...)` runs sequential branches with isolated child contexts (ready for true parallelism). Merge policy implemented via `:merge-policy` keyword: `:keep-existing` (default), `:overwrite`, `:merge`.
+- `(step-if ...)` and `(step-loop ...)` now enter/exit a step-scoped child context and produce lifecycle events
+- `(step.parallel ...)` runs sequential branches with isolated child contexts (ready for true parallelism). Merge policy implemented via `:merge-policy` keyword: `:keep-existing` (default), `:overwrite`, `:merge` (deep: maps merged, vectors concatenated)
+- Step options now support context exposure overrides: `:expose-context <bool>` and `:context-keys [..]` parsed at the start of `(step ...)` and applied step-scoped
 - Added context-aware helpers `begin_isolated`/`end_isolated` to streamline branch execution and merge
 
 ### 3) Orchestrator & Host Clarity
@@ -30,27 +32,35 @@ Phase 1 delivers a working hierarchical execution context system integrated with
   - `CCOSEnvironment` (runtime container)
   - `ExecutionContext` (hierarchical execution data)
   - `HostPlanContext` (host-side plan metadata for logging)
- - Checkpointing helpers: `serialize_context`/`deserialize_context`, `checkpoint_plan` (logs PlanPaused) and `resume_plan` (logs PlanResumed)
- - Persistence: added `CheckpointArchive` and `resume_plan_from_checkpoint` to load by checkpoint id (in-memory for now)
+  - Checkpointing helpers: `serialize_context`/`deserialize_context`, `checkpoint_plan` (logs PlanPaused) and `resume_plan` (logs PlanResumed)
+  - Persistence: added `CheckpointArchive` and `resume_plan_from_checkpoint` to load by checkpoint id (in-memory for now)
+  - Host now supports step-scoped read-only context exposure override with key filtering; uses dynamic policy (exact IDs, prefixes, tags) when attaching sanitized snapshots to capability calls
 
 ### 4) Capability Marketplace Hardening (related, unblock build)
 - Introduced dyn-safe, enum-based executor registry (`ExecutorVariant`) with dispatch in `CapabilityMarketplace`
 - Build restored to green; registry documented in spec 004
 
 ### 5) Documentation Delivered
-- New spec: `docs/ccos/specs/015-execution-contexts.md` (roles, lifecycle, isolation, integration; includes merge-policy examples)
+- New spec: `docs/ccos/specs/015-execution-contexts.md` (roles, lifecycle, isolation, integration; includes merge-policy examples and dynamic exposure policy by IDs/prefixes/tags; step-level overrides)
 - Cross-links: `000-ccos-architecture.md`, `014-step-special-form-design.md` (documents `:merge-policy`)
 - Updated: `docs/ccos/specs/004-capabilities-and-marketplace.md` (executor registry design)
 
 ### 6) Tests
 - Added `execution_context_tests.rs` covering creation, isolation behavior, basic serialization, child/parent visibility, and merge behavior (parent-wins default, overwrite manual, keyword-driven overwrite via `:merge-policy`)
 - Added `orchestrator_checkpoint_tests.rs` verifying checkpoint/resume helpers serialize/restore context, log `PlanPaused`/`PlanResumed`, and resume via stored checkpoint id
+- Added evaluator-level tests:
+  - `ccos_context_exposure_tests.rs`: validates context exposure to capabilities with security policy and step-level overrides (`:expose-context`, `:context-keys`) via `ccos.echo`
+  - `step_parallel_merge_tests.rs`: asserts deep-merge policy for nested maps and vector concatenation across parallel branches
+  - `checkpoint_resume_tests.rs`: enables durable checkpoints via `with_durable_dir` and verifies resume-by-id
+- Verified evaluator primitives with new step-if/step-loop context handling; overall suite remains stable (known unrelated failures tracked separately)
 
 ## Detailed Results
 
 - Context stack APIs support nested steps with clear parent→child data visibility semantics
 - Evaluator wires `(step ...)` entry/exit; `(step.parallel ...)` uses isolated child contexts (sequential for now)
 - Serialization supports simple values; complex `MapKey` handling deferred to future checkpoint/resume workstreams
+- Dynamic exposure policy: exact capability ID allowlist, namespace prefixes (e.g., `ccos.ai.`), and capability metadata tags; enforced at call-time via capability manifest lookup
+- Step-level overrides: `:expose-context` and `:context-keys` honored per step, applied and cleared reliably on success/error
 - Build: green; warnings exist but are unrelated to this feature and are logged for future cleanup
 
 ## Implementation Highlights
@@ -98,10 +108,11 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 1. True Parallel Execution
    - Implement concurrent branch execution for `(step.parallel ...)` with isolated child contexts
    - Deterministic aggregation and error handling (fail-fast vs. best-effort)
+    - Prepare evaluator-safe parallel scaffolding (separate child evaluators and environments per branch)
 
 2. Merge Policies
-   - Parent-wins, child-wins, key-wise/custom resolvers
-   - Explicit merge at step completion and policy selection in RTFS
+   - Parent-wins and child-wins implemented; `:merge` now performs deep merge for maps (key-wise) and concatenates vectors
+   - Extend `:merge` to support user-defined resolvers and typed/validated merges
 
 3. Checkpoint/Resume
    - In-memory `CheckpointArchive` implemented with id-based lookup; integrate durable Plan Archive next
@@ -109,8 +120,9 @@ Phase 1 delivers a working hierarchical execution context system integrated with
    - Governance on checkpoint creation/resume (policy hooks)
 
 4. Capability Context Access
-   - Read-only context exposure to capabilities via `CallContext`/`HostInterface`
-   - Enforce immutability and attestation when context-derived data is used
+    - Read-only context exposure to capabilities via `HostInterface` with dynamic policy and step overrides
+    - Enforce immutability and attestation when context-derived data is used
+    - Make override stack-safe for nested steps (DONE)
 
 5. Policy & Governance
    - Validate `IsolationLevel` choices against `RuntimeContext` policy at step entry
@@ -118,7 +130,7 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 
 6. Evaluator Coverage & Tests
    - Ensure `step.if`, `step.loop`, and error paths properly enter/exit contexts
-   - Add tests for nested steps, conflict merges, and resume scenarios
+    - Add tests for nested steps, conflict merges, context exposure overrides, and resume scenarios
 
 7. Performance & Ergonomics
    - Depth limits, diff-based serialization, memory bounds

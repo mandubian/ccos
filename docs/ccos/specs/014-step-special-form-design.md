@@ -62,7 +62,13 @@ The `(step ...)` family integrates with hierarchical execution contexts (see [SE
 - On step completion/failure, the evaluator exits the child context. Merges to parent are explicit.
 - `step-parallel` executes each branch in an isolated child context to avoid cross-branch interference.
 
-Note: current implementation uses a default parent-wins merge when consolidating branch context data. Configurable `:merge-policy` (e.g., `:overwrite`, `:merge`) is planned.
+Note: current implementation supports configurable merge policies when consolidating branch context data:
+
+- `:keep-existing` (default): parent-wins; child-only keys are added
+- `:overwrite` (child-wins): child values overwrite parent values
+- `:merge`: deep merge; maps are merged key-wise recursively and vectors are concatenated
+
+Additionally, `step-if` and `step-loop` execute within a step-scoped child context, with lifecycle events emitted and guaranteed context exit on both success and error paths.
 
 This separation keeps audit logging (via Host) distinct from data flow (via ExecutionContext), aligning with CCOS principles.
 

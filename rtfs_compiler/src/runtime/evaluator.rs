@@ -16,6 +16,7 @@ use crate::ccos::execution_context::{ContextManager, IsolationLevel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc as SyncArc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
 use std::sync::{Arc, Mutex};
 use crate::ccos::delegation::StaticDelegationEngine;
@@ -93,7 +94,7 @@ impl Evaluator {
             delegation_engine,
             model_registry,
             security_context,
-        host,
+            host,
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
@@ -114,7 +115,7 @@ impl Evaluator {
             module_registry,
             delegation_engine,
             RuntimeContext::pure(),
-        host,
+            host,
         )
     }
 
@@ -466,7 +467,7 @@ impl Evaluator {
     }
 
     fn eval_step_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
-        // 1. Validate arguments: "name" ...body
+        // 1. Validate arguments: "name" [options as keyword/value pairs] ...body
         if args.is_empty() { 
             return Err(RuntimeError::InvalidArguments {
                 expected: "at least 1 (a string name)".to_string(),
@@ -482,16 +483,58 @@ impl Evaluator {
             }),
         };
 
-        // 2. Enter step context
+        // 2. Parse optional options: :expose-context (bool), :context-keys (vector of strings)
+        use crate::ast::Literal as Lit;
+        let mut i = 1;
+        let mut expose_override: Option<bool> = None;
+        let mut context_keys_override: Option<Vec<String>> = None;
+        while i + 1 < args.len() {
+            match &args[i] {
+                Expression::Literal(Lit::Keyword(k)) => {
+                    let key = k.0.as_str();
+                    let val_expr = &args[i + 1];
+                    match (key, val_expr) {
+                        ("expose-context", Expression::Literal(Lit::Boolean(b))) => {
+                            expose_override = Some(*b);
+                            i += 2; continue;
+                        }
+                        ("context-keys", Expression::Vector(v)) => {
+                            let mut keys: Vec<String> = Vec::new();
+                            for e in v {
+                                if let Expression::Literal(Lit::String(s)) = e { keys.push(s.clone()); }
+                                else { return Err(RuntimeError::InvalidArguments { expected: "vector of strings for :context-keys".to_string(), actual: format!("{:?}", e) }); }
+                            }
+                            context_keys_override = Some(keys);
+                            i += 2; continue;
+                        }
+                        _ => { break; }
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // 3. Enter step context
+        // Enforce isolation policy via RuntimeContext before entering
+        if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+            return Err(RuntimeError::SecurityViolation {
+                operation: "step".to_string(),
+                capability: "isolation:inherit".to_string(),
+                context: format!("Isolation level not permitted: Inherit under {:?}", self.security_context.security_level),
+            });
+        }
         let mut context_manager = self.context_manager.borrow_mut();
         let _ = context_manager.enter_step(&step_name, IsolationLevel::Inherit)?;
         drop(context_manager); // Release borrow before calling host
 
-        // 3. Notify host that step has started
+        // 4. Apply step exposure override if provided
+        if let Some(expose) = expose_override { self.host.set_step_exposure_override(expose, context_keys_override.clone()); }
+
+        // 5. Notify host that step has started
         let step_action_id = self.host.notify_step_started(&step_name)?;
 
-        // 4. Evaluate the body of the step
-        let body_exprs = &args[1..];
+        // 6. Evaluate the body of the step
+        let body_exprs = &args[i..];
         let mut last_result = Ok(Value::Nil);
 
         for expr in body_exprs {
@@ -500,14 +543,15 @@ impl Evaluator {
                 // On failure, notify host and propagate the error
                 self.host.notify_step_failed(&step_action_id, &e.to_string())?;
                 
-                // Exit step context on failure
+                // Clear override and Exit step context on failure
                 let mut context_manager = self.context_manager.borrow_mut();
                 context_manager.exit_step()?;
+                self.host.clear_step_exposure_override();
                 return last_result;
             }
         }
 
-        // 5. Notify host of successful completion
+        // 7. Notify host of successful completion
         let final_value = last_result?;
         let exec_result = ExecutionResult {
             success: true,
@@ -516,15 +560,16 @@ impl Evaluator {
         };
         self.host.notify_step_completed(&step_action_id, &exec_result)?;
 
-        // 6. Exit step context
+        // 8. Exit step context and clear override
         let mut context_manager = self.context_manager.borrow_mut();
         context_manager.exit_step()?;
+        self.host.clear_step_exposure_override();
 
         Ok(final_value)
     }
 
     fn eval_step_if_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
-        // Validate arguments: condition then-branch [else-branch]
+        // Validate arguments: [options] condition then-branch [else-branch]
         if args.len() < 2 {
             return Err(RuntimeError::InvalidArguments {
                 expected: "at least 2 (condition then-branch [else-branch])".to_string(),
@@ -532,13 +577,61 @@ impl Evaluator {
             });
         }
 
-        // Extract condition and branches
-        let condition_expr = &args[0];
-        let then_branch = &args[1];
-        let else_branch = args.get(2);
+        // Parse optional options
+        use crate::ast::Literal as Lit;
+        let mut i: usize = 0;
+        let mut expose_override: Option<bool> = None;
+        let mut context_keys_override: Option<Vec<String>> = None;
+        while i + 1 < args.len() {
+            match &args[i] {
+                Expression::Literal(Lit::Keyword(k)) => {
+                    let key = k.0.as_str();
+                    let val_expr = &args[i + 1];
+                    match (key, val_expr) {
+                        ("expose-context", Expression::Literal(Lit::Boolean(b))) => {
+                            expose_override = Some(*b);
+                            i += 2; continue;
+                        }
+                        ("context-keys", Expression::Vector(v)) => {
+                            let mut keys: Vec<String> = Vec::new();
+                            for e in v {
+                                if let Expression::Literal(Lit::String(s)) = e { keys.push(s.clone()); }
+                                else { return Err(RuntimeError::InvalidArguments { expected: "vector of strings for :context-keys".to_string(), actual: format!("{:?}", e) }); }
+                            }
+                            context_keys_override = Some(keys);
+                            i += 2; continue;
+                        }
+                        _ => { break; }
+                    }
+                }
+                _ => break,
+            }
+        }
 
-        // 1. Notify host that step-if has started
+        // Extract condition and branches after options
+        if args.len().saturating_sub(i) < 2 {
+            return Err(RuntimeError::InvalidArguments { expected: "condition then-branch [else-branch] after options".to_string(), actual: format!("{}", args.len().saturating_sub(i)) });
+        }
+        let condition_expr = &args[i + 0];
+        let then_branch = &args[i + 1];
+        let else_branch = args.get(i + 2);
+
+        // 1. Enter step context and notify host that step-if has started
         let step_name = "step-if";
+        {
+            // Enforce isolation policy
+            if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "step-if".to_string(),
+                    capability: "isolation:inherit".to_string(),
+                    context: format!("Isolation level not permitted: Inherit under {:?}", self.security_context.security_level),
+                });
+            }
+            let mut context_manager = self.context_manager.borrow_mut();
+            let _ = context_manager.enter_step(step_name, IsolationLevel::Inherit)?;
+        }
+        // Apply step exposure override if provided
+        if let Some(expose) = expose_override { self.host.set_step_exposure_override(expose, context_keys_override.clone()); }
         let step_action_id = self.host.notify_step_started(step_name)?;
 
         // 2. Evaluate the condition
@@ -547,6 +640,10 @@ impl Evaluator {
             Err(e) => {
                 // On failure, notify host and propagate the error
                 self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                // Exit step context on failure
+                let mut context_manager = self.context_manager.borrow_mut();
+                let _ = context_manager.exit_step();
+                self.host.clear_step_exposure_override();
                 return Err(e);
             }
         };
@@ -571,6 +668,9 @@ impl Evaluator {
             Err(e) => {
                 // On failure, notify host and propagate the error
                 self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                // Exit step context on failure
+                let mut context_manager = self.context_manager.borrow_mut();
+                let _ = context_manager.exit_step();
                 return Err(e);
             }
         };
@@ -583,23 +683,69 @@ impl Evaluator {
         };
         self.host.notify_step_completed(&step_action_id, &exec_result)?;
 
+        // 5. Exit step context
+        {
+            let mut context_manager = self.context_manager.borrow_mut();
+            let _ = context_manager.exit_step();
+            self.host.clear_step_exposure_override();
+        }
+
         Ok(result)
     }
 
     fn eval_step_loop_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
-        // Validate arguments: condition body
-        if args.len() != 2 {
+        // Validate arguments: [options] condition body
+        if args.len() < 2 {
             return Err(RuntimeError::InvalidArguments {
-                expected: "exactly 2 (condition body)".to_string(),
+                expected: "(condition body) optionally preceded by options".to_string(),
                 actual: args.len().to_string(),
             });
         }
-
-        let condition_expr = &args[0];
-        let body_expr = &args[1];
+        // Parse optional options
+        use crate::ast::Literal as Lit;
+        let mut i: usize = 0;
+        let mut expose_override: Option<bool> = None;
+        let mut context_keys_override: Option<Vec<String>> = None;
+        while i + 1 < args.len() {
+            match &args[i] {
+                Expression::Literal(Lit::Keyword(k)) => {
+                    let key = k.0.as_str();
+                    let val_expr = &args[i + 1];
+                    match (key, val_expr) {
+                        ("expose-context", Expression::Literal(Lit::Boolean(b))) => { expose_override = Some(*b); i += 2; continue; }
+                        ("context-keys", Expression::Vector(v)) => {
+                            let mut keys: Vec<String> = Vec::new();
+                            for e in v { if let Expression::Literal(Lit::String(s)) = e { keys.push(s.clone()); } else { return Err(RuntimeError::InvalidArguments { expected: "vector of strings for :context-keys".to_string(), actual: format!("{:?}", e) }); } }
+                            context_keys_override = Some(keys);
+                            i += 2; continue;
+                        }
+                        _ => { break; }
+                    }
+                }
+                _ => break,
+            }
+        }
+        if args.len().saturating_sub(i) != 2 {
+            return Err(RuntimeError::InvalidArguments { expected: "condition body after options".to_string(), actual: format!("{}", args.len().saturating_sub(i)) });
+        }
+        let condition_expr = &args[i + 0];
+        let body_expr = &args[i + 1];
         
-        // 1. Notify host that step-loop has started
+        // 1. Enter step context and notify host that step-loop has started
         let step_name = "step-loop";
+        {
+            // Enforce isolation policy
+            if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "step-loop".to_string(),
+                    capability: "isolation:inherit".to_string(),
+                    context: format!("Isolation level not permitted: Inherit under {:?}", self.security_context.security_level),
+                });
+            }
+            let mut context_manager = self.context_manager.borrow_mut();
+            let _ = context_manager.enter_step(step_name, IsolationLevel::Inherit)?;
+        }
+        if let Some(expose) = expose_override { self.host.set_step_exposure_override(expose, context_keys_override.clone()); }
         let step_action_id = self.host.notify_step_started(step_name)?;
         
         let mut last_result = Value::Nil;
@@ -611,6 +757,9 @@ impl Evaluator {
             if iteration_count >= MAX_ITERATIONS {
                 let error_msg = format!("Loop exceeded maximum iterations ({})", MAX_ITERATIONS);
                 self.host.notify_step_failed(&step_action_id, &error_msg)?;
+                // Exit step context on failure
+                let mut context_manager = self.context_manager.borrow_mut();
+                let _ = context_manager.exit_step();
                 return Err(RuntimeError::Generic(error_msg));
             }
 
@@ -620,6 +769,10 @@ impl Evaluator {
                 Err(e) => {
                     // On failure, notify host and propagate the error
                     self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                    // Exit step context on failure
+                    let mut context_manager = self.context_manager.borrow_mut();
+                let _ = context_manager.exit_step();
+                self.host.clear_step_exposure_override();
                     return Err(e);
                 }
             };
@@ -647,6 +800,10 @@ impl Evaluator {
                 Err(e) => {
                     // On failure, notify host and propagate the error
                     self.host.notify_step_failed(&step_action_id, &e.to_string())?;
+                    // Exit step context on failure
+                    let mut context_manager = self.context_manager.borrow_mut();
+                    let _ = context_manager.exit_step();
+                    self.host.clear_step_exposure_override();
                     return Err(e);
                 }
             };
@@ -660,6 +817,13 @@ impl Evaluator {
             metadata: Default::default(),
         };
         self.host.notify_step_completed(&step_action_id, &exec_result)?;
+
+        // 3. Exit step context
+        {
+            let mut context_manager = self.context_manager.borrow_mut();
+            let _ = context_manager.exit_step();
+            self.host.clear_step_exposure_override();
+        }
 
         Ok(last_result)
     }
@@ -677,10 +841,12 @@ impl Evaluator {
         let step_name = "step-parallel";
         let step_action_id = self.host.notify_step_started(step_name)?;
 
-        // 2. Parse optional keyword arguments (e.g., :merge-policy :overwrite)
+        // 2. Parse optional keyword arguments (e.g., :merge-policy :overwrite, :expose-context, :context-keys)
         use crate::ast::Literal as Lit;
         let mut i: usize = 0;
         let mut merge_policy = crate::ccos::execution_context::ConflictResolution::KeepExisting;
+        let mut expose_override: Option<bool> = None;
+        let mut context_keys_override: Option<Vec<String>> = None;
         while i + 1 < args.len() {
             match &args[i] {
                 Expression::Literal(Lit::Keyword(k)) => {
@@ -691,6 +857,19 @@ impl Evaluator {
                     let val = match val_expr {
                         Expression::Literal(Lit::Keyword(kw)) => Value::Keyword(kw.clone()),
                         Expression::Literal(Lit::String(s)) => Value::String(s.clone()),
+                        Expression::Literal(Lit::Boolean(b)) => Value::Boolean(*b),
+                        Expression::Vector(v) if key == "context-keys" => {
+                            // Special-case vector literal for context-keys
+                            let mut keys: Vec<String> = Vec::new();
+                            for e in v {
+                                if let Expression::Literal(Lit::String(s)) = e { keys.push(s.clone()); }
+                                else { return Err(RuntimeError::InvalidArguments { expected: "vector of strings for :context-keys".to_string(), actual: format!("{:?}", e) }); }
+                            }
+                            // Store and advance, continue loop
+                            context_keys_override = Some(keys);
+                            i += 2;
+                            continue;
+                        }
                         other => {
                             // Stop parsing options if non-literal encountered to avoid
                             // consuming actual branch expressions
@@ -725,6 +904,10 @@ impl Evaluator {
                         };
                         i += 2;
                         continue;
+                    } else if key == "expose-context" || key == "expose_context" {
+                        expose_override = match val { Value::Boolean(b) => Some(b), _ => None };
+                        i += 2;
+                        continue;
                     } else {
                         // Unknown option - stop parsing and treat as branch start
                         break;
@@ -734,7 +917,10 @@ impl Evaluator {
             }
         }
 
-        // 3. Create and use isolated contexts per branch on demand
+        // 3. Apply step exposure override if provided
+        if let Some(expose) = expose_override { self.host.set_step_exposure_override(expose, context_keys_override.clone()); }
+
+        // 4. Create and use isolated contexts per branch on demand
 
         // Sequential execution with isolation, plus deterministic merging after each branch
         let mut results: Vec<Value> = Vec::with_capacity(args.len().saturating_sub(i));
@@ -743,6 +929,14 @@ impl Evaluator {
             let index = i + rel_index;
             // Begin isolated child context for this branch (also switches into it)
             let child_id = {
+                // Enforce isolation policy for isolated branch contexts
+                if !self.security_context.is_isolation_allowed(&IsolationLevel::Isolated) {
+                    return Err(RuntimeError::SecurityViolation {
+                        operation: "step-parallel".to_string(),
+                        capability: "isolation:isolated".to_string(),
+                        context: format!("Isolation level not permitted: Isolated under {:?}", self.security_context.security_level),
+                    });
+                }
                 let mut mgr = self.context_manager.borrow_mut();
                 mgr.begin_isolated(&format!("parallel-{}", index))?
             };
@@ -765,7 +959,10 @@ impl Evaluator {
             return Err(err);
         }
 
-        // 3. Notify host of successful completion
+        // Clear exposure override at the end
+        self.host.clear_step_exposure_override();
+
+        // 5. Notify host of successful completion
         let final_result = Value::Vector(results);
         let exec_result = ExecutionResult {
             success: true,

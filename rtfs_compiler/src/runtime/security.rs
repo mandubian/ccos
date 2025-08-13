@@ -3,6 +3,7 @@
 //! This module defines security policies and execution contexts for RTFS programs.
 
 use std::collections::HashSet;
+use crate::ccos::execution_context::IsolationLevel;
 
 /// Security levels for RTFS execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,18 @@ pub struct RuntimeContext {
     pub max_memory_usage: Option<u64>,
     /// Whether to log all capability calls
     pub log_capability_calls: bool,
+    /// Isolation policy: which step isolation levels are allowed
+    pub allow_inherit_isolation: bool,
+    pub allow_isolated_isolation: bool,
+    pub allow_sandboxed_isolation: bool,
+    /// When true, attach a sanitized, read-only execution context snapshot to capability calls
+    pub expose_readonly_context: bool,
+    /// Allowlist of capability IDs that may receive the read-only context snapshot
+    pub exposed_context_caps: HashSet<String>,
+    /// Allowlist of capability ID prefixes (e.g., "ccos.ai.") eligible for context exposure
+    pub exposed_context_prefixes: Vec<String>,
+    /// Allowlist of capability "tags" eligible for context exposure (matched against capability metadata)
+    pub exposed_context_tags: HashSet<String>,
 }
 
 impl RuntimeContext {
@@ -42,6 +55,13 @@ impl RuntimeContext {
             max_execution_time: Some(1000), // 1 second
             max_memory_usage: Some(16 * 1024 * 1024), // 16MB
             log_capability_calls: true,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: HashSet::new(),
         }
     }
     
@@ -54,6 +74,13 @@ impl RuntimeContext {
             max_execution_time: Some(5000), // 5 seconds
             max_memory_usage: Some(64 * 1024 * 1024), // 64MB
             log_capability_calls: true,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: HashSet::new(),
         }
     }
     
@@ -66,6 +93,13 @@ impl RuntimeContext {
             max_execution_time: None,
             max_memory_usage: None,
             log_capability_calls: true,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: HashSet::new(),
         }
     }
     
@@ -95,6 +129,80 @@ impl RuntimeContext {
         ];
         
         dangerous_capabilities.contains(&capability_id)
+    }
+
+    /// Check if the requested step isolation level is permitted by policy
+    pub fn is_isolation_allowed(&self, level: &IsolationLevel) -> bool {
+        match level {
+            IsolationLevel::Inherit => self.allow_inherit_isolation,
+            IsolationLevel::Isolated => self.allow_isolated_isolation,
+            IsolationLevel::Sandboxed => self.allow_sandboxed_isolation,
+        }
+    }
+
+    /// Check whether a capability may receive the sanitized context snapshot (exact ID allowlist only)
+    pub fn is_context_exposure_allowed(&self, capability_id: &str) -> bool {
+        self.expose_readonly_context && self.exposed_context_caps.contains(capability_id)
+    }
+
+    /// Check whether a capability may receive the sanitized context snapshot using
+    /// dynamic policies: exact ID allowlist, prefix allowlist, or tag allowlist.
+    /// `capability_tags` is derived from capability metadata (e.g., manifest.metadata["tags"]).
+    pub fn is_context_exposure_allowed_for(&self, capability_id: &str, capability_tags: Option<&[String]>) -> bool {
+        if !self.expose_readonly_context {
+            return false;
+        }
+        if self.exposed_context_caps.contains(capability_id) {
+            return true;
+        }
+        if self.exposed_context_prefixes.iter().any(|p| capability_id.starts_with(p)) {
+            return true;
+        }
+        if let Some(tags) = capability_tags {
+            if tags.iter().any(|t| self.exposed_context_tags.contains(t)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Enable read-only context exposure for a set of capability IDs (builder-style)
+    pub fn with_context_exposure(mut self, capability_ids: &[&str]) -> Self {
+        self.expose_readonly_context = true;
+        for id in capability_ids { self.exposed_context_caps.insert((*id).to_string()); }
+        self
+    }
+
+    /// Mutably enable exposure for a single capability ID
+    pub fn enable_context_exposure_for(&mut self, capability_id: &str) {
+        self.expose_readonly_context = true;
+        self.exposed_context_caps.insert(capability_id.to_string());
+    }
+
+    /// Enable exposure for capabilities matching any of the provided prefixes (builder-style)
+    pub fn with_context_prefixes(mut self, prefixes: &[&str]) -> Self {
+        self.expose_readonly_context = true;
+        for p in prefixes { self.exposed_context_prefixes.push((*p).to_string()); }
+        self
+    }
+
+    /// Mutably enable a single exposure prefix
+    pub fn enable_context_exposure_prefix(&mut self, prefix: &str) {
+        self.expose_readonly_context = true;
+        self.exposed_context_prefixes.push(prefix.to_string());
+    }
+
+    /// Enable exposure for capabilities that declare any of the provided tags (builder-style)
+    pub fn with_context_tags(mut self, tags: &[&str]) -> Self {
+        self.expose_readonly_context = true;
+        for t in tags { self.exposed_context_tags.insert((*t).to_string()); }
+        self
+    }
+
+    /// Mutably enable a single exposure tag
+    pub fn enable_context_exposure_tag(&mut self, tag: &str) {
+        self.expose_readonly_context = true;
+        self.exposed_context_tags.insert(tag.to_string());
     }
 }
 
