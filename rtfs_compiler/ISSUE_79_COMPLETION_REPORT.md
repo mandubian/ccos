@@ -48,6 +48,10 @@ Phase 1 delivers a working hierarchical execution context system integrated with
 ### 6) Tests
 - Added `execution_context_tests.rs` covering creation, isolation behavior, basic serialization, child/parent visibility, and merge behavior (parent-wins default, overwrite manual, keyword-driven overwrite via `:merge-policy`)
 - Added `orchestrator_checkpoint_tests.rs` verifying checkpoint/resume helpers serialize/restore context, log `PlanPaused`/`PlanResumed`, and resume via stored checkpoint id
+- Added evaluator-level tests:
+  - `ccos_context_exposure_tests.rs`: validates context exposure to capabilities with security policy and step-level overrides (`:expose-context`, `:context-keys`) via `ccos.echo`
+  - `step_parallel_merge_tests.rs`: asserts deep-merge policy for nested maps and vector concatenation across parallel branches
+  - `checkpoint_resume_tests.rs`: enables durable checkpoints via `with_durable_dir` and verifies resume-by-id
 - Verified evaluator primitives with new step-if/step-loop context handling; overall suite remains stable (known unrelated failures tracked separately)
 
 ## Detailed Results
