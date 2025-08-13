@@ -360,7 +360,7 @@ impl ModelProvider for DeterministicStubModel {
     fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // If prompt asks for USER_REQUEST -> JSON intent
         if prompt.contains("USER_REQUEST:") {
-            // Extract a simple goal by taking the text after USER_REQUEST: (best-effort, still deterministic)
+            // Extract a simple goal by taking the text after USER_REQUEST: (best-effort, deterministic)
             let goal = prompt.split("USER_REQUEST:").nth(1)
                 .map(|s| s.trim())
                 .unwrap_or("generic-task");
@@ -369,10 +369,11 @@ impl ModelProvider for DeterministicStubModel {
         }
         // If prompt contains INTENT_JSON, return a minimal valid RTFS plan using built-in capabilities
         if prompt.contains("INTENT_JSON:") {
+            // Valid RTFS using keywords for capability names and step wrappers for orchestration
             let rtfs = r#"(do
-  (call \"ccos.echo\" \"delegating arbiter stub start\")
-  (call \"ccos.math.add\" {:a 2 :b 3})
-  (call \"ccos.echo\" \"delegating arbiter stub done\")
+  (step "start" (call :ccos.echo "delegating arbiter stub start"))
+  (step "add" (call :ccos.math.add 2 3))
+  (step "done" (call :ccos.echo "delegating arbiter stub done"))
 )"#;
             return Ok(rtfs.to_string());
         }

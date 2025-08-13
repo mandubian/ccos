@@ -19,6 +19,7 @@ use super::orchestrator::Orchestrator;
 
 use super::intent_graph::IntentGraph;
 use super::types::{Plan, StorableIntent, ExecutionResult, PlanBody};
+use super::types::Intent; // for delegation validation
 use crate::runtime::error::RuntimeError;
 
 /// Represents the system's constitution, a set of human-authored rules.
@@ -149,6 +150,27 @@ impl GovernanceKernel {
             if body_text.contains("launch-nukes") {
                 return Err(RuntimeError::Generic("Plan violates Constitution: Rule against global thermonuclear war.".to_string()));
             }
+        }
+        Ok(())
+    }
+
+    /// Delegation validation hook (M4): governance pre-approval of agent selection.
+    /// Extend with constitutional / policy checks (e.g., trust tier allowlist, cost ceilings, jurisdiction constraints).
+    /// Return Err(...) to veto delegation (arbiter will fall back to LLM planning path).
+    pub fn validate_delegation(&self, intent: &Intent, agent_id: &str, score: f64) -> RuntimeResult<()> {
+        // Placeholder policy examples (expand as specs evolve):
+        // 1. Reject extremely low scores (defense in depth even if arbiter threshold handles it).
+        if score < 0.50 {
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "Delegation rejected: score {:.2} below governance floor for agent {}", score, agent_id
+            )));
+        }
+        // 2. Enforce simple constraint: if intent goal mentions "EU" ensure agent id does not contain "non_eu" (placeholder heuristic).
+        let goal_lower = intent.goal.to_lowercase();
+        if goal_lower.contains("eu") && agent_id.contains("non_eu") {
+            return Err(crate::runtime::error::RuntimeError::Generic(
+                "Delegation rejected: agent jurisdiction mismatch (EU constraint)".to_string(),
+            ));
         }
         Ok(())
     }
