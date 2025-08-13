@@ -43,6 +43,8 @@ pub trait AgentRegistry: Send + Sync {
     fn register(&mut self, agent: AgentDescriptor);
     fn list(&self) -> Vec<AgentDescriptor>;
     fn find_candidates(&self, draft: &IntentDraft, max: usize) -> Vec<ScoredAgent>;
+    /// Record execution feedback for an agent (success/failure) updating rolling success stats.
+    fn record_feedback(&mut self, agent_id: &str, success: bool);
 }
 
 /// In‑memory implementation with simple skill & constraint scoring.
@@ -103,5 +105,15 @@ impl AgentRegistry for InMemoryAgentRegistry {
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(max);
         scored
+    }
+
+    fn record_feedback(&mut self, agent_id: &str, success: bool) {
+        if let Some(agent) = self.agents.get_mut(agent_id) {
+            let stats = &mut agent.success;
+            let successes_prior = stats.success_rate * stats.samples as f64;
+            let successes_new = successes_prior + if success { 1.0 } else { 0.0 };
+            stats.samples += 1;
+            stats.success_rate = if stats.samples == 0 { 0.0 } else { successes_new / stats.samples as f64 };
+        }
     }
 }

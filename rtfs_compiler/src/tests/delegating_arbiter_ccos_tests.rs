@@ -147,3 +147,120 @@ async fn test_delegation_min_skill_hits_enforced() {
         assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should not occur due to min skill hits");
     } else { panic!("delegating arbiter missing"); }
 }
+
+#[tokio::test]
+async fn test_delegation_disabled_flag_blocks_delegation() {
+    std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
+    std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
+    std::env::set_var("CCOS_DELEGATION_ENABLED", "0");
+
+    let ccos = CCOS::new().await.expect("init ccos");
+    {
+        let reg_arc = ccos.get_agent_registry();
+        let mut reg = reg_arc.write().unwrap();
+        reg.register(AgentDescriptor {
+            agent_id: "high_skill_agent".into(),
+            kind: "planner".into(),
+            skills: vec!["analysis".into(), "market".into(), "eu".into()],
+            supported_constraints: vec!["budget".into(), "data-locality".into()],
+            trust_tier: TrustTier::T2Privileged,
+            cost: CostModel { cost_per_call: 0.01, tokens_per_second: 150.0 },
+            latency: LatencyStats { p50_ms: 40.0, p95_ms: 90.0 },
+            success: SuccessStats { success_rate: 0.95, samples: 50 },
+            provenance: None,
+        });
+    }
+    if let Some(da) = ccos.get_delegating_arbiter() {
+        use crate::ccos::arbiter_engine::ArbiterEngine;
+        let intent = da.natural_language_to_intent("EU market analysis under budget", None).await.expect("intent");
+        assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should be disabled by flag");
+    } else { panic!("delegating arbiter missing"); }
+}
+
+#[tokio::test]
+async fn test_delegation_governance_rejection_records_event() {
+    std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
+    std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
+    // Ensure delegation logic enabled
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+
+    let ccos = CCOS::new().await.expect("init ccos");
+    {
+        // Register agent likely selected but should be vetoed by governance (EU goal + non_eu agent id)
+        let reg_arc = ccos.get_agent_registry();
+        let mut reg = reg_arc.write().unwrap();
+        reg.register(AgentDescriptor {
+            agent_id: "analysis_non_eu_agent".into(),
+            kind: "planner".into(),
+            skills: vec!["analysis".into(), "eu".into(), "market".into()],
+            supported_constraints: vec!["budget".into(), "data-locality".into()],
+            trust_tier: TrustTier::T1Trusted,
+            cost: CostModel { cost_per_call: 0.02, tokens_per_second: 120.0 },
+            latency: LatencyStats { p50_ms: 60.0, p95_ms: 140.0 },
+            success: SuccessStats { success_rate: 0.9, samples: 30 },
+            provenance: None,
+        });
+    }
+    if let Some(da) = ccos.get_delegating_arbiter() {
+        use crate::ccos::arbiter_engine::ArbiterEngine;
+        let intent = da.natural_language_to_intent("Comprehensive EU market analysis with strict EU data locality", None).await.expect("intent");
+        // Governance should reject; thus no selected_agent metadata
+        assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should have been vetoed by governance");
+        // Check causal chain for a 'delegation.rejected' event
+        let chain = ccos.get_causal_chain();
+        let chain_locked = chain.lock().unwrap();
+        let found_rejected = chain_locked.get_all_actions().iter().any(|a| {
+            if let Some(fn_name) = &a.function_name { fn_name == "delegation.rejected" } else { false }
+        });
+        assert!(found_rejected, "expected delegation.rejected event in causal chain");
+    } else { panic!("delegating arbiter missing"); }
+}
+
+#[tokio::test]
+async fn test_delegation_completed_event_emitted() {
+    std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
+    std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
+    // Lower threshold to encourage delegation
+    std::env::set_var("CCOS_DELEGATION_THRESHOLD", "0.1");
+
+    let ccos = CCOS::new().await.expect("init ccos");
+    {
+        let reg_arc = ccos.get_agent_registry();
+        let mut reg = reg_arc.write().unwrap();
+        reg.register(AgentDescriptor {
+            agent_id: "high_perf_agent".into(),
+            kind: "planner".into(),
+            skills: vec!["delegated".into(), "task".into(), "small".into()],
+            supported_constraints: vec!["budget".into()],
+            trust_tier: TrustTier::T2Privileged,
+            cost: CostModel { cost_per_call: 0.01, tokens_per_second: 200.0 },
+            latency: LatencyStats { p50_ms: 30.0, p95_ms: 70.0 },
+            success: SuccessStats { success_rate: 0.98, samples: 60 },
+            provenance: None,
+        });
+    }
+
+    // Security context for plan execution
+    let context = RuntimeContext {
+        security_level: SecurityLevel::Controlled,
+        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()].into_iter().collect(),
+        ..RuntimeContext::pure()
+    };
+
+    let request = "please perform a small delegated task with budget awareness";
+    let _ = ccos.process_request(request, &context).await.expect("process_request");
+
+    // Inspect causal chain for approved then completed events
+    let chain = ccos.get_causal_chain();
+    let chain_locked = chain.lock().unwrap();
+    let mut saw_approved = false;
+    let mut saw_completed = false;
+    for a in chain_locked.get_all_actions() {
+        if let Some(fn_name) = &a.function_name {
+            if fn_name == "delegation.approved" { saw_approved = true; }
+            if fn_name == "delegation.completed" { saw_completed = true; }
+        }
+    }
+    assert!(saw_approved, "expected delegation.approved event");
+    assert!(saw_completed, "expected delegation.completed event");
+}
