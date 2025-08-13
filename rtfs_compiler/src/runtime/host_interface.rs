@@ -30,4 +30,12 @@ pub trait HostInterface: std::fmt::Debug {
 
     /// Clears the execution context after a plan has finished.
     fn clear_execution_context(&self);
+
+    /// Step-scoped override: request read-only context exposure for capability calls within the step
+    /// If `expose` is false, suppress exposure even if policy allows it. If `context_keys` is provided,
+    /// only those keys will be included in the snapshot.
+    fn set_step_exposure_override(&self, expose: bool, context_keys: Option<Vec<String>>);
+
+    /// Clear the most recent step exposure override (called on step exit)
+    fn clear_step_exposure_override(&self);
 }

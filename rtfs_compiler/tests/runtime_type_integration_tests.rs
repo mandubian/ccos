@@ -51,6 +51,14 @@ impl HostInterface for MockHost {
     fn clear_execution_context(&self) {
         // Mock implementation
     }
+
+    fn set_step_exposure_override(&self, _expose: bool, _context_keys: Option<Vec<String>>) {
+        // Mock implementation
+    }
+
+    fn clear_step_exposure_override(&self) {
+        // Mock implementation
+    }
 }
 
 #[cfg(test)]
