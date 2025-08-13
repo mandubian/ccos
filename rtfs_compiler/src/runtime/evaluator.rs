@@ -35,11 +35,7 @@ pub struct Evaluator {
     /// Security context for capability execution
     pub security_context: RuntimeContext,
     /// Host interface for CCOS interactions
-<<<<<<< HEAD
     pub host: Arc<dyn HostInterface>,
-=======
-    pub host: SyncArc<dyn HostInterface>,
->>>>>>> c9e5a4d (Issue #79: checkpoint before rebase onto main (after PR #88 merge))
     /// Dispatch table for special forms
     special_forms: HashMap<String, SpecialFormHandler>,
     /// Type validator for hybrid validation
@@ -2509,11 +2505,7 @@ impl Evaluator {
         env: Environment,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
-<<<<<<< HEAD
         host: Arc<dyn HostInterface>,
-=======
-        host: SyncArc<dyn HostInterface>,
->>>>>>> c9e5a4d (Issue #79: checkpoint before rebase onto main (after PR #88 merge))
     ) -> Self {
         Self {
             module_registry,
@@ -2556,11 +2548,7 @@ impl Default for Evaluator {
             capability_marketplace,
             security_context.clone(),
         );
-<<<<<<< HEAD
         let host = Arc::new(runtime_host);
-=======
-        let host = SyncArc::new(runtime_host);
->>>>>>> c9e5a4d (Issue #79: checkpoint before rebase onto main (after PR #88 merge))
 
         Self::new(
             module_registry,
