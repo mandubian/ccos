@@ -285,7 +285,7 @@ fn main() {
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
                 let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
                 let capability_marketplace = Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
-                let host = std::rc::Rc::new(RuntimeHost::new(
+                let host = std::sync::Arc::new(RuntimeHost::new(
                     causal_chain,
                     capability_marketplace,
                     rtfs_compiler::runtime::security::RuntimeContext::full(),
