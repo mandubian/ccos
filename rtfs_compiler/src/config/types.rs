@@ -30,6 +30,8 @@ pub struct AgentConfig {
     pub causal_chain: CausalChainConfig,
     /// Marketplace configuration
     pub marketplace: MarketplaceConfig,
+    /// Delegation configuration (optional tuning for agent delegation heuristics)
+    pub delegation: DelegationConfig,
     /// Feature flags
     pub features: Vec<String>,
 }
@@ -290,6 +292,23 @@ pub struct MarketplaceConfig {
     pub readonly: Option<bool>,
 }
 
+/// Delegation configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DelegationConfig {
+    /// Whether delegation is enabled (fallback: enabled if agent registry present)
+    pub enabled: Option<bool>,
+    /// Score threshold to approve delegation (default 0.65)
+    pub threshold: Option<f64>,
+    /// Minimum number of matched skills required
+    pub min_skill_hits: Option<u32>,
+    /// Maximum number of candidate agents to shortlist
+    pub max_candidates: Option<u32>,
+    /// Weight applied to recent successful executions when updating scores
+    pub feedback_success_weight: Option<f64>,
+    /// Decay factor applied to historical success metrics
+    pub feedback_decay: Option<f64>,
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -303,6 +322,7 @@ impl Default for AgentConfig {
             governance: GovernanceConfig::default(),
             causal_chain: CausalChainConfig::default(),
             marketplace: MarketplaceConfig::default(),
+            delegation: DelegationConfig::default(),
             features: vec![],
         }
     }
@@ -458,4 +478,17 @@ impl Default for MarketplaceConfig {
             readonly: None,
         }
     }
-} 
+}
+
+impl Default for DelegationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            threshold: None,
+            min_skill_hits: None,
+            max_candidates: None,
+            feedback_success_weight: None,
+            feedback_decay: None,
+        }
+    }
+}
