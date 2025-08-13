@@ -54,6 +54,7 @@ use crate::ccos::arbiter::{Arbiter, ArbiterConfig};
 use crate::ccos::delegating_arbiter::DelegatingArbiter;
 use crate::ccos::delegation::ModelRegistry;
 use crate::config::types::AgentConfig;
+use crate::ccos::agent_registry::AgentRegistry; // bring trait into scope for record_feedback
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::{RTFSRuntime, Runtime, ModuleRegistry};
 use crate::runtime::error::RuntimeResult;
@@ -229,8 +230,16 @@ impl CCOS {
                             meta.insert("success".to_string(), Value::Boolean(result.success));
                             let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
                         }
-                        // Feedback update if success: naive average bump
-                        if result.success { /* TODO feedback update pending registry mutation API */ }
+                        // Feedback update (rolling average) via registry
+                        if result.success {
+                            if let Ok(mut reg) = self.agent_registry.write() {
+                                reg.record_feedback(&agent_id, true);
+                            }
+                        } else {
+                            if let Ok(mut reg) = self.agent_registry.write() {
+                                reg.record_feedback(&agent_id, false);
+                            }
+                        }
                     }
                 }
             }
