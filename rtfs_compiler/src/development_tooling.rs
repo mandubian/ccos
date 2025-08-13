@@ -103,7 +103,7 @@ impl RtfsRepl {
                 Rc::new(module_registry.clone()),
                 delegation_engine,
                 security_context,
-                host,
+                std::sync::Arc::new(host.as_ref().clone()),
             )))),
             module_registry,
             context: ReplContext::default(),
@@ -133,7 +133,7 @@ impl RtfsRepl {
                     Rc::new(module_registry.clone()),
                     delegation_engine,
                     security_context,
-                    host,
+                    std::sync::Arc::new(host.as_ref().clone()),
                 )))
             },
             RuntimeStrategyValue::Ir => Box::new(crate::runtime::ir_runtime::IrStrategy::new(module_registry.clone())),
@@ -257,7 +257,7 @@ impl RtfsRepl {
                     Rc::new(self.module_registry.clone()),
                     delegation_engine,
                     security_context,
-                    host,
+                    std::sync::Arc::new(host.as_ref().clone()),
                 ))));
                 println!("🔄 Switched to AST runtime");
             }
@@ -545,7 +545,7 @@ impl RtfsTestFramework {
                 Rc::new(module_registry.clone()),
                 delegation_engine,
                 security_context,
-                host,
+                std::sync::Arc::new(host.as_ref().clone()),
             )))),
             module_registry,
         }
