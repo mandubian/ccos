@@ -28,7 +28,7 @@ pub fn create_test_evaluator() -> Evaluator {
     let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = crate::runtime::security::RuntimeContext::pure();
-    let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(crate::runtime::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
@@ -49,7 +49,7 @@ pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::Runtime
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-    let host = std::rc::Rc::new(crate::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(crate::runtime::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         ctx.clone(),

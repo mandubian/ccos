@@ -62,7 +62,7 @@ mod hybrid_runtime_integration_tests {
         let static_map = HashMap::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();
-        let host = Rc::new(MockHost);
+        let host = Arc::new(MockHost);
         
         Evaluator::new_optimized(module_registry, delegation_engine, security_context, host)
     }
@@ -72,7 +72,7 @@ mod hybrid_runtime_integration_tests {
         let static_map = HashMap::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();
-        let host = Rc::new(MockHost);
+        let host = Arc::new(MockHost);
         
         Evaluator::new_strict(module_registry, delegation_engine, security_context, host)
     }

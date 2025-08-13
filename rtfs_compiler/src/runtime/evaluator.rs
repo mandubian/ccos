@@ -34,7 +34,7 @@ pub struct Evaluator {
     /// Security context for capability execution
     pub security_context: RuntimeContext,
     /// Host interface for CCOS interactions
-    pub host: Rc<dyn HostInterface>,
+    pub host: Arc<dyn HostInterface>,
     /// Dispatch table for special forms
     special_forms: HashMap<String, SpecialFormHandler>,
     /// Type validator for hybrid validation
@@ -80,7 +80,7 @@ impl Evaluator {
         module_registry: Rc<ModuleRegistry>, 
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
-        host: Rc<dyn HostInterface>,
+        host: Arc<dyn HostInterface>,
     ) -> Self {
         let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
         let model_registry = Arc::new(ModelRegistry::with_defaults());
@@ -93,7 +93,7 @@ impl Evaluator {
             delegation_engine,
             model_registry,
             security_context,
-            host,
+        host,
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
@@ -108,13 +108,13 @@ impl Evaluator {
     pub fn new_with_defaults(
         module_registry: Rc<ModuleRegistry>, 
         delegation_engine: Arc<dyn DelegationEngine>,
-        host: Rc<dyn HostInterface>,
+        host: Arc<dyn HostInterface>,
     ) -> Self {
         Self::new(
             module_registry,
             delegation_engine,
             RuntimeContext::pure(),
-            host,
+        host,
         )
     }
 
@@ -135,7 +135,7 @@ impl Evaluator {
         module_registry: Rc<ModuleRegistry>,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
-        host: Rc<dyn HostInterface>,
+        host: Arc<dyn HostInterface>,
     ) -> Self {
         let mut evaluator = Self::new(module_registry, delegation_engine, security_context, host);
         evaluator.type_config = TypeCheckingConfig {
@@ -152,7 +152,7 @@ impl Evaluator {
         module_registry: Rc<ModuleRegistry>,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
-        host: Rc<dyn HostInterface>,
+        host: Arc<dyn HostInterface>,
     ) -> Self {
         let mut evaluator = Self::new(module_registry, delegation_engine, security_context, host);
         evaluator.type_config = TypeCheckingConfig {
@@ -2308,7 +2308,7 @@ impl Evaluator {
         env: Environment,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
-        host: Rc<dyn HostInterface>,
+        host: Arc<dyn HostInterface>,
     ) -> Self {
         Self {
             module_registry,
@@ -2351,7 +2351,7 @@ impl Default for Evaluator {
             capability_marketplace,
             security_context.clone(),
         );
-        let host = Rc::new(runtime_host);
+        let host = Arc::new(runtime_host);
 
         Self::new(
             module_registry,
