@@ -12,7 +12,9 @@ use crate::ccos::causal_chain::CausalChain;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::security::RuntimeContext;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
-use futures::executor;
+// futures::executor used via fully qualified path below
+use crate::ast::MapKey;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 struct HostPlanContext {
@@ -26,9 +28,10 @@ pub struct RuntimeHost {
     causal_chain: Arc<Mutex<CausalChain>>,
     capability_marketplace: Arc<CapabilityMarketplace>,
     security_context: RuntimeContext,
-    // The execution context is protected by a Mutex to allow safe concurrent access
-    // from multiple threads while evaluating a plan.
+    // Execution context and step override are now guarded by Mutex for thread safety
     execution_context: Mutex<Option<HostPlanContext>>,
+    // Step-level exposure override stack for nested steps
+    step_exposure_override: Mutex<Vec<(bool, Option<Vec<String>>)>>,
 }
 
 impl RuntimeHost {
@@ -42,29 +45,71 @@ impl RuntimeHost {
             capability_marketplace,
             security_context,
             execution_context: Mutex::new(None),
+            step_exposure_override: Mutex::new(Vec::new()),
         }
+    }
+
+    fn build_context_snapshot(&self, step_name: &str, args: &[Value], capability_id: &str) -> Option<Value> {
+        // Policy gate: allow exposing read-only context for this capability?
+        // Evaluate dynamic policy using manifest metadata (tags) when available.
+        // Step-level override may force exposure or suppression
+        if let Ok(ov) = self.step_exposure_override.lock() { if let Some((expose, _)) = ov.last() { if !*expose { return None; } } }
+
+        let allow_exposure = futures::executor::block_on(async {
+            if !self.security_context.expose_readonly_context { return false; }
+            // Try to fetch manifest to obtain metadata/tags
+            if let Some(manifest) = self.capability_marketplace.get_capability(capability_id).await {
+                // Tags may be stored in metadata as comma-separated under "tags" or repeated keys like tag:*
+                let mut tags: Vec<String> = Vec::new();
+                if let Some(tag_list) = manifest.metadata.get("tags") {
+                    tags.extend(tag_list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+                }
+                for (k,v) in &manifest.metadata {
+                    if k.starts_with("tag:") { tags.push(v.clone()); }
+                }
+                return self.security_context.is_context_exposure_allowed_for(capability_id, Some(&tags));
+            }
+            // Fallback to exact/prefix policy without tags
+            self.security_context.is_context_exposure_allowed_for(capability_id, None)
+        });
+        if !allow_exposure { return None; }
+        let plan_ctx_owned = {
+            let guard = self.execution_context.lock().ok()?;
+            guard.clone()?
+        };
+
+        // Compute a small content hash over inputs for provenance/caching
+        let mut hasher = Sha256::new();
+        let arg_fingerprint = format!("{:?}", args);
+        hasher.update(arg_fingerprint.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+
+        let mut map = std::collections::HashMap::new();
+        map.insert(MapKey::String("plan_id".to_string()), Value::String(plan_ctx_owned.plan_id.clone()));
+        map.insert(MapKey::String("primary_intent".to_string()), Value::String(plan_ctx_owned.intent_ids.first().cloned().unwrap_or_default()));
+        map.insert(MapKey::String("intent_ids".to_string()), Value::Vector(plan_ctx_owned.intent_ids.iter().cloned().map(Value::String).collect()));
+        map.insert(MapKey::String("step".to_string()), Value::String(step_name.to_string()));
+        map.insert(MapKey::String("inputs_hash".to_string()), Value::String(hash));
+
+        // Apply step override key filtering if present
+        if let Ok(ov) = self.step_exposure_override.lock() { if let Some((_, Some(keys))) = ov.last() { let allowed: std::collections::HashSet<&String> = keys.iter().collect(); map.retain(|k, _| match k { MapKey::String(s) => allowed.contains(s), _ => true }); } }
+        Some(Value::Map(map))
     }
 
     /// Sets the context for a new plan execution.
     pub fn set_execution_context(&self, plan_id: String, intent_ids: Vec<String>, parent_action_id: String) {
-        let mut guard = self
-            .execution_context
-            .lock()
-            .expect("Failed to lock execution_context mutex");
-        *guard = Some(HostPlanContext {
+        if let Ok(mut guard) = self.execution_context.lock() {
+            *guard = Some(HostPlanContext {
             plan_id,
             intent_ids,
             parent_action_id,
-        });
+            });
+        }
     }
 
     /// Clears the execution context after a plan has finished.
     pub fn clear_execution_context(&self) {
-        let mut guard = self
-            .execution_context
-            .lock()
-            .expect("Failed to lock execution_context mutex");
-        *guard = None;
+        if let Ok(mut guard) = self.execution_context.lock() { *guard = None; }
     }
 
     fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<CausalChain>> {
@@ -72,17 +117,9 @@ impl RuntimeHost {
     }
 
     fn get_context(&self) -> RuntimeResult<HostPlanContext> {
-        let guard = self
-            .execution_context
-            .lock()
-            .map_err(|_| RuntimeError::Generic("Failed to lock execution context".to_string()))?;
-        if let Some(ctx) = guard.as_ref() {
-            Ok(ctx.clone())
-        } else {
-            Err(RuntimeError::Generic(
-                "FATAL: Host method called without a valid execution context".to_string(),
-            ))
-        }
+        let guard = self.execution_context.lock().map_err(|_| RuntimeError::Generic("FATAL: Host lock poisoned".to_string()))?;
+        let ctx = guard.clone().ok_or_else(|| RuntimeError::Generic("FATAL: Host method called without a valid execution context".to_string()))?;
+        Ok(ctx)
     }
 }
 
@@ -98,7 +135,13 @@ impl HostInterface for RuntimeHost {
         }
 
         let context = self.get_context()?;
-        let capability_args = Value::List(args.to_vec());
+        // New calling convention: provide :args plus optional :context snapshot
+        let mut call_map: std::collections::HashMap<MapKey, Value> = std::collections::HashMap::new();
+        call_map.insert(MapKey::Keyword(crate::ast::Keyword("args".to_string())), Value::List(args.to_vec()));
+        if let Some(snapshot) = self.build_context_snapshot(name, args, name) {
+            call_map.insert(MapKey::Keyword(crate::ast::Keyword("context".to_string())), snapshot);
+        }
+        let capability_args = Value::Map(call_map);
 
         // 2. Create and log the CapabilityCall action
         let action = Action::new(
@@ -110,7 +153,7 @@ impl HostInterface for RuntimeHost {
         .with_name(name)
         .with_arguments(&args);
 
-        let action_id = self.get_causal_chain()?.append(&action)?;
+        let _action_id = self.get_causal_chain()?.append(&action)?;
 
         // 3. Execute the capability via the marketplace
         // Bridge async marketplace to sync evaluator using futures::executor::block_on
@@ -180,6 +223,14 @@ impl HostInterface for RuntimeHost {
     fn clear_execution_context(&self) {
         // Call inherent method explicitly to avoid trait-method recursion
         RuntimeHost::clear_execution_context(self);
+    }
+
+    fn set_step_exposure_override(&self, expose: bool, context_keys: Option<Vec<String>>) {
+        if let Ok(mut ov) = self.step_exposure_override.lock() { ov.push((expose, context_keys)); }
+    }
+
+    fn clear_step_exposure_override(&self) {
+        if let Ok(mut ov) = self.step_exposure_override.lock() { let _ = ov.pop(); }
     }
 }
 

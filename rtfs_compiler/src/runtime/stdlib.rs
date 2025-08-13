@@ -12,7 +12,7 @@
 //! - Tooling functions (file I/O, HTTP, etc.)
 //! - CCOS capability functions
 
-use crate::ast::Symbol;
+use crate::ast::{Symbol, Keyword, MapKey};
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::evaluator::Evaluator;
@@ -665,6 +665,29 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
         "Echoes the input value back".to_string(),
         Arc::new(|input| {
             match input {
+                // New calling convention: map with :args and optional :context
+                Value::Map(map) => {
+                    let args_val = map.get(&MapKey::Keyword(Keyword("args".to_string()))).cloned().unwrap_or(Value::List(vec![]));
+                    match args_val {
+                        Value::List(args) => {
+                            if args.len() == 1 {
+                                Ok(args[0].clone())
+                            } else {
+                                Err(RuntimeError::ArityMismatch {
+                                    function: "ccos.echo".to_string(),
+                                    expected: "1".to_string(),
+                                    actual: args.len(),
+                                })
+                            }
+                        }
+                        other => Err(RuntimeError::TypeError {
+                            expected: "list".to_string(),
+                            actual: other.type_name().to_string(),
+                            operation: "ccos.echo".to_string(),
+                        })
+                    }
+                }
+                // Backward compatibility: still accept a plain list
                 Value::List(args) => {
                     if args.len() == 1 {
                         Ok(args[0].clone())
@@ -677,7 +700,7 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
                     }
                 }
                 _ => Err(RuntimeError::TypeError {
-                    expected: "list".to_string(),
+                    expected: "map or list".to_string(),
                     actual: input.type_name().to_string(),
                     operation: "ccos.echo".to_string(),
                 })

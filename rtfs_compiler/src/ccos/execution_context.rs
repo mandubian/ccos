@@ -19,6 +19,28 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// Deep-merge helper for runtime values
+fn deep_merge_values(target: &mut Value, source: &Value) {
+    match (target, source) {
+        (Value::Map(dst), Value::Map(src)) => {
+            for (key, src_val) in src.iter() {
+                if let Some(dst_val) = dst.get_mut(key) {
+                    deep_merge_values(dst_val, src_val);
+                } else {
+                    dst.insert(key.clone(), src_val.clone());
+                }
+            }
+        }
+        (Value::Vector(dst_vec), Value::Vector(src_vec)) => {
+            dst_vec.extend(src_vec.clone());
+        }
+        // For other types or mismatched kinds, source overwrites target
+        (dst, src) => {
+            *dst = src.clone();
+        }
+    }
+}
+
 /// Metadata associated with an execution context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextMetadata {
@@ -117,9 +139,11 @@ impl ExecutionContext {
                     self.data.insert(key.clone(), value.clone());
                 }
                 ConflictResolution::Merge => {
-                    // For now, just overwrite. In the future, we could implement
-                    // deep merging for complex data structures
-                    self.data.insert(key.clone(), value.clone());
+                    if let Some(existing) = self.data.get_mut(key) {
+                        deep_merge_values(existing, value);
+                    } else {
+                        self.data.insert(key.clone(), value.clone());
+                    }
                 }
             }
         }
@@ -410,7 +434,11 @@ impl ContextStack {
                     parent.data.insert(key.clone(), value.clone());
                 }
                 ConflictResolution::Merge => {
-                    parent.data.insert(key.clone(), value.clone());
+                    if let Some(existing) = parent.data.get_mut(key) {
+                        deep_merge_values(existing, value);
+                    } else {
+                        parent.data.insert(key.clone(), value.clone());
+                    }
                 }
             }
         }
