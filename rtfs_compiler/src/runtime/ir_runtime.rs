@@ -364,6 +364,65 @@ impl IrRuntime {
                 Ok(log_values.last().cloned().unwrap_or(Value::Nil))
             }
 
+            IrNode::Step { name, expose_override: _, context_keys_override: _, params, body, .. } => {
+                // Evaluate params (if provided) before running body. If param evaluation fails,
+                // the body must not run (same semantics as AST evaluator).
+                let mut param_map: Option<HashMap<crate::ast::MapKey, Value>> = None;
+                if let Some(params_node) = params {
+                    let params_ir = params_node.as_ref();
+                    // Expect params_ir to be an IrNode::Map
+                    match params_ir {
+                        IrNode::Map { entries, .. } => {
+                            let mut map = HashMap::new();
+                            for entry in entries {
+                                // keys and values are IR nodes; evaluate both
+                                let key_val = self.execute_node(&entry.key, env, false, module_registry)?;
+                                let value_val = self.execute_node(&entry.value, env, false, module_registry)?;
+                                // Only allow string keys for :params (mirror AST behavior)
+                                let map_key = match key_val {
+                                    Value::String(s) => crate::ast::MapKey::String(s),
+                                    _ => return Err(RuntimeError::Generic("Invalid :params map key; expected string".to_string())),
+                                };
+                                map.insert(map_key, value_val);
+                            }
+                            param_map = Some(map);
+                        }
+                        other => {
+                            return Err(RuntimeError::Generic(format!("Expected map node for :params, found {:?}", other.id())));
+                        }
+                    }
+                }
+
+                // Create a child environment for the step body if params were provided
+                let mut child_env_opt: Option<IrEnvironment> = None;
+                if param_map.is_some() {
+                    let mut c = env.new_child();
+                    // Insert %params binding
+                    let mut ast_map = HashMap::new();
+                    if let Some(ref m) = param_map {
+                        for (k, v) in m.iter() { ast_map.insert(k.clone(), v.clone()); }
+                    }
+                    c.define("%params".to_string(), Value::Map(ast_map));
+                    child_env_opt = Some(c);
+                }
+
+                // Execute body in child_env (if created) or in the same env
+                let target_env: &mut IrEnvironment;
+                let mut temp_child_holder = None;
+                if let Some(mut c) = child_env_opt {
+                    // We need to own the child env to get a mutable reference into it
+                    temp_child_holder = Some(c);
+                    target_env = temp_child_holder.as_mut().unwrap();
+                } else {
+                    target_env = env;
+                }
+                let mut last_result = Value::Nil;
+                for expr in body {
+                    last_result = self.execute_node(expr, target_env, false, module_registry)?;
+                }
+                Ok(last_result)
+            }
+
             IrNode::DiscoverAgents { criteria, .. } => {
                 // Execute criteria and return empty vector for now
                 self.execute_node(criteria, env, false, module_registry)?;
