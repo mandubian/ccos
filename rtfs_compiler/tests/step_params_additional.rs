@@ -33,7 +33,7 @@ fn step_params_evaluation_error_prevents_body() -> Result<(), String> {
     );
 
     evaluator.context_manager.borrow_mut().initialize(Some("root".to_string()));
-    evaluator.host.set_execution_context("plan1".to_string(), vec!("intent1".to_string()), "root".to_string());
+    evaluator.host.set_execution_context("plan1".to_string(), vec!["intent1".to_string()], "root".to_string());
 
     use rtfs_compiler::ast::{Expression, Literal, Symbol, Keyword, MapKey, DoExpr, TopLevel};
     let mut params_map: std::collections::HashMap<MapKey, Expression> = std::collections::HashMap::new();
@@ -79,7 +79,7 @@ fn step_params_non_string_key_rejected() -> Result<(), String> {
     );
 
     evaluator.context_manager.borrow_mut().initialize(Some("root".to_string()));
-    evaluator.host.set_execution_context("plan1".to_string(), vec!("intent1".to_string()), "root".to_string());
+    evaluator.host.set_execution_context("plan1".to_string(), vec!["intent1".to_string()], "root".to_string());
 
     use rtfs_compiler::ast::{Expression, Literal, Symbol, Keyword, MapKey, DoExpr, TopLevel};
     let mut params_map: std::collections::HashMap<MapKey, Expression> = std::collections::HashMap::new();
@@ -125,7 +125,7 @@ fn step_params_shadowing_for_nested_steps() -> Result<(), String> {
     );
 
     evaluator.context_manager.borrow_mut().initialize(Some("root".to_string()));
-    evaluator.host.set_execution_context("plan1".to_string(), vec!("intent1".to_string()), "root".to_string());
+    evaluator.host.set_execution_context("plan1".to_string(), vec!["intent1".to_string()], "root".to_string());
 
     use rtfs_compiler::ast::{Expression, Literal, Symbol, Keyword, MapKey, DoExpr, TopLevel};
 

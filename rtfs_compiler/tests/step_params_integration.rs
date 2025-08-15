@@ -37,7 +37,7 @@ fn step_params_binding_visible_in_body() -> Result<(), String> {
     // Ensure the evaluator has a root execution context so enter_step can create children
     evaluator.context_manager.borrow_mut().initialize(Some("root".to_string()));
     // Set a minimal execution context in the host so notify_step_started/completed can record actions
-    evaluator.host.set_execution_context("plan1".to_string(), vec!("intent1".to_string()), "root".to_string());
+    evaluator.host.set_execution_context("plan1".to_string(), vec!["intent1".to_string()], "root".to_string());
 
     // Construct the AST directly to avoid depending on parser details in this unit test.
     use rtfs_compiler::ast::{Expression, Literal, Symbol, Keyword, MapKey, DoExpr, TopLevel};
