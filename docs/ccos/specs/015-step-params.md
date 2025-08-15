@@ -12,7 +12,7 @@ This document defines the semantics of supplying a `:params` map to the `(step .
 
 A `step` form may include an optional keyword `:params` followed by a map literal where keys are strings and values are expressions. Example:
 
-    (step "my-step" :params {"a" 1 "b" (call-svc ...) } ...body...)
+    (step "my-step" :params {"a" 1 "b" (call-svc ...)} ...body...)
 
 Only string keys are accepted in the `:params` map. Non-string keys will cause a runtime validation error before the step body is executed.
 

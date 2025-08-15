@@ -485,6 +485,8 @@ impl Evaluator {
 
         // 2. Parse optional options: :expose-context (bool), :context-keys (vector of strings)
     use crate::ast::Literal as Lit;
+    // Type alias for readability: map of parameter name -> expression
+    type ParamsExprMap = std::collections::HashMap<String, crate::ast::Expression>;
         let mut i = 1;
         let mut expose_override: Option<bool> = None;
         let mut context_keys_override: Option<Vec<String>> = None;
@@ -510,8 +512,8 @@ impl Evaluator {
                             i += 2; continue;
                         }
                         ("params", Expression::Map(m)) => {
-                            // collect expressions from the map into a HashMap<String, Expression>
-                            let mut pm: std::collections::HashMap<String, crate::ast::Expression> = std::collections::HashMap::new();
+                            // collect expressions from the map into a ParamsExprMap
+                            let mut pm: ParamsExprMap = ParamsExprMap::new();
                             for (mk, mv) in m.iter() {
                                 if let crate::ast::MapKey::String(s) = mk {
                                     pm.insert(s.clone(), mv.clone());
