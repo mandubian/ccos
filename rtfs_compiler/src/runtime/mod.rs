@@ -33,6 +33,7 @@ pub mod secure_stdlib;
 pub mod type_validator;  // Add type validator module
 pub mod values;
 pub mod security;
+pub mod param_binding;
 
 #[cfg(test)]
 mod stdlib_tests;
