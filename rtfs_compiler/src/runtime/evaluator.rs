@@ -484,10 +484,14 @@ impl Evaluator {
         };
 
         // 2. Parse optional options: :expose-context (bool), :context-keys (vector of strings)
-        use crate::ast::Literal as Lit;
+    use crate::ast::Literal as Lit;
+    // Type alias for readability: map of parameter name -> expression
+    type ParamsExprMap = std::collections::HashMap<String, crate::ast::Expression>;
         let mut i = 1;
         let mut expose_override: Option<bool> = None;
         let mut context_keys_override: Option<Vec<String>> = None;
+    // Optional params map (keyword :params followed by a map expression)
+    let mut params_expr_map: Option<std::collections::HashMap<String, crate::ast::Expression>> = None;
         while i + 1 < args.len() {
             match &args[i] {
                 Expression::Literal(Lit::Keyword(k)) => {
@@ -505,6 +509,19 @@ impl Evaluator {
                                 else { return Err(RuntimeError::InvalidArguments { expected: "vector of strings for :context-keys".to_string(), actual: format!("{:?}", e) }); }
                             }
                             context_keys_override = Some(keys);
+                            i += 2; continue;
+                        }
+                        ("params", Expression::Map(m)) => {
+                            // collect expressions from the map into a ParamsExprMap
+                            let mut pm: ParamsExprMap = ParamsExprMap::new();
+                            for (mk, mv) in m.iter() {
+                                if let crate::ast::MapKey::String(s) = mk {
+                                    pm.insert(s.clone(), mv.clone());
+                                } else {
+                                    return Err(RuntimeError::InvalidArguments { expected: "string keys in :params map".to_string(), actual: format!("{:?}", mk) });
+                                }
+                            }
+                            params_expr_map = Some(pm);
                             i += 2; continue;
                         }
                         _ => { break; }
@@ -530,19 +547,57 @@ impl Evaluator {
         // 4. Apply step exposure override if provided
         if let Some(expose) = expose_override { self.host.set_step_exposure_override(expose, context_keys_override.clone()); }
 
+        // Prepare a separate child environment when params are supplied so
+        // step-local bindings (like %params) don't overwrite the parent's bindings
+        // permanently. We'll evaluate the body in `body_env` which either
+        // references the provided `env` or a newly created child environment.
+        let mut child_env_opt: Option<Environment> = None;
+        let body_env: &mut Environment;
+        if let Some(param_map) = params_expr_map {
+            // adapt param_map to expected type for binder: HashMap<String, Expression>
+            use crate::runtime::param_binding::bind_parameters;
+            // build evaluator closure that evaluates against the parent env while
+            // binding params (param expressions can refer to parent bindings)
+            let mut eval_cb = |expr: &crate::ast::Expression| -> RuntimeResult<Value> {
+                self.eval_expr(expr, env)
+            };
+            match bind_parameters(&param_map, &mut eval_cb) {
+                Ok(bound) => {
+                    // Create a child environment with the current env as parent
+                    let parent_rc = Rc::new(env.clone());
+                    let mut child = Environment::with_parent(parent_rc);
+                    // Insert bound params into child environment under reserved symbol %params
+                    let mut map_vals = std::collections::HashMap::new();
+                    for (k, v) in bound.into_iter() { map_vals.insert(crate::ast::MapKey::String(k), v); }
+                    let sym = crate::ast::Symbol("%params".to_string());
+                    child.define(&sym, Value::Map(map_vals));
+                    child_env_opt = Some(child);
+                }
+                Err(e) => {
+                    return Err(RuntimeError::from(e));
+                }
+            }
+            // body_env will refer to the child we created
+            body_env = child_env_opt.as_mut().unwrap();
+        } else {
+            // No params supplied; evaluate body in the existing environment
+            body_env = env;
+        }
+
         // 5. Notify host that step has started
         let step_action_id = self.host.notify_step_started(&step_name)?;
 
-        // 6. Evaluate the body of the step
+        // 6. Evaluate the body of the step in the appropriate environment
         let body_exprs = &args[i..];
         let mut last_result = Ok(Value::Nil);
 
         for expr in body_exprs {
-            last_result = self.eval_expr(expr, env);
+            // use body_env (child if params were bound, otherwise the original env)
+            last_result = self.eval_expr(expr, body_env);
             if let Err(e) = &last_result {
                 // On failure, notify host and propagate the error
                 self.host.notify_step_failed(&step_action_id, &e.to_string())?;
-                
+
                 // Clear override and Exit step context on failure
                 let mut context_manager = self.context_manager.borrow_mut();
                 context_manager.exit_step()?;
