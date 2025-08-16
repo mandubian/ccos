@@ -1122,6 +1122,9 @@ impl<'a> IrConverter<'a> {
                 "step-parallel" => {
                     return self.convert_step_parallel_special_form(arguments);
                 }
+                "step" => {
+                    return self.convert_step_special_form(arguments);
+                }
                 _ => {}
             }
         }
@@ -1378,6 +1381,75 @@ impl<'a> IrConverter<'a> {
             id,
             bindings,
             ir_type: IrType::Vector(Box::new(IrType::Any)),
+            source_location: None,
+        })
+    }
+
+    /// Convert step special form: (step "name" [options as keyword/value pairs] body...)
+    fn convert_step_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+        if arguments.is_empty() {
+            return Err(IrConversionError::InvalidSpecialForm { form: "step".to_string(), message: "step requires at least a name string".to_string() });
+        }
+
+        let id = self.next_id();
+
+        // First arg must be a string literal name
+        let name = match &arguments[0] {
+            Expression::Literal(Literal::String(s)) => s.clone(),
+            _ => {
+                return Err(IrConversionError::InvalidSpecialForm { form: "step".to_string(), message: "first argument must be a string name".to_string() });
+            }
+        };
+
+        // Parse optional keyword options similar to evaluator: :expose-context, :context-keys, :params
+        use crate::ast::Literal as Lit;
+        let mut i = 1usize;
+        let mut expose_override: Option<IrNode> = None;
+        let mut context_keys_override: Option<IrNode> = None;
+        let mut params_node: Option<IrNode> = None;
+
+        while i + 1 <= arguments.len() {
+            if i >= arguments.len() { break; }
+            match &arguments[i] {
+                Expression::Literal(Lit::Keyword(k)) => {
+                    let key = k.0.as_str();
+                    if i + 1 >= arguments.len() { break; }
+                    let val_expr = arguments[i + 1].clone();
+                    match key {
+                        "expose-context" => {
+                            expose_override = Some(self.convert_expression(val_expr)?);
+                            i += 2; continue;
+                        }
+                        "context-keys" => {
+                            context_keys_override = Some(self.convert_expression(val_expr)?);
+                            i += 2; continue;
+                        }
+                        "params" => {
+                            // Expect a map expression; convert it to IR map node
+                            params_node = Some(self.convert_expression(val_expr)?);
+                            i += 2; continue;
+                        }
+                        _ => { break; }
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // Remaining expressions are the body
+        let mut body_exprs = Vec::new();
+        for expr in &arguments[i..] {
+            body_exprs.push(self.convert_expression(expr.clone())?);
+        }
+
+        Ok(IrNode::Step {
+            id,
+            name,
+            expose_override: expose_override.map(Box::new),
+            context_keys_override: context_keys_override.map(Box::new),
+            params: params_node.map(Box::new),
+            body: body_exprs,
+            ir_type: IrType::Any,
             source_location: None,
         })
     }
@@ -2309,6 +2381,14 @@ impl<'a> IrConverter<'a> {
             IrNode::LogStep { values, .. } => {
                 for value in values {
                     self.collect_variable_references(value, captured_names);
+                }
+            }
+            IrNode::Step { params, body, .. } => {
+                if let Some(p) = params {
+                    self.collect_variable_references(p, captured_names);
+                }
+                for expr in body {
+                    self.collect_variable_references(expr, captured_names);
                 }
             }
             IrNode::DiscoverAgents { criteria, .. } => {

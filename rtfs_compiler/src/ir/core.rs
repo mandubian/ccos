@@ -221,6 +221,19 @@ pub enum IrNode {
         source_location: Option<SourceLocation>,
     },
 
+    /// Plan / execution step with optional parameters that should be evaluated
+    /// before the body and exposed as `%params` in a child environment.
+    Step {
+        id: NodeId,
+        name: String,
+        expose_override: Option<Box<IrNode>>,
+        context_keys_override: Option<Box<IrNode>>,
+        params: Option<Box<IrNode>>, // expected to be an IrNode::Map when present
+        body: Vec<IrNode>,
+        ir_type: IrType,
+        source_location: Option<SourceLocation>,
+    },
+
     // Module system
     Module {
         id: NodeId,
@@ -379,6 +392,7 @@ impl IrNode {
             IrNode::Parallel { id, .. } => *id,
             IrNode::WithResource { id, .. } => *id,
             IrNode::LogStep { id, .. } => *id,
+            IrNode::Step { id, .. } => *id,
             IrNode::Module { id, .. } => *id,
             IrNode::Import { id, .. } => *id,
             IrNode::Task { id, .. } => *id,
@@ -409,6 +423,7 @@ impl IrNode {
             IrNode::Parallel { ir_type, .. } => Some(ir_type),
             IrNode::WithResource { ir_type, .. } => Some(ir_type),
             IrNode::LogStep { ir_type, .. } => Some(ir_type),
+            IrNode::Step { ir_type, .. } => Some(ir_type),
             IrNode::Vector { ir_type, .. } => Some(ir_type),
             IrNode::Map { ir_type, .. } => Some(ir_type),
             IrNode::Task { ir_type, .. } => Some(ir_type),
@@ -479,6 +494,7 @@ impl IrNode {
             IrNode::LogStep {
                 source_location, ..
             } => source_location.as_ref(),
+            IrNode::Step { source_location, .. } => source_location.as_ref(),
             IrNode::Module {
                 source_location, ..
             } => source_location.as_ref(),
