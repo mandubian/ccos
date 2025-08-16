@@ -14,6 +14,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use crate::runtime::host::RuntimeHost;
+use crate::runtime::host_interface::HostInterface;
+use crate::ccos::types::ExecutionResult;
+use crate::ccos::execution_context::{ContextManager, IsolationLevel};
+use crate::runtime::security::RuntimeContext;
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::delegation_l4::L4AwareDelegationEngine;
 use crate::ccos::caching::l4_content_addressable::L4CacheClient;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
@@ -35,8 +42,15 @@ impl IrStrategy {
         let l4_client = L4CacheClient::new();
         let wrapped = L4AwareDelegationEngine::new(l4_client, inner);
         let delegation_engine: Arc<dyn crate::ccos::delegation::DelegationEngine> = Arc::new(wrapped);
+        // Build a minimal host for IR runtime so it can notify the CCOS host about steps
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
+        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let security_context = RuntimeContext::pure();
+        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+
         Self {
-            runtime: IrRuntime::new(delegation_engine.clone()),
+            runtime: IrRuntime::new(delegation_engine.clone(), host, security_context.clone()),
             module_registry,
             delegation_engine,
         }
@@ -45,8 +59,14 @@ impl IrStrategy {
     pub fn with_delegation_engine(mut module_registry: ModuleRegistry, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
+        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let security_context = RuntimeContext::pure();
+        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+
         Self {
-            runtime: IrRuntime::new(delegation_engine.clone()),
+            runtime: IrRuntime::new(delegation_engine.clone(), host, security_context.clone()),
             module_registry,
             delegation_engine,
         }
@@ -83,16 +103,43 @@ impl RuntimeStrategy for IrStrategy {
 pub struct IrRuntime {
     delegation_engine: Arc<dyn DelegationEngine>,
     model_registry: Arc<ModelRegistry>,
+    // Host for CCOS interactions (notify step start/complete/fail, set overrides, etc.)
+    host: Arc<dyn HostInterface>,
+    // Security context and context manager for step scoping
+    security_context: RuntimeContext,
+    context_manager: RefCell<ContextManager>,
 }
 
 impl IrRuntime {
     /// Creates a new IR runtime.
-    pub fn new(delegation_engine: Arc<dyn DelegationEngine>) -> Self {
+    pub fn new(delegation_engine: Arc<dyn DelegationEngine>, host: Arc<dyn HostInterface>, security_context: RuntimeContext) -> Self {
         let model_registry = Arc::new(ModelRegistry::with_defaults());
         IrRuntime { 
             delegation_engine,
             model_registry,
+            host,
+            security_context,
+            context_manager: RefCell::new(ContextManager::new()),
         }
+    }
+
+    /// Compatibility constructor for callers that only have a delegation engine.
+    /// Constructs a default host and security context and forwards to `new`.
+    pub fn new_compat(delegation_engine: Arc<dyn DelegationEngine>) -> Self {
+        let model_registry = Arc::new(ModelRegistry::with_defaults());
+        // Build defaults matching IrStrategy construction
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
+        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let security_context = RuntimeContext::pure();
+        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+
+    // Ensure the default host has a minimal execution context so that
+    // notify_step_started / notify_step_completed can be called from
+    // IR runtime tests that use `new_compat`.
+    host.set_execution_context("ir-runtime-default-plan".to_string(), vec![], "root-action".to_string());
+
+    IrRuntime::new(delegation_engine, host, security_context)
     }
 
     /// Executes a program by running its top-level forms.
@@ -107,6 +154,15 @@ impl IrRuntime {
         };
 
         let mut env = IrEnvironment::with_stdlib(module_registry)?;
+
+        // Ensure the context manager has an initialized root context so step
+        // lifecycle operations (enter_step/exit_step) can create child contexts.
+        {
+            let mut cm = self.context_manager.borrow_mut();
+            if cm.current_context_id().is_none() {
+                cm.initialize(Some("ir-runtime-root".to_string()));
+            }
+        }
         let mut result = Value::Nil;
 
         for node in forms {
@@ -364,9 +420,100 @@ impl IrRuntime {
                 Ok(log_values.last().cloned().unwrap_or(Value::Nil))
             }
 
-            IrNode::Step { name, expose_override: _, context_keys_override: _, params, body, .. } => {
-                // Evaluate params (if provided) before running body. If param evaluation fails,
-                // the body must not run (same semantics as AST evaluator).
+            IrNode::Step { name, expose_override, context_keys_override, params, body, .. } => {
+                // 1. Enforce isolation policy and enter step context (mirror AST evaluator)
+                if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+                    return Err(RuntimeError::Generic(format!("Isolation level not permitted: Inherit under {:?}", self.security_context.security_level)));
+                }
+                let mut cm = self.context_manager.borrow_mut();
+                let _ = cm.enter_step(name, IsolationLevel::Inherit)?;
+                drop(cm);
+
+                // Apply step exposure override if provided. The converter currently
+                // stores these overrides as IR nodes, so evaluate them to concrete
+                // runtime values before calling the host API.
+                if expose_override.is_some() {
+                    // Evaluate expose override node to a bool
+                    let expose_val = match expose_override.as_ref().unwrap().as_ref() {
+                        IrNode::Literal { value, .. } => match value {
+                            crate::ast::Literal::Boolean(b) => *b,
+                            _ => {
+                                // Clear context and return error
+                                let mut cm = self.context_manager.borrow_mut();
+                                let _ = cm.exit_step();
+                                return Err(RuntimeError::Generic(":expose override must be a boolean literal".to_string()));
+                            }
+                        },
+                        other => {
+                            // Evaluate non-literal expression to a value and coerce to bool
+                            let v = self.execute_node(other, env, false, module_registry)?;
+                            match v {
+                                Value::Boolean(b) => b,
+                                _ => {
+                                    let mut cm = self.context_manager.borrow_mut();
+                                    let _ = cm.exit_step();
+                                    return Err(RuntimeError::Generic(":expose override must evaluate to a boolean".to_string()));
+                                }
+                            }
+                        }
+                    };
+
+                    // Evaluate context_keys_override if present to Option<Vec<String>>
+                    let mut context_keys: Option<Vec<String>> = None;
+                    if let Some(keys_node) = context_keys_override.as_ref() {
+                        match keys_node.as_ref() {
+                            IrNode::Vector { elements, .. } => {
+                                let mut keys = Vec::new();
+                                for e in elements {
+                                    let v = self.execute_node(e, env, false, module_registry)?;
+                                    if let Value::String(s) = v { keys.push(s); } else {
+                                        let mut cm = self.context_manager.borrow_mut();
+                                        let _ = cm.exit_step();
+                                        return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string()));
+                                    }
+                                }
+                                context_keys = Some(keys);
+                            }
+                            IrNode::Literal { value, .. } => {
+                                // single literal string -> single-key vector
+                                if let crate::ast::Literal::String(s) = value {
+                                    context_keys = Some(vec![s.clone()]);
+                                } else {
+                                    let mut cm = self.context_manager.borrow_mut();
+                                    let _ = cm.exit_step();
+                                    return Err(RuntimeError::Generic(":context-keys override must be a vector or string literal".to_string()));
+                                }
+                            }
+                            other => {
+                                // Evaluate expression that should produce a sequence/vector
+                                let v = self.execute_node(other, env, false, module_registry)?;
+                                match v {
+                                    Value::Vector(vec) => {
+                                        let mut keys = Vec::new();
+                                        for item in vec { if let Value::String(s) = item { keys.push(s); } else { let mut cm = self.context_manager.borrow_mut(); let _ = cm.exit_step(); return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string())); } }
+                                        context_keys = Some(keys);
+                                    }
+                                    _ => { let mut cm = self.context_manager.borrow_mut(); let _ = cm.exit_step(); return Err(RuntimeError::Generic(":context-keys override must evaluate to a vector of strings".to_string())); }
+                                }
+                            }
+                        }
+                    }
+
+                    self.host.set_step_exposure_override(expose_val, context_keys);
+                }
+
+                // 2. Notify host that step has started
+                let step_action_id = match self.host.notify_step_started(name) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        let mut cm = self.context_manager.borrow_mut();
+                        let _ = cm.exit_step();
+                        return Err(RuntimeError::Generic(format!("Host notify_step_started failed: {:?}", e)));
+                    }
+                };
+
+                // Evaluate params (if provided) after entering the step and notifying the host.
+                // Params must be evaluated in the parent environment; failure should notify host and exit step.
                 let mut param_map: Option<HashMap<crate::ast::MapKey, Value>> = None;
                 if let Some(params_node) = params {
                     let params_ir = params_node.as_ref();
@@ -376,19 +523,40 @@ impl IrRuntime {
                             let mut map = HashMap::new();
                             for entry in entries {
                                 // keys and values are IR nodes; evaluate both
-                                let key_val = self.execute_node(&entry.key, env, false, module_registry)?;
-                                let value_val = self.execute_node(&entry.value, env, false, module_registry)?;
-                                // Only allow string keys for :params (mirror AST behavior)
-                                let map_key = match key_val {
-                                    Value::String(s) => crate::ast::MapKey::String(s),
-                                    _ => return Err(RuntimeError::Generic("Invalid :params map key; expected string".to_string())),
-                                };
-                                map.insert(map_key, value_val);
+                                match (self.execute_node(&entry.key, env, false, module_registry), self.execute_node(&entry.value, env, false, module_registry)) {
+                                    (Ok(key_val), Ok(value_val)) => {
+                                        // Allow string or keyword keys for :params to be flexible
+                                        let map_key = match key_val {
+                                            Value::String(s) => crate::ast::MapKey::String(s),
+                                            Value::Keyword(k) => crate::ast::MapKey::Keyword(k),
+                                            _ => {
+                                                let _ = self.host.notify_step_failed(&step_action_id, "Invalid :params map key; expected string or keyword");
+                                                let mut cm = self.context_manager.borrow_mut();
+                                                let _ = cm.exit_step();
+                                                self.host.clear_step_exposure_override();
+                                                return Err(RuntimeError::Generic("Invalid :params map key; expected string or keyword".to_string()));
+                                            }
+                                        };
+                                        map.insert(map_key, value_val);
+                                    }
+                                    (Err(e), _) | (_, Err(e)) => {
+                                        let _ = self.host.notify_step_failed(&step_action_id, &e.to_string());
+                                        let mut cm = self.context_manager.borrow_mut();
+                                        let _ = cm.exit_step();
+                                        self.host.clear_step_exposure_override();
+                                        return Err(e);
+                                    }
+                                }
                             }
                             param_map = Some(map);
                         }
                         other => {
-                            return Err(RuntimeError::Generic(format!("Expected map node for :params, found {:?}", other.id())));
+                            let msg = format!("Expected map node for :params, found {:?}", other.id());
+                            let _ = self.host.notify_step_failed(&step_action_id, &msg);
+                            let mut cm = self.context_manager.borrow_mut();
+                            let _ = cm.exit_step();
+                            self.host.clear_step_exposure_override();
+                            return Err(RuntimeError::Generic(msg));
                         }
                     }
                 }
@@ -418,8 +586,28 @@ impl IrRuntime {
                 }
                 let mut last_result = Value::Nil;
                 for expr in body {
-                    last_result = self.execute_node(expr, target_env, false, module_registry)?;
+                    match self.execute_node(expr, target_env, false, module_registry) {
+                        Ok(v) => last_result = v,
+                        Err(e) => {
+                            // Notify host of failure, exit step context and clear override
+                            let _ = self.host.notify_step_failed(&step_action_id, &e.to_string());
+                            let mut cm = self.context_manager.borrow_mut();
+                            let _ = cm.exit_step();
+                            self.host.clear_step_exposure_override();
+                            return Err(e);
+                        }
+                    }
                 }
+
+                // 3. Notify host of successful completion
+                let exec_result = ExecutionResult { success: true, value: last_result.clone(), metadata: Default::default() };
+                let _ = self.host.notify_step_completed(&step_action_id, &exec_result);
+
+                // 4. Exit step context and clear override
+                let mut cm = self.context_manager.borrow_mut();
+                let _ = cm.exit_step();
+                self.host.clear_step_exposure_override();
+
                 Ok(last_result)
             }
 
@@ -590,8 +778,14 @@ impl IrRuntime {
                 if args.len() == 1 {
                     match &args[0] {
                         Value::Map(map) => {
-                            let map_key = crate::ast::MapKey::Keyword(keyword.clone());
-                            Ok(map.get(&map_key).cloned().unwrap_or(Value::Nil))
+                            // Try keyword key first, then fall back to string key for compatibility
+                            let map_key_kw = crate::ast::MapKey::Keyword(keyword.clone());
+                            if let Some(v) = map.get(&map_key_kw) {
+                                Ok(v.clone())
+                            } else {
+                                let map_key_str = crate::ast::MapKey::String(keyword.0.clone());
+                                Ok(map.get(&map_key_str).cloned().unwrap_or(Value::Nil))
+                            }
                         }
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
@@ -603,8 +797,13 @@ impl IrRuntime {
                     // (:key map default) is equivalent to (get map :key default)
                     match &args[0] {
                         Value::Map(map) => {
-                            let map_key = crate::ast::MapKey::Keyword(keyword.clone());
-                            Ok(map.get(&map_key).cloned().unwrap_or(args[1].clone()))
+                            let map_key_kw = crate::ast::MapKey::Keyword(keyword.clone());
+                            if let Some(v) = map.get(&map_key_kw) {
+                                Ok(v.clone())
+                            } else {
+                                let map_key_str = crate::ast::MapKey::String(keyword.0.clone());
+                                Ok(map.get(&map_key_str).cloned().unwrap_or(args[1].clone()))
+                            }
                         }
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
