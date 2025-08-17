@@ -54,6 +54,32 @@ impl StandardLibrary {
         env
     }
 
+    // `(vals map)` - return vector of values in the map (order may vary)
+    fn vals(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "vals".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Map(map) => {
+                let mut res = Vec::new();
+                for (_k, v) in map.iter() {
+                    res.push(v.clone());
+                }
+                Ok(Value::Vector(res))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "vals".to_string(),
+            }),
+        }
+    }
+
     /// Loads the tooling functions into the environment.
     /// 
     /// These functions provide access to external resources like the file system,
@@ -165,6 +191,15 @@ impl StandardLibrary {
                 func: Rc::new(Self::thread_sleep),
             })),
         );
+        // Alias for capitalization variants used in tests
+        env.define(
+            &Symbol("Thread/sleep".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "Thread/sleep".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::thread_sleep),
+            })),
+        );
 
         // File I/O functions
         env.define(
@@ -193,6 +228,36 @@ impl StandardLibrary {
                 name: "dotimes".to_string(),
                 arity: Arity::Fixed(2),
                 func: Rc::new(Self::dotimes),
+            })),
+        );
+
+        // Collection helpers: keys
+        env.define(
+            &Symbol("keys".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "keys".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::keys),
+            })),
+        );
+
+        // Collection helpers: vals
+        env.define(
+            &Symbol("vals".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "vals".to_string(),
+                arity: Arity::Fixed(1),
+                func: Rc::new(Self::vals),
+            })),
+        );
+
+        // Collection helpers: update (map key f)
+        env.define(
+            &Symbol("update".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "update".to_string(),
+                arity: Arity::Fixed(3),
+                func: Rc::new(Self::update),
             })),
         );
     }
@@ -614,6 +679,147 @@ impl StandardLibrary {
         // For now, just return nil since proper dotimes requires loop support
         // This allows the test to at least parse and run without error
         Ok(Value::Nil)
+    }
+
+    /// `(keys map)` -> returns a vector of keys present in the map
+    fn keys(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "keys".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Map(map) => {
+                let mut out: Vec<Value> = Vec::new();
+                for key in map.keys() {
+                    let v = match key {
+                        crate::ast::MapKey::String(s) => Value::String(s.clone()),
+                        crate::ast::MapKey::Keyword(k) => Value::Keyword(k.clone()),
+                        crate::ast::MapKey::Integer(i) => Value::Integer(*i),
+                    };
+                    out.push(v);
+                }
+                Ok(Value::Vector(out))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "keys".to_string(),
+            }),
+        }
+    }
+
+    /// `(update map key f)` -> returns a new map with key updated to (f current)
+    /// f may be a function value. This builtin needs evaluator context to call user functions.
+    fn update(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "update".to_string(),
+                expected: "3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // extract map
+        let map_val = &args[0];
+        let key_val = &args[1];
+        let f_val = &args[2];
+
+        // Support update for both maps and vectors
+        let mut new_map_opt: Option<std::collections::HashMap<crate::ast::MapKey, Value>> = None;
+        let mut new_vec_opt: Option<Vec<Value>> = None;
+
+        match map_val {
+            Value::Map(m) => new_map_opt = Some(m.clone()),
+            Value::Vector(v) => new_vec_opt = Some(v.clone()),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "map or vector".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "update".to_string(),
+                })
+            }
+        }
+
+        // convert key
+        let map_key = match key_val {
+            Value::String(s) => crate::ast::MapKey::String(s.clone()),
+            Value::Keyword(k) => crate::ast::MapKey::Keyword(k.clone()),
+            Value::Integer(i) => crate::ast::MapKey::Integer(*i),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string, keyword or integer".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "update".to_string(),
+                })
+            }
+        };
+
+        if let Some(mut new_map) = new_map_opt {
+            let current = new_map.get(&map_key).cloned().unwrap_or(Value::Nil);
+            let new_value = match f_val {
+                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
+                    let args_for_call = vec![current.clone()];
+                    evaluator.call_function(f_val.clone(), &args_for_call, env)?
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: f_val.type_name().to_string(),
+                        operation: "update".to_string(),
+                    })
+                }
+            };
+            new_map.insert(map_key, new_value);
+            return Ok(Value::Map(new_map));
+        }
+
+        if let Some(mut new_vec) = new_vec_opt {
+            // key must be integer index
+            let index = match key_val {
+                Value::Integer(i) => *i as usize,
+                other => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "integer index for vector".to_string(),
+                        actual: other.type_name().to_string(),
+                        operation: "update".to_string(),
+                    })
+                }
+            };
+
+            if index >= new_vec.len() {
+                return Err(RuntimeError::IndexOutOfBounds {
+                    index: index as i64,
+                    length: new_vec.len(),
+                });
+            }
+
+            let current = new_vec[index].clone();
+            let new_value = match f_val {
+                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
+                    let args_for_call = vec![current.clone()];
+                    evaluator.call_function(f_val.clone(), &args_for_call, env)?
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: f_val.type_name().to_string(),
+                        operation: "update".to_string(),
+                    })
+                }
+            };
+            new_vec[index] = new_value;
+            return Ok(Value::Vector(new_vec));
+        }
+
+        unreachable!()
     }
 
     // --- CCOS Capability Function Implementations ---
