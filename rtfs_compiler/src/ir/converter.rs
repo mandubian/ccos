@@ -1615,7 +1615,7 @@ impl<'a> IrConverter<'a> {
         for (binding, binding_id) in function_bindings {
             // Do NOT enter a new scope here; the placeholder is already in the current scope
             let init_expr = match *binding.value {
-                Expression::Fn(mut fn_expr) => {
+                Expression::Fn(fn_expr) => {
                     // Patch: do not enter a new scope in convert_fn, so the placeholder is visible
                     // Instead, convert params and body in the current scope
                     let id = self.next_id();
@@ -2377,7 +2377,7 @@ impl<'a> IrConverter<'a> {
                     }
                 }
             }
-            IrNode::Lambda { body, .. } => {
+            IrNode::Lambda {  .. } => {
                 // Don't traverse into nested lambdas for capture analysis
                 // Each lambda should do its own capture analysis
                 return;

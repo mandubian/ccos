@@ -16,7 +16,6 @@ use crate::ccos::execution_context::{ContextManager, IsolationLevel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc as SyncArc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
 use std::sync::{Arc, Mutex};
 use crate::ccos::delegation::StaticDelegationEngine;

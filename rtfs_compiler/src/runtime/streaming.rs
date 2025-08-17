@@ -1,10 +1,8 @@
 // streaming.rs
 // All stream-related types, traits, and aliases for CCOS/RTFS
 
-use crate::ast::TypeExpr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use async_trait::async_trait;
 
 /// Streaming type for capabilities
 #[derive(Debug, Clone, PartialEq)]

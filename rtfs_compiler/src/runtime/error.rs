@@ -302,7 +302,7 @@ impl RuntimeError {    pub fn to_value(&self) -> Value {
     }
 }
 
-use crate::ir::converter::IrConversionError; // TODO: Re-enable when IR is integrated
+ // TODO: Re-enable when IR is integrated
 
 /// Represents a location in the source code, pointing to a specific node in the AST.
 /// This is crucial for providing meaningful error messages that can direct the user

@@ -4,7 +4,7 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// WebAssembly MicroVM provider for sandboxed execution
 pub struct WasmMicroVMProvider {

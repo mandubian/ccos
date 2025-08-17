@@ -16,16 +16,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 
 use crate::runtime::{RuntimeError, RuntimeResult, Value as RuntimeValue};
-use crate::ast::Expression;
 use crate::runtime::capability_provider::{
-    CapabilityProvider, CapabilityDescriptor, SecurityRequirements, Permission,
+    CapabilityProvider, CapabilityDescriptor, SecurityRequirements,
     NetworkAccess, ResourceLimits, HealthStatus, ProviderConfig, ProviderMetadata,
     ExecutionContext
 };
-use crate::runtime::security::RuntimeContext;
 use crate::ast::{TypeExpr, PrimitiveType, MapKey};
 
 /// GitHub MCP Server implementation

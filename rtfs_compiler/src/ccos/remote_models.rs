@@ -7,9 +7,7 @@
 use crate::ccos::delegation::ModelProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use futures::executor::block_on;
 
 /// Configuration for remote model providers

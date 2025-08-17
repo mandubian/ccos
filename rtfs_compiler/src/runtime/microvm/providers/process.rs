@@ -4,11 +4,8 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
-use crate::ast::Expression;
-use crate::parser;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::process::{Command, Stdio};
-use std::io::Write;
 
 /// Process-based MicroVM provider for basic isolation
 pub struct ProcessMicroVMProvider {
@@ -59,7 +56,7 @@ impl ProcessMicroVMProvider {
     ) -> RuntimeResult<Value> {
         // Delegate to RTFS runtime for proper evaluation
         let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();
-        let mut rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
+        let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
         
         // Use the RTFS runtime to evaluate the source directly
         rtfs_runtime.evaluate(source)

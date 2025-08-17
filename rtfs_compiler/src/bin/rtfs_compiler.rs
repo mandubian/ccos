@@ -6,7 +6,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 use std::sync::Arc;
-use std::cell::RefCell;
 use rtfs_compiler::runtime::host::RuntimeHost;
 
 // Import the RTFS compiler modules

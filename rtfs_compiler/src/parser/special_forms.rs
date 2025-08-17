@@ -27,7 +27,6 @@ use crate::ast::{
     WithResourceExpr,
     DelegationHint,
 };
-use crate::error_reporting::SourceSpan;
 
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword

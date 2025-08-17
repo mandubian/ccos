@@ -1,5 +1,5 @@
 use crate::ast::{Expression, MapKey, Literal};
-use crate::ccos::types::{Intent, Plan, IntentId, PlanId, IntentStatus};
+use crate::ccos::types::{Intent, Plan, IntentStatus};
 use crate::runtime::values::Value;
 use super::errors::RtfsBridgeError;
 use std::collections::HashMap;

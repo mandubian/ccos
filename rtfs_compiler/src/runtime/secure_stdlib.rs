@@ -4,7 +4,7 @@
 //! in any context without security concerns. All dangerous operations (file I/O,
 //! network access, system calls) are moved to CCOS capabilities.
 
-use crate::ast::{Keyword, MapKey, Expression};
+use crate::ast::{MapKey, Expression};
 use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::{BuiltinFunction, Arity, Function, BuiltinFunctionWithContext};

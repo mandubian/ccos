@@ -3,8 +3,6 @@
 //! This module implements the Context Horizon Manager that addresses the finite
 //! context window of the core Arbiter LLM through virtualization and distillation.
 
-use super::causal_chain::CausalChain;
-use super::intent_graph::IntentGraph;
 use super::types::Intent;
 use crate::ccos::working_memory::backend::QueryParams;
 use crate::ccos::working_memory::boundaries::{Boundary, BoundaryType};
@@ -360,7 +358,7 @@ impl ContextHorizonManager {
         &self,
         boundaries: &[Boundary],
     ) -> Result<Vec<crate::ccos::working_memory::types::WorkingMemoryEntry>, RuntimeError> {
-        let mut wm = self
+        let wm = self
             .working_memory
             .lock()
             .map_err(|_| RuntimeError::Generic("WorkingMemory lock poisoned".into()))?;

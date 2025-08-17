@@ -4,9 +4,9 @@
 use crate::ast::{Expression, Keyword, Literal, MapKey, Symbol};
 use crate::ir::core::IrNode;
 use crate::runtime::environment::Environment;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::error::RuntimeResult;
 use crate::runtime::Evaluator;
-use crate::runtime::{IrEnvironment, IrRuntime};
+use crate::runtime::IrEnvironment;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;

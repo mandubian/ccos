@@ -4,8 +4,7 @@
 //! supporting multiple backends with graceful fallback to in-memory storage.
 
 use super::intent_graph::Edge;
-use super::types::{Intent, IntentId, IntentStatus, StorableIntent, RuntimeIntent};
-use crate::runtime::error::RuntimeError;
+use super::types::{IntentId, IntentStatus, StorableIntent};
 use crate::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,7 +12,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 /// Configuration for storage backend selection
 #[derive(Debug, Clone)]
@@ -192,7 +190,7 @@ impl IntentStorage for InMemoryStorage {
 
     async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
         let intents = self.intents.read().await;
-        let mut results: Vec<StorableIntent> = intents
+        let results: Vec<StorableIntent> = intents
             .values()
             .filter(|intent| {
                 // Apply filters

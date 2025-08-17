@@ -137,7 +137,7 @@ fn run_interactive_repl(
                 
                 // Add to history if not empty
                 if !line.is_empty() {
-                    rl.add_history_entry(line);
+                    let _ = rl.add_history_entry(line);
                 }
 
                 // Handle special commands (only when not in multi-line mode)

@@ -363,7 +363,7 @@ impl IrRuntime {
             }
             IrNode::TryCatch {
                 try_body,
-                catch_clauses,
+                
                 finally_body,
                 ..
             } => {
@@ -396,7 +396,7 @@ impl IrRuntime {
                 Ok(Value::Map(results))
             }
             IrNode::WithResource {
-                binding,
+                
                 init_expr,
                 body,
                 ..
@@ -409,7 +409,7 @@ impl IrRuntime {
                 }
                 Ok(result)
             }
-            IrNode::LogStep { level, values, .. } => {
+            IrNode::LogStep {  values, .. } => {
                 // Execute values and log them
                 let mut log_values = Vec::new();
                 for value_expr in values {
@@ -577,7 +577,7 @@ impl IrRuntime {
                 // Execute body in child_env (if created) or in the same env
                 let target_env: &mut IrEnvironment;
                 let mut temp_child_holder = None;
-                if let Some(mut c) = child_env_opt {
+                if let Some(c) = child_env_opt {
                     // We need to own the child env to get a mutable reference into it
                     temp_child_holder = Some(c);
                     target_env = temp_child_holder.as_mut().unwrap();

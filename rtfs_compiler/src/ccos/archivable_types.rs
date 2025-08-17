@@ -10,7 +10,6 @@
 use serde::{Deserialize, Serialize};
 use super::types::{Plan, PlanLanguage, PlanStatus, PlanBody, Action, StorableIntent};
 use super::storage::Archivable;
-use crate::runtime::values::Value;
 use std::collections::HashMap;
 
 /// Serializable version of Plan for archiving

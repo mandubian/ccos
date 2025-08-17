@@ -6,14 +6,13 @@
 
 use std::collections::HashMap;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use regex;
-use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, IntentStatus, StorableIntent, ExecutionResult};
+use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent, ExecutionResult};
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
-use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition, RegistryType};
+use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition};
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 
 use crate::ast::TopLevel;

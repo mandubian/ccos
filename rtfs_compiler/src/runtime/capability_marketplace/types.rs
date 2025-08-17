@@ -1,5 +1,5 @@
-use crate::ast::{MapKey, TypeExpr};
-use crate::runtime::streaming::{StreamType, BidirectionalConfig, DuplexChannels, StreamConfig, StreamingCapability, StreamHandle, StreamingProvider};
+use crate::ast::TypeExpr;
+use crate::runtime::streaming::{StreamType, BidirectionalConfig, DuplexChannels, StreamConfig, StreamingProvider};
 use crate::runtime::capability_registry::CapabilityRegistry;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;

@@ -4,7 +4,6 @@
 //! analyzes the Causal Chain and optimizes the system.
 
 use crate::runtime::error::RuntimeError;
-use std::collections::HashMap;
 
 /// Subconscious system for background analysis and optimization
 pub struct SubconsciousV1 {

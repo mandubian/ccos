@@ -1,6 +1,5 @@
 use crate::ast::{TypeExpr, TypePredicate, ArrayDimension, Literal, PrimitiveType, Keyword, MapKey};
 use crate::runtime::values::Value;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use regex::Regex;
 
