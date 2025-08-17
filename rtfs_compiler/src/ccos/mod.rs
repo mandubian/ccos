@@ -18,6 +18,7 @@ pub mod storage;           // Unified storage abstraction
 pub mod archivable_types;  // Serializable versions of CCOS types
 pub mod plan_archive;     // Plan archiving functionality
 pub mod checkpoint_archive; // Checkpoint storage for execution contexts
+pub mod rtfs_bridge;      // RTFS bridge for CCOS object extraction and conversion
 // pub mod archive_manager;   // Unified archive coordination (not yet present)
 pub mod execution_context; // Hierarchical execution context management
 
@@ -39,10 +40,7 @@ pub mod subconscious;
 pub mod working_memory;
 
  // Orchestration/Arbiter components (if present in tree)
-// pub mod arbiter;           // commented: module not present in tree
 // pub mod orchestrator;      // commented: module not present in tree
-pub mod delegating_arbiter;
-pub mod arbiter_engine;
 pub mod agent_registry;
 
 // --- Core CCOS System ---
@@ -50,8 +48,7 @@ pub mod agent_registry;
 use std::sync::{Arc, Mutex};
 use std::rc::Rc;
 
-use crate::ccos::arbiter::{Arbiter, ArbiterConfig};
-use crate::ccos::delegating_arbiter::DelegatingArbiter;
+use crate::ccos::arbiter::{ArbiterConfig, DelegatingArbiter, ArbiterEngine, DummyArbiter, Arbiter};
 use crate::ccos::delegation::ModelRegistry;
 use crate::config::types::AgentConfig;
 use crate::ccos::agent_registry::AgentRegistry; // bring trait into scope for record_feedback
@@ -110,7 +107,7 @@ impl CCOS {
         let governance_kernel = Arc::new(GovernanceKernel::new(Arc::clone(&orchestrator), Arc::clone(&intent_graph)));
 
         let arbiter = Arc::new(Arbiter::new(
-            ArbiterConfig::default(),
+            crate::ccos::arbiter::legacy_arbiter::ArbiterConfig::default(),
             Arc::clone(&intent_graph),
         ));
 
@@ -118,21 +115,7 @@ impl CCOS {
         let agent_registry = Arc::new(std::sync::RwLock::new(crate::ccos::agent_registry::InMemoryAgentRegistry::new()));
 
         // Optional: delegating arbiter behind feature flag/env var
-    let delegating_arbiter = if std::env::var("CCOS_USE_DELEGATING_ARBITER").ok().as_deref() == Some("1") {
-            let registry = Arc::new(ModelRegistry::with_defaults());
-            match DelegatingArbiter::with_base(
-                Arc::clone(&arbiter),
-                registry,
-                Some(Arc::clone(&agent_registry)),
-                Some(Arc::clone(&causal_chain)),
-                Some(Arc::clone(&governance_kernel)),
-                Some(Arc::clone(&agent_config)),
-                &std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "echo-model".to_string())
-            ) {
-                Ok(da) => Some(Arc::new(da)),
-                Err(_) => None,
-            }
-        } else { None };
+        let delegating_arbiter = None; // TODO: Implement delegating arbiter integration
 
         Ok(Self {
             arbiter,
@@ -194,7 +177,7 @@ impl CCOS {
         // 1. Arbiter: Generate a plan from the natural language request.
         let proposed_plan = if let Some(da) = &self.delegating_arbiter {
             // Use delegating arbiter to produce a plan via its engine API
-            use crate::ccos::arbiter_engine::ArbiterEngine;
+            use crate::ccos::arbiter::ArbiterEngine;
             let intent = da
                 .natural_language_to_intent(natural_language_request, None)
                 .await?;

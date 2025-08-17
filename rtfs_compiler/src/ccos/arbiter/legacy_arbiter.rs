@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
-use super::intent_graph::IntentGraph;
-use super::types::{Intent, Plan};
+use crate::ccos::intent_graph::IntentGraph;
+use crate::ccos::types::{Intent, Plan};
 #[allow(unused_imports)]
-use super::types::PlanBody;
-use super::types::StorableIntent;
+use crate::ccos::types::PlanBody;
+use crate::ccos::types::StorableIntent;
 
 /// The Arbiter - LLM kernel that converts natural language to structured intents and plans.
 pub struct Arbiter {
@@ -94,7 +94,7 @@ impl Arbiter {
             st.intent_id = intent.intent_id.clone();
             st.name = intent.name.clone();
             st.original_request = intent.original_request.clone();
-            st.status = super::types::IntentStatus::Active;
+            st.status = crate::ccos::types::IntentStatus::Active;
 
             graph.store_intent(st)?;
         }
