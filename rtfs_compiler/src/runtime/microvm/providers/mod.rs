@@ -6,7 +6,7 @@ pub mod firecracker;
 pub mod gvisor;
 pub mod wasm;
 
-use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::error::RuntimeResult;
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult};
 
 /// Trait for MicroVM providers that can execute programs in isolated environments

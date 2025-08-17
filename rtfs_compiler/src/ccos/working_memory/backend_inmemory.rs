@@ -16,7 +16,6 @@ use crate::ccos::working_memory::types::{WorkingMemoryEntry, WorkingMemoryId};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::mem;
 use std::path::{Path, PathBuf};
 
 /// Default in-memory + JSONL backend.

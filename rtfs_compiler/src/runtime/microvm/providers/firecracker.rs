@@ -8,7 +8,7 @@ use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, Execution
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
 use std::time::{Duration, Instant};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::fs;
 use std::io::{Write, BufRead, BufReader};
@@ -90,7 +90,7 @@ impl FirecrackerVM {
            .stdout(Stdio::piped())
            .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
+        let child = cmd.spawn()
             .map_err(|e| RuntimeError::Generic(format!("Failed to start Firecracker: {}", e)))?;
 
         // Wait a moment for the socket to be created

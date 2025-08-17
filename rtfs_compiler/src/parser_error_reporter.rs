@@ -1,7 +1,7 @@
 // Enhanced parser error reporting for RTFS
 // Provides detailed error messages with source location, code snippets, and helpful hints
 
-use crate::error_reporting::{DiagnosticInfo, ErrorHint, ErrorSeverity, SourceSpan};
+use crate::error_reporting::{DiagnosticInfo, ErrorHint, SourceSpan};
 use crate::parser::Rule;
 use pest::error::{Error as PestError, ErrorVariant, InputLocation};
 use pest::Position;

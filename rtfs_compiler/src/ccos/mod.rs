@@ -48,8 +48,7 @@ pub mod agent_registry;
 use std::sync::{Arc, Mutex};
 use std::rc::Rc;
 
-use crate::ccos::arbiter::{ArbiterConfig, DelegatingArbiter, ArbiterEngine, DummyArbiter, Arbiter};
-use crate::ccos::delegation::ModelRegistry;
+use crate::ccos::arbiter::{DelegatingArbiter, ArbiterEngine, Arbiter};
 use crate::config::types::AgentConfig;
 use crate::ccos::agent_registry::AgentRegistry; // bring trait into scope for record_feedback
 use crate::runtime::capability_marketplace::CapabilityMarketplace;

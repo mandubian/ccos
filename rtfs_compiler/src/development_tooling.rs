@@ -8,14 +8,12 @@ use crate::runtime::{
     TreeWalkingStrategy,
 };
 use crate::runtime::host::RuntimeHost;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::sync::Mutex;
 
 // Placeholder IrStrategy implementation until the actual one is available
@@ -36,7 +34,7 @@ impl IrStrategy {
 impl RuntimeStrategy for IrStrategy {
     fn run(
         &mut self,
-        program: &crate::ast::Expression,
+        _program: &crate::ast::Expression,
     ) -> Result<crate::runtime::Value, crate::runtime::RuntimeError> {
         // Delegate to execute method foErr(crate::runtime::RuntimeError::NotImplemented("IrStrategy execution not yet implemented".to_string()))self.execute(program)
         Err(crate::runtime::RuntimeError::NotImplemented(

@@ -20,8 +20,6 @@ use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use std::sync::Arc;
-use crate::ccos::types::{Action, ExecutionResult};
-use uuid::Uuid;
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};

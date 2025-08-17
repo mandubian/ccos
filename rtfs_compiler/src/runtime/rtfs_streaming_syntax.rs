@@ -1,4 +1,3 @@
-use tokio::sync::RwLock;
 use crate::runtime::streaming::{StreamingCapability, StreamHandle, StreamConfig};
 use crate::runtime::error::RuntimeResult;
 
@@ -774,7 +773,7 @@ impl RtfsStreamingSyntaxExecutor {
 
     /// Helper: Build stream callbacks from callback definitions
     fn build_stream_callbacks(&self, callbacks: HashMap<String, String>) -> Result<StreamCallbacks, StreamingError> {
-    let mut stream_callbacks = StreamCallbacks { progress: None, complete: None, error: None };
+    let stream_callbacks = StreamCallbacks { progress: None, complete: None, error: None };
 
         for (event_name, callback_fn) in callbacks {
             match event_name.as_str() {

@@ -8,9 +8,7 @@ use uuid::Uuid;
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata, Program};
-use crate::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
 use crate::runtime::microvm::providers::MicroVMProvider;
-use crate::runtime::security::RuntimeContext;
 use crate::runtime::Value;
 
 /// gVisor container configuration

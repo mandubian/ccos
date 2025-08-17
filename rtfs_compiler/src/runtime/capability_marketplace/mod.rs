@@ -8,4 +8,3 @@ pub mod marketplace;
 pub use types::*;
 pub use executors::*;
 pub use discovery::*;
-pub use marketplace::*;

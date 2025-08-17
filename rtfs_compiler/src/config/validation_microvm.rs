@@ -3,7 +3,7 @@
 //! This module provides validation for MicroVM-specific agent configurations,
 //! enforcing constraints and security policies as defined in the MicroVM deployment profile.
 
-use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::error::RuntimeResult;
 use super::types::*;
 
 /// Validation result for MicroVM configuration

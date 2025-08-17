@@ -1,6 +1,6 @@
 use super::storage::{ContentAddressableArchive, InMemoryArchive};
 use super::archivable_types::ArchivablePlan;
-use super::types::{Plan, PlanId, IntentId, PlanStatus, PlanBody};
+use super::types::{Plan, PlanId, IntentId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

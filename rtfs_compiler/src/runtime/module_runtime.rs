@@ -11,7 +11,6 @@ use crate::ir::converter::{BindingInfo, BindingKind, IrConverter};
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::{IrEnvironment, IrRuntime, RuntimeError, Value};
-use crate::ccos::delegation::StaticDelegationEngine;
 use sha2::{Sha256, Digest};
 use crate::ccos::caching::l4_content_addressable::L4CacheClient;
 

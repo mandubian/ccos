@@ -13,15 +13,12 @@ use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::host::RuntimeHost;
-use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeResult, RuntimeError};
 use crate::parser::parse_expression;
-use crate::ast::Expression;
 
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
 use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody};
-use super::execution_context::ContextManager;
 
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
@@ -84,7 +81,7 @@ impl Orchestrator {
         let module_registry = Rc::new(ModuleRegistry::new());
         let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let host_iface: Arc<dyn HostInterface> = host.clone();
-        let mut evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);
+        let evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);
         
         // Initialize context manager for the plan execution
         {

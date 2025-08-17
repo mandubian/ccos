@@ -7,13 +7,12 @@
 use std::collections::HashMap;
 use async_trait::async_trait;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, IntentStatus, StorableIntent};
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
-use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior};
+use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate};
 
 /// Template-based arbiter that uses pattern matching and predefined templates
 pub struct TemplateArbiter {

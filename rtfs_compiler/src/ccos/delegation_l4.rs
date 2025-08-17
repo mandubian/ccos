@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::caching::l4_content_addressable::{L4CacheClient, RtfsModuleMetadata};
+use super::caching::l4_content_addressable::L4CacheClient;
 use super::delegation::{CallContext, DelegationEngine, ExecTarget};
 
 /// Decorator that checks the L4 content-addressable cache before falling back

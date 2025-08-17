@@ -1,6 +1,6 @@
 use crate::ast::{
-    ActionDefinition, CapabilityDefinition, IntentDefinition, Keyword, PlanDefinition, Property,
-    ResourceDefinition, Symbol, TopLevel,
+    ActionDefinition, CapabilityDefinition, IntentDefinition, PlanDefinition, Property,
+    ResourceDefinition, TopLevel,
 };
 use crate::error_reporting::ValidationError;
 use std::collections::HashMap;

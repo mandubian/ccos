@@ -4,9 +4,8 @@ impl MapKey {
         MapKey::String(s.to_string())
     }
 }
-use crate::runtime::values::{Arity, Function, Value};
+use crate::runtime::values::Value;
 use crate::runtime::error::RuntimeError;
-use std::cell::RefCell;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -4,8 +4,7 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
-use crate::ast::Expression;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Mock MicroVM provider for testing and development
 pub struct MockMicroVMProvider {
@@ -44,7 +43,7 @@ impl MicroVMProvider for MockMicroVMProvider {
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
                     // Delegate to RTFS runtime for proper evaluation
                     let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();
-                    let mut rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
+                    let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
                     
                     // Use the RTFS runtime to evaluate the source directly
                     match rtfs_runtime.evaluate(&source) {

@@ -2,7 +2,6 @@
 
 use super::super::types::{StorableIntent, IntentId, IntentStatus};
 use super::storage::IntentGraphStorage;
-use super::virtualization::IntentSummary;
 use crate::runtime::error::RuntimeError;
 use std::collections::{HashMap, HashSet};
 

@@ -10,7 +10,7 @@
 //!
 //! Unit tests at the bottom validate derivation helpers and idempotency by content hash.
 
-use crate::ccos::working_memory::backend::{QueryParams, WorkingMemoryError};
+use crate::ccos::working_memory::backend::WorkingMemoryError;
 use crate::ccos::working_memory::facade::WorkingMemory;
 use crate::ccos::working_memory::types::{WorkingMemoryEntry, WorkingMemoryId, WorkingMemoryMeta};
 use std::collections::HashSet;
