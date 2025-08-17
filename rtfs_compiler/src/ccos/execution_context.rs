@@ -227,9 +227,19 @@ impl ContextStack {
 
     /// Pushes a new context onto the stack
     pub fn push(&mut self, step_name: Option<String>, isolation_level: IsolationLevel) -> RuntimeResult<String> {
+        // If the stack was never initialized with a root, create a default root
+        if self.current_id.is_none() {
+            let mut root = ExecutionContext::new(Some("root".to_string()));
+            let root_id = "root".to_string();
+            root.id = root_id.clone();
+            self.contexts.insert(root_id.clone(), root);
+            self.current_id = Some(root_id.clone());
+            self.root_id = Some(root_id);
+        }
+
         let current = self.current_mut()
             .ok_or_else(|| RuntimeError::Generic("No current context to create child from".to_string()))?;
-        
+
         let child = current.create_child(step_name, isolation_level);
         let child_id = child.id.clone();
         

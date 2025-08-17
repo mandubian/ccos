@@ -476,7 +476,7 @@ impl CapabilityMarketplace {
         if let Some(input_schema) = &manifest.input_schema {
             self.type_validator
                 .validate_with_config(inputs, input_schema, &type_config, &boundary_context)
-                .map_err(|e| RuntimeError::Generic(format!("Type validation failed: {}", e)))?;
+                .map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?;
         }
 
         // Execute via executor registry or provider fallback
@@ -509,7 +509,7 @@ impl CapabilityMarketplace {
         if let Some(output_schema) = &manifest.output_schema {
             self.type_validator
                 .validate_with_config(&exec_result, output_schema, &type_config, &boundary_context)
-                .map_err(|e| RuntimeError::Generic(format!("Type validation failed: {}", e)))?;
+                .map_err(|e| RuntimeError::Generic(format!("Output validation failed: {}", e)))?;
         }
 
         Ok(exec_result)
@@ -551,8 +551,29 @@ impl CapabilityMarketplace {
     pub async fn execute_with_validation_config(&self, capability_id: &str, params: &HashMap<String, Value>, config: &TypeCheckingConfig) -> Result<Value, RuntimeError> {
         let capability = { let capabilities = self.capabilities.read().await; capabilities.get(capability_id).cloned().ok_or_else(|| RuntimeError::Generic(format!("Capability not found: {}", capability_id)))? };
         let boundary_context = VerificationContext::capability_boundary(capability_id);
-        if let Some(input_schema) = &capability.input_schema { self.validate_input_schema_optimized(params, input_schema, config, &boundary_context).await?; }
-        let inputs_value = self.params_to_value(params)?;
+        // Special-case: if the input schema is a primitive (or any non-map) type AND the caller provided exactly
+        // one parameter (commonly named "input"), we treat the inner value directly instead of a map wrapper.
+        // This makes test ergonomics nicer and matches intuitive single-argument invocation semantics.
+        let mut direct_primitive_input: Option<Value> = None;
+        if let Some(input_schema) = &capability.input_schema {
+            let is_single = params.len() == 1;
+            // Currently only Map { .. } represents structured map inputs. Any other variant is treated as primitive/single value.
+            let is_non_map_schema = !matches!(input_schema, TypeExpr::Map { .. });
+            if is_single && is_non_map_schema {
+                if let Some((_k, v)) = params.iter().next() { // ignore key name, just use the value
+                    // Validate directly against schema
+                    self.type_validator
+                        .validate_with_config(v, input_schema, config, &boundary_context)
+                        .map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?;
+                    direct_primitive_input = Some(v.clone());
+                }
+            } else {
+                // Fallback to original map-based validation path
+                self.validate_input_schema_optimized(params, input_schema, config, &boundary_context).await?;
+            }
+        }
+
+        let inputs_value = if let Some(v) = direct_primitive_input { v } else { self.params_to_value(params)? };
         let result = self.execute_capability(capability_id, &inputs_value).await?;
         if let Some(output_schema) = &capability.output_schema { self.validate_output_schema_optimized(&result, output_schema, config, &boundary_context).await?; }
         Ok(result)

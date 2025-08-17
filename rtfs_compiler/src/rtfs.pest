@@ -30,10 +30,10 @@ special_float = @{ "##Inf" | "##-Inf" | "##NaN" }
 
 // String parsing rules:
 // escape_sequence must be defined before string_char, and string_char before string.
-escape_sequence = { "\\" ~ ("\"" | "\\" | "n" | "t" | "r") } // For tool: \\ becomes \, \" becomes ", \\ becomes \
-string_char     = { escape_sequence | (!("\"" | "\\\\") ~ ANY) }   // For tool: \" becomes ", \\\\ becomes \
-string          =  { "\"" ~ string_char* ~ "\"" }                 // For tool: \" becomes "
-
+// Allow any escaped non-newline character to provide broader compatibility with test strings
+escape_sequence = { "\\" ~ (!"\n" ~ ANY) } // E.g. \" or \n or \t or any escaped punctuation
+string_char     = { escape_sequence | (!("\"" | "\\") ~ ANY) }
+string          =  { "\"" ~ string_char* ~ "\"" }
 boolean = @{ "true" | "false" }
 nil     = @{ "nil" ~ !identifier_chars }
 
@@ -96,11 +96,15 @@ primitive_type = { symbol | keyword }
 // Complex Type Rules (assuming list-based syntax like [:vector T], [:map ...], etc.)
 optional_marker = { "?" }
 vector_type    = { "[" ~ ":vector" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
+// Map type entry supports two styles used in tests:
+//  - Bracketed single-entry: [ :key Type ]
+//  - Braced compact form: { :key Type :key2 Type2 }
 map_type_entry = { "[" ~ keyword ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ optional_marker)? ~ WHITESPACE* ~ "]" }
+map_type_entry_braced = { "{" ~ (WHITESPACE* ~ keyword ~ WHITESPACE* ~ type_expr ~ (WHITESPACE* ~ optional_marker)? )+ ~ WHITESPACE* ~ "}" }
 // [Key Type Optional?]
 map_type_wildcard = { "[" ~ ":*" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
 // [:* WildcardType]
-map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ (map_type_wildcard | map_type_entry))* ~ WHITESPACE* ~ "]" }
+map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ (map_type_wildcard | map_type_entry | map_type_entry_braced))* ~ WHITESPACE* ~ "]" }
 tuple_type          = { "[" ~ ":tuple" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 param_type          = { type_expr }
 variadic_param_type = { "&" ~ WHITESPACE* ~ type_expr }

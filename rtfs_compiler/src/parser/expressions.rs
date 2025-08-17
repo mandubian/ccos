@@ -1,4 +1,4 @@
-use super::common::{build_keyword, build_literal, build_map_key, build_symbol};
+use super::common::{build_literal, build_map_key, build_symbol};
 use super::errors::{pair_to_source_span, PestParseError};
 use super::special_forms::{
     build_def_expr, build_defn_expr, build_discover_agents_expr, build_do_expr, build_fn_expr,
@@ -7,7 +7,7 @@ use super::special_forms::{
 };
 use super::utils::unescape;
 use super::Rule;
-use crate::ast::{Expression, MapKey, Symbol};
+use crate::ast::{Expression, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -35,6 +35,13 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
         Rule::resource_ref => build_resource_ref(pair),
+        // Task context access currently desugars to a plain symbol (strip leading '@' and optional ':')
+        Rule::task_context_access => {
+            let raw = pair.as_str(); // e.g. "@task-id" or "@:context-key"
+            let without_at = &raw[1..];
+            let symbol_name = if let Some(rest) = without_at.strip_prefix(':') { rest } else { without_at };
+            Ok(Expression::Symbol(Symbol(symbol_name.to_string())))
+        }
 
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
