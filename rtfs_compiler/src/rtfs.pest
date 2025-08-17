@@ -274,6 +274,9 @@ WHEN = @{ "when" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":
 // Agent discovery expression: (discover-agents criteria-map options-map?)
 discover_agents_expr = { "(" ~ discover_agents_keyword ~ expression ~ expression? ~ ")" }
 
+// (plan ...) has been removed from RTFS core grammar. Plans are CCOS objects represented
+// either as function calls (ccos/plan ...) or maps at the CCOS layer and extracted there.
+
 // --- Top-Level Definitions ---
 module_keyword = @{ "module" }
 import_keyword = @{ "import" }

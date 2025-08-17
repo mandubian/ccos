@@ -1,0 +1,112 @@
+# CCOS Arbiter Configuration Example
+# This file demonstrates how to configure different types of arbiters
+
+# Engine type: template, llm, delegating, hybrid, dummy
+engine_type = "dummy"
+
+# LLM configuration (required for llm, delegating, and hybrid engines)
+[llm_config]
+provider = "stub"  # openai, anthropic, stub, echo
+model = "gpt-4"
+api_key = ""  # Set via environment variable CCOS_LLM_API_KEY
+max_tokens = 4096
+temperature = 0.7
+system_prompt = "You are a helpful AI assistant that generates structured intents and RTFS plans."
+intent_prompt_template = "Convert the following natural language request into a structured Intent: {input}"
+plan_prompt_template = "Generate an RTFS plan to achieve this intent: {intent}"
+
+# Delegation configuration (required for delegating engine)
+[delegation_config]
+enabled = true
+threshold = 0.65
+max_candidates = 3
+min_skill_hits = 2
+
+[delegation_config.agent_registry]
+registry_type = "in_memory"
+agents = [
+    { agent_id = "sentiment_agent", name = "Sentiment Analysis Agent", capabilities = ["sentiment", "analysis"], cost = 0.1, trust_score = 0.9 },
+    { agent_id = "optimization_agent", name = "Performance Optimization Agent", capabilities = ["optimization", "performance"], cost = 0.2, trust_score = 0.8 }
+]
+
+# Capability configuration
+[capability_config]
+validate_capabilities = true
+suggest_alternatives = true
+default_capabilities = [":ccos.echo", ":ccos.analyze", ":ccos.optimize"]
+
+[capability_config.marketplace]
+marketplace_type = "local"
+discovery_endpoints = []
+
+[capability_config.marketplace.cache_config]
+enabled = true
+ttl_seconds = 3600
+max_size = 1000
+
+# Security configuration
+[security_config]
+validate_intents = true
+validate_plans = true
+max_plan_complexity = 100
+allowed_capability_prefixes = [":ccos.", ":safe."]
+blocked_capability_prefixes = [":dangerous.", ":internal."]
+
+# Template configuration (required for template and hybrid engines)
+[template_config]
+fallback = "default"
+
+[[template_config.intent_patterns]]
+name = "sentiment_analysis"
+pattern = "(?i)sentiment|analyze.*feeling|emotion"
+intent_name = "analyze_user_sentiment"
+goal_template = "Analyze sentiment from {input}"
+constraints = ["privacy"]
+preferences = ["accuracy"]
+
+[[template_config.intent_patterns]]
+name = "optimization"
+pattern = "(?i)optimize|improve.*performance|speed.*up"
+intent_name = "optimize_response_time"
+goal_template = "Optimize performance for {input}"
+constraints = ["budget"]
+preferences = ["speed"]
+
+[[template_config.intent_patterns]]
+name = "greeting"
+pattern = "(?i)hello|hi|greet"
+intent_name = "greet_user"
+goal_template = "Greet the user"
+constraints = []
+preferences = ["friendliness"]
+
+[[template_config.plan_templates]]
+name = "sentiment_analysis"
+rtfs_template = """
+(do
+    (step "Fetch Data" (call :ccos.echo "fetched user interactions"))
+    (step "Analyze Sentiment" (call :ccos.echo "sentiment: positive"))
+    (step "Generate Report" (call :ccos.echo "report generated"))
+)
+"""
+variables = []
+
+[[template_config.plan_templates]]
+name = "optimization"
+rtfs_template = """
+(do
+    (step "Get Metrics" (call :ccos.echo "metrics collected"))
+    (step "Identify Bottlenecks" (call :ccos.echo "bottlenecks identified"))
+    (step "Apply Optimizations" (call :ccos.echo "optimizations applied"))
+)
+"""
+variables = []
+
+[[template_config.plan_templates]]
+name = "greeting"
+rtfs_template = """
+(do
+    (step "Generate Greeting" (call :ccos.echo "Hello! How can I help you today?"))
+)
+"""
+variables = []

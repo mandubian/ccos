@@ -121,6 +121,11 @@ mod tests {
             status: PlanStatus::Draft,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             metadata: HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            policies: HashMap::new(),
+            capabilities_required: Vec::new(),
+            annotations: HashMap::new(),
         }
     }
 

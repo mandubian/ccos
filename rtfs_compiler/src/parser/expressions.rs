@@ -54,6 +54,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::match_expr => Ok(Expression::Match(build_match_expr(pair)?)),
         Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(pair)?))),
         Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(pair)?)),
+        // Plan is not a core special form; handled as FunctionCall/Map at CCOS layer
         Rule::list => {
             let _list_pair_span = pair_to_source_span(&pair);
             let mut inner_pairs = pair.into_inner().peekable();

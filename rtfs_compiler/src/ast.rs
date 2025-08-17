@@ -824,6 +824,9 @@ pub struct DiscoverAgentsExpr {
     pub options: Option<Box<Expression>>, // Optional Map expression
 }
 
+// Removed PlanExpr from RTFS core AST. Plan is a CCOS object extracted from
+// standard RTFS expressions (FunctionCall or Map) at the CCOS layer.
+
 
 
 // --- Delegation Hint ---

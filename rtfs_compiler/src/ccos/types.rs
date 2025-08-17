@@ -129,6 +129,13 @@ pub struct Plan {
     pub status: PlanStatus,
     pub created_at: u64,
     pub metadata: HashMap<String, Value>,
+    
+    // New first-class Plan attributes
+    pub input_schema: Option<Value>,      // Schema for plan inputs
+    pub output_schema: Option<Value>,     // Schema for plan outputs
+    pub policies: HashMap<String, Value>, // Execution policies (max-cost, retry, etc.)
+    pub capabilities_required: Vec<String>, // Capabilities this plan depends on
+    pub annotations: HashMap<String, Value>, // Provenance and metadata (prompt-id, version, etc.)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -298,6 +305,12 @@ impl Plan {
             status: PlanStatus::Draft,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             metadata: HashMap::new(),
+            // New fields with defaults
+            input_schema: None,
+            output_schema: None,
+            policies: HashMap::new(),
+            capabilities_required: Vec::new(),
+            annotations: HashMap::new(),
         }
     }
 
@@ -307,6 +320,34 @@ impl Plan {
         plan.language = language;
         plan.body = body;
         plan
+    }
+    
+    /// Create a new Plan with full first-class attributes
+    pub fn new_with_schemas(
+        name: Option<String>,
+        intent_ids: Vec<IntentId>,
+        body: PlanBody,
+        input_schema: Option<Value>,
+        output_schema: Option<Value>,
+        policies: HashMap<String, Value>,
+        capabilities_required: Vec<String>,
+        annotations: HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            plan_id: format!("plan-{}", Uuid::new_v4()),
+            name,
+            intent_ids,
+            language: PlanLanguage::Rtfs20,
+            body,
+            status: PlanStatus::Draft,
+            created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            metadata: HashMap::new(),
+            input_schema,
+            output_schema,
+            policies,
+            capabilities_required,
+            annotations,
+        }
     }
 }
 

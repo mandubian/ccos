@@ -309,7 +309,7 @@ impl From<Expression> for Value {
                 Value::String(format!("@{}", resource_name))
             }
 
-            Expression::LogStep(log_expr) => {
+            Expression::LogStep(_log_expr) => {
                 // For now, return a placeholder for log step expressions
                 Value::String("#<log-step>".to_string())
             }
