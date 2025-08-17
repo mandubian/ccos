@@ -78,7 +78,7 @@ fn test_ir_runtime_delegation() {
     map.insert("test-fn".to_string(), ExecTarget::LocalModel("echo-model".to_string()));
     let delegation_engine = Arc::new(StaticDelegationEngine::new(map));
     
-    let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
     
     // The IR runtime should have the model registry available
     // This test verifies that the delegation engine integration is complete

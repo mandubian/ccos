@@ -16,7 +16,7 @@ mod tests {
         registry.add_module_path(test_modules_path);
         
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
         
         // Test loading math.utils module
         let result = registry.load_module("math.utils", &mut ir_runtime);
@@ -77,7 +77,7 @@ mod tests {
         // by trying to load a non-existent module and checking the error message
         let mut test_registry = ModuleRegistry::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
         
         let result = test_registry.load_module("non.existent.module", &mut ir_runtime);
         assert!(result.is_err());
@@ -94,7 +94,7 @@ mod tests {
     fn test_circular_dependency_detection() {
         let mut registry = ModuleRegistry::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
         
         // Since loading_stack is private, we can't directly test circular dependency detection.
         // Instead, we test that loading a non-existent module fails appropriately.
