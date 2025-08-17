@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
-use super::types::{ExecutionResult, Intent, Plan};
+use crate::ccos::types::{ExecutionResult, Intent, Plan};
 
 /// High-level interface exposed by all Arbiter implementations.
 ///

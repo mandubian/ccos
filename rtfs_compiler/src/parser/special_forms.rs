@@ -1354,6 +1354,9 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
     }
 }
 
+/// Build a plan expression from parsed pairs
+// build_plan_expr removed: Plan is not a core special form in RTFS anymore.
+
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
@@ -1441,6 +1444,8 @@ mod tests {
         let defn_expr = result.unwrap();
         assert_eq!(defn_expr.delegation_hint, None);
     }
+
+    // Plan parsing test removed; plan is handled at CCOS layer (as FunctionCall/Map)
 }
 
 
