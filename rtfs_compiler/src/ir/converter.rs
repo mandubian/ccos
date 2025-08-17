@@ -1001,7 +1001,7 @@ impl<'a> IrConverter<'a> {
                     })
                 }
             }
-
+            // Plan is not a core RTFS expression; handled in CCOS layer
         }
     }
 
