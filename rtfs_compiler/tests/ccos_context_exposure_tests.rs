@@ -8,6 +8,8 @@ use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
 use tokio::sync::RwLock;
+use tokio::runtime::Runtime;
+use rtfs_compiler::runtime::stdlib::register_default_capabilities;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::runtime::values::Value;
@@ -20,6 +22,13 @@ fn test_context_exposure_with_step_overrides() {
     // Build marketplace and host
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
+  // Register default local capabilities (ccos.echo, ccos.math.add, etc.)
+  let rt = Runtime::new().expect("tokio runtime");
+  rt.block_on(async {
+    register_default_capabilities(&capability_marketplace)
+      .await
+      .expect("register default capabilities");
+  });
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("causal chain")));
 
     // Allow exposure for ccos.echo

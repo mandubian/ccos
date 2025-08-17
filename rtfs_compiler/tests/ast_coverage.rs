@@ -331,15 +331,14 @@ mod special_form_coverage {
             })
         );
         
-        // Let with type annotation - currently parser treats "x:int" as symbol name
-        // This reflects current parser behavior rather than ideal behavior  
+        // Let with type annotation now parsed into pattern symbol "x" + explicit type annotation :int
         assert_expr_parses_to!(
             "(let [x:int 42] x)",
             Expression::Let(LetExpr {
                 bindings: vec![
                     LetBinding {
-                        pattern: Pattern::Symbol(Symbol("x:int".to_string())),
-                        type_annotation: None,
+                        pattern: Pattern::Symbol(Symbol("x".to_string())),
+                        type_annotation: Some(TypeExpr::Primitive(PrimitiveType::Int)),
                         value: Box::new(Expression::Literal(Literal::Integer(42))),
                     }
                 ],
@@ -442,16 +441,16 @@ mod special_form_coverage {
             })
         );
         
-        // Function with type annotations - currently parser treats "x:int" as symbol name 
+        // Function with parameter and return type annotations
         assert_expr_parses_to!(
             "(fn [x:int]:int (* x 2))",
             Expression::Fn(FnExpr {
                 params: vec![ParamDef {
-                    pattern: Pattern::Symbol(Symbol("x:int".to_string())),
-                    type_annotation: None,
+                    pattern: Pattern::Symbol(Symbol("x".to_string())),
+                    type_annotation: Some(TypeExpr::Primitive(PrimitiveType::Int)),
                 }],
                 variadic_param: None,
-                return_type: Some(TypeExpr::Alias(Symbol("int".to_string()))),
+                return_type: Some(TypeExpr::Primitive(PrimitiveType::Int)),
                 body: vec![Expression::FunctionCall {
                     callee: Box::new(Expression::Symbol(Symbol("*".to_string()))),
                     arguments: vec![
@@ -493,12 +492,12 @@ mod special_form_coverage {
             }))
         );
         
-        // Def with type annotation - currently parser treats "x:int" as symbol name
+        // Def with type annotation
         assert_expr_parses_to!(
             "(def x:int 42)",
             Expression::Def(Box::new(DefExpr {
-                symbol: Symbol("x:int".to_string()),
-                type_annotation: None,
+                symbol: Symbol("x".to_string()),
+                type_annotation: Some(TypeExpr::Primitive(PrimitiveType::Int)),
                 value: Box::new(Expression::Literal(Literal::Integer(42))),
             }))
         );

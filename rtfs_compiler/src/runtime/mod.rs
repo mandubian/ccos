@@ -178,7 +178,10 @@ impl Runtime {
     }
 
     pub fn evaluate(&self, input: &str) -> Result<Value, RuntimeError> {
-        let parsed = parser::parse(input).expect("Failed to parse input");
+        let parsed = match parser::parse(input) {
+            Ok(p) => p,
+            Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {:?}", e))),
+        };
         let module_registry = ModuleRegistry::new();
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
@@ -198,7 +201,10 @@ impl Runtime {
     }
 
     pub fn evaluate_with_stdlib(&self, input: &str) -> Result<Value, RuntimeError> {
-        let parsed = parser::parse(input).expect("Failed to parse input");
+        let parsed = match parser::parse(input) {
+            Ok(p) => p,
+            Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {:?}", e))),
+        };
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));

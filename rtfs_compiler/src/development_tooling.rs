@@ -27,8 +27,9 @@ struct IrStrategy {
 impl IrStrategy {
     fn new() -> Self {
         let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
+        // Use compatibility constructor which builds a default host + security context
         Self {
-            ir_runtime: IrRuntime::new(delegation_engine),
+            ir_runtime: IrRuntime::new_compat(delegation_engine),
         }
     }
 }

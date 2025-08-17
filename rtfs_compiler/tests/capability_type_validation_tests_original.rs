@@ -2,7 +2,7 @@ use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, Literal, Keywor
 use rtfs_compiler::runtime::{Value, RuntimeResult, RuntimeError};
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
-use std::collections::HashMap;
+use std::collections::HashMap; // HashMap for capability input param assembly
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -126,7 +126,10 @@ async fn test_capability_execution_with_invalid_input() {
     
     // Test execution with invalid input (integer instead of string)
     let invalid_input = Value::Integer(42);
-    let result = marketplace.execute_capability("string.uppercase", &invalid_input).await;
+    let mut params = std::collections::HashMap::new();
+    params.insert("input".to_string(), invalid_input.clone());
+    // Use validation path to trigger schema enforcement
+    let result = marketplace.execute_with_validation("string.uppercase", &params).await;
     
     // Should fail due to input validation
     assert!(result.is_err());
@@ -369,14 +372,16 @@ async fn test_capability_output_validation() {
         Some(string_schema),
     ).await.unwrap();
     
-    // Test with correct output
-    let correct_input = Value::Boolean(true);
-    let result = marketplace.execute_capability("test.output", &correct_input).await;
-    assert!(result.is_ok());
+    // Test with correct output (validated path)
+    let mut ok_params = std::collections::HashMap::new();
+    ok_params.insert("input".to_string(), Value::Boolean(true));
+    let result = marketplace.execute_with_validation("test.output", &ok_params).await;
+    assert!(result.is_ok(), "Expected success for correct output, got {:?}", result);
     
     // Test with incorrect output (handler returns wrong type)
-    let incorrect_input = Value::Boolean(false);
-    let result = marketplace.execute_capability("test.output", &incorrect_input).await;
+    let mut bad_params = std::collections::HashMap::new();
+    bad_params.insert("input".to_string(), Value::Boolean(false));
+    let result = marketplace.execute_with_validation("test.output", &bad_params).await;
     
     // Should fail due to output validation
     assert!(result.is_err());

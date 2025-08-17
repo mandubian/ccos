@@ -615,7 +615,7 @@ impl ModuleRegistry {
         } else {
             // Before failing, try to load the module
             let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
-            let mut ir_runtime = IrRuntime::new(delegation_engine); // Temporary runtime
+            let mut ir_runtime = IrRuntime::new_compat(delegation_engine); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
                     if let Some(export) = module.exports.borrow().get(symbol_name) {
@@ -714,7 +714,7 @@ impl ModuleAwareRuntime {
     pub fn new() -> Self {
         let module_registry = ModuleRegistry::new();
         ModuleAwareRuntime {
-            ir_runtime: IrRuntime::new(Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()))),
+            ir_runtime: IrRuntime::new_compat(Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()))),
             module_registry,
         }
     }
@@ -945,7 +945,7 @@ mod tests {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
 
         // Test loading the math.utils module
         let module = registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -966,7 +966,7 @@ mod tests {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
 
         // Load math.utils module from file
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -985,7 +985,7 @@ mod tests {
             .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let mut ir_runtime = IrRuntime::new(delegation_engine);
+    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
         let result = registry.load_module("module-a", &mut ir_runtime);
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();
