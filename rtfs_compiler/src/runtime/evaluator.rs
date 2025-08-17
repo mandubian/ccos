@@ -68,6 +68,7 @@ impl Evaluator {
         special_forms.insert("step-if".to_string(), Self::eval_step_if_form);
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
+    special_forms.insert("set!".to_string(), Self::eval_set_form);
         // Add other evaluator-level special forms here in the future
         
         // LLM execution bridge (M1)
@@ -1665,6 +1666,44 @@ impl Evaluator {
         }
         println!("[{}] {}", level, messages.join(" "));
         Ok(Value::Nil)
+    }
+
+    fn eval_set_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Expect (set! sym expr)
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "set!".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // First arg must be a symbol
+        let sym = match &args[0] {
+            Expression::Symbol(s) => s.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "symbol".to_string(),
+                    actual: format!("{:?}", args[0]),
+                    operation: "set!".to_string(),
+                })
+            }
+        };
+
+        // Evaluate value
+        let value = self.eval_expr(&args[1], env)?;
+
+        // Update the binding in the nearest reachable scope. Because Environment
+        // does not expose mutable access to parent scopes, we adopt a conservative
+        // approach: if the symbol is reachable via lookup, define it in the
+        // current environment (this may shadow a parent binding). If it's not
+        // found at all, return an error.
+        if env.lookup(&sym).is_some() {
+            env.define(&sym, value.clone());
+            Ok(Value::Nil)
+        } else {
+            Err(RuntimeError::Generic(format!("set!: symbol '{}' not found", sym.0)))
+        }
     }
 
     fn eval_try_catch(

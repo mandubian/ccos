@@ -629,6 +629,28 @@ impl IrRuntime {
                 self.execute_destructure(pattern, &value, env, module_registry)?;
                 Ok(Value::Nil)
             }
+            IrNode::Program { forms, .. } => {
+                // Execute contained forms in the provided environment
+                let mut result = Value::Nil;
+                for form in forms {
+                    result = self.execute_node(form, env, false, module_registry)?;
+                }
+                Ok(result)
+            }
+            IrNode::VariableBinding { name, .. } => {
+                // VariableBinding nodes are patterns used in let/param lists and
+                // should not be executed directly. Return Nil to allow higher-level
+                // constructs to handle bindings.
+                let _ = name; // silence unused
+                Ok(Value::Nil)
+            }
+            IrNode::Param { binding, .. } => {
+                // Params are structural; evaluating a Param alone yields Nil.
+                // The binding sub-node will be processed by the function/closure
+                // construction logic elsewhere.
+                let _ = binding;
+                Ok(Value::Nil)
+            }
             _ => Err(RuntimeError::Generic(format!(
                 "Execution for IR node {:?} is not yet implemented",
                 node.id()
@@ -966,6 +988,96 @@ impl IrRuntime {
             "reduce" => self.ir_reduce_with_context(args, env, module_registry),
             "every?" => self.ir_every_with_context(args, env, module_registry),
             "some?" => self.ir_some_with_context(args, env, module_registry),
+            "update" => {
+                // Provide a minimal implementation of update usable by IR tests.
+                if args.len() < 3 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: "update".to_string(),
+                        expected: "3".to_string(),
+                        actual: args.len(),
+                    });
+                }
+
+                let collection = &args[0];
+                let key = &args[1];
+                let updater = &args[2];
+
+                match collection {
+                    Value::Map(map) => {
+                        // Convert key to MapKey
+                        let map_key = match key {
+                            Value::Keyword(k) => crate::ast::MapKey::Keyword(k.clone()),
+                            Value::String(s) => crate::ast::MapKey::String(s.clone()),
+                            Value::Integer(i) => crate::ast::MapKey::Integer(*i),
+                            _ => return Err(RuntimeError::TypeError {
+                                expected: "map-key".to_string(),
+                                actual: key.type_name().to_string(),
+                                operation: "update".to_string(),
+                            }),
+                        };
+
+                        let current = map.get(&map_key).cloned().unwrap_or(Value::Nil);
+                        // Apply updater if it's a builtin or callable value
+                        let new_val = match updater {
+                            Value::Function(Function::Builtin(b)) => (b.func)(vec![current.clone()])?,
+                            Value::Function(Function::BuiltinWithContext(b)) => {
+                                self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)?
+                            }
+                            Value::Function(_) => self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)?,
+                            _ => return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: updater.type_name().to_string(),
+                                operation: "update".to_string(),
+                            }),
+                        };
+
+                        // Build new map
+                        let mut new_map = map.clone();
+                        new_map.insert(map_key, new_val);
+                        Ok(Value::Map(new_map))
+                    }
+                    Value::Vector(vec) => {
+                        // Expect integer index
+                        let idx = match key {
+                            Value::Integer(i) => *i as usize,
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "integer index".to_string(),
+                                    actual: key.type_name().to_string(),
+                                    operation: "update".to_string(),
+                                })
+                            }
+                        };
+
+                        if idx >= vec.len() {
+                            return Err(RuntimeError::IndexOutOfBounds { index: idx as i64, length: vec.len() });
+                        }
+
+                        let current = vec[idx].clone();
+                        let new_val = match updater {
+                            Value::Function(Function::Builtin(b)) => (b.func)(vec![current.clone()])?,
+                            Value::Function(Function::BuiltinWithContext(b)) => {
+                                self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)?
+                            }
+                            Value::Function(_) => self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)?,
+                            _ => return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: updater.type_name().to_string(),
+                                operation: "update".to_string(),
+                            }),
+                        };
+
+                        let mut new_vec = vec.clone();
+                        new_vec[idx] = new_val;
+                        Ok(Value::Vector(new_vec))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "map or vector".to_string(),
+                        actual: collection.type_name().to_string(),
+                        operation: "update".to_string(),
+                    }),
+                }
+            }
             _ => {
                 // For other BuiltinWithContext functions, we need a proper evaluator
                 // For now, return an error

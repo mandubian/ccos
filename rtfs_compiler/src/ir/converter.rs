@@ -187,6 +187,47 @@ impl<'a> IrConverter<'a> {
                     return_type: Box::new(IrType::Int),
                 },
             ),
+            // Collection helpers
+            (
+                "keys",
+                IrType::Function {
+                    param_types: vec![IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
+                },
+            ),
+            (
+                "update",
+                IrType::Function {
+                    param_types: vec![
+                        IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+                        IrType::Any,
+                        IrType::Function {
+                            param_types: vec![IrType::Any],
+                            variadic_param_type: None,
+                            return_type: Box::new(IrType::Any),
+                        },
+                    ],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }),
+                },
+            ),
+            (
+                "thread/sleep",
+                IrType::Function {
+                    param_types: vec![IrType::Int],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Nil),
+                },
+            ),
+            (
+                "Thread/sleep",
+                IrType::Function {
+                    param_types: vec![IrType::Int],
+                    variadic_param_type: None,
+                    return_type: Box::new(IrType::Nil),
+                },
+            ),
             // Comparison operators
             (
                 "=",
@@ -1125,6 +1166,9 @@ impl<'a> IrConverter<'a> {
                 "step" => {
                     return self.convert_step_special_form(arguments);
                 }
+                "set!" => {
+                    return self.convert_set_special_form(arguments);
+                }
                 _ => {}
             }
         }
@@ -1148,6 +1192,44 @@ impl<'a> IrConverter<'a> {
             function,
             arguments: ir_arguments,
             ir_type: return_type,
+            source_location: None,
+        })
+    }
+
+    /// Convert set! special form: (set! symbol expr)
+    fn convert_set_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+        if arguments.len() != 2 {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "set!".to_string(),
+                message: "set! requires exactly 2 arguments: symbol and expression".to_string(),
+            });
+        }
+
+        // First argument must be a symbol
+        let sym = if let Expression::Symbol(Symbol(name)) = &arguments[0] {
+            name.clone()
+        } else {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "set!".to_string(),
+                message: "first argument to set! must be a symbol".to_string(),
+            });
+        };
+
+        // Convert the RHS expression
+        let value_node = Box::new(self.convert_expression(arguments[1].clone())?);
+
+        // Create an assignment node using IrNode::Apply with a special builtin 'set!'
+        let id = self.next_id();
+        Ok(IrNode::Apply {
+            id,
+            function: Box::new(IrNode::VariableBinding {
+                id: 0,
+                name: format!("set!::{}", sym),
+                ir_type: IrType::Any,
+                source_location: None,
+            }),
+            arguments: vec![*value_node],
+            ir_type: IrType::Any,
             source_location: None,
         })
     }

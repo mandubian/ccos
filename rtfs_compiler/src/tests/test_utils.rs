@@ -76,7 +76,7 @@ pub fn create_llm_test_evaluator() -> Evaluator {
 /// Creates a new IR runtime.
 pub fn create_test_ir_runtime() -> crate::runtime::ir_runtime::IrRuntime {
     let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    crate::runtime::ir_runtime::IrRuntime::new(delegation_engine)
+    crate::runtime::ir_runtime::IrRuntime::new_compat(delegation_engine)
 }
 
 /// A helper to parse, convert to IR, and execute code using the IR runtime.
