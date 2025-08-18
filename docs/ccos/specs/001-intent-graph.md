@@ -564,3 +564,15 @@ Plans can dynamically interact with the Intent Graph:
 ```
 
 This comprehensive integration ensures that the Intent Graph serves as the central nervous system of CCOS, connecting strategic goals with tactical execution while maintaining a complete audit trail of all system behavior.
+
+### 11.4. Orchestrator → Intent Graph Status Wiring
+
+When the Orchestrator completes (or fails) the execution of a `Plan`, it will update the primary associated `Intent` in the `IntentGraph` to reflect the final outcome. This wiring ensures that the long-term memory is consistent with observed execution results and enables downstream processes (archival, retries, delegation) to make decisions based on accurate status.
+
+- On successful execution, the `Intent.status` will be transitioned to `Completed` and `updated_at` refreshed.
+- On failure, the `Intent.status` will be transitioned to `Failed` and `updated_at` refreshed. The intent's `metadata` may contain audit entries recording the failure reason via the `IntentLifecycleManager`.
+
+Implementation notes:
+- The Orchestrator locks the shared `IntentGraph` (`Arc<Mutex<IntentGraph>>`), fetches the primary intent by id, and calls `update_intent(intent, &ExecutionResult)` which performs the status transition and persists the intent via the graph storage layer.
+- The operation is best-effort: if the Graph lock fails or the intent is not found, the Orchestrator will return an error; this behavior can be hardened later to make the update non-fatal depending on policy.
+

@@ -142,7 +142,30 @@ impl Orchestrator {
         }?; // Note: This '?' will propagate the error from the Err case
 
         // --- 5. Update Intent Graph ---
-        // TODO: Add logic to update the status of the associated intents in the IntentGraph.
+        // Update the primary intent(s) associated with this plan so the IntentGraph
+        // reflects the final outcome of plan execution. We attempt to lock the
+        // IntentGraph, load the primary intent, and call the graph's
+        // update_intent helper which will set status/updated_at and persist the
+        // change via storage.
+        {
+            let mut graph = self
+                .intent_graph
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+            if !primary_intent_id.is_empty() {
+                if let Some(intent) = graph.get_intent(&primary_intent_id) {
+                    // update_intent consumes/stores the StorableIntent and will
+                    // set status to Completed or Failed based on ExecutionResult.
+                    graph
+                        .update_intent(intent, &execution_result)
+                        .map_err(|e| RuntimeError::Generic(format!(
+                            "IntentGraph update failed for {}: {:?}",
+                            primary_intent_id, e
+                        )))?;
+                }
+            }
+        }
 
         Ok(execution_result)
     }

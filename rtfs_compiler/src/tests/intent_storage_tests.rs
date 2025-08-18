@@ -98,3 +98,35 @@ mod intent_storage_tests {
         assert_eq!(matching_intents[0].goal, "Completed task");
     }
 }
+
+#[cfg(test)]
+mod intent_graph_update_integration {
+    use crate::ccos::intent_graph::IntentGraph;
+    use crate::ccos::types::{StorableIntent, ExecutionResult, IntentStatus};
+    use crate::runtime::values::Value;
+
+    #[test]
+    fn orchestrator_style_update_sets_status() {
+        let mut graph = IntentGraph::new().expect("Failed to create IntentGraph");
+
+        // Store intent
+        let intent = StorableIntent::new("Integration test goal".to_string());
+        let id = intent.intent_id.clone();
+        graph.store_intent(intent.clone()).expect("store_intent failed");
+
+        // Update to success
+        let success = ExecutionResult { success: true, value: Value::String("ok".to_string()), metadata: Default::default() };
+        graph.update_intent(graph.get_intent(&id).unwrap(), &success).expect("update_intent failed");
+        let got = graph.get_intent(&id).expect("get_intent failed");
+        assert_eq!(got.status, IntentStatus::Completed);
+
+        // New intent -> fail
+        let intent2 = StorableIntent::new("Integration test goal 2".to_string());
+        let id2 = intent2.intent_id.clone();
+        graph.store_intent(intent2.clone()).expect("store_intent failed");
+        let fail = ExecutionResult { success: false, value: Value::String("err".to_string()), metadata: Default::default() };
+        graph.update_intent(graph.get_intent(&id2).unwrap(), &fail).expect("update_intent failed");
+        let got2 = graph.get_intent(&id2).expect("get_intent failed");
+        assert_eq!(got2.status, IntentStatus::Failed);
+    }
+}
