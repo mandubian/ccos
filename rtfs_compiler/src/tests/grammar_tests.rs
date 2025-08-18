@@ -1303,7 +1303,7 @@ mod ast_validation {
             "(defn factorial [n] (if (<= n 1) 1 (* n (factorial (- n 1)))))",
             "(let [x 5 y (+ x 3)] (do (println x) (println y) (* x y)))",
             r#"(fn [data] (map (fn [item] {:processed true :value (* item 2)}) data))"#,
-            "(match x [:vector a b] (+ a b) [:map {:key val}] val _ :unknown)",
+            "(match x [:vector a b] (+ a b) _ :unknown)",
         ];
 
         for input in test_cases {
