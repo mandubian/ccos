@@ -18,7 +18,7 @@
 ;; Parallel with function calls
 (do
   (defn slow-add [a b] 
-    (Thread/sleep 100) ; simulate slow operation
+    (thread/sleep 100) ; simulate slow operation
     (+ a b))
   (parallel
     [result1 (slow-add 1 2)]
@@ -121,8 +121,8 @@
 ;; Parallel with timeout (if supported)
 (parallel
   [quick 42]
-  [slow (do (Thread/sleep 5000) "done")]
-  [medium (do (Thread/sleep 1000) "medium")])
+  [slow (do (thread/sleep 5000) "done")]
+  [medium (do (thread/sleep 1000) "medium")])
 ;; Expected: Results as they complete
 
 ;; Parallel execution order independence

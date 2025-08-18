@@ -35,7 +35,7 @@
 ;; Expected: "done" (with multiple log entries)
 
 ;; Task context access
-@task-id
+@plan-id
 ;; Expected: Task ID from context (if set)
 
 @user-id
@@ -161,11 +161,11 @@
 ;; Expected: System initialization with resource tracking
 
 ;; Hierarchical task context
-(let [parent-task @parent-task-id
+(let [parent-action @parent-action-id
       subtask-id (generate-uuid)]
   (step :info "Starting subtask" 
-        {:parent parent-task :subtask subtask-id})
-  (with-task-context {:task-id subtask-id :parent parent-task}
+        {:parent parent-action :subtask subtask-id})
+  (with-task-context {:plan-id subtask-id :parent parent-action}
     (step :debug "In subtask context")
     (subtask-operation)))
 ;; Expected: Subtask execution with hierarchical context

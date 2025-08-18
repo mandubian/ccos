@@ -4,6 +4,7 @@
 use crate::ast::*;
 use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
+use crate::runtime::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -214,14 +215,6 @@ impl<'a> IrConverter<'a> {
             ),
             (
                 "thread/sleep",
-                IrType::Function {
-                    param_types: vec![IrType::Int],
-                    variadic_param_type: None,
-                    return_type: Box::new(IrType::Nil),
-                },
-            ),
-            (
-                "Thread/sleep",
                 IrType::Function {
                     param_types: vec![IrType::Int],
                     variadic_param_type: None,
@@ -1218,17 +1211,26 @@ impl<'a> IrConverter<'a> {
         // Convert the RHS expression
         let value_node = Box::new(self.convert_expression(arguments[1].clone())?);
 
-        // Create an assignment node using IrNode::Apply with a special builtin 'set!'
+        // Create an assignment node using IrNode::Apply with a builtin function call
         let id = self.next_id();
         Ok(IrNode::Apply {
             id,
             function: Box::new(IrNode::VariableBinding {
                 id: 0,
-                name: format!("set!::{}", sym),
+                name: "set!".to_string(),
                 ir_type: IrType::Any,
                 source_location: None,
             }),
-            arguments: vec![*value_node],
+            arguments: vec![
+                IrNode::VariableRef {
+                    id: self.next_id(),
+                    name: sym,
+                    binding_id: 0, // Will be resolved during execution
+                    ir_type: IrType::Any,
+                    source_location: None,
+                },
+                *value_node,
+            ],
             ir_type: IrType::Any,
             source_location: None,
         })
