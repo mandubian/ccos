@@ -1,6 +1,7 @@
 # Track all chat JSON files with Git LFS
 chats/chat_*.json filter=lfs diff=lfs merge=lfs -text
-chats/chat_49.json filter=lfs diff=lfs merge=lfs -text
-chats/chat_50.json filter=lfs diff=lfs merge=lfs -text
-chats/chat_51.json filter=lfs diff=lfs merge=lfs -text
 chats/*.md filter=lfs diff=lfs merge=lfs -text
+chats/chat_118.json filter=lfs diff=lfs merge=lfs -text
+chats/chat_120.json filter=lfs diff=lfs merge=lfs -text
+chats/chat_115.json filter=lfs diff=lfs merge=lfs -text
+chats/chat_117.json filter=lfs diff=lfs merge=lfs -text
