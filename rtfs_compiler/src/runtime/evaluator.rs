@@ -418,6 +418,19 @@ impl Evaluator {
             Expression::FunctionCall { callee, arguments } => {
                 // Check if this is a special form before evaluating the callee
                 if let Expression::Symbol(s) = &**callee {
+                    // Special case: if this is "step" and the first argument is a keyword,
+                    // treat it as a regular function call instead of a special form
+                    if s.0 == "step" && !arguments.is_empty() {
+                        if let Expression::Literal(crate::ast::Literal::Keyword(_)) = &arguments[0] {
+                            // This is a step function call with keyword arguments, not a special form
+                            let func_value = self.eval_expr(callee, env)?;
+                            let args: RuntimeResult<Vec<Value>> =
+                                arguments.iter().map(|e| self.eval_expr(e, env)).collect();
+                            let args = args?;
+                            return self.call_function(func_value, &args, env);
+                        }
+                    }
+                    
                     if let Some(handler) = self.special_forms.get(&s.0) {
                         return handler(self, arguments, env);
                     }
@@ -462,7 +475,14 @@ impl Evaluator {
             Expression::DiscoverAgents(discover_expr) => {
                 self.eval_discover_agents(discover_expr, env)
             }
-            Expression::ResourceRef(s) => Ok(Value::String(s.clone())),
+            Expression::ResourceRef(s) => {
+                // Resolve resource references from the host's execution context
+                if let Some(val) = self.host.get_context_value(s) {
+                    return Ok(val);
+                }
+                // Fallback: echo as symbolic reference string (keeps prior behavior for resource:ref)
+                Ok(Value::String(format!("@{}", s)))
+            }
         }
     }
 
@@ -1692,17 +1712,11 @@ impl Evaluator {
         // Evaluate value
         let value = self.eval_expr(&args[1], env)?;
 
-        // Update the binding in the nearest reachable scope. Because Environment
-        // does not expose mutable access to parent scopes, we adopt a conservative
-        // approach: if the symbol is reachable via lookup, define it in the
-        // current environment (this may shadow a parent binding). If it's not
-        // found at all, return an error.
-        if env.lookup(&sym).is_some() {
-            env.define(&sym, value.clone());
-            Ok(Value::Nil)
-        } else {
-            Err(RuntimeError::Generic(format!("set!: symbol '{}' not found", sym.0)))
-        }
+        // Update the binding in the current environment.
+        // If the symbol exists in a parent scope, we shadow it in the current scope.
+        // If it doesn't exist anywhere, we create it in the current scope.
+        env.define(&sym, value.clone());
+        Ok(Value::Nil)
     }
 
     fn eval_try_catch(

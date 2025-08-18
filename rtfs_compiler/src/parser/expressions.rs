@@ -35,12 +35,12 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
         Rule::resource_ref => build_resource_ref(pair),
-        // Task context access currently desugars to a plain symbol (strip leading '@' and optional ':')
+        // Resource context access creates a ResourceRef
         Rule::task_context_access => {
-            let raw = pair.as_str(); // e.g. "@task-id" or "@:context-key"
+            let raw = pair.as_str(); // e.g. "@plan-id" or "@:context-key"
             let without_at = &raw[1..];
-            let symbol_name = if let Some(rest) = without_at.strip_prefix(':') { rest } else { without_at };
-            Ok(Expression::Symbol(Symbol(symbol_name.to_string())))
+            let resource_name = if let Some(rest) = without_at.strip_prefix(':') { rest } else { without_at };
+            Ok(Expression::ResourceRef(resource_name.to_string()))
         }
 
         Rule::vector => Ok(Expression::Vector(
