@@ -8,7 +8,7 @@ This index lists the documents moved into this archive folder when the `rtfs_com
 If you want a file restored to `rtfs_compiler/`, run:
 
 ```bash
-git mv docs/rtfs_compiler/archived/<FILENAME> rtfs_compiler/
+git mv docs/archive/rtfs_compiler/<FILENAME> rtfs_compiler/
 git commit -m "docs(rtfs_compiler): restore <FILENAME> from archive"
 ```
 
@@ -51,6 +51,6 @@ Archived files (alpha order)
 
 Notes
 - This index is intentionally lightweight. For deeper context, open the archived file; each completion report contains links to PRs, commits, and tests used for verification.
-- If you prefer a different archive location (e.g., `docs/archive/`), I can move the files and update this index accordingly.
+- These files were relocated from the former path `docs/rtfs_compiler/archived/` to the consolidated archive root `docs/archive/rtfs_compiler/`.
 
 Maintainers: if you add more archived files, please append them to this index with a short description.
