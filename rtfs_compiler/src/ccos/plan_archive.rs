@@ -110,6 +110,8 @@ mod tests {
     use super::*;
     use crate::runtime::values::Value;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::PlanBody;
+    use crate::PlanStatus;
 
     fn create_test_plan() -> Plan {
         Plan {
