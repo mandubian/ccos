@@ -98,6 +98,12 @@ vector = left-bracket { expression } right-bracket;
 map = left-brace { key-value-pair } right-brace;
 key-value-pair = expression expression;
 
+/* Map type (braced) annotation */
+/* A braced map type may be used in type annotations and schema-like literals.
+  Example: [:map { :host :string :port :int }] represents a map with keys
+  :host (string) and :port (int).
+*/
+
 /* Capability calls */
 capability-call = left-paren "capability" keyword expression right-paren;
 ```
