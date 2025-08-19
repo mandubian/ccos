@@ -266,3 +266,7 @@ The implementation demonstrates:
 - **Proper documentation** synchronized with implementation
 
 This work establishes a solid foundation for future RTFS 2.0 development and ensures the language is ready for integration with CCOS components.
+
+## Next actions
+
+- Commit remaining documentation edits and push branch `wt/rtfs-stability-core` so PR #121 contains all spec updates and the stability summary.
