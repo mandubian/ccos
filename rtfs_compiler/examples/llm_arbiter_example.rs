@@ -12,7 +12,7 @@ use rtfs_compiler::ccos::arbiter::llm_provider::{
     LlmProviderConfig,
     LlmProvider,
 };
-use rtfs_compiler::ccos::types::{Intent, Plan};
+use rtfs_compiler::ccos::types::StorableIntent;
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -69,23 +69,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📋 Testing Plan Generation");
     println!("--------------------------");
     
-    let test_intent = Intent {
+    let test_intent = StorableIntent {
         intent_id: "test_intent_123".to_string(),
         name: Some("analyze_user_sentiment".to_string()),
-        goal: "Analyze user sentiment from interactions".to_string(),
-        original_request: "analyze sentiment".to_string(),
+    original_request: "analyze sentiment".to_string(),
+    rtfs_intent_source: "(intent ... )".to_string(),
+    goal: "Analyze user sentiment from interactions".to_string(),
         constraints: {
             let mut map = HashMap::new();
-            map.insert("accuracy".to_string(), rtfs_compiler::runtime::values::Value::String("high".to_string()));
+            map.insert("accuracy".to_string(), "high".to_string());
             map
         },
         preferences: {
             let mut map = HashMap::new();
-            map.insert("speed".to_string(), rtfs_compiler::runtime::values::Value::String("medium".to_string()));
+            map.insert("speed".to_string(), "medium".to_string());
             map
         },
-        success_criteria: Some(rtfs_compiler::runtime::values::Value::String("sentiment_analyzed".to_string())),
+        success_criteria: Some("sentiment_analyzed".to_string()),
+        parent_intent: None,
+        child_intents: vec![],
+        triggered_by: rtfs_compiler::ccos::types::TriggerSource::HumanRequest,
+        generation_context: rtfs_compiler::ccos::types::GenerationContext { arbiter_version: "stub".to_string(), generation_timestamp: 0, input_context: HashMap::new(), reasoning_trace: None },
         status: rtfs_compiler::ccos::types::IntentStatus::Active,
+        priority: 0,
         created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
         updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
         metadata: HashMap::new(),
@@ -99,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   ✅ Generated Plan:");
     println!("      ID: {}", plan.plan_id);
     println!("      Name: {:?}", plan.name);
-    println!("      Description: {:?}", plan.description);
+    println!("      Name: {:?}", plan.name);
     println!("      Language: {:?}", plan.language);
     println!("      Status: {:?}", plan.status);
     
@@ -112,7 +118,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔍 Testing Plan Validation");
     println!("--------------------------");
     
-    let validation = provider.validate_plan(&plan).await?;
+    // validate_plan expects the textual plan content; extract RTFS body when available
+    let plan_body_text = match &plan.body {
+        rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
+        _ => String::new(),
+    };
+    let validation = provider.validate_plan(&plan_body_text).await?;
     
     println!("   ✅ Validation Result:");
     println!("      Valid: {}", validation.is_valid);
@@ -135,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
+            prompts: None,
         }),
         delegation_config: None,
         capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),

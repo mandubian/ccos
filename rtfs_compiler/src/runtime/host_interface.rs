@@ -38,7 +38,6 @@ pub trait HostInterface: std::fmt::Debug {
 
     /// Clear the most recent step exposure override (called on step exit)
     fn clear_step_exposure_override(&self);
-
     /// Returns a value from the current execution context, if available.
     /// Common keys include:
     /// - "plan-id"
@@ -47,4 +46,21 @@ pub trait HostInterface: std::fmt::Debug {
     /// - "parent-action-id"
     /// Returns None when the value is not available.
     fn get_context_value(&self, key: &str) -> Option<Value>;
+
+    /// Optional lifecycle helper: prepare host for a new execution (called before plan start).
+    /// Many callers in the codebase call `prepare_execution(plan_id, intent_ids)` as a convenience
+    /// wrapper around `set_execution_context` — provide a default implementation that sets a
+    /// sensible parent_action_id and returns Ok(()) so implementations may override if needed.
+    fn prepare_execution(&self, plan_id: String, intent_ids: Vec<String>) -> RuntimeResult<()> {
+        // Default parent action id when not provided by the caller
+        self.set_execution_context(plan_id, intent_ids, "0".to_string());
+        Ok(())
+    }
+
+    /// Optional lifecycle helper: cleanup host after execution (called after plan end).
+    /// Default implementation clears the execution context and returns Ok(()).
+    fn cleanup_execution(&self) -> RuntimeResult<()> {
+        self.clear_execution_context();
+        Ok(())
+    }
 }

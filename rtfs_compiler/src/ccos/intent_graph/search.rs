@@ -87,6 +87,7 @@ impl SemanticSearchEngine {
 
         // Boost active intents
         match intent.status {
+            IntentStatus::Executing => score *= 1.3,
             IntentStatus::Active => score *= 1.2,
             IntentStatus::Failed => score *= 1.1,
             IntentStatus::Suspended => score *= 0.8,

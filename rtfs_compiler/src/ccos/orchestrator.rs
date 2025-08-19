@@ -18,7 +18,7 @@ use crate::parser::parse_expression;
 
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
-use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody};
+use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody, IntentStatus};
 
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
@@ -71,6 +71,18 @@ impl Orchestrator {
             ).with_parent(None)
         )?;
 
+        // Mark primary intent as Executing (transition Active -> Executing) before evaluation begins
+        if !primary_intent_id.is_empty() {
+            if let Ok(mut graph) = self.intent_graph.lock() {
+                let _ = graph.set_intent_status_with_audit(
+                    &primary_intent_id,
+                    IntentStatus::Executing,
+                    Some(&plan_id),
+                    Some(&plan_action_id),
+                );
+            }
+        }
+
         // --- 2. Set up the Host and Evaluator ---
         let host = Arc::new(RuntimeHost::new(
             self.causal_chain.clone(),
@@ -113,7 +125,8 @@ impl Orchestrator {
         host.clear_execution_context();
 
         // --- 4. Log Final Plan Status ---
-        let execution_result = match final_result {
+        // Construct execution_result while ensuring we still update the IntentGraph on failure.
+        let (execution_result, error_opt) = match final_result {
             Ok(value) => {
                 let res = ExecutionResult { success: true, value, metadata: Default::default() };
                 self.log_action(
@@ -125,9 +138,10 @@ impl Orchestrator {
                     .with_parent(Some(plan_action_id.clone()))
                     .with_result(res.clone())
                 )?;
-                Ok(res)
+                (res, None)
             },
             Err(e) => {
+                // Log aborted action first
                 self.log_action(
                     Action::new(
                         ActionType::PlanAborted,
@@ -137,9 +151,12 @@ impl Orchestrator {
                     .with_parent(Some(plan_action_id.clone()))
                     .with_error(&e.to_string())
                 )?;
-                Err(e)
+                // Represent failure value explicitly (string) so ExecutionResult always has a Value
+                let failure_value = RtfsValue::String(format!("error: {}", e));
+                let res = ExecutionResult { success: false, value: failure_value, metadata: Default::default() };
+                (res, Some(e))
             }
-        }?; // Note: This '?' will propagate the error from the Err case
+        };
 
         // --- 5. Update Intent Graph ---
         // Update the primary intent(s) associated with this plan so the IntentGraph
@@ -154,11 +171,14 @@ impl Orchestrator {
                 .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
             if !primary_intent_id.is_empty() {
-                if let Some(intent) = graph.get_intent(&primary_intent_id) {
-                    // update_intent consumes/stores the StorableIntent and will
-                    // set status to Completed or Failed based on ExecutionResult.
+                if let Some(pre_intent) = graph.get_intent(&primary_intent_id) {
                     graph
-                        .update_intent(intent, &execution_result)
+                        .update_intent_with_audit(
+                            pre_intent,
+                            &execution_result,
+                            Some(&plan_id),
+                            Some(&plan_action_id),
+                        )
                         .map_err(|e| RuntimeError::Generic(format!(
                             "IntentGraph update failed for {}: {:?}",
                             primary_intent_id, e
@@ -167,7 +187,8 @@ impl Orchestrator {
             }
         }
 
-        Ok(execution_result)
+    // Propagate original error after updating intent status
+    if let Some(err) = error_opt { Err(err) } else { Ok(execution_result) }
     }
 
     /// Serialize the current execution context from an evaluator (checkpoint helper)

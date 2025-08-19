@@ -39,8 +39,15 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::task_context_access => {
             let raw = pair.as_str(); // e.g. "@plan-id" or "@:context-key"
             let without_at = &raw[1..];
-            let resource_name = if let Some(rest) = without_at.strip_prefix(':') { rest } else { without_at };
-            Ok(Expression::ResourceRef(resource_name.to_string()))
+            // If the token is "@:<name>" we treat it as a Symbol (task-context access alias),
+            // otherwise it's a ResourceRef (explicit resource path like @plan-id).
+            if raw.starts_with("@:") {
+                let resource_name = &without_at[1..]; // skip the ':'
+                Ok(Expression::Symbol(Symbol(resource_name.to_string())))
+            } else {
+                let resource_name = without_at;
+                Ok(Expression::ResourceRef(resource_name.to_string()))
+            }
         }
 
         Rule::vector => Ok(Expression::Vector(
