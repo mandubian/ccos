@@ -96,6 +96,9 @@ The RTFS 2.0 Secure Standard Library provides a comprehensive set of pure, side-
 - `(vals map)` - Returns vector of map values
 - `(merge map1 map2)` - Returns new map with map2 entries merged into map1
 
+### Extended Map Operations
+
+
 ### Vector Operations
 
 - `(vector ...)` - Creates a new vector
@@ -105,10 +108,16 @@ The RTFS 2.0 Secure Standard Library provides a comprehensive set of pure, side-
 - `(for [var collection] body)` - Executes body for each element in collection
 - `(dotimes n body)` - Executes body n times
 
-### File and Data Operations
+### Additional Loop & Control Constructs
 
-- `(read-file path)` - Reads file content (placeholder implementation)
-- `(process-data data)` - Processes data (placeholder implementation)
+- `(for [binding-form collection] body)` - Collection iteration with support for destructuring in `binding-form` (destructuring support partially implemented; some complex destructuring cases remain and are tracked under Issue #111)
+
+
+### New Standard Library Helpers
+
+- `(read-file path)` - Reads file content from the given `path` and returns string content. In secure contexts this is a placeholder and requires explicit capability in CCOS environments.
+- `(process-data data)` - Convenience helper for common data transformations; placeholder for user implementations or capability-backed processing.
+- `(deftype name type-expr)` - Define a named type alias for the type system; lightweight aliasing helper (partial implementation).
 
 ### Type System
 
