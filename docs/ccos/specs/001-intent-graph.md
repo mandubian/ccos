@@ -567,12 +567,27 @@ This comprehensive integration ensures that the Intent Graph serves as the centr
 
 ### 11.4. Orchestrator → Intent Graph Status Wiring
 
-When the Orchestrator completes (or fails) the execution of a `Plan`, it will update the primary associated `Intent` in the `IntentGraph` to reflect the final outcome. This wiring ensures that the long-term memory is consistent with observed execution results and enables downstream processes (archival, retries, delegation) to make decisions based on accurate status.
+When the Orchestrator begins executing a `Plan`, it now performs a two-phase status update on the primary associated `Intent` in the `IntentGraph`:
 
-- On successful execution, the `Intent.status` will be transitioned to `Completed` and `updated_at` refreshed.
-- On failure, the `Intent.status` will be transitioned to `Failed` and `updated_at` refreshed. The intent's `metadata` may contain audit entries recording the failure reason via the `IntentLifecycleManager`.
+1. **Start**: Transition `Active → Executing` (best-effort). This marks the intent as in-flight and is useful for UIs / monitoring to distinguish queued vs running work.
+2. **Completion**: After plan evaluation, transition `Executing → Completed | Failed` based on the `ExecutionResult`.
+
+If the initial transition cannot be recorded (e.g. transient lock error), plan execution proceeds; the final terminal status update is still attempted.
+
+Current terminal transitions implemented:
+```
+Active -----> Executing -----> Completed
+   \                          /
+  \-----> Executing -----> Failed
+```
+Other pre-existing statuses (Suspended, Archived) are not modified by the Orchestrator; policies may later block execution if an intent is not `Active`.
+
+On successful execution, the `Intent.status` becomes `Completed` and `updated_at` is refreshed.
+On failure, the `Intent.status` becomes `Failed` and `updated_at` is refreshed. The intent's `metadata` may contain audit entries recording the failure reason via the `IntentLifecycleManager` (future enhancement).
 
 Implementation notes:
-- The Orchestrator locks the shared `IntentGraph` (`Arc<Mutex<IntentGraph>>`), fetches the primary intent by id, and calls `update_intent(intent, &ExecutionResult)` which performs the status transition and persists the intent via the graph storage layer.
-- The operation is best-effort: if the Graph lock fails or the intent is not found, the Orchestrator will return an error; this behavior can be hardened later to make the update non-fatal depending on policy.
+- Start phase uses a new `set_intent_status(intent_id, IntentStatus::Executing)` helper (best-effort, non-fatal on error).
+- Completion phase calls `update_intent(intent, &ExecutionResult)` which derives `Completed` / `Failed` and persists.
+- Both operations refresh `updated_at`.
+- Future: emit `IntentStatusChanged` causal actions for each transition (currently implicit through plan lifecycle actions).
 

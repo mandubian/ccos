@@ -500,6 +500,7 @@ impl IntentGraphQueryAPI {
 
         // Determine color based on status
         let color = match intent.status {
+            IntentStatus::Executing => "#FFC107".to_string(),   // Amber for in-flight
             IntentStatus::Active => "#4CAF50".to_string(),     // Green
             IntentStatus::Completed => "#2196F3".to_string(),  // Blue
             IntentStatus::Failed => "#F44336".to_string(),     // Red

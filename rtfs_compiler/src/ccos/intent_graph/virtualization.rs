@@ -183,6 +183,7 @@ impl Default for VirtualizationConfig {
     fn default() -> Self {
         let mut status_weights = HashMap::new();
         status_weights.insert(IntentStatus::Active, 1.0);
+    status_weights.insert(IntentStatus::Executing, 1.1);
         status_weights.insert(IntentStatus::Completed, 0.3);
         status_weights.insert(IntentStatus::Failed, 0.5);
         status_weights.insert(IntentStatus::Suspended, 0.2);

@@ -30,7 +30,7 @@ special_float = @{ "##Inf" | "##-Inf" | "##NaN" }
 
 // String parsing rules:
 // escape_sequence must be defined before string_char, and string_char before string.
-// Only allow explicit escape sequences that the parser unescape routine supports
+// Only allow explicit escape sequences that the parser unescape routine supports.
 // This keeps string token contents predictable for downstream unescape handling.
 escape_sequence = { "\\" ~ ("n" | "t" | "r" | "\\" | "\"") } // E.g. \" or \n or \t
 string_char     = { escape_sequence | (!("\"" | "\\") ~ ANY) }

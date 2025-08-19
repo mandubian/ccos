@@ -59,6 +59,11 @@ impl HostInterface for MockHost {
     fn clear_step_exposure_override(&self) {
         // Mock implementation
     }
+
+    fn get_context_value(&self, _key: &str) -> Option<Value> {
+        // Return None for all keys in the mock
+        None
+    }
 }
 
 #[cfg(test)]
