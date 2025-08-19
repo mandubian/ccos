@@ -82,6 +82,7 @@ pub trait IntentEventSink: Send + Sync + Debug {
         - 2025-08-19: Initial specification and integration tests added.
         ``` 
 - No best-effort logging: lifecycle transitions call the sink and treat failures as runtime errors.
+- Note: when the lifecycle manager marks an intent as "complete", the resulting stored intent status depends on the execution outcome: if `ExecutionResult.success` is false, the lifecycle will transition the intent to `Failed` (and emit a `Failed` audit action) rather than `Completed`.
 
 Implementations
 - NoopIntentEventSink
