@@ -329,6 +329,7 @@ impl IntentLifecycleManager {
     pub async fn archive_completed_intents(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
     ) -> Result<(), RuntimeError> {
         let completed_filter = IntentFilter {
             status: Some(IntentStatus::Completed),
@@ -340,7 +341,7 @@ impl IntentLifecycleManager {
         for mut intent in completed_intents {
             self.transition_intent_status(
                 storage,
-                None, // causal_chain - will be added when IntentGraph has access
+                event_sink,
                 &mut intent,
                 IntentStatus::Archived,
                 "Auto-archived completed intent".to_string(),
@@ -355,7 +356,7 @@ impl IntentLifecycleManager {
     pub async fn transition_intent_status(
         &self,
         storage: &mut IntentGraphStorage,
-        causal_chain: Option<&mut crate::ccos::causal_chain::CausalChain>,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent: &mut StorableIntent,
         new_status: IntentStatus,
         reason: String,
@@ -399,18 +400,14 @@ impl IntentLifecycleManager {
         // Store the updated intent
         storage.update_intent(intent).await?;
         
-        // Log to Causal Chain if available
-        if let Some(chain) = causal_chain {
-            let plan_id = triggering_plan_id.unwrap_or("intent-lifecycle-manager");
-            chain.log_intent_status_change(
-                &plan_id.to_string(),
-                &intent.intent_id,
-                self.status_to_string(&old_status),
-                self.status_to_string(&new_status),
-                &reason,
-                None, // triggering_action_id - could be enhanced later
-            )?;
-        }
+        // Emit status change event for mandatory audit
+        event_sink.emit_status_change(
+            &intent.intent_id,
+            &old_status,
+            &new_status,
+            &reason,
+            triggering_plan_id,
+        )?;
         
         Ok(())
     }
@@ -419,23 +416,24 @@ impl IntentLifecycleManager {
     pub async fn complete_intent(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
         let mut intent = storage.get_intent(intent_id).await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
         
-        let reason = if result.success {
-            "Intent completed successfully".to_string()
+        let (target_status, reason) = if result.success {
+            (IntentStatus::Completed, "Intent completed successfully".to_string())
         } else {
-            format!("Intent completed with errors: {:?}", result.value)
+            (IntentStatus::Failed, format!("Intent failed with errors: {:?}", result.value))
         };
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
-            IntentStatus::Completed,
+            target_status,
             reason,
             None, // triggering_plan_id - will be enhanced later
         ).await?;
@@ -447,6 +445,7 @@ impl IntentLifecycleManager {
     pub async fn fail_intent(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         error_message: String,
     ) -> Result<(), RuntimeError> {
@@ -455,7 +454,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
             IntentStatus::Failed,
             format!("Intent failed: {}", error_message),
@@ -469,6 +468,7 @@ impl IntentLifecycleManager {
     pub async fn suspend_intent(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -477,7 +477,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
             IntentStatus::Suspended,
             format!("Intent suspended: {}", reason),
@@ -491,6 +491,7 @@ impl IntentLifecycleManager {
     pub async fn resume_intent(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -499,7 +500,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
             IntentStatus::Active,
             format!("Intent resumed: {}", reason),
@@ -513,6 +514,7 @@ impl IntentLifecycleManager {
     pub async fn archive_intent(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -521,7 +523,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
             IntentStatus::Archived,
             format!("Intent archived: {}", reason),
@@ -535,6 +537,7 @@ impl IntentLifecycleManager {
     pub async fn reactivate_intent(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -543,7 +546,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
             IntentStatus::Active,
             format!("Intent reactivated: {}", reason),
@@ -694,6 +697,7 @@ impl IntentLifecycleManager {
     pub async fn bulk_transition_intents(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_ids: &[IntentId],
         new_status: IntentStatus,
         reason: String,
@@ -702,7 +706,7 @@ impl IntentLifecycleManager {
         let mut errors = Vec::new();
         
         for intent_id in intent_ids {
-            match self.transition_intent_by_id(storage, intent_id, new_status.clone(), reason.clone()).await {
+            match self.transition_intent_by_id(storage, event_sink, intent_id, new_status.clone(), reason.clone()).await {
                 Ok(()) => successful_transitions.push(intent_id.clone()),
                 Err(e) => errors.push((intent_id.clone(), e)),
             }
@@ -727,6 +731,7 @@ impl IntentLifecycleManager {
     async fn transition_intent_by_id(
         &self,
         storage: &mut IntentGraphStorage,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         new_status: IntentStatus,
         reason: String,
@@ -736,7 +741,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            None, // causal_chain - will be added when IntentGraph has access
+            event_sink,
             &mut intent,
             new_status,
             reason,
