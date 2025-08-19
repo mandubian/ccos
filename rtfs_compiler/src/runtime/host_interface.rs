@@ -38,4 +38,13 @@ pub trait HostInterface: std::fmt::Debug {
 
     /// Clear the most recent step exposure override (called on step exit)
     fn clear_step_exposure_override(&self);
+
+    /// Returns a value from the current execution context, if available.
+    /// Common keys include:
+    /// - "plan-id"
+    /// - "intent-id"
+    /// - "intent-ids"
+    /// - "parent-action-id"
+    /// Returns None when the value is not available.
+    fn get_context_value(&self, key: &str) -> Option<Value>;
 }

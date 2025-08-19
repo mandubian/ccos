@@ -65,6 +65,17 @@
 - Multiple catch clauses
 - Finally blocks
 
+#### Set! Assignment
+```clojure
+(set! variable-name new-value)
+(set! x 42)
+(set! config {:host "localhost" :port 8080})
+```
+- Assigns a value to a symbol in the current environment
+- Creates new bindings or shadows existing ones
+- Works in both AST and IR runtimes
+- Returns nil
+
 ### 2. Data Structures ✅ IMPLEMENTED
 
 #### Vectors

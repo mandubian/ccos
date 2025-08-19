@@ -1,267 +1,240 @@
-# RTFS 2.0 Secure Standard Library Specification
+# RTFS 2.0 Secure Standard Library
 
 ## Overview
 
-The RTFS Secure Standard Library provides a comprehensive set of pure, deterministic functions that are safe to execute in any context without security concerns. This library implements the requirements specified in Issue #51, expanding the RTFS secure standard library with additional pure functions.
+The RTFS 2.0 Secure Standard Library provides a comprehensive set of pure, side-effect-free functions that are safe to execute in any context. These functions form the foundation of RTFS 2.0's functional programming model and are designed to work seamlessly with the CCOS integration.
 
-## Design Principles
+## Core Principles
 
-- **Pure Functions**: All functions are pure and deterministic
-- **Security**: No dangerous operations (file I/O, network access, system calls)
-- **Composability**: Functions can be combined to build complex operations
-- **Type Safety**: Strong type checking and error handling
-- **Performance**: Efficient implementations for common operations
+- **Pure Functions**: All functions are pure with no side effects
+- **Type Safety**: Comprehensive type checking and validation
+- **Immutable Operations**: All operations return new values rather than modifying existing ones
+- **CCOS Integration**: Designed to work with CCOS orchestration and step special forms
+- **Security First**: No direct I/O or system access without explicit capabilities
 
 ## Function Categories
 
-### 1. Essential Math Functions
+### Collection Operations
 
-#### `abs`
-- **Purpose**: Returns the absolute value of a number
-- **Signature**: `(abs number) -> number`
-- **Examples**:
-  ```rtfs
-  (abs -5)     ; => 5
-  (abs 3.14)   ; => 3.14
-  (abs 0)      ; => 0
-  ```
+#### Basic Collection Functions
 
-#### `mod`
-- **Purpose**: Returns the remainder of division
-- **Signature**: `(mod dividend divisor) -> number`
-- **Examples**:
-  ```rtfs
-  (mod 7 3)    ; => 1
-  (mod 10 2)   ; => 0
-  (mod -7 3)   ; => -1
-  ```
+- `(first collection)` - Returns the first element of a collection
+- `(rest collection)` - Returns all elements except the first
+- `(nth collection index)` - Returns the element at the specified index
+- `(count collection)` - Returns the number of elements in a collection
+- `(empty? collection)` - Returns true if collection is empty
+- `(conj collection item)` - Adds an item to the end of a collection
+- `(cons item collection)` - Adds an item to the beginning of a collection
 
-#### `sqrt`
-- **Purpose**: Returns the square root of a number
-- **Signature**: `(sqrt number) -> number`
-- **Examples**:
-  ```rtfs
-  (sqrt 16)    ; => 4.0
-  (sqrt 2)     ; => 1.4142135623730951
-  (sqrt 0)     ; => 0.0
-  ```
+#### Collection Transformation
 
-#### `pow`
-- **Purpose**: Returns a number raised to a power
-- **Signature**: `(pow base exponent) -> number`
-- **Examples**:
-  ```rtfs
-  (pow 2 3)    ; => 8
-  (pow 5 2)    ; => 25
-  (pow 2 0.5)  ; => 1.4142135623730951
-  ```
+- `(map f collection)` - Applies function f to each element
+- `(map-indexed f collection)` - Applies function f to each element with its index
+- `(filter pred collection)` - Returns elements that satisfy predicate
+- `(remove pred collection)` - Returns elements that don't satisfy predicate
+- `(reduce f initial collection)` - Reduces collection using function f
+- `(sort collection)` - Returns sorted collection
+- `(sort-by key-fn collection)` - Returns collection sorted by key function
+- `(reverse collection)` - Returns collection in reverse order
 
-### 2. String Utilities
+#### Collection Analysis
 
-#### `string-upper`
-- **Purpose**: Converts a string to uppercase
-- **Signature**: `(string-upper string) -> string`
-- **Examples**:
-  ```rtfs
-  (string-upper "hello")     ; => "HELLO"
-  (string-upper "World")     ; => "WORLD"
-  (string-upper "123")       ; => "123"
-  ```
+- `(frequencies collection)` - Returns map of element frequencies
+- `(distinct collection)` - Returns collection with duplicates removed
+- `(contains? collection item)` - Returns true if collection contains item
+- `(some? pred collection)` - Returns true if any element satisfies predicate
+- `(every? pred collection)` - Returns true if all elements satisfy predicate
 
-#### `string-lower`
-- **Purpose**: Converts a string to lowercase
-- **Signature**: `(string-lower string) -> string`
-- **Examples**:
-  ```rtfs
-  (string-lower "WORLD")     ; => "world"
-  (string-lower "Hello")     ; => "hello"
-  (string-lower "123")       ; => "123"
-  ```
+### Sequence Generation
 
-#### `string-trim`
-- **Purpose**: Removes leading and trailing whitespace from a string
-- **Signature**: `(string-trim string) -> string`
-- **Examples**:
-  ```rtfs
-  (string-trim "  hi  ")     ; => "hi"
-  (string-trim "hello")      ; => "hello"
-  (string-trim "  ")         ; => ""
-  ```
+- `(range end)` - Returns sequence from 0 to end-1
+- `(range start end)` - Returns sequence from start to end-1
+- `(range start end step)` - Returns sequence from start to end-1 with step
 
-### 3. Collection Utilities
+### String Operations
 
-#### `reverse`
-- **Purpose**: Reverses a vector or string
-- **Signature**: `(reverse collection) -> collection`
-- **Examples**:
-  ```rtfs
-  (reverse [1 2 3])          ; => [3 2 1]
-  (reverse "hello")          ; => "olleh"
-  (reverse [])               ; => []
-  ```
+- `(str ...)` - Converts all arguments to strings and concatenates them
+- `(subs string start)` - Returns substring from start to end
+- `(subs string start end)` - Returns substring from start to end
+- `(split string separator)` - Splits string by separator
+- `(join collection separator)` - Joins collection elements with separator
 
-#### `last`
-- **Purpose**: Returns the last element of a vector or string
-- **Signature**: `(last collection) -> element`
-- **Examples**:
-  ```rtfs
-  (last [1 2 3])             ; => 3
-  (last "hello")             ; => "o"
-  (last [])                  ; => nil
-  ```
+### Number Operations
 
-#### `take`
-- **Purpose**: Returns the first n elements of a collection
-- **Signature**: `(take count collection) -> collection`
-- **Examples**:
-  ```rtfs
-  (take 2 [1 2 3 4])         ; => [1 2]
-  (take 3 "hello")           ; => "hel"
-  (take 0 [1 2 3])           ; => []
-  ```
+- `(inc n)` - Returns n + 1
+- `(dec n)` - Returns n - 1
+- `(+ ...)` - Addition of numbers
+- `(- ...)` - Subtraction of numbers
+- `(* ...)` - Multiplication of numbers
+- `(/ ...)` - Division of numbers
+- `(mod n divisor)` - Returns remainder of division
 
-#### `drop`
-- **Purpose**: Returns all elements after the first n elements
-- **Signature**: `(drop count collection) -> collection`
-- **Examples**:
-  ```rtfs
-  (drop 2 [1 2 3 4])         ; => [3 4]
-  (drop 2 "hello")           ; => "llo"
-  (drop 0 [1 2 3])           ; => [1 2 3]
-  ```
+### Predicate Functions
 
-#### `distinct`
-- **Purpose**: Returns a collection with duplicate elements removed
-- **Signature**: `(distinct collection) -> collection`
-- **Examples**:
-  ```rtfs
-  (distinct [1 2 2 3])       ; => [1 2 3]
-  (distinct "hello")         ; => "helo"
-  (distinct [])              ; => []
-  ```
+- `(even? n)` - Returns true if n is even
+- `(odd? n)` - Returns true if n is odd
+- `(zero? n)` - Returns true if n is zero
+- `(pos? n)` - Returns true if n is positive
+- `(neg? n)` - Returns true if n is negative
+- `(= ...)` - Equality comparison
+- `(not= ...)` - Inequality comparison
+- `(< ...)` - Less than comparison
+- `(<= ...)` - Less than or equal comparison
+- `(> ...)` - Greater than comparison
+- `(>= ...)` - Greater than or equal comparison
 
-### 4. Functional Predicates
+### Map Operations
 
-#### `every?`
-- **Purpose**: Returns true if the predicate is true for all elements
-- **Signature**: `(every? predicate collection) -> boolean`
-- **Examples**:
-  ```rtfs
-  (every? (fn [x] (> x 0)) [1 2 3])     ; => true
-  (every? (fn [x] (> x 0)) [-1 2 3])    ; => false
-  (every? (fn [c] (= c (string-upper c))) "HELLO") ; => true
-  ```
+- `(get map key)` - Returns value for key in map
+- `(get map key default)` - Returns value for key or default if not found
+- `(assoc map key value)` - Returns new map with key-value pair added
+- `(dissoc map key)` - Returns new map with key removed
+- `(update map key f)` - Returns new map with key updated by function f
+- `(update map key default f)` - Returns new map with key updated by function f, using default if key doesn't exist
+- `(update map key default f arg1 arg2)` - Returns new map with key updated by function f with additional arguments
+- `(keys map)` - Returns vector of map keys
+- `(vals map)` - Returns vector of map values
+- `(merge map1 map2)` - Returns new map with map2 entries merged into map1
 
-#### `some?`
-- **Purpose**: Returns true if the predicate is true for at least one element
-- **Signature**: `(some? predicate collection) -> boolean`
-- **Examples**:
-  ```rtfs
-  (some? (fn [x] (> x 0)) [-1 -2 3])    ; => true
-  (some? (fn [x] (> x 0)) [-1 -2 -3])   ; => false
-  (some? (fn [c] (= c (string-upper c))) "Hello") ; => true
-  ```
+### Vector Operations
 
-## Implementation Status
+- `(vector ...)` - Creates a new vector
 
-### ✅ Completed Functions
-- **Phase 1**: All essential math functions (`abs`, `mod`, `sqrt`, `pow`)
-- **Phase 2**: All string utilities (`string-upper`, `string-lower`, `string-trim`)
-- **Phase 3**: All collection utilities (`reverse`, `last`, `take`, `drop`, `distinct`)
+### Loop Constructs
 
-### ⚠️ Partially Implemented Functions
-- **Phase 4**: Functional predicates (`every?`, `some?`)
-  - **Status**: Implemented in the main evaluator
-  - **Issue**: Requires IR runtime support for `BuiltinWithContext` functions
-  - **Workaround**: Functions work in the main evaluator but not in the IR runtime
+- `(for [var collection] body)` - Executes body for each element in collection
+- `(dotimes n body)` - Executes body n times
+
+### File and Data Operations
+
+- `(read-file path)` - Reads file content (placeholder implementation)
+- `(process-data data)` - Processes data (placeholder implementation)
+
+### Type System
+
+- `(deftype name type-expr)` - Defines a custom type alias (placeholder implementation)
+- `(vec collection)` - Converts collection to vector
+- `(get vector index)` - Returns element at index
+- `(get vector index default)` - Returns element at index or default if out of bounds
+- `(assoc vector index value)` - Returns new vector with element at index replaced
+- `(subvec vector start)` - Returns subvector from start to end
+- `(subvec vector start end)` - Returns subvector from start to end
+
+### List Operations
+
+- `(list ...)` - Creates a new list
+- `(first list)` - Returns first element of list
+- `(rest list)` - Returns all elements except first
+- `(cons item list)` - Adds item to beginning of list
+- `(conj list item)` - Adds item to end of list
+
+### Type Conversion
+
+- `(str value)` - Converts value to string
+- `(int value)` - Converts value to integer
+- `(float value)` - Converts value to float
+- `(bool value)` - Converts value to boolean
+- `(vec collection)` - Converts collection to vector
+- `(list collection)` - Converts collection to list
+- `(set collection)` - Converts collection to set
+
+### Utility Functions
+
+- `(identity x)` - Returns x unchanged
+- `(constantly x)` - Returns function that always returns x
+- `(complement f)` - Returns function that returns opposite of f
+- `(partial f ...)` - Returns function with some arguments partially applied
+- `(comp ...)` - Returns composition of functions
+
+## CCOS Integration
+
+All standard library functions are designed to work seamlessly with CCOS orchestration:
+
+```clojure
+; Use step special form for automatic action logging
+(step "Process Data" 
+  (let [data [1 2 3 4 5]
+        filtered (filter even? data)
+        doubled (map #(* 2 %) filtered)]
+    (step "Log Result" (println doubled))
+    doubled))
+
+; Use with capability calls
+(step "External Processing"
+  (let [result (call :external-api.process data)]
+    (step "Transform Result"
+      (map-indexed #(assoc %2 :index %1) result))))
+```
 
 ## Error Handling
 
-All functions include comprehensive error handling:
+All functions provide comprehensive error handling:
 
-- **Arity Mismatch**: Functions validate the correct number of arguments
-- **Type Errors**: Functions validate argument types and provide clear error messages
-- **Bounds Checking**: Collection functions handle empty collections and out-of-bounds access
-- **Edge Cases**: Functions handle edge cases like empty strings, empty vectors, etc.
+- **Arity Mismatch**: Clear error messages for incorrect number of arguments
+- **Type Errors**: Detailed type information for type mismatches
+- **Bounds Errors**: Safe handling of out-of-bounds access
+- **Nil Handling**: Graceful handling of nil values where appropriate
 
-## Performance Characteristics
+## Performance Considerations
 
-- **Time Complexity**: All functions are optimized for common use cases
-- **Space Complexity**: Functions minimize memory allocation where possible
-- **Lazy Evaluation**: Functional predicates use short-circuit evaluation
-- **Immutable**: All functions return new values without modifying inputs
+- **Lazy Evaluation**: Where appropriate, functions use lazy evaluation
+- **Immutable Data**: All operations return new data structures
+- **Efficient Algorithms**: Optimized implementations for common operations
+- **Memory Safety**: No memory leaks or unsafe operations
 
-## Security Considerations
+## Security Features
 
-- **Pure Functions**: No side effects or external dependencies
-- **Deterministic**: Same inputs always produce same outputs
-- **No I/O**: No file system, network, or system call access
-- **Memory Safe**: No buffer overflows or memory leaks
-- **Type Safe**: Strong type checking prevents runtime errors
+- **Pure Functions**: No side effects or external state modification
+- **Type Safety**: Compile-time and runtime type checking
+- **Input Validation**: Comprehensive validation of all inputs
+- **No Direct I/O**: All I/O operations require explicit capabilities
+- **Sandboxed Execution**: Safe execution in any context
 
-## Usage Examples
+## Examples
 
-### Basic Math Operations
-```rtfs
-;; Calculate the hypotenuse of a right triangle
-(defn hypotenuse [a b]
-  (sqrt (+ (pow a 2) (pow b 2))))
+```clojure
+; Basic collection operations
+(let [data [1 2 3 4 5 6 7 8 9 10]
+      evens (filter even? data)
+      doubled (map #(* 2 %) evens)
+      sum (reduce + 0 doubled)]
+  (println "Sum of doubled evens:" sum))
 
-(hypotenuse 3 4)  ; => 5.0
+; Map operations with update
+(let [user {:name "Alice" :age 30}
+      updated (update user :age inc)]
+  (println "Updated user:" updated))
+
+; String processing
+(let [text "hello,world,how,are,you"
+      words (split text ",")
+      upper (map str/upper-case words)
+      result (join upper " ")]
+  (println "Result:" result))
+
+; Complex data transformation
+(let [data [{:id 1 :value 10} {:id 2 :value 20} {:id 3 :value 30}]
+      indexed (map-indexed #(assoc %2 :index %1) data)
+      filtered (filter #(> (:value %) 15) indexed)
+      result (map :id filtered)]
+  (println "IDs with value > 15:" result))
 ```
 
-### String Processing
-```rtfs
-;; Normalize a string for comparison
-(defn normalize-string [s]
-  (string-trim (string-lower s)))
+## Implementation Status
 
-(normalize-string "  Hello World  ")  ; => "hello world"
-```
+The following functions have been implemented and tested:
 
-### Collection Processing
-```rtfs
-;; Get unique elements from a list
-(defn unique-elements [coll]
-  (distinct coll))
+- ✅ Basic collection functions (first, rest, nth, count, empty?, conj, cons)
+- ✅ Collection transformation (map, map-indexed, filter, remove, reduce, sort, sort-by, reverse)
+- ✅ Collection analysis (frequencies, distinct, contains?, some?, every?)
+- ✅ Sequence generation (range)
+- ✅ String operations (str, subs, split, join)
+- ✅ Number operations (inc, dec, arithmetic operators)
+- ✅ Predicate functions (even?, odd?, zero?, pos?, neg?, comparisons)
+- ✅ Map operations (get, assoc, dissoc, update, keys, vals, merge)
+- ✅ Vector operations (vector, vec, get, assoc, subvec)
+- ✅ List operations (list, first, rest, cons, conj)
+- ✅ Type conversion (str, int, float, bool, vec, list, set)
+- ✅ Utility functions (identity, constantly, complement, partial, comp)
 
-(unique-elements [1 2 2 3 3 4])  ; => [1 2 3 4]
-```
-
-### Functional Programming
-```rtfs
-;; Check if all numbers are positive
-(defn all-positive? [numbers]
-  (every? (fn [x] (> x 0)) numbers))
-
-(all-positive? [1 2 3])   ; => true
-(all-positive? [-1 2 3])  ; => false
-```
-
-## Future Enhancements
-
-### Planned Additions
-- Additional math functions (trigonometric, logarithmic)
-- More string manipulation functions
-- Advanced collection operations
-- Pattern matching utilities
-
-### IR Runtime Support
-- Complete implementation of `BuiltinWithContext` functions in IR runtime
-- Performance optimizations for functional predicates
-- Compile-time optimizations for common patterns
-
-## Testing
-
-All functions are thoroughly tested with:
-- Unit tests for individual functions
-- Integration tests for function combinations
-- Edge case testing for error conditions
-- Performance benchmarks for optimization
-
-## References
-
-- **Issue #51**: Original requirements for expanding the secure standard library
-- **RTFS 2.0 Language Features**: Core language specification
-- **RTFS 2.0 Grammar Extensions**: Syntax and grammar rules
-- **RTFS 2.0 Native Type System**: Type system specification 
+All functions are available in both AST and IR runtimes with consistent behavior. 
