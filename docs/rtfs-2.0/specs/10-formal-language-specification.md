@@ -362,6 +362,10 @@ RTFS 2.0 uses a strict, eager evaluation model with the following characteristic
 [:union :string :number]
 [:optional :string]
 
+;; Map types with braced syntax
+[:map {:host :string :port :int}]
+[:map {:name :string :age :int :active :bool}]
+
 ;; Custom types
 [:struct {:name :string
           :age :number

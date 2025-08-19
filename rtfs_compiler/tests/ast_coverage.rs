@@ -671,8 +671,8 @@ mod context_and_resource_coverage {
         // Note: Currently the parser returns task context access as Symbol instead of TaskContextAccess
         // This reflects the current implementation where task context access is "represented as a special symbol"
         assert_expr_parses_to!(
-            "@task-id",
-            Expression::Symbol(Symbol("task-id".to_string()))
+                    "@plan-id",
+        Expression::ResourceRef("plan-id".to_string())
         );
         
         assert_expr_parses_to!(

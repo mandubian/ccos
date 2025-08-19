@@ -133,9 +133,47 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                                 }
                             })?;
                         wildcard = Some(Box::new(build_type_expr(wildcard_type_pair)?));
-                    }                    _ => {
+                    }
+                    Rule::map_type_entry_braced => {
+                        // Parse braced map entries: {:host :string :port :int}
+                        let mut entry_inner = map_entry_pair.into_inner();
+                        let mut current_key = None;
+                        
+                        for entry_pair in entry_inner {
+                            match entry_pair.as_rule() {
+                                Rule::keyword => {
+                                    current_key = Some(build_keyword(entry_pair)?);
+                                }
+                                Rule::type_expr => {
+                                    if let Some(key) = current_key.take() {
+                                        // Check for optional marker in the remaining pairs
+                                        let mut optional = false;
+                                        // Note: We can't easily check for optional markers here since we're iterating
+                                        // For now, assume no optional markers in braced form
+                                        entries.push(MapTypeEntry {
+                                            key,
+                                            value_type: Box::new(build_type_expr(entry_pair)?),
+                                            optional,
+                                        });
+                                    } else {
+                                        return Err(PestParseError::MissingToken {
+                                            token: "expected keyword before type in braced map entry".to_string(),
+                                            span: None
+                                        });
+                                    }
+                                }
+                                Rule::WHITESPACE | Rule::COMMENT => {
+                                    // Skip whitespace and comments
+                                }
+                                _ => {
+                                    // Skip other tokens (like optional markers)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
                         return Err(PestParseError::UnexpectedRule {
-                            expected: "map_type_entry or map_type_wildcard".to_string(),
+                            expected: "map_type_entry, map_type_wildcard, or map_type_entry_braced".to_string(),
                             found: format!("{:?}", map_entry_pair.as_rule()),
                             rule_text: map_entry_pair.as_str().to_string(),
                             span: None

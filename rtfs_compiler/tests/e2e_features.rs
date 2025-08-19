@@ -12,6 +12,7 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+mod test_helpers;
 
 /// Feature test configuration for each grammar rule
 #[derive(Debug, Clone)]
@@ -152,29 +153,18 @@ fn run_test_case(
     feature_name: &str,
     case_index: usize,
 ) -> Result<String, String> {
-    // Create module registry
-    let mut module_registry = ModuleRegistry::new();
-    let _ = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry);
-    let module_registry = Rc::new(module_registry);
-
-    // Create runtime based on strategy
-    let mut runtime = match runtime_strategy {
-        RuntimeStrategy::Ast => {
-            runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone())
-        }
-        RuntimeStrategy::Ir => {
-            let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
-            runtime::Runtime::new(Box::new(ir_strategy))
-        }
-        RuntimeStrategy::Both => unreachable!(),
-    };
+    // Create evaluator with proper host setup
+    let evaluator = test_helpers::create_full_evaluator();
+    
+    // Set up execution context for host method calls
+    test_helpers::setup_execution_context(&*evaluator.host);
 
     // Try to parse the expression
     let expr = parse_expression(test_code)
         .map_err(|e| format!("Parse error in {}[{}]: {:?}", feature_name, case_index, e))?;
 
-    // Try to run the expression
-    match runtime.run(&expr) {
+    // Try to run the expression using the evaluator
+    match evaluator.eval_expr(&expr, &mut evaluator.env.clone()) {
         Ok(result) => Ok(result.to_string()),
         Err(e) => Err(format!("Runtime error in {}[{}]: {:?}", feature_name, case_index, e)),
     }

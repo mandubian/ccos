@@ -232,6 +232,19 @@ impl HostInterface for RuntimeHost {
     fn clear_step_exposure_override(&self) {
         if let Ok(mut ov) = self.step_exposure_override.lock() { let _ = ov.pop(); }
     }
+
+    fn get_context_value(&self, key: &str) -> Option<Value> {
+        let ctx = self.execution_context.lock().ok()?.clone()?;
+        match key {
+            // Primary identifiers
+            "plan-id" => Some(Value::String(ctx.plan_id.clone())),
+            "intent-id" => Some(Value::String(ctx.intent_ids.first().cloned().unwrap_or_default())),
+            "intent-ids" => Some(Value::Vector(ctx.intent_ids.iter().cloned().map(Value::String).collect())),
+            // Parent action ID
+            "parent-action-id" => Some(Value::String(ctx.parent_action_id.clone())),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Debug for RuntimeHost {

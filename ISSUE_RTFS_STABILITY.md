@@ -13,7 +13,7 @@ The end-to-end test execution revealed 385+ test cases across 14 feature categor
 **Functions Needed**:
 - `println` - Basic output functionality
 - `nth` - Vector/list element access
-- `Thread/sleep` - Concurrency operations
+- `thread/sleep` - Concurrency operations
 - `read-lines` - File I/O operations
 - `step` - Iterator functionality
 - `first`, `rest` - Sequence operations
@@ -73,7 +73,7 @@ The end-to-end test execution revealed 385+ test cases across 14 feature categor
 1. Implement basic I/O functions (`println`, `read-lines`)
 2. Add sequence operations (`nth`, `first`, `rest`, `range`)
 3. Implement higher-order functions (`map`, `filter`, `reduce`)
-4. Add concurrency primitives (`Thread/sleep`)
+4. Add concurrency primitives (`thread/sleep`)
 
 ### Phase 2: Variable Scoping Fix (Week 2-3)
 1. Audit variable resolution logic in AST evaluator
