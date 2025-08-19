@@ -428,18 +428,18 @@ impl IntentLifecycleManager {
     ) -> Result<(), RuntimeError> {
         let mut intent = storage.get_intent(intent_id).await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
-        let (target_status, reason) = if result.success {
+
+        let (new_status, reason) = if result.success {
             (IntentStatus::Completed, "Intent completed successfully".to_string())
         } else {
             (IntentStatus::Failed, format!("Intent failed with errors: {:?}", result.value))
         };
-        
+
         self.transition_intent_status(
             storage,
             sink,
             &mut intent,
-            target_status,
+            new_status,
             reason,
             None, // triggering_plan_id - will be enhanced later
         ).await?;
