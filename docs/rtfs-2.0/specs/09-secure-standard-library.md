@@ -91,6 +91,7 @@ The RTFS 2.0 Secure Standard Library provides a comprehensive set of pure, side-
 - `(dissoc map key)` - Returns new map with key removed
 - `(update map key f)` - Returns new map with key updated by function f
 - `(update map key default f)` - Returns new map with key updated by function f, using default if key doesn't exist
+- `(update map key default f arg1 arg2)` - Returns new map with key updated by function f with additional arguments
 - `(keys map)` - Returns vector of map keys
 - `(vals map)` - Returns vector of map values
 - `(merge map1 map2)` - Returns new map with map2 entries merged into map1
@@ -98,6 +99,20 @@ The RTFS 2.0 Secure Standard Library provides a comprehensive set of pure, side-
 ### Vector Operations
 
 - `(vector ...)` - Creates a new vector
+
+### Loop Constructs
+
+- `(for [var collection] body)` - Executes body for each element in collection
+- `(dotimes n body)` - Executes body n times
+
+### File and Data Operations
+
+- `(read-file path)` - Reads file content (placeholder implementation)
+- `(process-data data)` - Processes data (placeholder implementation)
+
+### Type System
+
+- `(deftype name type-expr)` - Defines a custom type alias (placeholder implementation)
 - `(vec collection)` - Converts collection to vector
 - `(get vector index)` - Returns element at index
 - `(get vector index default)` - Returns element at index or default if out of bounds
