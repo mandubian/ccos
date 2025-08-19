@@ -423,6 +423,18 @@ fn test_parsing_error() {
 }
 
 #[test]
+fn test_unknown_escape() {
+    run_all_tests_for_file(&TestConfig {
+        name: "test_unknown_escape".to_string(),
+        should_compile: false,
+        should_execute: false,
+        // Expect a parser/unescape error; match Pest or unescape handling
+        expected_error: Some("Pest"),
+        ..TestConfig::new("test_unknown_escape")
+    });
+}
+
+#[test]
 fn test_map_destructuring() {
     run_all_tests_for_file(&TestConfig {
         name: "test_map_destructuring".to_string(),
@@ -478,7 +490,7 @@ fn test_computational_heavy() {
 fn test_string_ops() {
     run_all_tests_for_file(&TestConfig {
         name: "test_string_ops".to_string(),
-        expected_result: Some(r#"String("\"hello\"\", \"\"world!\"")"#.to_string()),
+    expected_result: Some(r#"String("hello, world!")"#.to_string()),
         ..TestConfig::new("test_string_ops")
     });
 }

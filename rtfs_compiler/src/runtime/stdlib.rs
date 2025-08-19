@@ -483,7 +483,7 @@ impl StandardLibrary {
             &Symbol("reduce".to_string()),
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "reduce".to_string(),
-                arity: Arity::Fixed(2),
+                arity: Arity::Range(2, 3),
                 func: Rc::new(Self::reduce),
             })),
         );
@@ -732,18 +732,18 @@ impl StandardLibrary {
     /// 
     /// Returns the current system time in milliseconds since the UNIX epoch.
     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
-        if !args.is_empty() {
+        if args.len() != 0 {
             return Err(RuntimeError::ArityMismatch {
-                function: "tool.time-ms".to_string(),
+                function: "tool/time-ms".to_string(),
                 expected: "0".to_string(),
                 actual: args.len(),
             });
         }
 
-        let start = SystemTime::now();
-        let since_the_epoch = start
+        let since_the_epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards");
+            .map_err(|e| RuntimeError::Generic(format!("SystemTime before UNIX EPOCH: {}", e)))?;
+
         Ok(Value::Integer(since_the_epoch.as_millis() as i64))
     }
 
@@ -759,11 +759,11 @@ impl StandardLibrary {
             });
         }
 
-        let value = &args[0];
-        let json_value = Self::rtfs_value_to_json(value)?;
-        
-        match serde_json::to_string(&json_value) {
-            Ok(json_string) => Ok(Value::String(json_string)),
+        let json_val = Self::rtfs_value_to_json(&args[0])
+            .map_err(|e| RuntimeError::Generic(format!("JSON serialization error: {}", e)))?;
+
+        match serde_json::to_string(&json_val) {
+            Ok(s) => Ok(Value::String(s)),
             Err(e) => Err(RuntimeError::Generic(format!("JSON serialization error: {}", e))),
         }
     }
@@ -2038,22 +2038,21 @@ impl StandardLibrary {
         evaluator: &Evaluator,
         env: &mut Environment,
     ) -> RuntimeResult<Value> {
-        if args.len() != 2 {
+        if args.len() < 2 || args.len() > 3 {
             return Err(RuntimeError::ArityMismatch {
                 function: "reduce".to_string(),
-                expected: "2".to_string(),
+                expected: "2 to 3".to_string(),
                 actual: args.len(),
             });
         }
 
         let function = &args[0];
-        let collection = &args[1];
+        let collection_arg_index = args.len() - 1;
+        let collection_val = &args[collection_arg_index];
 
-        let elements = match collection {
-            Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+        let collection = match collection_val {
+            Value::Vector(v) => v.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -2064,16 +2063,25 @@ impl StandardLibrary {
             }
         };
 
-        if elements.is_empty() {
-            return Ok(Value::Nil);
+        if collection.is_empty() {
+            return if args.len() == 3 {
+                Ok(args[1].clone())
+            } else {
+                Err(RuntimeError::new("reduce on empty collection with no initial value"))
+            };
         }
 
-        let mut result = elements[0].clone();
-        for element in elements.iter().skip(1) {
-            result = evaluator.call_function(function.clone(), &[result, element.clone()], env)?;
+        let (mut accumulator, rest) = if args.len() == 3 {
+            (args[1].clone(), collection.as_slice())
+        } else {
+            (collection[0].clone(), &collection[1..])
+        };
+
+        for value in rest {
+            accumulator = evaluator.call_function(function.clone(), &[accumulator.clone(), value.clone()], env)?;
         }
 
-        Ok(result)
+        Ok(accumulator)
     }
 
     /// `(sort collection)` or `(sort comparator collection)` - Sorts a collection

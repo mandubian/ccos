@@ -1243,6 +1243,7 @@ impl Evaluator {
                 }
             }
             Value::Function(Function::Builtin(func)) => {
+                // debug: removed temporary diagnostic print for reduce arity
                 // Special handling for map function to support user-defined functions
                 if func.name == "map" && args.len() == 2 {
                     return self.handle_map_with_user_functions(&args[0], &args[1], env);
@@ -1269,6 +1270,7 @@ impl Evaluator {
                 Ok(result)
             }
             Value::Function(Function::BuiltinWithContext(func)) => {
+                // debug: removed temporary diagnostic print for reduce arity
                 // Check arity
                 if !self.check_arity(&func.arity, args.len()) {
                     return Err(RuntimeError::ArityMismatch {

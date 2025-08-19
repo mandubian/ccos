@@ -1,0 +1,3 @@
+; Test that unknown escape sequences are rejected by the parser/unescape
+; This file contains a string with an unsupported escape: \x
+(str "hello\xworld")
