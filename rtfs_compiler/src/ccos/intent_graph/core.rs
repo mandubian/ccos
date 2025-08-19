@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,7 @@ use crate::ccos::types::{
     EdgeType, IntentId, IntentStatus, StorableIntent, ExecutionResult,
 };
 use crate::ccos::intent_storage::IntentFilter;
+use crate::ccos::event_sink::IntentEventSink;
 use crate::runtime::RuntimeError;
 use super::{
     config::IntentGraphConfig,
@@ -20,6 +21,7 @@ pub struct IntentGraph {
     pub storage: IntentGraphStorage,
     pub virtualization: IntentGraphVirtualization,
     pub lifecycle: IntentLifecycleManager,
+    pub event_sink: Arc<dyn IntentEventSink>,
     pub rt: tokio::runtime::Handle,
 }
 
@@ -29,6 +31,7 @@ impl std::fmt::Debug for IntentGraph {
             .field("storage", &self.storage)
             .field("virtualization", &self.virtualization)
             .field("lifecycle", &self.lifecycle)
+            .field("event_sink", &"Arc<dyn IntentEventSink>")
             .field("rt", &"tokio::runtime::Handle")
             .finish()
     }
@@ -40,6 +43,18 @@ impl IntentGraph {
     }
 
     pub fn with_config(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
+        use crate::ccos::event_sink::NoopIntentEventSink;
+        Self::with_config_and_event_sink(config, Arc::new(NoopIntentEventSink))
+    }
+
+    pub fn with_event_sink(event_sink: Arc<dyn IntentEventSink>) -> Result<Self, RuntimeError> {
+        Self::with_config_and_event_sink(IntentGraphConfig::default(), event_sink)
+    }
+
+    pub fn with_config_and_event_sink(
+        config: IntentGraphConfig, 
+        event_sink: Arc<dyn IntentEventSink>
+    ) -> Result<Self, RuntimeError> {
         // For synchronous creation, we need to handle the case where no runtime exists
         let rt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle
@@ -66,12 +81,21 @@ impl IntentGraph {
             storage,
             virtualization: IntentGraphVirtualization::new(),
             lifecycle: IntentLifecycleManager,
+            event_sink,
             rt,
         })
     }
 
     /// Create a new IntentGraph asynchronously (for use within existing async contexts)
     pub async fn new_async(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
+        use crate::ccos::event_sink::NoopIntentEventSink;
+        Self::new_async_with_event_sink(config, Arc::new(NoopIntentEventSink)).await
+    }
+
+    pub async fn new_async_with_event_sink(
+        config: IntentGraphConfig,
+        event_sink: Arc<dyn IntentEventSink>
+    ) -> Result<Self, RuntimeError> {
         let storage = IntentGraphStorage::new(config).await;
         
         // Get the current runtime handle for future operations
@@ -82,6 +106,7 @@ impl IntentGraph {
             storage,
             virtualization: IntentGraphVirtualization::new(),
             lifecycle: IntentLifecycleManager,
+            event_sink,
             rt,
         })
     }
@@ -120,25 +145,27 @@ impl IntentGraph {
         intent: StorableIntent,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
-        let updated_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let mut intent = intent;
-        intent.updated_at = updated_at;
-
-        // Update status based on result
-        intent.status = if result.success {
-            IntentStatus::Completed
-        } else {
-            IntentStatus::Failed
-        };
-
+        let intent_id = intent.intent_id.clone();
+        let event_sink = self.event_sink.clone();
+        
         if tokio::runtime::Handle::try_current().is_ok() {
-            futures::executor::block_on(async { self.storage.update_intent(&intent).await })
+            futures::executor::block_on(async { 
+                self.lifecycle.complete_intent(
+                    &mut self.storage,
+                    event_sink.as_ref(),
+                    &intent_id,
+                    result,
+                ).await
+            })
         } else {
-            self.rt.block_on(async { self.storage.update_intent(&intent).await })
+            self.rt.block_on(async { 
+                self.lifecycle.complete_intent(
+                    &mut self.storage,
+                    event_sink.as_ref(),
+                    &intent_id,
+                    result,
+                ).await
+            })
         }
     }
 
@@ -802,50 +829,57 @@ impl IntentGraph {
 
     /// Archive completed intents
     pub fn archive_completed_intents(&mut self) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.archive_completed_intents(&mut self.storage).await
+            self.lifecycle.archive_completed_intents(&mut self.storage, event_sink.as_ref()).await
         })
     }
 
     /// Complete an intent with execution result
     pub fn complete_intent(&mut self, intent_id: &IntentId, result: &ExecutionResult) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.complete_intent(&mut self.storage, intent_id, result).await
+            self.lifecycle.complete_intent(&mut self.storage, event_sink.as_ref(), intent_id, result).await
         })
     }
 
     /// Fail an intent with error message
     pub fn fail_intent(&mut self, intent_id: &IntentId, error_message: String) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.fail_intent(&mut self.storage, intent_id, error_message).await
+            self.lifecycle.fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message).await
         })
     }
 
     /// Suspend an intent with reason
     pub fn suspend_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.suspend_intent(&mut self.storage, intent_id, reason).await
+            self.lifecycle.suspend_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
     }
 
     /// Resume a suspended intent
     pub fn resume_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.resume_intent(&mut self.storage, intent_id, reason).await
+            self.lifecycle.resume_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
     }
 
     /// Archive an intent with reason
     pub fn archive_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.archive_intent(&mut self.storage, intent_id, reason).await
+            self.lifecycle.archive_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
     }
 
     /// Reactivate an archived intent
     pub fn reactivate_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.reactivate_intent(&mut self.storage, intent_id, reason).await
+            self.lifecycle.reactivate_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
     }
 
@@ -891,8 +925,9 @@ impl IntentGraph {
         new_status: IntentStatus,
         reason: String,
     ) -> Result<Vec<IntentId>, RuntimeError> {
+        let event_sink = self.event_sink.clone();
         self.rt.block_on(async {
-            self.lifecycle.bulk_transition_intents(&mut self.storage, intent_ids, new_status, reason).await
+            self.lifecycle.bulk_transition_intents(&mut self.storage, event_sink.as_ref(), intent_ids, new_status, reason).await
         })
     }
 }
