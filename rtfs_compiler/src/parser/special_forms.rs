@@ -10,6 +10,8 @@ use crate::ast::{
     CatchPattern,
     DefExpr,
     DefnExpr,
+    DefstructExpr,
+    DefstructField,
     DoExpr,
     FnExpr,    
     IfExpr,
@@ -636,6 +638,81 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         body,
         return_type,
         delegation_hint,
+    })
+}
+
+pub(super) fn build_defstruct_expr(defstruct_expr_pair: Pair<Rule>) -> Result<DefstructExpr, PestParseError> {
+    let defstruct_span = pair_to_source_span(&defstruct_expr_pair);
+    let mut pairs = defstruct_expr_pair.clone().into_inner();
+
+    // Consume defstruct_keyword if present
+    if let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::defstruct_keyword {
+            pairs.next();
+            // Consume whitespace after keyword
+            while let Some(sp) = pairs.peek() {
+                if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
+                    pairs.next();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    let symbol_pair = pairs
+        .next()
+        .ok_or_else(|| PestParseError::InvalidInput { message: "defstruct requires a symbol".to_string(), span: Some(defstruct_span.clone()) })?;
+    if symbol_pair.as_rule() != Rule::symbol {
+        return Err(PestParseError::InvalidInput { 
+            message: format!("Expected symbol for defstruct, found {:?}", symbol_pair.as_rule()), 
+            span: Some(pair_to_source_span(&symbol_pair)) 
+        });
+    }
+    let symbol = build_symbol(symbol_pair.clone())?;
+
+    let mut fields = Vec::new();
+    
+    // Process field pairs (keyword type_expr keyword type_expr ...)
+    while let Some(field_pair) = pairs.next() {
+        if field_pair.as_rule() == Rule::WHITESPACE || field_pair.as_rule() == Rule::COMMENT {
+            continue;
+        }
+        
+        if field_pair.as_rule() == Rule::defstruct_field {
+            let mut field_inner = field_pair.into_inner();
+            
+            let keyword_pair = field_inner.next().ok_or_else(|| {
+                PestParseError::InvalidInput { message: "defstruct_field missing keyword".to_string(), span: Some(defstruct_span.clone()) }
+            })?;
+            if keyword_pair.as_rule() != Rule::keyword {
+                return Err(PestParseError::InvalidInput { 
+                    message: format!("Expected keyword in defstruct_field, found {:?}", keyword_pair.as_rule()), 
+                    span: Some(pair_to_source_span(&keyword_pair)) 
+                });
+            }
+            let keyword = build_keyword(keyword_pair)?;
+            
+            let type_pair = field_inner.next().ok_or_else(|| {
+                PestParseError::InvalidInput { message: "defstruct_field missing type".to_string(), span: Some(defstruct_span.clone()) }
+            })?;
+            let field_type = build_type_expr(type_pair)?;
+            
+            fields.push(DefstructField {
+                key: keyword,
+                field_type,
+            });
+        } else {
+            return Err(PestParseError::InvalidInput { 
+                message: format!("Expected defstruct_field, found {:?}", field_pair.as_rule()), 
+                span: Some(pair_to_source_span(&field_pair)) 
+            });
+        }
+    }
+
+    Ok(DefstructExpr {
+        name: symbol,
+        fields,
     })
 }
 
@@ -1442,6 +1519,58 @@ mod tests {
         assert!(result.is_ok());
         let defn_expr = result.unwrap();
         assert_eq!(defn_expr.delegation_hint, None);
+    }
+
+    #[test]
+    fn test_defstruct_basic() {
+        let input = "(defstruct GenerationContext :arbiter-version String :generation-timestamp Timestamp)";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::defstruct_expr, input).unwrap();
+        let result = build_defstruct_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let defstruct_expr = result.unwrap();
+        assert_eq!(defstruct_expr.name.0, "GenerationContext");
+        assert_eq!(defstruct_expr.fields.len(), 2);
+        assert_eq!(defstruct_expr.fields[0].key.0, "arbiter-version");
+        assert_eq!(defstruct_expr.fields[1].key.0, "generation-timestamp");
+    }
+
+    #[test]
+    fn test_defstruct_empty() {
+        let input = "(defstruct EmptyStruct)";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::defstruct_expr, input).unwrap();
+        let result = build_defstruct_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let defstruct_expr = result.unwrap();
+        assert_eq!(defstruct_expr.name.0, "EmptyStruct");
+        assert_eq!(defstruct_expr.fields.len(), 0);
+    }
+
+    #[test]
+    fn test_defstruct_from_issue_example() {
+        let input = "(defstruct GenerationContext :arbiter-version String :generation-timestamp Timestamp :input-context Any :reasoning-trace String)";
+        let mut pairs = RTFSParser::parse(crate::parser::Rule::defstruct_expr, input).unwrap();
+        let result = build_defstruct_expr(pairs.next().unwrap());
+        assert!(result.is_ok());
+        let defstruct_expr = result.unwrap();
+        assert_eq!(defstruct_expr.name.0, "GenerationContext");
+        assert_eq!(defstruct_expr.fields.len(), 4);
+        assert_eq!(defstruct_expr.fields[0].key.0, "arbiter-version");
+        assert_eq!(defstruct_expr.fields[1].key.0, "generation-timestamp");
+        assert_eq!(defstruct_expr.fields[2].key.0, "input-context");
+        assert_eq!(defstruct_expr.fields[3].key.0, "reasoning-trace");
+    }
+
+    #[test]
+    fn test_defstruct_as_expression() {
+        let input = "(defstruct GenerationContext :arbiter-version String :generation-timestamp Timestamp)";
+        let result = crate::parser::parse_expression(input);
+        assert!(result.is_ok());
+        if let Ok(crate::ast::Expression::Defstruct(defstruct_expr)) = result {
+            assert_eq!(defstruct_expr.name.0, "GenerationContext");
+            assert_eq!(defstruct_expr.fields.len(), 2);
+        } else {
+            panic!("Expected defstruct expression");
+        }
     }
 
     // Plan parsing test removed; plan is handled at CCOS layer (as FunctionCall/Map)

@@ -109,6 +109,7 @@ pub struct PlanArchiveStatistics {
 mod tests {
     use super::*;
     use crate::runtime::values::Value;
+    use crate::ccos::types::{PlanBody, PlanStatus};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn create_test_plan() -> Plan {

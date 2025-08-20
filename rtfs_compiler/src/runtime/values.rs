@@ -409,6 +409,10 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for log step expressions
                 Value::String("#<log-step>".to_string())
             }
+            Expression::Defstruct(_defstruct_expr) => {
+                // For now, return a placeholder for defstruct expressions
+                Value::String("#<defstruct>".to_string())
+            }
         }
     }
 }

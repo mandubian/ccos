@@ -54,6 +54,7 @@ pub enum BindingKind {
     Function,
     Parameter,
     Resource,
+    Type,
 }
 
 /// Scope for symbol resolution with proper mutable access
@@ -1015,6 +1016,7 @@ impl<'a> IrConverter<'a> {
             }
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
+            Expression::Defstruct(defstruct_expr) => self.convert_defstruct(*defstruct_expr),
             Expression::ResourceRef(resource_ref) => {
                 let id = self.next_id();
                 let resource_name = resource_ref.clone();
@@ -2199,6 +2201,39 @@ impl<'a> IrConverter<'a> {
             id,
             name,
             lambda: Box::new(lambda),
+            ir_type,
+            source_location: None,
+        })
+    }
+
+    fn convert_defstruct(&mut self, defstruct_expr: DefstructExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let name = defstruct_expr.name.0.clone();
+        
+        // Create a refined map type that represents the struct
+        // For now, we'll treat it as a type definition that creates a type alias
+        let ir_type = IrType::TypeRef(name.clone()); // Represents a type definition
+        
+        let binding_info = BindingInfo {
+            name: name.clone(),
+            binding_id: id,
+            ir_type: ir_type.clone(),
+            kind: BindingKind::Type,
+        };
+        self.define_binding(name.clone(), binding_info);
+
+        // For now, return a placeholder type definition node
+        // In a full implementation, this would create the appropriate refined map type
+        Ok(IrNode::VariableDef {
+            id,
+            name: name.clone(),
+            type_annotation: None,
+            init_expr: Box::new(IrNode::Literal {
+                id: self.next_id(),
+                value: Literal::String(format!("#<defstruct-{}>", name)),
+                ir_type: IrType::String,
+                source_location: None,
+            }),
             ir_type,
             source_location: None,
         })
