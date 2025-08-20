@@ -8,7 +8,7 @@ use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::values::{Arity, Function, Value};
+use crate::runtime::values::{Arity, Function, Value, BuiltinFunctionWithContext};
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, ValidationLevel, VerificationContext};
 use crate::ccos::types::ExecutionResult;
@@ -1826,13 +1826,68 @@ impl Evaluator {
         Ok(function)
     }
 
-    fn eval_defstruct(&self, defstruct_expr: &DefstructExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // For now, defstruct creates a type constructor function that validates struct fields
-        // In a full implementation, this would create a proper type with validation
+    pub fn eval_defstruct(&self, defstruct_expr: &DefstructExpr, env: &mut Environment) -> RuntimeResult<Value> {
         let struct_name = defstruct_expr.name.0.clone();
-        let type_value = Value::String(format!("#<defstruct-type:{}>", struct_name));
-        env.define(&defstruct_expr.name, type_value.clone());
-        Ok(type_value)
+        
+        // Create a constructor function that validates inputs
+        let struct_name_clone = struct_name.clone();
+        let fields = defstruct_expr.fields.clone();
+        
+        let constructor = Function::BuiltinWithContext(BuiltinFunctionWithContext {
+            name: format!("{}.new", struct_name),
+            arity: Arity::Fixed(1), // Takes a map as input
+            func: Rc::new(move |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| -> RuntimeResult<Value> {
+                if args.len() != 1 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: struct_name_clone.clone(),
+                        expected: "1".to_string(),
+                        actual: args.len(),
+                    });
+                }
+                
+                let input_map = &args[0];
+                
+                // Validate that input is a map
+                let Value::Map(map) = input_map else {
+                    return Err(RuntimeError::TypeError {
+                        expected: "map".to_string(),
+                        actual: input_map.type_name().to_string(),
+                        operation: format!("{} constructor", struct_name_clone),
+                    });
+                };
+                
+                // Check that all required fields are present and have correct types
+                for field in &fields {
+                    let key = MapKey::Keyword(field.key.clone());
+                    
+                    if let Some(value) = map.get(&key) {
+                        // Validate the field type using the type validator
+                        if let Err(validation_error) = evaluator.type_validator.validate_value(value, &field.field_type) {
+                            return Err(RuntimeError::TypeValidationError(format!(
+                                "Field {} failed type validation: {:?}", 
+                                field.key.0, 
+                                validation_error
+                            )));
+                        }
+                    } else {
+                        // Required field is missing
+                        return Err(RuntimeError::TypeValidationError(format!(
+                            "Required field {} is missing", 
+                            field.key.0
+                        )));
+                    }
+                }
+                
+                // If all validations pass, return the input map (it's already a valid struct)
+                Ok(input_map.clone())
+            }),
+        });
+        
+        // Store the constructor function in the environment
+        let constructor_value = Value::Function(constructor);
+        env.define(&defstruct_expr.name, constructor_value.clone());
+        
+        Ok(constructor_value)
     }
 
     fn match_catch_pattern(
