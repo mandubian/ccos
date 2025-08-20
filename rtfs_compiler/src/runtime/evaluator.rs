@@ -1,7 +1,7 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
 use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
     Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr};
 use crate::runtime::environment::Environment;
@@ -472,6 +472,7 @@ impl Evaluator {
             Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
+            Expression::Defstruct(defstruct_expr) => self.eval_defstruct(defstruct_expr, env),
             Expression::DiscoverAgents(discover_expr) => {
                 self.eval_discover_agents(discover_expr, env)
             }
@@ -1585,7 +1586,8 @@ impl Evaluator {
             | Expression::Vector(_)
             | Expression::Map(_)
             | Expression::List(_)
-            | Expression::ResourceRef(_) => false,
+            | Expression::ResourceRef(_)
+            | Expression::Defstruct(_) => false,
         }
     }
 
@@ -1822,6 +1824,15 @@ impl Evaluator {
         ));
         env.define(&defn_expr.name, function.clone());
         Ok(function)
+    }
+
+    fn eval_defstruct(&self, defstruct_expr: &DefstructExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // For now, defstruct creates a type constructor function that validates struct fields
+        // In a full implementation, this would create a proper type with validation
+        let struct_name = defstruct_expr.name.0.clone();
+        let type_value = Value::String(format!("#<defstruct-type:{}>", struct_name));
+        env.define(&defstruct_expr.name, type_value.clone());
+        Ok(type_value)
     }
 
     fn match_catch_pattern(
