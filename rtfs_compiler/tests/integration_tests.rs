@@ -6,6 +6,8 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 
+mod test_helpers;
+
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
 struct TestConfig {
@@ -733,4 +735,116 @@ fn test_orchestration_primitives() {
     let actual = format!("{:?}", result);
     
     assert_eq!(actual, expected, "Orchestration primitives test result mismatch");
+}
+
+#[test]
+fn test_defstruct_evaluation_basic() {
+    use rtfs_compiler::ast::{DefstructExpr, DefstructField, Symbol, Keyword, TypeExpr, PrimitiveType, MapKey};
+    use rtfs_compiler::runtime::{Environment};
+    use rtfs_compiler::runtime::values::{Value};
+    use std::collections::HashMap;
+    use crate::test_helpers;
+
+    // Create a defstruct for testing
+    let defstruct_expr = DefstructExpr {
+        name: Symbol::new("TestStruct"),
+        fields: vec![
+            DefstructField {
+                key: Keyword::new("name"),
+                field_type: TypeExpr::Primitive(PrimitiveType::String),
+            },
+            DefstructField {
+                key: Keyword::new("age"),
+                field_type: TypeExpr::Primitive(PrimitiveType::Int),
+            },
+        ],
+    };
+
+    // Create evaluator using test helpers
+    let evaluator = test_helpers::create_full_evaluator();
+    let mut env = Environment::new();
+
+    // Evaluate the defstruct
+    let result = evaluator.eval_defstruct(&defstruct_expr, &mut env);
+    assert!(result.is_ok(), "Failed to evaluate defstruct: {:?}", result);
+
+    // Check that a constructor function was created
+    let constructor = env.lookup(&Symbol::new("TestStruct"));
+    assert!(constructor.is_some(), "Constructor function not found in environment");
+
+    if let Some(constructor_value) = constructor {
+        if let Value::Function(_) = &constructor_value {
+            // Test valid input
+            let mut valid_map = HashMap::new();
+            valid_map.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Alice".to_string()));
+            valid_map.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(30));
+            
+            let valid_input = vec![Value::Map(valid_map)];
+            let construct_result = evaluator.call_function(constructor_value.clone(), &valid_input, &mut env);
+            assert!(construct_result.is_ok(), "Failed to construct valid struct: {:?}", construct_result);
+
+            // Test invalid input - missing field
+            let mut invalid_map = HashMap::new();
+            invalid_map.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Bob".to_string()));
+            // Missing age field
+            
+            let invalid_input = vec![Value::Map(invalid_map)];
+            let invalid_result = evaluator.call_function(constructor_value.clone(), &invalid_input, &mut env);
+            assert!(invalid_result.is_err(), "Should have failed for missing field");
+
+            // Test invalid type
+            let mut wrong_type_map = HashMap::new();
+            wrong_type_map.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Charlie".to_string()));
+            wrong_type_map.insert(MapKey::Keyword(Keyword::new("age")), Value::String("thirty".to_string())); // Wrong type
+            
+            let wrong_type_input = vec![Value::Map(wrong_type_map)];
+            let wrong_type_result = evaluator.call_function(constructor_value.clone(), &wrong_type_input, &mut env);
+            assert!(wrong_type_result.is_err(), "Should have failed for wrong type");
+        } else {
+            panic!("Expected a function value for the constructor");
+        }
+    } else {
+        panic!("Constructor function not found");
+    }
+}
+
+#[test]
+fn test_defstruct_evaluation_empty() {
+    use rtfs_compiler::ast::{DefstructExpr, Symbol, MapKey};
+    use rtfs_compiler::runtime::{Environment};
+    use rtfs_compiler::runtime::values::{Value};
+    use std::collections::HashMap;
+    use crate::test_helpers;
+
+    // Create an empty defstruct for testing
+    let defstruct_expr = DefstructExpr {
+        name: Symbol::new("EmptyStruct"),
+        fields: vec![],
+    };
+
+    // Create evaluator using test helpers
+    let evaluator = test_helpers::create_full_evaluator();
+    let mut env = Environment::new();
+
+    // Evaluate the defstruct
+    let result = evaluator.eval_defstruct(&defstruct_expr, &mut env);
+    assert!(result.is_ok(), "Failed to evaluate empty defstruct: {:?}", result);
+
+    // Check that a constructor function was created
+    let constructor = env.lookup(&Symbol::new("EmptyStruct"));
+    assert!(constructor.is_some(), "Constructor function not found in environment");
+
+    if let Some(constructor_value) = constructor {
+        if let Value::Function(_) = &constructor_value {
+            // Test empty map - should work
+            let empty_map = HashMap::new();
+            let valid_input = vec![Value::Map(empty_map)];
+            let construct_result = evaluator.call_function(constructor_value, &valid_input, &mut env);
+            assert!(construct_result.is_ok(), "Failed to construct empty struct: {:?}", construct_result);
+        } else {
+            panic!("Expected a function value for the constructor");
+        }
+    } else {
+        panic!("Constructor function not found");
+    }
 }
