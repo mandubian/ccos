@@ -281,7 +281,7 @@ impl ArbiterEngine for TemplateArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate};
+    use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior};
 
     fn create_test_config() -> TemplateConfig {
         TemplateConfig {
