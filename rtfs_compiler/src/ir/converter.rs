@@ -2255,6 +2255,16 @@ impl<'a> IrConverter<'a> {
             }
         ];
         
+        // TODO: Full defstruct IR implementation should include:
+        // 1. Field validation logic in constructor body (instead of just returning input_map)
+        // 2. Proper typed field access methods/getters for each struct field
+        // 3. Type checking for each field against its declared type annotation
+        // 4. Integration with type refinement system for advanced constraints
+        // 5. Compile-time optimizations for known struct field access patterns
+        // 6. Error handling and reporting for invalid field values
+        // 7. Support for default values and optional fields
+        // 8. Immutable update operations (assoc, dissoc, update-in style)
+        
         // Create the constructor function type
         let constructor_type = IrType::Function {
             param_types: vec![IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }],
