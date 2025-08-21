@@ -1,6 +1,6 @@
 //! Tests for enhanced MicroVM functionality with program execution and capability permissions
 
-use super::microvm::*;
+use super::*;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::values::Value;
 use crate::runtime::{RuntimeResult, RuntimeError};
