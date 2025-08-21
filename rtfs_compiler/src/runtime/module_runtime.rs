@@ -933,6 +933,7 @@ impl ModuleAwareRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::StaticDelegationEngine;
 
     #[test]
     fn test_module_registry_creation() {

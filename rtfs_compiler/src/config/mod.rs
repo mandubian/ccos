@@ -1,10 +1,7 @@
-//! Configuration management for RTFS agents
-//! 
-//! This module provides configuration structures and validation for RTFS agents,
-//! including MicroVM deployment profiles and security policies.
+//! Configuration types and parsing for RTFS
 
-pub mod validation_microvm;
 pub mod types;
+pub mod parser;
 
 pub use types::*;
-pub use validation_microvm::*; 
+pub use parser::AgentConfigParser; 

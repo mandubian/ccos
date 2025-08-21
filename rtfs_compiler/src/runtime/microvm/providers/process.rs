@@ -103,6 +103,18 @@ impl MicroVMProvider for ProcessMicroVMProvider {
             return Err(RuntimeError::Generic("Process provider not initialized".to_string()));
         }
 
+        // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
+        // Just ensure the capability ID is present in permissions if specified
+        if let Some(capability_id) = &context.capability_id {
+            if !context.capability_permissions.contains(capability_id) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "execute_program".to_string(),
+                    capability: capability_id.clone(),
+                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                });
+            }
+        }
+
         // Validate permissions for external programs
         if let Some(ref program) = context.program {
             if let crate::runtime::microvm::core::Program::ExternalProgram { .. } = program {
