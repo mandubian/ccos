@@ -136,10 +136,10 @@
       _ "pattern-not-matched")))
 ;; Expected: "pattern-matched"
 
-;; Edge case: Empty try block
+;; Edge case: Empty try block is valid only with finally
 (try
-  (catch Exception e "empty-try"))
-;; Expected: nil or error
+  (finally (println "empty-try-finally")))
+;; Expected: nil (with side effect)
 
 ;; Edge case: Catch without exception type (catch-all)
 (try

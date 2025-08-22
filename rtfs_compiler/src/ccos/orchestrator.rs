@@ -18,7 +18,7 @@ use crate::parser::parse_expression;
 
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
-use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody};
+use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody, IntentStatus};
 
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
@@ -71,6 +71,18 @@ impl Orchestrator {
             ).with_parent(None)
         )?;
 
+        // Mark primary intent as Executing (transition Active -> Executing) before evaluation begins
+        if !primary_intent_id.is_empty() {
+            if let Ok(mut graph) = self.intent_graph.lock() {
+                let _ = graph.set_intent_status_with_audit(
+                    &primary_intent_id,
+                    IntentStatus::Executing,
+                    Some(&plan_id),
+                    Some(&plan_action_id),
+                );
+            }
+        }
+
         // --- 2. Set up the Host and Evaluator ---
         let host = Arc::new(RuntimeHost::new(
             self.causal_chain.clone(),
@@ -113,7 +125,8 @@ impl Orchestrator {
         host.clear_execution_context();
 
         // --- 4. Log Final Plan Status ---
-        let execution_result = match final_result {
+        // Construct execution_result while ensuring we still update the IntentGraph on failure.
+        let (execution_result, error_opt) = match final_result {
             Ok(value) => {
                 let res = ExecutionResult { success: true, value, metadata: Default::default() };
                 self.log_action(
@@ -125,9 +138,10 @@ impl Orchestrator {
                     .with_parent(Some(plan_action_id.clone()))
                     .with_result(res.clone())
                 )?;
-                Ok(res)
+                (res, None)
             },
             Err(e) => {
+                // Log aborted action first
                 self.log_action(
                     Action::new(
                         ActionType::PlanAborted,
@@ -137,14 +151,44 @@ impl Orchestrator {
                     .with_parent(Some(plan_action_id.clone()))
                     .with_error(&e.to_string())
                 )?;
-                Err(e)
+                // Represent failure value explicitly (string) so ExecutionResult always has a Value
+                let failure_value = RtfsValue::String(format!("error: {}", e));
+                let res = ExecutionResult { success: false, value: failure_value, metadata: Default::default() };
+                (res, Some(e))
             }
-        }?; // Note: This '?' will propagate the error from the Err case
+        };
 
         // --- 5. Update Intent Graph ---
-        // TODO: Add logic to update the status of the associated intents in the IntentGraph.
+        // Update the primary intent(s) associated with this plan so the IntentGraph
+        // reflects the final outcome of plan execution. We attempt to lock the
+        // IntentGraph, load the primary intent, and call the graph's
+        // update_intent helper which will set status/updated_at and persist the
+        // change via storage.
+        {
+            let mut graph = self
+                .intent_graph
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
-        Ok(execution_result)
+            if !primary_intent_id.is_empty() {
+                if let Some(pre_intent) = graph.get_intent(&primary_intent_id) {
+                    graph
+                        .update_intent_with_audit(
+                            pre_intent,
+                            &execution_result,
+                            Some(&plan_id),
+                            Some(&plan_action_id),
+                        )
+                        .map_err(|e| RuntimeError::Generic(format!(
+                            "IntentGraph update failed for {}: {:?}",
+                            primary_intent_id, e
+                        )))?;
+                }
+            }
+        }
+
+    // Propagate original error after updating intent status
+    if let Some(err) = error_opt { Err(err) } else { Ok(execution_result) }
     }
 
     /// Serialize the current execution context from an evaluator (checkpoint helper)
@@ -252,5 +296,146 @@ impl Orchestrator {
         let mut chain = self.causal_chain.lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
         chain.append(&action)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ccos::event_sink::CausalChainIntentEventSink;
+    use crate::ccos::types::{PlanStatus, StorableIntent};
+    use crate::runtime::security::SecurityLevel;
+
+    fn test_context() -> RuntimeContext {
+        RuntimeContext {
+            security_level: SecurityLevel::Controlled,
+            ..RuntimeContext::pure()
+        }
+    }
+
+    fn make_graph_with_sink(chain: Arc<Mutex<CausalChain>>) -> Arc<Mutex<IntentGraph>> {
+        let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&chain)));
+        Arc::new(Mutex::new(IntentGraph::with_event_sink(sink).expect("intent graph")))
+    }
+
+    fn collect_status_changes(chain: &CausalChain, intent_id: &str) -> Vec<Action> {
+        let mut out = Vec::new();
+        for a in chain.get_actions_for_intent(&intent_id.to_string()) {
+            if a.action_type == ActionType::IntentStatusChanged {
+                out.push((*a).clone());
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn orchestrator_emits_executing_and_completed() {
+        let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
+        let graph = make_graph_with_sink(Arc::clone(&chain));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
+        let orch = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace));
+
+        // Seed an Active intent
+    let stored = StorableIntent::new("test goal".to_string());
+    let intent_id = stored.intent_id.clone();
+        {
+            let mut g = graph.lock().unwrap();
+            g.store_intent(stored.clone()).expect("store intent");
+        }
+
+        // Minimal RTFS plan body that evaluates successfully
+        let mut plan = Plan::new_rtfs("42".to_string(), vec![intent_id.clone()]);
+        plan.status = PlanStatus::Active;
+
+        let ctx = test_context();
+        let result = orch.execute_plan(&plan, &ctx).await.expect("exec ok");
+        assert!(result.success);
+
+        // Verify status changes were audited: Active->Executing, Executing->Completed
+        let changes = {
+            let guard = chain.lock().unwrap();
+            collect_status_changes(&guard, &intent_id)
+        };
+        assert!(changes.len() >= 2, "expected at least 2 status change actions, got {}", changes.len());
+
+        // Find specific transitions via metadata
+        let mut saw_active_to_executing = false;
+        let mut saw_executing_to_completed = false;
+        let mut saw_triggering = false;
+        let mut saw_reason_set = false;
+        for a in &changes {
+            let old_s = a.metadata.get("old_status").and_then(|v| v.as_string());
+            let new_s = a.metadata.get("new_status").and_then(|v| v.as_string());
+            if a.metadata.get("triggering_action_id").is_some() { saw_triggering = true; }
+            if let Some(reason) = a.metadata.get("reason").and_then(|v| v.as_string()) {
+                if reason == "IntentGraph: explicit status set" || reason == "IntentGraph: update_intent result" {
+                    saw_reason_set = true;
+                }
+            }
+            match (old_s.as_deref(), new_s.as_deref()) {
+                (Some("Active"), Some("Executing")) => saw_active_to_executing = true,
+                (Some("Executing"), Some("Completed")) => saw_executing_to_completed = true,
+                _ => {}
+            }
+        }
+        assert!(saw_active_to_executing, "missing Active->Executing status change");
+        assert!(saw_executing_to_completed, "missing Executing->Completed status change");
+        assert!(saw_triggering, "missing triggering_action_id metadata on status change");
+        assert!(saw_reason_set, "missing expected reason metadata on status change");
+    }
+
+    #[tokio::test]
+    async fn orchestrator_emits_failed_on_error() {
+        let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
+        let graph = make_graph_with_sink(Arc::clone(&chain));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
+        let orch = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace));
+
+        // Seed an Active intent
+        let stored = StorableIntent::new("test goal".to_string());
+        let intent_id = stored.intent_id.clone();
+        {
+            let mut g = graph.lock().unwrap();
+            g.store_intent(stored).expect("store intent");
+        }
+
+        // Invalid RTFS to trigger parse error
+        let mut plan = Plan::new_rtfs("(this is not valid".to_string(), vec![intent_id.clone()]);
+        plan.status = PlanStatus::Active;
+
+        let ctx = test_context();
+        let res = orch.execute_plan(&plan, &ctx).await;
+        assert!(res.is_err(), "expected parse error");
+
+        // Verify status changes were audited: Active->Executing, Executing->Failed
+        let changes = {
+            let guard = chain.lock().unwrap();
+            collect_status_changes(&guard, &intent_id)
+        };
+        assert!(changes.len() >= 2, "expected at least 2 status change actions, got {}", changes.len());
+
+        let mut saw_active_to_executing = false;
+        let mut saw_executing_to_failed = false;
+        let mut saw_triggering = false;
+        let mut saw_reason_set = false;
+        for a in &changes {
+            let old_s = a.metadata.get("old_status").and_then(|v| v.as_string());
+            let new_s = a.metadata.get("new_status").and_then(|v| v.as_string());
+            if a.metadata.get("triggering_action_id").is_some() { saw_triggering = true; }
+            if let Some(reason) = a.metadata.get("reason").and_then(|v| v.as_string()) {
+                if reason == "IntentGraph: explicit status set" || reason == "IntentGraph: update_intent result" {
+                    saw_reason_set = true;
+                }
+            }
+            match (old_s.as_deref(), new_s.as_deref()) {
+                (Some("Active"), Some("Executing")) => saw_active_to_executing = true,
+                (Some("Executing"), Some("Failed")) => saw_executing_to_failed = true,
+                _ => {}
+            }
+        }
+        assert!(saw_active_to_executing, "missing Active->Executing status change");
+        assert!(saw_executing_to_failed, "missing Executing->Failed status change");
+        assert!(saw_triggering, "missing triggering_action_id metadata on status change");
+        assert!(saw_reason_set, "missing expected reason metadata on status change");
     }
 }

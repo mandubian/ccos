@@ -1,11 +1,13 @@
-use rtfs_compiler::ccos::arbiter::{Arbiter, ArbiterConfig};
+use rtfs_compiler::ccos::arbiter::Arbiter;
+// Use the legacy arbiter config type to match `legacy_arbiter::Arbiter::new` signature
+use rtfs_compiler::ccos::arbiter::legacy_arbiter::ArbiterConfig as LegacyArbiterConfig;
 use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use std::sync::{Arc, Mutex};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create an arbiter with default configuration
     let intent_graph = Arc::new(Mutex::new(IntentGraph::new().unwrap()));
-    let arbiter = Arbiter::new(ArbiterConfig::default(), intent_graph);
+    let arbiter = Arbiter::new(LegacyArbiterConfig::default(), intent_graph);
 
     println!("=== CCOS + RTFS Cognitive Computing Demo ===\n");
 

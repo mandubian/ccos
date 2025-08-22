@@ -92,4 +92,3 @@ rules:
       cargo test --test custom_tests -- --option1 --option2 
     message: "Run custom tests for the project."
     severity: info
-

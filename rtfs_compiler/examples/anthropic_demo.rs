@@ -17,6 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             base_url: None, // Use default Anthropic API
             max_tokens: Some(2000),
             temperature: Some(0.7),
+                prompts: None,
             timeout_seconds: Some(60),
         }),
         delegation_config: None,
@@ -41,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 base_url: None,
                 max_tokens: Some(1000),
                 temperature: Some(0.7),
+                prompts: None,
                 timeout_seconds: Some(30),
             }),
             delegation_config: None,
