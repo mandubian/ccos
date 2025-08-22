@@ -63,16 +63,73 @@ The `resource_limits` prevent a rogue or inefficient plan from consuming excessi
 -   `max_memory_bytes` (Integer): The maximum memory allocation.
 -   `max_actions` (Integer): The maximum number of actions that can be logged to the Causal Chain, preventing infinite loops.
 
-## 5. Orchestrator Enforcement
+## 5. Central Authorization System
+
+The `SecurityAuthorizer` provides centralized security enforcement for all capability and program execution requests.
+
+### 5.1. SecurityAuthorizer
+
+```rust
+pub struct SecurityAuthorizer;
+
+impl SecurityAuthorizer {
+    /// Authorize a capability execution request
+    pub fn authorize_capability(
+        runtime_context: &RuntimeContext,
+        capability_id: &str,
+        args: &[Value],
+    ) -> RuntimeResult<Vec<String>>;
+    
+    /// Authorize a program execution request
+    pub fn authorize_program(
+        runtime_context: &RuntimeContext,
+        program: &Program,
+        capability_id: Option<&str>,
+    ) -> RuntimeResult<Vec<String>>;
+    
+    /// Validate execution context permissions
+    pub fn validate_execution_context(
+        required_permissions: &[String],
+        execution_context: &ExecutionContext,
+    ) -> RuntimeResult<()>;
+}
+```
+
+### 5.2. Authorization Flow
+
+1. **Capability Authorization**: Before executing any capability, the system calls `SecurityAuthorizer::authorize_capability`
+2. **Permission Determination**: The authorizer determines the minimal set of permissions needed for the specific execution
+3. **Program Authorization**: For program execution, `SecurityAuthorizer::authorize_program` validates the program type and required permissions
+4. **Context Validation**: `SecurityAuthorizer::validate_execution_context` ensures the execution context contains all required permissions
+
+### 5.3. Security Levels
+
+#### Pure Security Level
+- **Capabilities**: None allowed
+- **MicroVM**: Not used
+- **Use Case**: Maximum security for untrusted code
+
+#### Controlled Security Level
+- **Capabilities**: Explicit allowlist
+- **MicroVM**: Required for dangerous operations
+- **Use Case**: Standard production workloads
+
+#### Full Security Level
+- **Capabilities**: All allowed
+- **MicroVM**: Optional
+- **Use Case**: Trusted code execution
+
+## 6. Orchestrator Enforcement
 
 The Orchestrator is responsible for enforcing the policies and limits of the `RuntimeContext`.
 
 1.  **Before Execution**: The Orchestrator can perform a static analysis of the plan to check for obvious policy violations before running it.
 2.  **Before Each Step**: Before executing a step, the Orchestrator checks the current resource consumption against the limits.
 3.  **Before Each `(call ...)`**:
-    a. It checks the `capability_id` against the `security_policy`.
-    b. If the policy is conditional, it evaluates the condition.
-    c. If the call is denied, the step fails immediately with a `SecurityViolation` error, which is logged to the Causal Chain.
+    a. It calls `SecurityAuthorizer::authorize_capability` to validate the request.
+    b. It checks the `capability_id` against the `security_policy`.
+    c. If the policy is conditional, it evaluates the condition.
+    d. If the call is denied, the step fails immediately with a `SecurityViolation` error, which is logged to the Causal Chain.
 4.  **During Execution**: The runtime continuously monitors resource usage (time, memory) and will halt execution if any limit is exceeded.
 
 By separating the "how" (the Plan) from the "what is allowed" (the Runtime Context), CCOS can safely execute complex, AI-generated logic in a secure and controlled environment.
