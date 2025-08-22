@@ -2,233 +2,71 @@
 
 ## Overview
 
-The `IntentEventSink` is an abstraction for mandatory intent lifecycle audit in CCOS. It provides a centralized mechanism for emitting intent status change events that must be recorded for auditability and compliance.
+The IntentEventSink is the mandatory audit surface for intent lifecycle status transitions. It centralizes emission of audited status change events and ensures failures are surfaced (no best-effort logging).
 
 ## Contract
 
-### Core Trait
+### Core trait (conceptual signature)
 
 ```rust
-pub trait IntentEventSink: Send + Sync + Debug {
+pub trait IntentEventSink: Debug {
     /// Emit an intent status change event for mandatory audit
-    fn emit_status_change(
+    fn log_intent_status_change(
         &self,
+        plan_id: &str,
         intent_id: &IntentId,
-        old_status: &IntentStatus,
-        new_status: &IntentStatus,
+        old_status: &str,
+        new_status: &str,
         reason: &str,
-        triggering_plan_id: Option<&str>,
+        triggering_action_id: Option<&str>,
     ) -> Result<(), RuntimeError>;
 }
 ```
 
-### Implementations
+### Behavioral guarantees
+- Implementations must ensure either:
+  - The status change is durably recorded (preferred), or
+  - An explicit error is returned and propagated to the caller so the transition can fail/retry.
+- No best-effort logging: lifecycle transitions call the sink and treat failures as runtime errors.
+- When lifecycle completes an intent, the resulting status depends on execution result: success → Completed, failure → Failed (and a corresponding audit action is emitted).
 
-#### 1. NoopIntentEventSink
+## Implementations
+- NoopIntentEventSink
+  - Purpose: compatibility for unit tests that intentionally don't assert audit trails.
+  - Behavior: always returns Ok(()) and does not mutate external state.
+- CausalChainIntentEventSink
+  - Purpose: production sink appending an IntentStatusChanged action into the CausalChain.
+  - Behavior: locks the CausalChain (internal Arc<Mutex<CausalChain>>) and appends an audited action.
+  - Failure modes: locking failure or ledger append failure map to RuntimeError and are returned upstream.
 
-A no-operation implementation that discards all events. Useful for testing or scenarios where audit is disabled.
+## Integration points
+- IntentGraph owns an Arc<dyn IntentEventSink> constructed at system init (CCOS::new) and passes it through lifecycle mutations.
+- All lifecycle mutation paths (orchestrator, lifecycle manager, bulk ops, archival) must use the sink and never bypass it.
 
-```rust
-pub struct NoopIntentEventSink;
-```
+## Error handling and recovery
+- On sink error, lifecycle methods return an error and do not silently drop the audit event.
+- Caller (orchestrator / CCOS) may decide whether to retry the transition after handling the error.
 
-#### 2. CausalChainIntentEventSink
+## Audit data format
+- IntentStatusChanged action metadata includes:
+  - plan_id (optional)
+  - intent_id
+  - old_status
+  - new_status
+  - reason
+  - triggering_action_id (optional)
+  - signature (added by causal-chain signing)
 
-A production implementation that writes all status changes to the CausalChain ledger for immutable audit trails.
+## Testing guidance
+- Unit tests may use NoopIntentEventSink when audit assertions are not required.
+- Integration tests should use CausalChainIntentEventSink with an in-memory CausalChain and assert presence of IntentStatusChanged actions via get_actions_for_intent.
 
-```rust
-pub struct CausalChainIntentEventSink<F> 
-where 
-    F: Fn(&IntentId, &IntentStatus, &IntentStatus, &str, Option<&str>) -> Result<(), RuntimeError> + Send + Sync,
-{
-    log_fn: F,
-}
-```
+## Migration notes
+- Previous optional causal chain parameter was removed. Callers must be constructed with an event sink.
+- If a new sink implementation performs network/blocking I/O, prefer asynchronous design and ensure non-blocking call paths or background tasks.
 
-## Guarantees
+## Security and privacy
+- The sink may record sensitive metadata (intent goals or reasons). Implementations must honor runtime privacy/security policies (e.g., redact secrets).
 
-### Mandatory Audit
-
-- **All intent status transitions MUST be audited**: Every call to `IntentLifecycleManager::transition_intent_status` requires an `IntentEventSink` parameter
-- **No optional audit**: The previous optional `CausalChain` parameter has been replaced with the mandatory sink
-- **Fail-fast on audit errors**: If the sink returns an error, the status transition fails entirely
-
-### Atomicity
-
-- Status transitions are atomic: either both the storage update and audit succeed, or neither does
-- The storage is updated first, followed by the audit emission
-- If audit fails, the calling code should handle rollback if needed
-
-### Thread Safety
-
-- All implementations must be `Send + Sync` for use across threads
-- The trait is designed for injection via `Arc<dyn IntentEventSink>`
-
-## Integration Points
-
-### IntentGraph
-
-The `IntentGraph` holds an `Arc<dyn IntentEventSink>` and passes it to all lifecycle operations:
-
-```rust
-pub struct IntentGraph {
-    pub storage: IntentGraphStorage,
-    pub virtualization: IntentGraphVirtualization, 
-    pub lifecycle: IntentLifecycleManager,
-    pub event_sink: Arc<dyn IntentEventSink>,  // NEW
-    pub rt: tokio::runtime::Handle,
-}
-```
-
-### Lifecycle Manager
-
-All lifecycle methods now require an event sink parameter:
-
-```rust
-impl IntentLifecycleManager {
-    pub async fn transition_intent_status(
-        &self,
-        storage: &mut IntentGraphStorage,
-        event_sink: &dyn IntentEventSink,  // NEW: mandatory
-        intent: &mut StorableIntent,
-        new_status: IntentStatus,
-        reason: String,
-        triggering_plan_id: Option<&str>,
-    ) -> Result<(), RuntimeError>
-    
-    pub async fn complete_intent(
-        &self,
-        storage: &mut IntentGraphStorage,
-        event_sink: &dyn IntentEventSink,  // NEW: mandatory
-        intent_id: &IntentId,
-        result: &ExecutionResult,
-    ) -> Result<(), RuntimeError>
-    
-    // ... all other lifecycle methods updated similarly
-}
-```
-
-## Audit Metadata Format
-
-When emitted through a CausalChain-backed sink, events are recorded as `ActionType::IntentStatusChanged` with the following metadata:
-
-```rust
-{
-    "old_status": "Active",           // Debug format of old status
-    "new_status": "Completed",        // Debug format of new status  
-    "reason": "Intent completed successfully",  // Human-readable reason
-    "transition_timestamp": "1703123456",       // Unix timestamp
-    "signature": "0x...",             // Cryptographic signature
-    // Additional context may be added by specific implementations
-}
-```
-
-## Usage Examples
-
-### Creating an IntentGraph with CausalChain Audit
-
-```rust
-let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
-let chain_clone = causal_chain.clone();
-
-let event_sink = Arc::new(CausalChainIntentEventSink::new(
-    move |intent_id, old_status, new_status, reason, triggering_plan_id| {
-        let mut chain = chain_clone.lock()?;
-        let plan_id = triggering_plan_id.unwrap_or("intent-lifecycle-manager");
-        let old_status_str = format!("{:?}", old_status);
-        let new_status_str = format!("{:?}", new_status);
-        
-        chain.log_intent_status_change(
-            &plan_id.to_string(),
-            intent_id,
-            &old_status_str,
-            &new_status_str,
-            reason,
-            None,
-        )
-    }
-));
-
-let intent_graph = IntentGraph::with_event_sink(event_sink)?;
-```
-
-### Creating an IntentGraph with No Audit
-
-```rust
-let intent_graph = IntentGraph::new()?;  // Uses NoopIntentEventSink by default
-```
-
-### Direct Lifecycle Management
-
-```rust
-let lifecycle = IntentLifecycleManager;
-let event_sink = Arc::new(NoopIntentEventSink);
-
-lifecycle.complete_intent(
-    &mut storage, 
-    event_sink.as_ref(), 
-    &intent_id, 
-    &execution_result
-).await?;
-```
-
-## Migration Guide
-
-### From Optional CausalChain to Mandatory EventSink
-
-**Before:**
-```rust
-lifecycle.transition_intent_status(
-    storage,
-    Some(&mut causal_chain),  // Optional
-    &mut intent,
-    new_status,
-    reason,
-    plan_id,
-).await?;
-```
-
-**After:**
-```rust  
-lifecycle.transition_intent_status(
-    storage,
-    event_sink.as_ref(),     // Mandatory
-    &mut intent,
-    new_status,
-    reason,
-    plan_id,
-).await?;
-```
-
-### ExecutionResult Semantics
-
-The `complete_intent` method now properly handles failure cases:
-
-- `ExecutionResult { success: true, .. }` → `IntentStatus::Completed`
-- `ExecutionResult { success: false, .. }` → `IntentStatus::Failed`
-
-Both transitions are audited through the event sink.
-
-## Testing
-
-Integration tests are provided in `tests/intent_lifecycle_audit_tests.rs` to validate:
-
-1. Basic event sink functionality
-2. IntentGraph integration with event sinks
-3. Proper failure case handling (success=false → Failed status)
-4. Complete lifecycle audit coverage
-5. All status transition methods emit events
-
-## Performance Considerations
-
-- Event sinks should be lightweight and avoid blocking operations
-- Heavy processing should be deferred by the sink implementation
-- The CausalChain-backed sink provides async-safe logging through closures
-- Consider using buffering or background threads for high-frequency audit events
-
-## Security Implications
-
-- All intent operations are now mandatorily audited
-- Audit failures prevent status transitions, ensuring no untracked changes
-- Cryptographic signing is handled by the CausalChain implementation
-- The abstraction allows for future security enhancements without API changes
+## Revision history
+- 2025-08-19: Initial specification and integration tests added.

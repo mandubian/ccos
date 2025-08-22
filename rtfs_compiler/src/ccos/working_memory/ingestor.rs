@@ -125,7 +125,7 @@ impl MemoryIngestor {
 mod tests {
     use super::*;
     use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
-    use crate::ccos::working_memory::QueryParams;
+    use crate::ccos::working_memory::backend::QueryParams;
 
     fn mk_action(id: &str, ts: u64, kind: &str, content: &str) -> ActionRecord {
         ActionRecord {

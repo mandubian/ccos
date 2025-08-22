@@ -43,6 +43,13 @@ pub mod working_memory;
 // pub mod orchestrator;      // commented: module not present in tree
 pub mod agent_registry;
 
+// Re-export some arbiter sub-modules at the ccos root for historic import paths
+// Tests and examples sometimes refer to `rtfs_compiler::ccos::delegating_arbiter` or
+// `rtfs_compiler::ccos::arbiter_engine`. Provide lightweight re-exports to avoid
+// breaking consumers when the arbiter was nested under `ccos::arbiter`.
+pub use crate::ccos::arbiter::arbiter_engine;
+pub use crate::ccos::arbiter::delegating_arbiter;
+
 // --- Core CCOS System ---
 
 use std::sync::{Arc, Mutex};
@@ -59,6 +66,7 @@ use crate::runtime::security::RuntimeContext;
 use self::types::ExecutionResult;
 
 use self::intent_graph::IntentGraph;
+use self::event_sink::CausalChainIntentEventSink;
 use self::causal_chain::CausalChain;
 use self::governance_kernel::GovernanceKernel;
 
@@ -85,8 +93,9 @@ impl CCOS {
     /// Creates and initializes a new CCOS instance.
     pub async fn new() -> RuntimeResult<Self> {
         // 1. Initialize shared, stateful components
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
+    let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
+    let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
+    let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
         // TODO: The marketplace should be initialized with discovered capabilities.
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
 

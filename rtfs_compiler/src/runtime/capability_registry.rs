@@ -693,6 +693,7 @@ impl CapabilityRegistry {
             Value::Timestamp(ts) => Ok(serde_json::Value::String(format!("@{}", ts))),
             Value::Uuid(uuid) => Ok(serde_json::Value::String(format!("@{}", uuid))),
             Value::ResourceHandle(handle) => Ok(serde_json::Value::String(format!("@{}", handle))),
+            Value::Atom(_) => Ok(serde_json::Value::String("<atom>".to_string())),
             Value::Function(_) => Err(RuntimeError::Generic(
                 "Cannot serialize functions to JSON".to_string(),
             )),

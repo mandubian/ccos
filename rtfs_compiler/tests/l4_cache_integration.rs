@@ -12,7 +12,7 @@ use rtfs_compiler::runtime::{Evaluator, ModuleRegistry, Value, RuntimeResult};
 use rtfs_compiler::runtime::environment::Environment;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::values::{Function};
-use rtfs_compiler::ast::{Literal, Symbol, Expression};
+use rtfs_compiler::ast::{Literal, Symbol, Expression, Pattern};
 use wat::parse_str;
 use rtfs_compiler::parser::parse_expression;
 
@@ -55,6 +55,10 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     // Create a dummy closure that won't actually be executed when delegation takes L4 path.
     let dummy_closure = Function::new_closure(
         vec![Symbol("x".to_string()), Symbol("y".to_string())],
+        vec![
+            Pattern::Symbol(Symbol("x".to_string())),
+            Pattern::Symbol(Symbol("y".to_string())),
+        ],
         Box::new(rtfs_compiler::ast::Expression::Literal(Literal::Nil)),
         Rc::new(Environment::new()),
         None,

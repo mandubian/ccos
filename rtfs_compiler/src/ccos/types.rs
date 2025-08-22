@@ -45,6 +45,8 @@ pub struct Intent {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IntentStatus {
     Active,
+    /// Intent is currently being executed by a Plan (in-flight)
+    Executing,
     Completed,
     Failed,
     Archived,

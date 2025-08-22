@@ -1,0 +1,2 @@
+This is a local test resource file used by feature tests.
+Line two.
