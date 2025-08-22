@@ -322,6 +322,14 @@ fn test_rtfs2_special_forms_feature() {
     run_feature_tests(&config).expect("rtfs2_special_forms feature tests failed");
 }
 
+// MARK: - Mutation & State Tests
+
+#[test]
+fn test_mutation_and_state_feature() {
+    let config = FeatureTestConfig::new("mutation_and_state", FeatureCategory::SpecialForms);
+    run_feature_tests(&config).expect("mutation_and_state feature tests failed");
+}
+
 // MARK: - Type System Tests
 
 #[test]
@@ -352,6 +360,8 @@ fn test_all_features_integration() {
         FeatureTestConfig::new("literal_values", FeatureCategory::DataStructures),
         FeatureTestConfig::new("vector_operations", FeatureCategory::DataStructures),
         FeatureTestConfig::new("map_operations", FeatureCategory::DataStructures),
+    // Mutation & State
+    FeatureTestConfig::new("mutation_and_state", FeatureCategory::SpecialForms),
         
         // RTFS 2.0 Features
         FeatureTestConfig::new("rtfs2_special_forms", FeatureCategory::Rtfs2Features),

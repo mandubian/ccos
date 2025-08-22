@@ -34,6 +34,23 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
     match pair.as_rule() {
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
+        Rule::method_call_expr => {
+            // (.method target arg1 arg2 ...) -> (method target arg1 arg2 ...)
+            let mut inner = pair.into_inner();
+            // First inner pair is the identifier captured by grammar
+            let method_ident_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "Method call missing identifier".to_string(),
+                span: Some(pair_to_source_span(&current_pair_for_span))
+            })?;
+            let method_name = method_ident_pair.as_str().to_string();
+            let mut elements: Vec<Expression> = Vec::new();
+            elements.push(Expression::Symbol(Symbol(method_name)));
+            for arg_pair in inner {
+                elements.push(build_expression(arg_pair)?);
+            }
+            Ok(Expression::List(elements))
+        }
+        Rule::shorthand_fn => build_shorthand_fn(pair),
         Rule::resource_ref => build_resource_ref(pair),
         // Resource context access creates a ResourceRef
         Rule::task_context_access => {
@@ -195,4 +212,137 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
         map_data.insert(key, value);
     }
     Ok(map_data)
+}
+
+fn build_shorthand_fn(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
+    // Collect body expressions first
+    let span = pair_to_source_span(&pair);
+    let mut body_exprs = Vec::new();
+    let mut max_index: usize = 0; // Track highest %n encountered
+    let mut uses_plain_percent = false;
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::WHITESPACE || inner.as_rule() == Rule::COMMENT { continue; }
+        let expr = build_expression(inner.clone())?;
+        // Scan expression tree for % symbols
+        scan_for_placeholders(&expr, &mut max_index, &mut uses_plain_percent);
+        body_exprs.push(expr);
+    }
+
+    // Determine parameter list
+    let param_count = if max_index > 0 { max_index } else if uses_plain_percent { 1 } else { 0 };
+    let mut params = Vec::new();
+    for i in 1..=param_count {
+        let name = if i == 1 && uses_plain_percent { "%".to_string() } else { format!("%{}", i) };
+        params.push(crate::ast::ParamDef { pattern: crate::ast::Pattern::Symbol(Symbol(name)), type_annotation: None });
+    }
+
+    // Rewrite placeholders in body to generated param symbols
+    let rewritten_body: Vec<Expression> = body_exprs.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect();
+
+    Ok(Expression::Fn(crate::ast::FnExpr {
+        params,
+        variadic_param: None,
+        return_type: None,
+        body: rewritten_body,
+        delegation_hint: None,
+    }))
+}
+
+fn scan_for_placeholders(expr: &Expression, max_index: &mut usize, uses_plain_percent: &mut bool) {
+    match expr {
+        Expression::Symbol(Symbol(s)) => {
+            if s == "%" { *uses_plain_percent = true; }
+            else if s.starts_with('%') {
+                if let Ok(n) = s[1..].parse::<usize>() { if n > *max_index { *max_index = n; } }
+            }
+        }
+        Expression::List(items) | Expression::Vector(items) => {
+            for e in items { scan_for_placeholders(e, max_index, uses_plain_percent); }
+        }
+        Expression::Map(m) => {
+            for v in m.values() { scan_for_placeholders(v, max_index, uses_plain_percent); }
+        }
+        Expression::FunctionCall { callee, arguments } => {
+            scan_for_placeholders(callee, max_index, uses_plain_percent);
+            for a in arguments { scan_for_placeholders(a, max_index, uses_plain_percent); }
+        }
+        Expression::If(if_expr) => {
+            scan_for_placeholders(&if_expr.condition, max_index, uses_plain_percent);
+            scan_for_placeholders(&if_expr.then_branch, max_index, uses_plain_percent);
+            if let Some(e) = &if_expr.else_branch { scan_for_placeholders(e, max_index, uses_plain_percent); }
+        }
+        Expression::Let(let_expr) => {
+            for b in &let_expr.bindings { scan_for_placeholders(&b.value, max_index, uses_plain_percent); }
+            for b in &let_expr.body { scan_for_placeholders(b, max_index, uses_plain_percent); }
+        }
+        Expression::Do(do_expr) => {
+            for e in &do_expr.expressions { scan_for_placeholders(e, max_index, uses_plain_percent); }
+        }
+        Expression::Fn(fn_expr) => {
+            for e in &fn_expr.body { scan_for_placeholders(e, max_index, uses_plain_percent); }
+        }
+        Expression::Def(def_expr) => {
+            scan_for_placeholders(&def_expr.value, max_index, uses_plain_percent);
+        }
+        Expression::Defn(defn_expr) => {
+            for e in &defn_expr.body { scan_for_placeholders(e, max_index, uses_plain_percent); }
+        }
+        Expression::TryCatch(tc) => {
+            for e in &tc.try_body { scan_for_placeholders(e, max_index, uses_plain_percent); }
+            for c in &tc.catch_clauses { for e in &c.body { scan_for_placeholders(e, max_index, uses_plain_percent); } }
+        }
+        Expression::Parallel(p) => {
+            for b in &p.bindings { scan_for_placeholders(&b.expression, max_index, uses_plain_percent); }
+        }
+        Expression::WithResource(w) => {
+            scan_for_placeholders(&w.resource_init, max_index, uses_plain_percent);
+            for e in &w.body { scan_for_placeholders(e, max_index, uses_plain_percent); }
+        }
+        Expression::Match(mexpr) => {
+            scan_for_placeholders(&mexpr.expression, max_index, uses_plain_percent);
+            for c in &mexpr.clauses { if let Some(g) = &c.guard { scan_for_placeholders(g, max_index, uses_plain_percent); } scan_for_placeholders(&c.body, max_index, uses_plain_percent); }
+        }
+        Expression::LogStep(log) => {
+            for v in &log.values { scan_for_placeholders(v, max_index, uses_plain_percent); }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expression {
+    match expr {
+        Expression::Symbol(Symbol(s)) => Expression::Symbol(Symbol(s)), // No renaming needed now
+        Expression::List(items) => Expression::List(items.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect()),
+        Expression::Vector(items) => Expression::Vector(items.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect()),
+        Expression::Map(m) => {
+            let out = m.into_iter().map(|(k,v)| (k, rewrite_placeholders(v, uses_plain_percent))).collect();
+            Expression::Map(out)
+        }
+        Expression::FunctionCall { callee, arguments } => Expression::FunctionCall {
+            callee: Box::new(rewrite_placeholders(*callee, uses_plain_percent)),
+            arguments: arguments.into_iter().map(|a| rewrite_placeholders(a, uses_plain_percent)).collect(),
+        },
+        Expression::If(mut ife) => {
+            ife.condition = Box::new(rewrite_placeholders(*ife.condition, uses_plain_percent));
+            ife.then_branch = Box::new(rewrite_placeholders(*ife.then_branch, uses_plain_percent));
+            if let Some(e)=ife.else_branch { ife.else_branch = Some(Box::new(rewrite_placeholders(*e, uses_plain_percent))); }
+            Expression::If(ife)
+        }
+        Expression::Let(mut le) => {
+            for b in &mut le.bindings { let new_v = rewrite_placeholders(*b.value.clone(), uses_plain_percent); b.value = Box::new(new_v); }
+            le.body = le.body.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect();
+            Expression::Let(le)
+        }
+        Expression::Do(mut de) => { de.expressions = de.expressions.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::Do(de) }
+        Expression::Fn(mut fe) => { fe.body = fe.body.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::Fn(fe) }
+        Expression::Def(mut de) => { de.value = Box::new(rewrite_placeholders(*de.value, uses_plain_percent)); Expression::Def(de) }
+        Expression::Defn(mut dn) => { dn.body = dn.body.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::Defn(dn) }
+        Expression::TryCatch(mut tc) => { tc.try_body = tc.try_body.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); for c in &mut tc.catch_clauses { c.body = c.body.iter().cloned().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); } Expression::TryCatch(tc) }
+        Expression::Parallel(mut p) => { for b in &mut p.bindings { let new_e = rewrite_placeholders(*b.expression.clone(), uses_plain_percent); b.expression = Box::new(new_e); } Expression::Parallel(p) }
+        Expression::WithResource(mut w) => { w.resource_init = Box::new(rewrite_placeholders(*w.resource_init, uses_plain_percent)); w.body = w.body.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::WithResource(w) }
+        Expression::Match(mut me) => { me.expression = Box::new(rewrite_placeholders(*me.expression, uses_plain_percent)); for c in &mut me.clauses { c.body = Box::new(rewrite_placeholders(*c.body.clone(), uses_plain_percent)); if let Some(g)=c.guard.clone() { c.guard = Some(Box::new(rewrite_placeholders(*g, uses_plain_percent))); } } Expression::Match(me) }
+        Expression::LogStep(mut lg) => { lg.values = lg.values.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::LogStep(lg) }
+        other => other,
+    }
 }
