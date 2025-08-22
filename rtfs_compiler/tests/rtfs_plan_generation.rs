@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use rtfs_compiler::ccos::arbiter_engine::ArbiterEngine;
+use rtfs_compiler::ccos::arbiter::{ArbiterEngine, DelegatingArbiter};
 use rtfs_compiler::ccos::delegation::{ModelProvider, ModelRegistry};
-use rtfs_compiler::ccos::delegating_arbiter::DelegatingArbiter;
 use rtfs_compiler::ccos::types::{Intent, PlanBody};
 
 /// A stub LLM that returns hard-coded JSON or RTFS snippets so that we can unit-test
@@ -32,30 +31,31 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
     // 1. Register the stub model
     let registry = Arc::new(ModelRegistry::new());
     registry.register(StubRTFSModel);
-
     // 2. Create the arbiter using our stub provider configuration
-    let llm_cfg = rtfs_compiler::ccos::arbiter::arbiter_config::LlmConfig {
-        provider_type: rtfs_compiler::ccos::arbiter::arbiter_config::LlmProviderType::Stub,
+    let llm_config = rtfs_compiler::ccos::arbiter::arbiter_config::LlmConfig {
+        provider_type: rtfs_compiler::ccos::arbiter::LlmProviderType::Stub,
         model: "stub-model".to_string(),
         api_key: None,
         base_url: None,
-        max_tokens: None,
-        temperature: None,
-        timeout_seconds: None,
+        max_tokens: Some(1000),
+        temperature: Some(0.7),
+        timeout_seconds: Some(30),
         prompts: None,
     };
 
-    let delegation_cfg = rtfs_compiler::ccos::arbiter::arbiter_config::DelegationConfig {
+    // Keep stub model registration from local edits; use upstream delegation config shape
+    let delegation_config = rtfs_compiler::ccos::arbiter::arbiter_config::DelegationConfig {
         enabled: false,
-        threshold: 0.5,
+        threshold: 0.65,
         max_candidates: 3,
         min_skill_hits: None,
-        agent_registry: rtfs_compiler::ccos::arbiter::arbiter_config::AgentRegistryConfig { registry_type: rtfs_compiler::ccos::arbiter::arbiter_config::RegistryType::InMemory, database_url: None, agents: vec![] },
+        agent_registry: rtfs_compiler::ccos::arbiter::arbiter_config::AgentRegistryConfig::default(),
     };
 
-    let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::intent_graph::IntentGraph::new().unwrap()));
+    let intent_graph = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::intent_graph::IntentGraph::new().unwrap()));
 
-    let arbiter = DelegatingArbiter::new(llm_cfg, delegation_cfg, intent_graph).await.unwrap();
+    // Construct the delegating arbiter (async constructor)
+    let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph).await.unwrap();
 
     // 3. Create a dummy Intent manually (skip NL phase for simplicity)
     let intent = Intent::new("test goal".to_string()).with_name("stub_intent".to_string());

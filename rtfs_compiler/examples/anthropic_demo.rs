@@ -17,7 +17,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             base_url: None, // Use default Anthropic API
             max_tokens: Some(2000),
             temperature: Some(0.7),
+<<<<<<< HEAD
                 prompts: None,
+=======
+                prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+>>>>>>> d3d4c9a (Fix: treat unknown string escapes as parse errors; normalize :keys destructuring for AST and IR; update integration test expectation)
             timeout_seconds: Some(60),
         }),
         delegation_config: None,
@@ -42,8 +46,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 base_url: None,
                 max_tokens: Some(1000),
                 temperature: Some(0.7),
+<<<<<<< HEAD
                 prompts: None,
                 timeout_seconds: Some(30),
+=======
+                    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+                    timeout_seconds: Some(30),
+>>>>>>> d3d4c9a (Fix: treat unknown string escapes as parse errors; normalize :keys destructuring for AST and IR; update integration test expectation)
             }),
             delegation_config: None,
             capability_config: rtfs_compiler::ccos::arbiter::CapabilityConfig::default(),
@@ -134,6 +143,7 @@ mod tests {
                 base_url: None,
                 max_tokens: Some(2000),
                 temperature: Some(0.7),
+                prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
                 timeout_seconds: Some(60),
             }),
             delegation_config: None,

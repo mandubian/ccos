@@ -69,27 +69,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📋 Testing Plan Generation");
     println!("--------------------------");
     
+    let mut constraints = HashMap::new();
+    constraints.insert("accuracy".to_string(), "high".to_string());
+
+    let mut preferences = HashMap::new();
+    preferences.insert("speed".to_string(), "medium".to_string());
+
     let test_intent = StorableIntent {
         intent_id: "test_intent_123".to_string(),
         name: Some("analyze_user_sentiment".to_string()),
-    original_request: "analyze sentiment".to_string(),
-    rtfs_intent_source: "(intent ... )".to_string(),
-    goal: "Analyze user sentiment from interactions".to_string(),
-        constraints: {
-            let mut map = HashMap::new();
-            map.insert("accuracy".to_string(), "high".to_string());
-            map
-        },
-        preferences: {
-            let mut map = HashMap::new();
-            map.insert("speed".to_string(), "medium".to_string());
-            map
-        },
+        original_request: "analyze sentiment".to_string(),
+        rtfs_intent_source: "".to_string(),
+        goal: "Analyze user sentiment from interactions".to_string(),
+        constraints,
+        preferences,
         success_criteria: Some("sentiment_analyzed".to_string()),
         parent_intent: None,
         child_intents: vec![],
         triggered_by: rtfs_compiler::ccos::types::TriggerSource::HumanRequest,
-        generation_context: rtfs_compiler::ccos::types::GenerationContext { arbiter_version: "stub".to_string(), generation_timestamp: 0, input_context: HashMap::new(), reasoning_trace: None },
+        generation_context: rtfs_compiler::ccos::types::GenerationContext {
+            arbiter_version: "example".to_string(),
+            generation_timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            input_context: HashMap::new(),
+            reasoning_trace: None,
+        },
         status: rtfs_compiler::ccos::types::IntentStatus::Active,
         priority: 0,
         created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
@@ -104,33 +107,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("   ✅ Generated Plan:");
     println!("      ID: {}", plan.plan_id);
+    // Description field may be absent on some Plan shapes; show metadata keys instead
     println!("      Name: {:?}", plan.name);
-    println!("      Name: {:?}", plan.name);
+    println!("      Metadata keys: {:?}", plan.metadata.keys().collect::<Vec<_>>());
     println!("      Language: {:?}", plan.language);
     println!("      Status: {:?}", plan.status);
     
     if let rtfs_compiler::ccos::types::PlanBody::Rtfs(rtfs_code) = &plan.body {
         println!("      RTFS Code:");
         println!("      {}", rtfs_code);
-    }
 
-    // Test plan validation
-    println!("\n🔍 Testing Plan Validation");
-    println!("--------------------------");
-    
-    // validate_plan expects the textual plan content; extract RTFS body when available
-    let plan_body_text = match &plan.body {
-        rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
-        _ => String::new(),
-    };
-    let validation = provider.validate_plan(&plan_body_text).await?;
-    
-    println!("   ✅ Validation Result:");
-    println!("      Valid: {}", validation.is_valid);
-    println!("      Confidence: {:.2}", validation.confidence);
-    println!("      Reasoning: {}", validation.reasoning);
-    println!("      Suggestions: {:?}", validation.suggestions);
-    println!("      Errors: {:?}", validation.errors);
+        // Validate using the RTFS string when available
+        let validation = provider.validate_plan(rtfs_code).await?;
+        println!("   ✅ Validation Result:");
+        println!("      Valid: {}", validation.is_valid);
+        println!("      Confidence: {:.2}", validation.confidence);
+        println!("      Reasoning: {}", validation.reasoning);
+        println!("      Suggestions: {:?}", validation.suggestions);
+        println!("      Errors: {:?}", validation.errors);
+    } else {
+        println!("   ⚠️  Cannot validate non-RTFS plan bodies in this example");
+    }
 
     // Show configuration example
     println!("\n⚙️  Configuration Example");
@@ -146,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
-            prompts: None,
+            prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
         }),
         delegation_config: None,
         capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
@@ -171,3 +168,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
