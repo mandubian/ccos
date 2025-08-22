@@ -48,6 +48,7 @@ impl StorageValue {
             // Skip non-serializable types
             Value::Function(_) => StorageValue::String("<<function>>".to_string()),
             Value::FunctionPlaceholder(_) => StorageValue::String("<<function_placeholder>>".to_string()),
+            Value::Atom(_) => StorageValue::String("<<atom>>".to_string()),
             // Handle other Value variants
             Value::Timestamp(t) => StorageValue::String(format!("timestamp:{}", t)),
             Value::Uuid(u) => StorageValue::String(format!("uuid:{}", u)),
