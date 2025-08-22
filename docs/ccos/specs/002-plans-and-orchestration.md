@@ -6,6 +6,8 @@
 **Related:**
 - [SEP-000: System Architecture](./000-ccos-architecture.md)
 - [SEP-003: Causal Chain](./003-causal-chain.md)
+- [Intent Event Sink (Audit) Specification](./intent_event_sink.md)
+- [Worktree summary: wt/orch-core-status-context](./worktree-orch-core-status-context.md)
 
 ## 1. Abstract
 
