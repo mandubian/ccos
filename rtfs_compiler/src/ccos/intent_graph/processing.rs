@@ -7,7 +7,6 @@ use crate::ccos::types::{
 use super::virtualization::VirtualizationConfig;
 use crate::ccos::intent_storage::IntentFilter;
 use crate::runtime::RuntimeError;
-use crate::ccos::event_sink::IntentEventSink;
 use super::storage::IntentGraphStorage;
 
 /// Intent summarization for virtualization
@@ -94,8 +93,8 @@ impl IntentSummarizer {
         let status_weights = intents
             .iter()
             .map(|intent| match intent.status {
-                IntentStatus::Executing => 1.1,
                 IntentStatus::Active => 1.0,
+                IntentStatus::Executing => 0.95,
                 IntentStatus::Failed => 0.8,
                 IntentStatus::Suspended => 0.6,
                 IntentStatus::Completed => 0.4,
@@ -184,8 +183,8 @@ impl IntentSummarizer {
         };
 
         let status_text = match dominant_status {
-            IntentStatus::Executing => "currently executing",
             IntentStatus::Active => "actively being pursued",
+            IntentStatus::Executing => "currently executing",
             IntentStatus::Completed => "completed",
             IntentStatus::Failed => "failed",
             IntentStatus::Suspended => "suspended",
@@ -227,7 +226,7 @@ impl IntentPruningEngine {
     pub fn prune_intents(
         &self,
         relevant_intents: &[IntentId],
-    _storage: &IntentGraphStorage,
+        storage: &IntentGraphStorage,
         _config: &VirtualizationConfig,
     ) -> Result<Vec<IntentId>, RuntimeError> {
         // For now, just return the input intents (no actual pruning)
@@ -261,8 +260,8 @@ impl IntentPruningEngine {
 
         // Status-based scoring
         score += match intent.status {
-            IntentStatus::Executing => 1.0,
-            IntentStatus::Active => 0.9,
+            IntentStatus::Active => 1.0,
+            IntentStatus::Executing => 0.95,
             IntentStatus::Suspended => 0.8,
             IntentStatus::Failed => 0.6,
             IntentStatus::Completed => 0.4,
@@ -315,8 +314,8 @@ impl IntentPruningEngine {
     /// Calculate base relevance score for an intent
     fn calculate_base_relevance(&self, intent: &StorableIntent) -> f64 {
         match intent.status {
-            IntentStatus::Executing => 1.0,
             IntentStatus::Active => 0.9,
+            IntentStatus::Executing => 0.85,
             IntentStatus::Failed => 0.7,
             IntentStatus::Suspended => 0.5,
             IntentStatus::Completed => 0.3,
@@ -334,7 +333,7 @@ impl IntentLifecycleManager {
     pub async fn archive_completed_intents(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
     ) -> Result<(), RuntimeError> {
         let completed_filter = IntentFilter {
             status: Some(IntentStatus::Completed),
@@ -346,11 +345,11 @@ impl IntentLifecycleManager {
         for mut intent in completed_intents {
             self.transition_intent_status(
                 storage,
-                sink,
+                event_sink,
                 &mut intent,
                 IntentStatus::Archived,
                 "Auto-archived completed intent".to_string(),
-                None,
+                None, // triggering_plan_id - will be enhanced later
             ).await?;
         }
 
@@ -361,7 +360,7 @@ impl IntentLifecycleManager {
     pub async fn transition_intent_status(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent: &mut StorableIntent,
         new_status: IntentStatus,
         reason: String,
@@ -402,17 +401,18 @@ impl IntentLifecycleManager {
         let audit_key = format!("status_transition_{}_{}", timestamp, transition_count);
         intent.metadata.insert(audit_key, audit_entry);
         
-    // Store the updated intent
-    storage.update_intent(intent).await?;
-
-    let plan_id = triggering_plan_id.unwrap_or("intent-lifecycle-manager");
-    sink.log_intent_status_change(
-            plan_id,
+        // Store the updated intent
+        storage.update_intent(intent).await?;
+        
+        // Emit status change event for mandatory audit
+        // NOTE: We don't yet have a concrete plan_id wired here; pass empty string until orchestration plumbs it.
+        event_sink.log_intent_status_change(
+            "", // plan_id placeholder
             &intent.intent_id,
-            &self.status_to_string(&old_status),
-            &self.status_to_string(&new_status),
+            self.status_to_string(&old_status),
+            self.status_to_string(&new_status),
             &reason,
-            None,
+            triggering_plan_id,
         )?;
         
         Ok(())
@@ -422,24 +422,24 @@ impl IntentLifecycleManager {
     pub async fn complete_intent(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
         let mut intent = storage.get_intent(intent_id).await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-
-        let (new_status, reason) = if result.success {
+        
+        let (target_status, reason) = if result.success {
             (IntentStatus::Completed, "Intent completed successfully".to_string())
         } else {
             (IntentStatus::Failed, format!("Intent failed with errors: {:?}", result.value))
         };
-
+        
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
-            new_status,
+            target_status,
             reason,
             None, // triggering_plan_id - will be enhanced later
         ).await?;
@@ -451,7 +451,7 @@ impl IntentLifecycleManager {
     pub async fn fail_intent(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         error_message: String,
     ) -> Result<(), RuntimeError> {
@@ -460,7 +460,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
             IntentStatus::Failed,
             format!("Intent failed: {}", error_message),
@@ -474,7 +474,7 @@ impl IntentLifecycleManager {
     pub async fn suspend_intent(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -483,7 +483,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
             IntentStatus::Suspended,
             format!("Intent suspended: {}", reason),
@@ -497,7 +497,7 @@ impl IntentLifecycleManager {
     pub async fn resume_intent(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -506,7 +506,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
             IntentStatus::Active,
             format!("Intent resumed: {}", reason),
@@ -520,7 +520,7 @@ impl IntentLifecycleManager {
     pub async fn archive_intent(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -529,7 +529,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
             IntentStatus::Archived,
             format!("Intent archived: {}", reason),
@@ -543,7 +543,7 @@ impl IntentLifecycleManager {
     pub async fn reactivate_intent(
         &self,
         storage: &mut IntentGraphStorage,
-        sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
@@ -552,7 +552,7 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
             IntentStatus::Active,
             format!("Intent reactivated: {}", reason),
@@ -611,38 +611,39 @@ impl IntentLifecycleManager {
         to: &IntentStatus,
     ) -> Result<(), RuntimeError> {
         match (from, to) {
-            // Active can transition to any other status
+            // Active can transition to Executing, Suspended, Archived, Failed (edge), Completed (unlikely direct), or stay Active
             (IntentStatus::Active, _) => Ok(()),
-            
-            // Executing can transition only to terminal or pausable states
-            // (Completed/Failed end execution, Suspended allows pausing an in-flight intent)
+
+            // Executing can complete, fail, suspend, return to Active (rollback), or archive (edge case)
             (IntentStatus::Executing, IntentStatus::Completed) => Ok(()),
             (IntentStatus::Executing, IntentStatus::Failed) => Ok(()),
             (IntentStatus::Executing, IntentStatus::Suspended) => Ok(()),
+            (IntentStatus::Executing, IntentStatus::Active) => Ok(()),
+            (IntentStatus::Executing, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Executing, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Executing to {:?}", to)
             )),
-            
+
             // Completed can only transition to Archived
             (IntentStatus::Completed, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Completed, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Completed to {:?}", to)
             )),
-            
+
             // Failed can transition to Active (retry) or Archived
             (IntentStatus::Failed, IntentStatus::Active) => Ok(()),
             (IntentStatus::Failed, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Failed, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Failed to {:?}", to)
             )),
-            
+
             // Suspended can transition to Active (resume) or Archived
             (IntentStatus::Suspended, IntentStatus::Active) => Ok(()),
             (IntentStatus::Suspended, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Suspended, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Suspended to {:?}", to)
             )),
-            
+
             // Archived can transition to Active (reactivate)
             (IntentStatus::Archived, IntentStatus::Active) => Ok(()),
             (IntentStatus::Archived, _) => Err(RuntimeError::Generic(
@@ -654,8 +655,8 @@ impl IntentLifecycleManager {
     /// Convert status to string for audit trail
     fn status_to_string(&self, status: &IntentStatus) -> &'static str {
         match status {
-            IntentStatus::Executing => "Executing",
             IntentStatus::Active => "Active",
+            IntentStatus::Executing => "Executing",
             IntentStatus::Completed => "Completed",
             IntentStatus::Failed => "Failed",
             IntentStatus::Archived => "Archived",
@@ -688,10 +689,10 @@ impl IntentLifecycleManager {
     /// Get intents that can be archived (Completed for more than specified days)
     pub async fn get_intents_ready_for_archival(
         &self,
-    _storage: &IntentGraphStorage,
+        storage: &IntentGraphStorage,
         days_threshold: u64,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-    let completed_intents = self.get_intents_by_status(_storage, IntentStatus::Completed).await?;
+        let completed_intents = self.get_intents_by_status(storage, IntentStatus::Completed).await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -713,7 +714,7 @@ impl IntentLifecycleManager {
     pub async fn bulk_transition_intents(
         &self,
         storage: &mut IntentGraphStorage,
-    sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_ids: &[IntentId],
         new_status: IntentStatus,
         reason: String,
@@ -722,7 +723,7 @@ impl IntentLifecycleManager {
         let mut errors = Vec::new();
         
         for intent_id in intent_ids {
-            match self.transition_intent_by_id(storage, sink, intent_id, new_status.clone(), reason.clone()).await {
+            match self.transition_intent_by_id(storage, event_sink, intent_id, new_status.clone(), reason.clone()).await {
                 Ok(()) => successful_transitions.push(intent_id.clone()),
                 Err(e) => errors.push((intent_id.clone(), e)),
             }
@@ -747,7 +748,7 @@ impl IntentLifecycleManager {
     async fn transition_intent_by_id(
         &self,
         storage: &mut IntentGraphStorage,
-    sink: &dyn IntentEventSink,
+        event_sink: &dyn crate::ccos::event_sink::IntentEventSink,
         intent_id: &IntentId,
         new_status: IntentStatus,
         reason: String,
@@ -757,11 +758,11 @@ impl IntentLifecycleManager {
         
         self.transition_intent_status(
             storage,
-            sink,
+            event_sink,
             &mut intent,
             new_status,
             reason,
-            None,
+            None, // triggering_plan_id - will be enhanced later
         ).await
     }
 
