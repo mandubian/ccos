@@ -1,0 +1,22 @@
+;; Mutation & State minimal checks
+
+;; 1) set! rebinding in current frame
+(let [x 1]
+  (do (set! x 2) x))
+;; Expected: 2
+
+;; 2) atom + deref + swap!
+(let [c (atom 0)
+      _ (swap! c inc)]
+  (deref c))
+;; Expected: 1
+
+;; 3) atom updates (sequential)
+(let [sum (atom 0)]
+  (do (swap! sum + 0)
+      (swap! sum + 1)
+      (swap! sum + 2)
+      (swap! sum + 3)
+      (swap! sum + 4)
+      (deref sum)))
+;; Expected: 10
