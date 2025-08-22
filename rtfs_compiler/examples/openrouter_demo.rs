@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create OpenRouter configuration
     let config = ArbiterConfig {
         engine_type: rtfs_compiler::ccos::arbiter::ArbiterEngineType::Llm,
-        llm_config: Some(LlmConfig {
+    llm_config: Some(LlmConfig {
             provider_type: LlmProviderType::OpenAI, // OpenRouter uses OpenAI-compatible API
             // model: "anthropic/claude-3.5-sonnet".to_string(), // OpenRouter model
             model: "moonshotai/kimi-k2:free".to_string(),
@@ -26,7 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: Some(2000),
             temperature: Some(0.7),
             timeout_seconds: Some(60),
+<<<<<<< HEAD
             prompts: None,
+=======
+            prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+>>>>>>> d3d4c9a (Fix: treat unknown string escapes as parse errors; normalize :keys destructuring for AST and IR; update integration test expectation)
         }),
         delegation_config: None,
         capability_config: rtfs_compiler::ccos::arbiter::CapabilityConfig::default(),
@@ -51,7 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_tokens: Some(1000),
                 temperature: Some(0.7),
                 timeout_seconds: Some(30),
+<<<<<<< HEAD
                 prompts: None,
+=======
+                prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+>>>>>>> d3d4c9a (Fix: treat unknown string escapes as parse errors; normalize :keys destructuring for AST and IR; update integration test expectation)
             }),
             delegation_config: None,
             capability_config: rtfs_compiler::ccos::arbiter::CapabilityConfig::default(),

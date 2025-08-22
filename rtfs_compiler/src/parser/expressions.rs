@@ -56,14 +56,12 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::task_context_access => {
             let raw = pair.as_str(); // e.g. "@plan-id" or "@:context-key"
             let without_at = &raw[1..];
-            // If the token is "@:<name>" we treat it as a Symbol (task-context access alias),
-            // otherwise it's a ResourceRef (explicit resource path like @plan-id).
-            if raw.starts_with("@:") {
-                let resource_name = &without_at[1..]; // skip the ':'
-                Ok(Expression::Symbol(Symbol(resource_name.to_string())))
+            // If the access is prefixed with ':' (e.g. @:context-key) treat it as a Symbol
+            // Otherwise treat it as a ResourceRef (explicit resource path like @plan-id)
+            if let Some(rest) = without_at.strip_prefix(':') {
+                Ok(Expression::Symbol(Symbol(rest.to_string())))
             } else {
-                let resource_name = without_at;
-                Ok(Expression::ResourceRef(resource_name.to_string()))
+                Ok(Expression::ResourceRef(without_at.to_string()))
             }
         }
 
@@ -72,6 +70,20 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                 .map(build_expression)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        Rule::anon_fn => {
+            // Anonymous function shorthand: #( ... )
+            let body = pair
+                .into_inner()
+                .map(build_expression)
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Expression::Fn(crate::ast::FnExpr {
+                params: vec![],
+                variadic_param: None,
+                return_type: None,
+                body,
+                delegation_hint: None,
+            }));
+        }
         Rule::map => Ok(Expression::Map(build_map(pair)?)),
         Rule::let_expr => Ok(Expression::Let(build_let_expr(pair)?)),
         Rule::if_expr => Ok(Expression::If(build_if_expr(pair)?)),
