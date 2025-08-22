@@ -3,9 +3,10 @@
 //! This example demonstrates the pluggable MicroVM architecture for RTFS/CCOS.
 
 use crate::runtime::capability_registry::CapabilityRegistry;
-use crate::runtime::microvm_config::MicroVMSettings;
+use crate::runtime::microvm::MicroVMSettings;
 use crate::runtime::values::Value;
 use crate::runtime::error::RuntimeResult;
+use crate::runtime::security::RuntimeContext;
 
 fn main() -> RuntimeResult<()> {
     println!("=== RTFS/CCOS MicroVM Architecture Demo ===\n");
@@ -36,10 +37,17 @@ fn main() -> RuntimeResult<()> {
     // Demonstrate capability execution with MicroVM isolation
     println!("=== Testing Capabilities with MicroVM Isolation ===\n");
     
+    // Create a controlled runtime context for testing
+    let runtime_context = RuntimeContext::controlled(vec![
+        "ccos.network.http-fetch".to_string(),
+        "ccos.io.open-file".to_string(),
+        "ccos.system.current-time".to_string(),
+    ]);
+    
     // Test network capability
     println!("1. Testing network capability (ccos.network.http-fetch):");
     let args = vec![Value::String("https://httpbin.org/get".to_string())];
-    match registry.execute_capability_with_microvm("ccos.network.http-fetch", args) {
+    match registry.execute_capability_with_microvm("ccos.network.http-fetch", args, Some(&runtime_context)) {
         Ok(result) => println!("   Result: {:?}", result),
         Err(e) => println!("   Error: {}", e),
     }
@@ -48,7 +56,7 @@ fn main() -> RuntimeResult<()> {
     // Test file I/O capability
     println!("2. Testing file I/O capability (ccos.io.open-file):");
     let args = vec![Value::String("/tmp/test.txt".to_string()), Value::String("r".to_string())];
-    match registry.execute_capability_with_microvm("ccos.io.open-file", args) {
+    match registry.execute_capability_with_microvm("ccos.io.open-file", args, Some(&runtime_context)) {
         Ok(result) => println!("   Result: {:?}", result),
         Err(e) => println!("   Error: {}", e),
     }
@@ -57,7 +65,7 @@ fn main() -> RuntimeResult<()> {
     // Test safe capability (doesn't require MicroVM)
     println!("3. Testing safe capability (ccos.system.current-time):");
     let args = vec![];
-    match registry.execute_capability_with_microvm("ccos.system.current-time", args) {
+    match registry.execute_capability_with_microvm("ccos.system.current-time", args, Some(&runtime_context)) {
         Ok(result) => println!("   Result: {:?}", result),
         Err(e) => println!("   Error: {}", e),
     }

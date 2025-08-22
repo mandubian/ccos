@@ -4,6 +4,137 @@
 
 use std::collections::HashSet;
 use crate::ccos::execution_context::IsolationLevel;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+
+/// Central security authorizer for capability execution
+pub struct SecurityAuthorizer;
+
+impl SecurityAuthorizer {
+    /// Authorize a capability execution request
+    /// 
+    /// This is the central point for all capability authorization decisions.
+    /// It validates the request against the runtime context and returns
+    /// the minimal set of permissions needed for this specific execution.
+    pub fn authorize_capability(
+        runtime_context: &RuntimeContext,
+        capability_id: &str,
+        args: &[crate::runtime::values::Value],
+    ) -> RuntimeResult<Vec<String>> {
+        // Check if the capability is allowed by the runtime context
+        if !runtime_context.is_capability_allowed(capability_id) {
+            return Err(RuntimeError::SecurityViolation {
+                operation: "capability_authorization".to_string(),
+                capability: capability_id.to_string(),
+                context: format!("Capability '{}' not allowed by runtime context", capability_id),
+            });
+        }
+
+        // Determine the minimal set of permissions needed for this execution
+        let mut required_permissions = vec![capability_id.to_string()];
+
+        // Add additional permissions based on capability type and arguments
+        match capability_id {
+            // File operations might need additional file-specific permissions
+            "ccos.io.open-file" | "ccos.io.read-line" | "ccos.io.write-line" => {
+                if let Some(crate::runtime::values::Value::String(path)) = args.get(0) {
+                    // Could add path-based permissions here
+                    required_permissions.push("ccos.io.file-access".to_string());
+                }
+            },
+            // Network operations might need additional network permissions
+            "ccos.network.http-fetch" => {
+                required_permissions.push("ccos.network.outbound".to_string());
+            },
+            // System operations might need additional system permissions
+            "ccos.system.get-env" => {
+                required_permissions.push("ccos.system.environment".to_string());
+            },
+            _ => {
+                // For other capabilities, just the capability ID is sufficient
+            }
+        }
+
+        Ok(required_permissions)
+    }
+
+    /// Authorize a program execution request
+    /// 
+    /// This validates program execution against the runtime context and
+    /// determines what permissions are needed for the program to run.
+    pub fn authorize_program(
+        runtime_context: &RuntimeContext,
+        program: &crate::runtime::microvm::core::Program,
+        capability_id: Option<&str>,
+    ) -> RuntimeResult<Vec<String>> {
+        let mut required_permissions = Vec::new();
+
+        // If a specific capability is requested, authorize it
+        if let Some(cap_id) = capability_id {
+            if !runtime_context.is_capability_allowed(cap_id) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "program_authorization".to_string(),
+                    capability: cap_id.to_string(),
+                    context: format!("Capability '{}' not allowed for program execution", cap_id),
+                });
+            }
+            required_permissions.push(cap_id.to_string());
+        }
+
+        // Analyze the program to determine additional permissions needed
+        match program {
+            crate::runtime::microvm::core::Program::ExternalProgram { path, args } => {
+                // External programs require special permission
+                if !runtime_context.is_capability_allowed("external_program") {
+                    return Err(RuntimeError::SecurityViolation {
+                        operation: "external_program_authorization".to_string(),
+                        capability: "external_program".to_string(),
+                        context: "External program execution not permitted".to_string(),
+                    });
+                }
+                required_permissions.push("external_program".to_string());
+            },
+            crate::runtime::microvm::core::Program::NativeFunction(_) => {
+                // Native functions require special permission
+                if !runtime_context.is_capability_allowed("native_function") {
+                    return Err(RuntimeError::SecurityViolation {
+                        operation: "native_function_authorization".to_string(),
+                        capability: "native_function".to_string(),
+                        context: "Native function execution not permitted".to_string(),
+                    });
+                }
+                required_permissions.push("native_function".to_string());
+            },
+            _ => {
+                // RTFS programs are generally allowed if the capability is authorized
+            }
+        }
+
+        Ok(required_permissions)
+    }
+
+    /// Validate that the execution context has the required permissions
+    /// 
+    /// This is a final validation step that ensures the execution context
+    /// contains all the permissions that were authorized.
+    pub fn validate_execution_context(
+        required_permissions: &[String],
+        execution_context: &crate::runtime::microvm::core::ExecutionContext,
+    ) -> RuntimeResult<()> {
+        for permission in required_permissions {
+            if !execution_context.capability_permissions.contains(permission) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "execution_context_validation".to_string(),
+                    capability: permission.clone(),
+                    context: format!(
+                        "Required permission '{}' not in execution context permissions: {:?}",
+                        permission, execution_context.capability_permissions
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
 
 /// Security levels for RTFS execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

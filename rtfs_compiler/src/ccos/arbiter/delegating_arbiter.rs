@@ -820,7 +820,7 @@ impl ArbiterEngine for DelegatingArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition, LlmProviderType};
+    use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition, LlmProviderType, RegistryType};
 
     fn create_test_config() -> (LlmConfig, DelegationConfig) {
         let llm_config = LlmConfig {
