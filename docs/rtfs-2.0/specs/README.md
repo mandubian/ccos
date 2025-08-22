@@ -23,6 +23,7 @@ This directory contains the complete specification for RTFS 2.0, a major evoluti
 4. **[04-streaming-syntax.md](04-streaming-syntax.md)** - Streaming capabilities and syntax
 5. **[05-native-type-system.md](05-native-type-system.md)** - RTFS native type system specification
 6. **[14-step-special-form.md](14-step-special-form.md)** - Step special form for CCOS plan execution
+7. **[16-mutation-and-state.md](16-mutation-and-state.md)** - Immutability-by-default and sanctioned mutability (set!, atoms)
 
 ### System Architecture Specifications
 
