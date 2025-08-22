@@ -510,7 +510,7 @@ pub fn run_error_case_tests() {
         ("(fn [])", "Function missing body"),
         ("(match)", "Match missing expression"),
         ("(match x)", "Match missing patterns"),
-        ("(try)", "Try missing body"),
+    ("(try)", "Try without catch/finally"),
         ("(catch)", "Catch without try"),
         ("(finally)", "Finally without try"),
         ("(with-resource)", "With-resource missing binding"),

@@ -13,7 +13,8 @@ program = { SOI ~ (module_definition | expression)* ~ EOI }
 // --- Core Recursive Rule ---
 // Order matters for precedence (e.g., special forms before general lists)
 // Removed function_call, relying on list + parser heuristic
-expression = _{ literal | keyword | symbol | task_context_access | resource_ref | special_form | list | vector | map }
+// Include shorthand_fn before other possibilities so it captures '#(' sequences
+expression = _{ shorthand_fn | method_call_expr | literal | keyword | symbol | task_context_access | resource_ref | special_form | list | vector | map }
 
 // --- Basic Values ---
 
@@ -30,9 +31,8 @@ special_float = @{ "##Inf" | "##-Inf" | "##NaN" }
 
 // String parsing rules:
 // escape_sequence must be defined before string_char, and string_char before string.
-// Only allow explicit escape sequences that the parser unescape routine supports.
-// This keeps string token contents predictable for downstream unescape handling.
-escape_sequence = { "\\" ~ ("n" | "t" | "r" | "\\" | "\"") } // E.g. \" or \n or \t
+// Accept any escaped character (\X). Unknown escapes are preserved and handled later by the unescape routine.
+escape_sequence = { "\\" ~ ANY } // E.g. \", \n, \t, or any other escaped char preserved
 string_char     = { escape_sequence | (!("\"" | "\\") ~ ANY) }
 string          =  { "\"" ~ string_char* ~ "\"" }
 boolean = @{ "true" | "false" }
@@ -40,7 +40,8 @@ nil     = @{ "nil" ~ !identifier_chars }
 
 // --- Identifiers & Symbols ---
 // Based on grammar_spec.md, allowing common Lisp chars. '.' is for ns, '-' is common.
-identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" }
+// Added '%' for shorthand lambda placeholders (% %1 %2 ...)
+identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" }
 identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
 identifier            = @{ identifier_start_char ~ identifier_chars* }
 
@@ -89,6 +90,13 @@ map       = { "{" ~ map_entry* ~ "}" }
 map_entry = { map_key ~ expression }
 // Allowing keywords, strings, or integers as map keys for now (as per grammar_spec)
 map_key = { keyword | string | integer }
+
+// Shorthand anonymous function using Clojure-style reader macro: #( ... ) with % %1 %2 etc.
+// Parses as its own rule; later transformed into a normal fn expression in parser.
+shorthand_fn = { "#" ~ "(" ~ expression* ~ ")" }
+
+// Method call interop: (.method target arg*) desugared in parser to (method target arg*)
+method_call_expr = { "(" ~ "." ~ identifier ~ expression+ ~ ")" }
 
 // --- Type Expressions (Based on grammar_spec.md) ---
 primitive_type = { symbol | keyword }
@@ -264,7 +272,7 @@ with_resource_expr = { "(" ~ with_resource_keyword ~ "[" ~ symbol ~ type_expr ~ 
 // This prevents expression+ from consuming catch/finally clauses.
 try_body_expression = _{ !(catch_clause | finally_clause) ~ expression }
 
-try_catch_expr = { "(" ~ try_keyword ~ try_body_expression+ ~ catch_clause* ~ finally_clause? ~ ")" } // Use try_keyword and try_body_expression
+try_catch_expr = { "(" ~ try_keyword ~ try_body_expression* ~ catch_clause* ~ finally_clause? ~ ")" } // Use try_keyword and try_body_expression; allow empty try body
 // Changed + to * for catch
 catch_clause   =  { "(" ~ catch_keyword ~ symbol ~ symbol? ~ expression+ ~ ")" } // Use catch_keyword
 finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_keyword
