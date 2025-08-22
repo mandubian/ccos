@@ -8,7 +8,7 @@ use std::time::Instant;
 
 /// Mock MicroVM provider for testing and development
 pub struct MockMicroVMProvider {
-    initialized: bool,
+    pub initialized: bool,
 }
 
 impl MockMicroVMProvider {
@@ -34,6 +34,18 @@ impl MicroVMProvider for MockMicroVMProvider {
     fn execute_program(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         if !self.initialized {
             return Err(RuntimeError::Generic("Mock provider not initialized".to_string()));
+        }
+
+        // 🔒 SECURITY: Capability-based access control for program execution
+        if let Some(capability_id) = &context.capability_id {
+            // Check if the requested capability is in the allowed permissions
+            if !context.capability_permissions.contains(capability_id) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "execute_program".to_string(),
+                    capability: capability_id.clone(),
+                    context: format!("Allowed permissions: {:?}", context.capability_permissions),
+                });
+            }
         }
 
         let start_time = Instant::now();
@@ -85,6 +97,18 @@ impl MicroVMProvider for MockMicroVMProvider {
     fn execute_capability(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         if !self.initialized {
             return Err(RuntimeError::Generic("Mock provider not initialized".to_string()));
+        }
+
+        // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
+        // Just ensure the capability ID is present in permissions if specified
+        if let Some(capability_id) = &context.capability_id {
+            if !context.capability_permissions.contains(capability_id) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "execute_capability".to_string(),
+                    capability: capability_id.clone(),
+                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                });
+            }
         }
 
         let start_time = Instant::now();
