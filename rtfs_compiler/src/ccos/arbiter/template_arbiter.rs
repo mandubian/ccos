@@ -355,14 +355,18 @@ mod tests {
         // Test sentiment analysis pattern
         let pattern = arbiter.match_intent_pattern("analyze user sentiment from chat logs");
         assert!(pattern.is_some());
-    let name = pattern.unwrap().name.clone();
-    assert!(name == "analyze_sentiment" || name == "sentiment_analysis" || name.contains("sentiment"));
-        
+        {
+            let p = pattern.unwrap();
+            assert_eq!(p.intent_name.clone(), "analyze_sentiment");
+        }
+
         // Test backup pattern
         let pattern = arbiter.match_intent_pattern("create backup of database");
         assert!(pattern.is_some());
-    let name = pattern.unwrap().name.clone();
-    assert!(name == "backup_data" || name == "backup" || name.contains("backup"));
+        {
+            let p = pattern.unwrap();
+            assert_eq!(p.intent_name.clone(), "backup_data");
+        }
         
         // Test no match
         let pattern = arbiter.match_intent_pattern("random request");

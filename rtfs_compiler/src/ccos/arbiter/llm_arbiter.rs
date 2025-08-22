@@ -373,13 +373,19 @@ impl ArbiterEngine for LlmArbiter {
         // Use LLM provider to generate text response
         let response = self.llm_provider.generate_text(&prompt).await?;
         
-        // Parse RTFS response into intent structure
-        let intent = self.parse_rtfs_intent_response(&response, natural_language, context)?;
-        
-        // Store the generated intent
-        self.store_intent(&intent).await?;
-        
-        Ok(intent)
+    // Parse RTFS response into intent structure
+    let mut intent = self.parse_rtfs_intent_response(&response, natural_language, context)?;
+
+    // Ensure the original user request is recorded on the intent
+    intent.original_request = natural_language.to_string();
+
+    // Mark generation method for downstream consumers/tests
+    intent.metadata.insert("generation_method".to_string(), crate::runtime::values::Value::String("llm".to_string()));
+
+    // Store the generated intent
+    self.store_intent(&intent).await?;
+
+    Ok(intent)
     }
     
     async fn intent_to_plan(

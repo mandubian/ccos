@@ -435,16 +435,23 @@ pub(super) fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, Pest
         Rule::keyword => Ok(MatchPattern::Keyword(build_keyword(pair.clone())?)),
         Rule::wildcard => Ok(MatchPattern::Wildcard),
         Rule::symbol => Ok(MatchPattern::Symbol(build_symbol(pair.clone())?)),
-        Rule::type_expr => {
-            // Assuming type_expr is a valid pattern for now, might need specific handling
-            // For now, let's treat it as an error or unsupported, as TypeExpr is not directly a MatchPattern variant by default.
-            // This depends on how type patterns are defined in AST.
-            // If Type(TypeExpr) is a variant of MatchPattern:
-            // Ok(MatchPattern::Type(super::types::build_type_expr(pair.clone())?))
-            Err(PestParseError::UnsupportedRule {
-                rule: "Type matching in patterns not fully implemented yet".to_string(),
-                span: Some(match_pattern_span.clone()),
-            })
+        // Allow type expressions (and their specific subrules) to be used as match patterns.
+        // Parse the type expression using the types builder and wrap it as a MatchPattern::Type.
+        Rule::type_expr
+        | Rule::vector_type
+        | Rule::map_type
+        | Rule::tuple_type
+        | Rule::function_type
+        | Rule::resource_type
+        | Rule::enum_type
+        | Rule::union_type
+        | Rule::intersection_type
+        | Rule::literal_type
+        | Rule::array_type
+        | Rule::primitive_type
+        => {
+            let ty = super::types::build_type_expr(pair.clone())?;
+            Ok(MatchPattern::Type(ty, None))
         }
         Rule::as_match_pattern => {
             let mut inner = pair.clone().into_inner();
