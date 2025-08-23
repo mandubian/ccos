@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Serialize, Deserialize};
 use crate::ccos::storage::{ContentAddressableArchive, Archivable, ArchiveStats};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SqliteArchive {
-    conn: Connection,
+    conn: Arc<Mutex<Connection>>,
     db_path: PathBuf,
 }
 
@@ -21,7 +22,7 @@ impl SqliteArchive {
                 size INTEGER NOT NULL
             );CREATE INDEX IF NOT EXISTS idx_objects_stored_at ON objects(stored_at);COMMIT;",
         ).map_err(|e| e.to_string())?;
-        Ok(Self { conn, db_path })
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), db_path })
     }
 }
 
@@ -39,7 +40,8 @@ where
             .as_secs() as i64;
 
         // Insert or ignore to preserve immutability
-        self.conn.execute(
+        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
+        conn_guard.execute(
             "INSERT OR IGNORE INTO objects(hash, payload, stored_at, size) VALUES (?1, ?2, ?3, ?4)",
             params![hash, payload, ts, size],
         ).map_err(|e| e.to_string())?;
@@ -48,7 +50,8 @@ where
     }
 
     fn retrieve(&self, hash: &str) -> Result<Option<T>, String> {
-        let mut stmt = self.conn.prepare("SELECT payload FROM objects WHERE hash = ?1").map_err(|e| e.to_string())?;
+        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
+        let mut stmt = conn_guard.prepare("SELECT payload FROM objects WHERE hash = ?1").map_err(|e| e.to_string())?;
         let payload: Option<String> = stmt
             .query_row(params![hash], |row| row.get(0))
             .optional()
@@ -62,7 +65,11 @@ where
     }
 
     fn exists(&self, hash: &str) -> bool {
-        let mut stmt = match self.conn.prepare("SELECT 1 FROM objects WHERE hash = ?1 LIMIT 1") {
+        let conn_guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let mut stmt = match conn_guard.prepare("SELECT 1 FROM objects WHERE hash = ?1 LIMIT 1") {
             Ok(s) => s,
             Err(_) => return false,
         };
@@ -70,16 +77,20 @@ where
     }
 
     fn stats(&self) -> ArchiveStats {
-        let total_entities: usize = self.conn
+        let conn_guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => return ArchiveStats { total_entities: 0, total_size_bytes: 0, oldest_timestamp: None, newest_timestamp: None },
+        };
+        let total_entities: usize = conn_guard
             .query_row("SELECT COUNT(1) FROM objects", [], |r| r.get(0))
             .unwrap_or(0);
-        let total_size_bytes: usize = self.conn
+        let total_size_bytes: usize = conn_guard
             .query_row("SELECT COALESCE(SUM(size),0) FROM objects", [], |r| r.get(0))
             .unwrap_or(0);
-        let oldest_ts: Option<u64> = self.conn
+        let oldest_ts: Option<u64> = conn_guard
             .query_row("SELECT MIN(stored_at) FROM objects", [], |r| r.get(0))
             .ok();
-        let newest_ts: Option<u64> = self.conn
+        let newest_ts: Option<u64> = conn_guard
             .query_row("SELECT MAX(stored_at) FROM objects", [], |r| r.get(0))
             .ok();
 
@@ -92,7 +103,8 @@ where
     }
 
     fn verify_integrity(&self) -> Result<bool, String> {
-        let mut stmt = self.conn.prepare("SELECT hash, payload FROM objects").map_err(|e| e.to_string())?;
+        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
+        let mut stmt = conn_guard.prepare("SELECT hash, payload FROM objects").map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .map_err(|e| e.to_string())?;
         for row in rows {
@@ -107,7 +119,11 @@ where
 
     fn list_hashes(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if let Ok(mut stmt) = self.conn.prepare("SELECT hash FROM objects") {
+        let conn_guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => return out,
+        };
+        if let Ok(mut stmt) = conn_guard.prepare("SELECT hash FROM objects") {
             let rows = stmt.query_map([], |row| row.get(0));
             if let Ok(iter) = rows {
                 for r in iter.flatten() { out.push(r); }
@@ -142,12 +158,12 @@ mod tests {
 
         let e = TestEntity { id: "a".to_string(), n: 5 };
         let h = archive.store(e.clone()).expect("store");
-        assert!(archive.exists(&h));
-        let got = archive.retrieve(&h).expect("retrieve").unwrap();
-        assert_eq!(got.id, e.id);
+    assert!(<SqliteArchive as ContentAddressableArchive<TestEntity>>::exists(&archive, &h));
+    let got: TestEntity = <SqliteArchive as ContentAddressableArchive<TestEntity>>::retrieve(&archive, &h).expect("retrieve").unwrap();
+    assert_eq!(got.id, e.id);
 
-        // Verify integrity
-        assert!(archive.verify_integrity().unwrap());
+    // Verify integrity
+    assert!(<SqliteArchive as ContentAddressableArchive<TestEntity>>::verify_integrity(&archive).unwrap());
     }
 
     #[test]
@@ -157,7 +173,7 @@ mod tests {
         let s = SqliteArchive::new(path).expect("sqlite");
 
         let e = TestEntity { id: "x".to_string(), n: 9 };
-        let hs = s.store(e.clone()).expect("store sqlite");
+    let hs = <SqliteArchive as ContentAddressableArchive<TestEntity>>::store(&s, e.clone()).expect("store sqlite");
 
         let dir = tempfile::tempdir().unwrap();
         let f = FileArchive::new(dir.path()).expect("file archive");
