@@ -19,6 +19,7 @@ pub mod archivable_types;  // Serializable versions of CCOS types
 pub mod plan_archive;     // Plan archiving functionality
 pub mod checkpoint_archive; // Checkpoint storage for execution contexts
 pub mod rtfs_bridge;      // RTFS bridge for CCOS object extraction and conversion
+pub mod storage_backends; // Pluggable storage backend implementations (file/sqlite)
 // pub mod archive_manager;   // Unified archive coordination (not yet present)
 pub mod execution_context; // Hierarchical execution context management
 
