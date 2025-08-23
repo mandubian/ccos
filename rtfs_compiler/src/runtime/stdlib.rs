@@ -131,9 +131,9 @@ impl StandardLibrary {
                         other => return Err(RuntimeError::TypeError { expected: "string".to_string(), actual: other.type_name().to_string(), operation: "http/get".to_string() }),
                     };
                     let mut map: HashMap<MapKey, Value> = HashMap::new();
-                    map.insert(MapKey::Keyword(Keyword(":status".into())), Value::Integer(200));
-                    map.insert(MapKey::Keyword(Keyword(":url".into())), Value::String(url));
-                    map.insert(MapKey::Keyword(Keyword(":body".into())), Value::String("ok".into()));
+                    map.insert(MapKey::Keyword(Keyword("status".into())), Value::Integer(200));
+                    map.insert(MapKey::Keyword(Keyword("url".into())), Value::String(url));
+                    map.insert(MapKey::Keyword(Keyword("body".into())), Value::String("ok".into()));
                     Ok(Value::Map(map))
                 }),
             })),
@@ -154,11 +154,11 @@ impl StandardLibrary {
                         other => return Err(RuntimeError::TypeError { expected: "string".to_string(), actual: other.type_name().to_string(), operation: "db/query".to_string() }),
                     };
                     let mut row1: HashMap<MapKey, Value> = HashMap::new();
-                    row1.insert(MapKey::Keyword(Keyword(":row".into())), Value::Integer(1));
-                    row1.insert(MapKey::Keyword(Keyword(":sql".into())), Value::String(sql.clone()));
+                    row1.insert(MapKey::Keyword(Keyword("row".into())), Value::Integer(1));
+                    row1.insert(MapKey::Keyword(Keyword("sql".into())), Value::String(sql.clone()));
                     let mut row2: HashMap<MapKey, Value> = HashMap::new();
-                    row2.insert(MapKey::Keyword(Keyword(":row".into())), Value::Integer(2));
-                    row2.insert(MapKey::Keyword(Keyword(":sql".into())), Value::String(sql));
+                    row2.insert(MapKey::Keyword(Keyword("row".into())), Value::Integer(2));
+                    row2.insert(MapKey::Keyword(Keyword("sql".into())), Value::String(sql));
                     Ok(Value::Vector(vec![Value::Map(row1), Value::Map(row2)]))
                 }),
             })),
