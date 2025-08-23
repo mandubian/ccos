@@ -11,9 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Create an arbiter with default configuration
-    let intent_graph = Arc::new(Mutex::new(IntentGraph::new().unwrap()));
-    let arbiter = Arbiter::new(LegacyArbiterConfig::default(), intent_graph);
+    // Create an arbiter with default configuration (no unwrap/expect)
+    let ig = IntentGraph::new()?;
+    let intent_graph = Arc::new(Mutex::new(ig));
+    let _arbiter = Arbiter::new(LegacyArbiterConfig::default(), intent_graph);
 
     println!("=== CCOS + RTFS Cognitive Computing Demo ===\n");
 

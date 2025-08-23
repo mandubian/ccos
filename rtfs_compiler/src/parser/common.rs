@@ -96,8 +96,10 @@ pub(super) fn build_keyword(pair: Pair<Rule>) -> Result<Keyword, PestParseError>
             span: Some(pair_span),
         });
     }
-    // Preserve the leading ':' in the Keyword value to match existing AST expectations
-    Ok(Keyword(pair.as_str().to_string()))
+    // Store keywords without the leading ':' for a consistent internal representation
+    let s = pair.as_str();
+    let normalized = if s.starts_with(':') { &s[1..] } else { s };
+    Ok(Keyword(normalized.to_string()))
 }
 
 pub(super) fn build_map_key(pair: Pair<Rule>) -> Result<MapKey, PestParseError> {
