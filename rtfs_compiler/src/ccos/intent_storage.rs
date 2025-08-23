@@ -265,27 +265,32 @@ impl IntentStorage for InMemoryStorage {
     async fn backup(&self, path: &Path) -> Result<(), StorageError> {
         let intents = self.intents.read().await;
         let edges = self.edges.read().await;
-        
-        let backup_data = StorageBackupData {
-            intents: intents.clone(),
-            edges: edges.clone(),
-            version: "1.0".to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
+
+    let backup_data = StorageBackupData::new(intents.clone(), edges.clone());
 
         let json = serde_json::to_string_pretty(&backup_data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        
-        fs::write(path, json)?;
+        // Atomic write
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut tmp = path.to_path_buf();
+        let tmp_name = format!("{}.tmp-{}", path.file_name().and_then(|s| s.to_str()).unwrap_or("backup.json"), std::process::id());
+        tmp.set_file_name(tmp_name);
+        if let Some(dir) = path.parent() { tmp = dir.join(tmp.file_name().unwrap()); }
+        {
+            let mut f = fs::File::create(&tmp)?;
+            use std::io::Write as _;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, path)?;
         Ok(())
     }
 
     async fn restore(&mut self, path: &Path) -> Result<(), StorageError> {
         let content = fs::read_to_string(path)?;
-        let backup_data: StorageBackupData = serde_json::from_str(&content)
+    let backup_data: StorageBackupData = serde_json::from_str(&content)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         let mut intents = self.intents.write().await;
@@ -330,27 +335,32 @@ impl FileStorage {
     async fn save_to_file(&self) -> Result<(), StorageError> {
         let intents = self.in_memory.intents.read().await;
         let edges = self.in_memory.edges.read().await;
-        
-        let backup_data = StorageBackupData {
-            intents: intents.clone(),
-            edges: edges.clone(),
-            version: "1.0".to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
+
+    let backup_data = StorageBackupData::new(intents.clone(), edges.clone());
 
         let json = serde_json::to_string_pretty(&backup_data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        
-        fs::write(&self.file_path, json)?;
+        // Atomic write: write to temp file in same dir then rename
+        if let Some(parent) = self.file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut tmp = self.file_path.clone();
+        let tmp_name = format!("{}.tmp-{}", self.file_path.file_name().and_then(|s| s.to_str()).unwrap_or("storage.json"), std::process::id());
+        tmp.set_file_name(tmp_name);
+        if let Some(dir) = self.file_path.parent() { tmp = dir.join(tmp.file_name().unwrap()); }
+        {
+            let mut f = fs::File::create(&tmp)?;
+            use std::io::Write as _;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, &self.file_path)?;
         Ok(())
     }
     
     async fn load_from_file(&mut self) -> Result<(), StorageError> {
         let content = tokio::fs::read_to_string(&self.file_path).await?;
-        let backup_data: StorageBackupData = serde_json::from_str(&content)
+    let backup_data: StorageBackupData = serde_json::from_str(&content)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         let mut intents = self.in_memory.intents.write().await;
@@ -439,6 +449,85 @@ struct StorageBackupData {
     edges: Vec<Edge>,
     version: String,
     timestamp: u64,
+    #[serde(default)]
+    manifest: Option<BackupManifest>,
+    #[serde(default)]
+    rtfs: Option<String>,
+}
+
+/// Optional manifest metadata embedded in backups
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+struct BackupManifest {
+    /// Identifier for the producer of the backup
+    created_by: String,
+    /// Optional free-form source identifier (e.g., file path, node id)
+    #[serde(default)]
+    source: Option<String>,
+    /// Optional note about the backup purpose
+    #[serde(default)]
+    note: Option<String>,
+}
+
+impl StorageBackupData {
+    fn new(intents: HashMap<IntentId, StorableIntent>, edges: Vec<Edge>) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let rtfs = Some(Self::render_rtfs(&intents, &edges));
+        let manifest = Some(BackupManifest {
+            created_by: "rtfs_compiler".to_string(),
+            source: None,
+            note: Some("Hybrid JSON+RTFS backup".to_string()),
+        });
+
+        Self {
+            intents,
+            edges,
+            version: "1.1".to_string(),
+            timestamp,
+            manifest,
+            rtfs,
+        }
+    }
+
+    /// Render a human-readable RTFS snapshot alongside the JSON backup
+    fn render_rtfs(intents: &HashMap<IntentId, StorableIntent>, edges: &Vec<Edge>) -> String {
+        fn esc(s: &str) -> String { s.replace('\\', "\\\\").replace('"', "\\\"") }
+
+        let mut out = String::new();
+        out.push_str(";; Intent Graph Snapshot (hybrid backup)\n");
+        out.push_str("(intent-graph\n");
+        out.push_str("  (intents\n");
+        for (_id, intent) in intents.iter() {
+            out.push_str(&format!(
+                "    (intent {{:id \"{}\" :goal \"{}\" :status \"{:?}\" :priority {}{}{} }})\n",
+                esc(&intent.intent_id),
+                esc(&intent.goal),
+                intent.status,
+                intent.priority,
+                match &intent.name { Some(n) => format!(" :name \"{}\"", esc(n)), None => String::new() },
+                if !intent.rtfs_intent_source.is_empty() {
+                    format!(" :rtfs-intent \"{}\"", esc(&intent.rtfs_intent_source))
+                } else { String::new() }
+            ));
+        }
+        out.push_str("  )\n");
+        out.push_str("  (edges\n");
+        for e in edges.iter() {
+            out.push_str(&format!(
+                "    (edge {{:from \"{}\" :to \"{}\" :type \"{:?}\"{} }})\n",
+                esc(&e.from),
+                esc(&e.to),
+                e.edge_type,
+                match e.weight { Some(w) => format!(" :weight {}", w), None => String::new() }
+            ));
+        }
+        out.push_str("  )\n");
+        out.push_str(")\n");
+        out
+    }
 }
 
 /// Storage factory for creating different storage backends
@@ -589,6 +678,16 @@ mod tests {
         // Backup
         storage.backup(&backup_path).await.unwrap();
         assert!(backup_path.exists());
+
+    // Validate hybrid fields present
+    let content = std::fs::read_to_string(&backup_path).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(v["version"], serde_json::json!("1.1"));
+    assert!(v.get("manifest").is_some());
+    assert_eq!(v["manifest"]["created_by"], serde_json::json!("rtfs_compiler"));
+    assert!(v.get("rtfs").is_some());
+    let rtfs_str = v["rtfs"].as_str().unwrap();
+    assert!(rtfs_str.contains("(intent-graph"));
 
         // Create new storage and restore
         let mut new_storage = InMemoryStorage::new();
