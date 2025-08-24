@@ -12,7 +12,6 @@ use crate::ir::core::{IrNode, IrPattern};
 use crate::runtime::RuntimeStrategy;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use crate::runtime::host::RuntimeHost;
 use crate::runtime::host_interface::HostInterface;
@@ -259,7 +258,7 @@ impl IrRuntime {
                 for binding in bindings {
                     if let IrNode::VariableBinding { name, .. } = &binding.pattern {
                         if let IrNode::Lambda { .. } = &binding.init_expr {
-                            let placeholder_cell = Rc::new(RefCell::new(Value::Nil));
+                            let placeholder_cell = std::sync::Arc::new(std::sync::RwLock::new(Value::Nil));
                             env.define(
                                 name.clone(),
                                 Value::FunctionPlaceholder(placeholder_cell.clone()),
@@ -270,9 +269,10 @@ impl IrRuntime {
                 }
                 // Second pass: evaluate all function bindings and update placeholders
                 for (name, lambda_node, placeholder_cell) in &placeholders {
-                    let value = self.execute_node(lambda_node, env, false, module_registry)?;
+                        let value = self.execute_node(lambda_node, env, false, module_registry)?;
                     if matches!(value, Value::Function(_)) {
-                        *placeholder_cell.borrow_mut() = value;
+                        let mut guard = placeholder_cell.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                        *guard = value;
                     } else {
                         return Err(RuntimeError::Generic(format!(
                             "letrec: expected function for {}",
@@ -672,7 +672,7 @@ impl IrRuntime {
     ) -> Result<Value, RuntimeError> {
         let module = module_registry.load_module(module_name, self)?;
 
-        for (name, value) in module.exports.borrow().iter() {
+    for (name, value) in module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
             env.define(name.clone(), value.value.clone());
         }
 
@@ -707,7 +707,8 @@ impl IrRuntime {
     ) -> Result<Value, RuntimeError> {
         match function {
             Value::FunctionPlaceholder(cell) => {
-                let actual = cell.borrow().clone();
+                let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                let actual = guard.clone();
                 self.apply_function(actual, args, env, _is_tail_call, module_registry)
             }
             Value::Function(ref f) => {

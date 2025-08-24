@@ -3,7 +3,6 @@ use crate::ccos::delegation::{ExecTarget, LocalEchoModel, ModelRegistry, RemoteA
 use crate::parser;
 use crate::runtime::{Environment, Evaluator, IrRuntime, ModuleRegistry};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 #[test]
@@ -13,7 +12,7 @@ fn test_delegation_hint_local_model() {
     map.insert("test-fn".to_string(), ExecTarget::LocalModel("echo-model".to_string()));
     let delegation_engine = Arc::new(StaticDelegationEngine::new(map));
     
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let mut evaluator = Evaluator::new(module_registry, delegation_engine);
     
     // Create a function with delegation hint
@@ -35,7 +34,7 @@ fn test_delegation_hint_remote_model() {
     map.insert("test-fn".to_string(), ExecTarget::RemoteModel("arbiter-remote".to_string()));
     let delegation_engine = Arc::new(StaticDelegationEngine::new(map));
     
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let mut evaluator = Evaluator::new(module_registry, delegation_engine);
     
     // Create a function with delegation hint

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// 
 /// This trait enables content-addressable storage with automatic integrity verification.
 /// All archived entities must be serializable to ensure thread-safety and persistence.
-pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync {
+pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> {
     /// Generate a content hash for this entity
     fn content_hash(&self) -> String {
         let serialized = serde_json::to_string(self).unwrap_or_default();
@@ -33,7 +33,7 @@ pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> + Se
 /// 
 /// This trait provides the core storage interface used by all CCOS archives.
 /// Implementations must be thread-safe and support concurrent access.
-pub trait ContentAddressableArchive<T: Archivable>: Send + Sync {
+pub trait ContentAddressableArchive<T: Archivable> {
     /// Store an entity, returning its content hash
     fn store(&self, entity: T) -> Result<String, String>;
     

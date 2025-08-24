@@ -3,7 +3,6 @@ use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::parser::parse_expression;
 use rtfs_compiler::runtime::values::Value;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
@@ -17,7 +16,7 @@ struct StdlibTestRunner {
 impl StdlibTestRunner {
     fn new() -> Self {
         let env = StandardLibrary::create_global_environment();
-        let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
         let registry = Arc::new(RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(
             rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry)

@@ -266,7 +266,7 @@ impl IntentStorage for InMemoryStorage {
         let intents = self.intents.read().await;
         let edges = self.edges.read().await;
 
-    let backup_data = StorageBackupData::new(intents.clone(), edges.clone());
+        let backup_data = StorageBackupData::new(intents.clone(), edges.clone());
 
         let json = serde_json::to_string_pretty(&backup_data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -336,7 +336,7 @@ impl FileStorage {
         let intents = self.in_memory.intents.read().await;
         let edges = self.in_memory.edges.read().await;
 
-    let backup_data = StorageBackupData::new(intents.clone(), edges.clone());
+        let backup_data = StorageBackupData::new(intents.clone(), edges.clone());
 
         let json = serde_json::to_string_pretty(&backup_data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -360,7 +360,7 @@ impl FileStorage {
     
     async fn load_from_file(&mut self) -> Result<(), StorageError> {
         let content = tokio::fs::read_to_string(&self.file_path).await?;
-    let backup_data: StorageBackupData = serde_json::from_str(&content)
+        let backup_data: StorageBackupData = serde_json::from_str(&content)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         let mut intents = self.in_memory.intents.write().await;

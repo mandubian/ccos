@@ -140,11 +140,11 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     // Create module registry and load stdlib
     let mut module_registry = ModuleRegistry::new();
     let _ = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry);
-    let module_registry = Rc::new(module_registry);
+    let module_registry = std::sync::Arc::new(module_registry);
 
     // Create runtime based on strategy
     let mut runtime = match strategy {
-        "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
+    "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
         "ir" => {
             let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
             runtime::Runtime::new(Box::new(ir_strategy))
