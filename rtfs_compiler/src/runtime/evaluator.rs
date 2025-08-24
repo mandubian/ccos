@@ -1,14 +1,14 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
 use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{CatchPattern, DefExpr, DefnExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
     Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr};
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::values::{Arity, Function, Value};
+use crate::runtime::values::{Arity, Function, Value, BuiltinFunctionWithContext};
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, ValidationLevel, VerificationContext};
 use crate::ccos::types::ExecutionResult;
@@ -475,6 +475,7 @@ impl Evaluator {
             Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
+            Expression::Defstruct(defstruct_expr) => self.eval_defstruct(defstruct_expr, env),
             Expression::DiscoverAgents(discover_expr) => {
                 self.eval_discover_agents(discover_expr, env)
             }
@@ -1556,7 +1557,8 @@ impl Evaluator {
             | Expression::Vector(_)
             | Expression::Map(_)
             | Expression::List(_)
-            | Expression::ResourceRef(_) => false,
+            | Expression::ResourceRef(_)
+            | Expression::Defstruct(_) => false,
         }
     }
 
@@ -1825,6 +1827,70 @@ impl Evaluator {
         Ok(function)
     }
 
+    pub fn eval_defstruct(&self, defstruct_expr: &DefstructExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        let struct_name = defstruct_expr.name.0.clone();
+        
+        // Create a constructor function that validates inputs
+        let struct_name_clone = struct_name.clone();
+        let fields = defstruct_expr.fields.clone();
+        
+        let constructor = Function::BuiltinWithContext(BuiltinFunctionWithContext {
+            name: format!("{}.new", struct_name),
+            arity: Arity::Fixed(1), // Takes a map as input
+            func: Rc::new(move |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| -> RuntimeResult<Value> {
+                if args.len() != 1 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: struct_name_clone.clone(),
+                        expected: "1".to_string(),
+                        actual: args.len(),
+                    });
+                }
+                
+                let input_map = &args[0];
+                
+                // Validate that input is a map
+                let Value::Map(map) = input_map else {
+                    return Err(RuntimeError::TypeError {
+                        expected: "map".to_string(),
+                        actual: input_map.type_name().to_string(),
+                        operation: format!("{} constructor", struct_name_clone),
+                    });
+                };
+                
+                // Check that all required fields are present and have correct types
+                for field in &fields {
+                    let key = MapKey::Keyword(field.key.clone());
+                    
+                    if let Some(value) = map.get(&key) {
+                        // Validate the field type using the type validator
+                        if let Err(validation_error) = evaluator.type_validator.validate_value(value, &field.field_type) {
+                            return Err(RuntimeError::TypeValidationError(format!(
+                                "Field {} failed type validation: {:?}", 
+                                field.key.0, 
+                                validation_error
+                            )));
+                        }
+                    } else {
+                        // Required field is missing
+                        return Err(RuntimeError::TypeValidationError(format!(
+                            "Required field {} is missing", 
+                            field.key.0
+                        )));
+                    }
+                }
+                
+                // If all validations pass, return the input map (it's already a valid struct)
+                Ok(input_map.clone())
+            }),
+        });
+        
+        // Store the constructor function in the environment
+        let constructor_value = Value::Function(constructor);
+        env.define(&defstruct_expr.name, constructor_value.clone());
+        
+        Ok(constructor_value)
+    }
+  
     /// Special form: (dotimes [i n] body)
     fn eval_dotimes_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
         if args.len() != 2 {

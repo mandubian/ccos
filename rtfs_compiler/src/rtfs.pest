@@ -241,7 +241,7 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // --- Special Forms ---
 log_step_expr = { "(" ~ log_step_keyword ~ keyword? ~ expression* ~ ")" }
 
-special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defstruct_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
 do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
@@ -266,6 +266,10 @@ param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 
 def_expr  = { "(" ~ def_keyword ~ symbol ~ (COLON ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
 defn_expr = { "(" ~ defn_keyword ~ symbol ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Added WHITESPACE* between metadata and param list
+
+// defstruct rule for ergonomic struct definitions
+defstruct_expr = { "(" ~ defstruct_keyword ~ symbol ~ defstruct_field* ~ ")" }
+defstruct_field = { keyword ~ type_expr }
 
 parallel_expr    = { "(" ~ parallel_keyword ~ parallel_binding+ ~ ")" } // Use parallel_keyword
 parallel_binding = { "[" ~ symbol ~ type_annotation? ~ expression ~ "]" }
@@ -304,6 +308,7 @@ import_keyword = @{ "import" }
 fn_keyword = @{ "fn" | "λ" }
 def_keyword = @{ "def" }
 defn_keyword = @{ "defn" }
+defstruct_keyword = @{ "defstruct" }
 // let_keyword is already defined
 // if_keyword is not needed as "if" is not ambiguous with symbols in the same way
 parallel_keyword = @{ "parallel" }
