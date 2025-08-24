@@ -580,11 +580,14 @@ impl ArbiterEngine for HybridArbiter {
         // Template matching failed, use LLM fallback based on configuration
         match self.fallback_behavior {
             FallbackBehavior::Llm => {
-                let intent = self.generate_intent_with_llm(natural_language, context).await?;
-                
+                let mut intent = self.generate_intent_with_llm(natural_language, context).await?;
+
+                // Mark this as LLM-generated for tests and downstream code
+                intent.metadata.insert("generation_method".to_string(), Value::String("llm".to_string()));
+
                 // Store the intent
                 self.store_intent(&intent).await?;
-                
+
                 Ok(intent)
             }
             FallbackBehavior::Default => {

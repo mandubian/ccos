@@ -362,6 +362,137 @@ cargo test --lib test_microvm_provider_performance_comparison
 cargo test --lib test_microvm_provider_security_isolation
 ```
 
+## Step-Level Profile Derivation and Enforcement
+
+The MicroVM system now supports automatic derivation of security profiles for individual execution steps, providing fine-grained security controls based on the operations being performed.
+
+### StepProfile System
+
+Each execution step gets a comprehensive security profile that includes:
+
+- **Isolation Level**: Inherit, Isolated, or Sandboxed based on operation risk
+- **Network Policy**: AllowList, DenyList, Denied, or Full network access
+- **File System Policy**: None, ReadOnly, ReadWrite, or Full access
+- **Resource Limits**: CPU, memory, time, and I/O constraints
+- **Security Flags**: Syscall filtering, memory protection, monitoring settings
+
+### Automatic Profile Derivation
+
+The `StepProfileDeriver` analyzes RTFS expressions to automatically determine appropriate security settings:
+
+```rust
+use rtfs_compiler::ccos::orchestrator::StepProfileDeriver;
+
+let step_expr = parse_expression("(call :http.fetch {:url \"https://api.example.com\"})");
+let profile = StepProfileDeriver::derive_profile("fetch-data", &step_expr, &runtime_context)?;
+
+// Automatically derives:
+// - IsolationLevel::Isolated (network operation)
+// - NetworkPolicy::AllowList(["api.example.com"])
+// - SecurityFlags::enable_network_acl = true
+// - Resource limits appropriate for network operations
+```
+
+### Operation Classification
+
+The system automatically classifies operations to determine security requirements:
+
+#### High-Risk Operations (Sandboxed)
+- System calls (`exec`, `shell`, `process`)
+- External program execution
+- Raw system access
+
+#### Medium-Risk Operations (Isolated)
+- Network access (`http-fetch`, `socket`, `fetch`)
+- File system operations (`open`, `read`, `write`)
+- System environment access
+
+#### Low-Risk Operations (Inherit)
+- Pure functions
+- Data transformations
+- Math operations
+- Local data processing
+
+### Integration with Orchestrator
+
+The step profile system integrates with the CCOS Orchestrator:
+
+```rust
+// Derive profile for a step before execution
+orchestrator.derive_step_profile(step_name, &step_expr, &runtime_context)?;
+
+// Get current step profile during execution
+let profile = orchestrator.get_current_step_profile();
+
+// Clear profile after step completion
+orchestrator.clear_step_profile();
+```
+
+### Policy Enforcement
+
+MicroVM providers enforce the derived policies:
+
+```rust
+// Network policy enforcement
+match config.network_policy {
+    NetworkPolicy::Denied => {
+        // Block all network access
+        return Err(SecurityViolation::new("network", "Network access denied by policy"));
+    }
+    NetworkPolicy::AllowList(domains) => {
+        // Only allow specified domains
+        if !domains.contains(&requested_domain) {
+            return Err(SecurityViolation::new("network", "Domain not in allowlist"));
+        }
+    }
+    // ... other policies
+}
+
+// File system policy enforcement
+match config.fs_policy {
+    FileSystemPolicy::ReadOnly => {
+        // Block write operations
+        if operation.is_write() {
+            return Err(SecurityViolation::new("filesystem", "Write access denied"));
+        }
+    }
+    // ... other policies
+}
+```
+
+### Example Usage
+
+```clojure
+; This plan will automatically get appropriate security profiles
+(step "Process user data"
+  (call :data.process {:input user-data}))
+
+(step "Fetch external API data"
+  (call :http.fetch {:url "https://api.example.com/data"}))
+
+(step "Execute system command"
+  (call :system.execute {:cmd "ls -la"}))
+```
+
+The first step runs with minimal privileges (Inherit), the second gets network controls (Isolated), and the third gets full sandboxing (Sandboxed).
+
+### Testing Step Profiles
+
+The system includes comprehensive tests for profile derivation and enforcement:
+
+```bash
+# Run profile derivation tests
+cargo test test_step_profile_derivation_network_operations
+cargo test test_step_profile_derivation_file_operations
+cargo test test_step_profile_resource_limits
+
+# Run policy enforcement tests
+cargo test deny_network_when_policy_denied
+cargo test allow_network_when_in_allowlist
+cargo test deny_fs_write_when_readonly
+cargo test allow_fs_read_when_readonly_path_matches
+```
+
 ## Troubleshooting
 
 ### Common Issues

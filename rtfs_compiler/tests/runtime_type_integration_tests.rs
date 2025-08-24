@@ -61,8 +61,8 @@ impl HostInterface for MockHost {
     }
 
     fn get_context_value(&self, _key: &str) -> Option<Value> {
-        // Return None for all keys in the mock
-        None
+    // Return None for all keys in the mock (compatible with updated HostInterface)
+    None
     }
 }
 
