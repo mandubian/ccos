@@ -4,7 +4,7 @@
 use crate::ast::*;
 use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::Value;
+
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -54,6 +54,7 @@ pub enum BindingKind {
     Function,
     Parameter,
     Resource,
+    Type,
 }
 
 /// Scope for symbol resolution with proper mutable access
@@ -1015,6 +1016,7 @@ impl<'a> IrConverter<'a> {
             }
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
+            Expression::Defstruct(defstruct_expr) => self.convert_defstruct(*defstruct_expr),
             Expression::ResourceRef(resource_ref) => {
                 let id = self.next_id();
                 let resource_name = resource_ref.clone();
@@ -2204,6 +2206,102 @@ impl<'a> IrConverter<'a> {
         })
     }
 
+    fn convert_defstruct(&mut self, defstruct_expr: DefstructExpr) -> IrConversionResult<IrNode> {
+        let id = self.next_id();
+        let name = defstruct_expr.name.0.clone();
+        
+        // Create the struct type from the field definitions
+        let mut map_entries = Vec::new();
+        for field in &defstruct_expr.fields {
+            // Convert the field type annotation to IrType
+            let field_type = self.convert_type_annotation(field.field_type.clone())?;
+            map_entries.push(IrMapTypeEntry {
+                key: field.key.clone(),
+                value_type: field_type,
+                optional: false, // defstruct fields are required by default
+            });
+        }
+        
+        let struct_type = IrType::Map {
+            entries: map_entries,
+            wildcard: None, // defstruct creates closed maps
+        };
+        
+        // Create a constructor function that validates inputs
+        // The constructor takes a map and validates it against the struct definition
+        let param_id = self.next_id();
+        let constructor_param = IrNode::Param {
+            id: param_id,
+            binding: Box::new(IrNode::VariableBinding {
+                id: param_id,
+                name: "input_map".to_string(),
+                ir_type: IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+                source_location: None,
+            }),
+            type_annotation: Some(IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }),
+            ir_type: IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+            source_location: None,
+        };
+        
+        // Constructor body: for now, just return the input map
+        // In a full implementation, this would contain validation logic
+        let constructor_body = vec![
+            IrNode::VariableRef {
+                id: self.next_id(),
+                name: "input_map".to_string(),
+                binding_id: param_id,
+                ir_type: IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+                source_location: None,
+            }
+        ];
+        
+        // TODO: Full defstruct IR implementation should include:
+        // 1. Field validation logic in constructor body (instead of just returning input_map)
+        // 2. Proper typed field access methods/getters for each struct field
+        // 3. Type checking for each field against its declared type annotation
+        // 4. Integration with type refinement system for advanced constraints
+        // 5. Compile-time optimizations for known struct field access patterns
+        // 6. Error handling and reporting for invalid field values
+        // 7. Support for default values and optional fields
+        // 8. Immutable update operations (assoc, dissoc, update-in style)
+        
+        // Create the constructor function type
+        let constructor_type = IrType::Function {
+            param_types: vec![IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }],
+            variadic_param_type: None,
+            return_type: Box::new(struct_type.clone()),
+        };
+        
+        // Create the constructor lambda
+        let constructor_lambda = IrNode::Lambda {
+            id: self.next_id(),
+            params: vec![constructor_param],
+            variadic_param: None,
+            body: constructor_body,
+            captures: Vec::new(),
+            ir_type: constructor_type.clone(),
+            source_location: None,
+        };
+        
+        // Define the constructor function in the environment
+        let binding_info = BindingInfo {
+            name: name.clone(),
+            binding_id: id,
+            ir_type: constructor_type.clone(),
+            kind: BindingKind::Function,
+        };
+        self.define_binding(name.clone(), binding_info);
+        
+        // Return a function definition that binds the constructor to the struct name
+        Ok(IrNode::FunctionDef {
+            id,
+            name: name.clone(),
+            lambda: Box::new(constructor_lambda),
+            ir_type: constructor_type,
+            source_location: None,
+        })
+    }
+
     /// Convert pattern to IR node
     fn convert_pattern(
         &mut self,
@@ -2538,10 +2636,109 @@ impl<'a> IrConverter<'a> {
         }
     }
 
-    /// TODO: Implement type annotation conversion logic
+    /// Convert TypeExpr to IrType
     fn convert_type_annotation(&mut self, t: TypeExpr) -> IrConversionResult<IrType> {
-        // TODO: Properly convert/resolve type annotations
-        Ok(IrType::Any)
+        match t {
+            TypeExpr::Primitive(prim) => Ok(match prim {
+                PrimitiveType::Int => IrType::Int,
+                PrimitiveType::Float => IrType::Float,
+                PrimitiveType::String => IrType::String,
+                PrimitiveType::Bool => IrType::Bool,
+                PrimitiveType::Nil => IrType::Nil,
+                PrimitiveType::Keyword => IrType::Keyword,
+                PrimitiveType::Symbol => IrType::Symbol,
+                PrimitiveType::Custom(kw) => IrType::TypeRef(kw.0), // Custom types become type references
+            }),
+            TypeExpr::Any => Ok(IrType::Any),
+            TypeExpr::Never => Ok(IrType::Never),
+            TypeExpr::Alias(symbol) => Ok(IrType::TypeRef(symbol.0)),
+            TypeExpr::Vector(element_type) => {
+                let element_ir_type = self.convert_type_annotation(*element_type)?;
+                Ok(IrType::Vector(Box::new(element_ir_type)))
+            },
+            TypeExpr::Tuple(element_types) => {
+                let ir_types: Result<Vec<_>, _> = element_types
+                    .into_iter()
+                    .map(|t| self.convert_type_annotation(t))
+                    .collect();
+                Ok(IrType::Tuple(ir_types?))
+            },
+            TypeExpr::Map { entries, wildcard } => {
+                let mut ir_entries = Vec::new();
+                for entry in entries {
+                    let value_type = self.convert_type_annotation(*entry.value_type)?;
+                    ir_entries.push(IrMapTypeEntry {
+                        key: entry.key,
+                        value_type,
+                        optional: entry.optional,
+                    });
+                }
+                let wildcard_type = wildcard
+                    .map(|w| self.convert_type_annotation(*w))
+                    .transpose()?
+                    .map(Box::new);
+                Ok(IrType::Map {
+                    entries: ir_entries,
+                    wildcard: wildcard_type,
+                })
+            },
+            TypeExpr::Function { param_types, variadic_param_type, return_type } => {
+                let ir_param_types: Result<Vec<_>, _> = param_types
+                    .into_iter()
+                    .map(|pt| match pt {
+                        ParamType::Simple(t) => self.convert_type_annotation(*t),
+                    })
+                    .collect();
+                let ir_variadic_type = variadic_param_type
+                    .map(|vt| self.convert_type_annotation(*vt))
+                    .transpose()?
+                    .map(Box::new);
+                let ir_return_type = Box::new(self.convert_type_annotation(*return_type)?);
+                Ok(IrType::Function {
+                    param_types: ir_param_types?,
+                    variadic_param_type: ir_variadic_type,
+                    return_type: ir_return_type,
+                })
+            },
+            TypeExpr::Union(types) => {
+                let ir_types: Result<Vec<_>, _> = types
+                    .into_iter()
+                    .map(|t| self.convert_type_annotation(t))
+                    .collect();
+                Ok(IrType::Union(ir_types?))
+            },
+            TypeExpr::Intersection(types) => {
+                let ir_types: Result<Vec<_>, _> = types
+                    .into_iter()
+                    .map(|t| self.convert_type_annotation(t))
+                    .collect();
+                Ok(IrType::Intersection(ir_types?))
+            },
+            TypeExpr::Resource(symbol) => Ok(IrType::Resource(symbol.0)),
+            TypeExpr::Literal(lit) => Ok(IrType::LiteralValue(lit)),
+            TypeExpr::Optional(inner_type) => {
+                let inner_ir_type = self.convert_type_annotation(*inner_type)?;
+                Ok(IrType::Union(vec![inner_ir_type, IrType::Nil]))
+            },
+            // For complex types that don't have direct IR equivalents, fall back to Any for now
+            TypeExpr::Array { element_type: _, shape: _ } => {
+                // TODO: Implement proper array type support in IR
+                Ok(IrType::Any)
+            },
+            TypeExpr::Refined { base_type, predicates: _ } => {
+                // For now, just convert the base type and ignore predicates
+                // TODO: Implement refined type support in IR
+                self.convert_type_annotation(*base_type)
+            },
+            TypeExpr::Enum(literals) => {
+                // Convert enum to union of literal types
+                let literal_types: Vec<IrType> = literals
+                    .into_iter()
+                    .map(IrType::LiteralValue)
+                    .collect();
+                Ok(IrType::Union(literal_types))
+            },
+        }
     }
 
     /// TODO: Implement type annotation option conversion logic

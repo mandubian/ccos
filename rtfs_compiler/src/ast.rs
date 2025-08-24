@@ -492,6 +492,7 @@ pub enum Expression {
     Fn(#[validate] FnExpr),
     Def(#[validate] Box<DefExpr>),   // Added for def as an expression
     Defn(#[validate] Box<DefnExpr>), // Added for defn as an expression
+    Defstruct(#[validate] Box<DefstructExpr>), // Added for defstruct as an expression
     DiscoverAgents(#[validate] DiscoverAgentsExpr),
     LogStep(#[validate] Box<LogStepExpr>),
     TryCatch(#[validate] TryCatchExpr),
@@ -530,6 +531,7 @@ impl Validate for Expression {
             Expression::Fn(expr) => expr.validate(),
             Expression::Def(expr) => expr.validate(),
             Expression::Defn(expr) => expr.validate(),
+            Expression::Defstruct(expr) => expr.validate(),
             Expression::DiscoverAgents(expr) => expr.validate(),
             Expression::LogStep(expr) => expr.validate(),
             Expression::TryCatch(expr) => expr.validate(),
@@ -627,6 +629,21 @@ pub struct DefnExpr {
     #[validate(nested)]
     pub body: Vec<Expression>,
     pub delegation_hint: Option<DelegationHint>,
+}
+
+// Defstruct is syntactic sugar for (def name refined-map-type)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
+pub struct DefstructExpr {
+    pub name: Symbol,
+    pub fields: Vec<DefstructField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
+pub struct DefstructField {
+    pub key: Keyword,
+    pub field_type: TypeExpr,
 }
 
 // --- New Special Form Structs ---
