@@ -333,7 +333,9 @@ impl CapabilityRegistry {
             capability_id: Some(capability_id.to_string()),
             capability_permissions: required_permissions.clone(),
             args,
-            config: MicroVMConfig::default(),
+            config: runtime_context
+                .and_then(|rc| rc.microvm_config_override.clone())
+                .unwrap_or_else(MicroVMConfig::default),
             runtime_context: runtime_context.cloned(),
         };
         
