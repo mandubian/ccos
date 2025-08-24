@@ -2552,15 +2552,16 @@ impl Evaluator {
                                 // Handle :keys [key1 key2] syntax
                                 for symbol in symbols {
                                     // Convert symbol to keyword for map lookup
-                                    // Symbols in :keys bindings are plain identifiers; map keys are keywords
-                                    // so prefix with ':' to form the proper Keyword value used in map keys.
-                                    let kw_text = if symbol.0.starts_with(":") {
-                                        symbol.0.clone()
+                                    // Internally, keywords are stored WITHOUT the leading ':'.
+                                    // The pattern symbols are plain identifiers (e.g., key1). If a ':' is
+                                    // present for any reason, strip it to normalize.
+                                    let normalized = if symbol.0.starts_with(":") {
+                                        symbol.0.trim_start_matches(':').to_string()
                                     } else {
-                                        format!(":{}", symbol.0)
+                                        symbol.0.clone()
                                     };
                                     let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(
-                                        kw_text,
+                                        normalized,
                                     ));
                                     bound_keys.insert(key.clone());
                                     if let Some(map_value) = map_values.get(&key) {

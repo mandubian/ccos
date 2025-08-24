@@ -2364,10 +2364,11 @@ impl<'a> IrConverter<'a> {
                         MapDestructuringEntry::Keys(symbols) => {
                             for sym in symbols {
                                 let sym_text = sym.0.clone();
-                                let kw_text = if sym_text.starts_with(":") {
-                                    sym_text.clone()
+                                // Normalize keyword WITHOUT leading ':' to match internal representation
+                                let kw_text = if sym_text.starts_with(':') {
+                                    sym_text.trim_start_matches(':').to_string()
                                 } else {
-                                    format!(":{}", sym_text)
+                                    sym_text.clone()
                                 };
                                 ir_entries.push(IrMapPatternEntry {
                                     key: MapKey::Keyword(Keyword(kw_text)),
@@ -2428,10 +2429,11 @@ impl<'a> IrConverter<'a> {
                         MapDestructuringEntry::Keys(symbols) => {
                             for sym in symbols {
                                 let sym_text = sym.0.clone();
-                                let kw_text = if sym_text.starts_with(":") {
-                                    sym_text.clone()
+                                // Normalize keyword WITHOUT leading ':' to match internal representation
+                                let kw_text = if sym_text.starts_with(':') {
+                                    sym_text.trim_start_matches(':').to_string()
                                 } else {
-                                    format!(":{}", sym_text)
+                                    sym_text.clone()
                                 };
                                 ir_entries.push(IrMapPatternEntry {
                                     key: MapKey::Keyword(Keyword(kw_text)),
