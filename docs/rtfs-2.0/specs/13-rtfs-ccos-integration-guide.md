@@ -393,6 +393,106 @@ let actions = causal_chain.get_actions_for_plan(plan.id).await?;
 // Contains: intent creation, plan generation, capability calls, result storage
 ```
 
+## Step-Level Profile Derivation and Enforcement
+
+The RTFS-CCOS integration now includes automatic derivation of security profiles for individual execution steps, providing fine-grained security controls based on the operations being performed.
+
+### Step Profile System
+
+Each execution step gets a comprehensive security profile that includes:
+
+- **Isolation Level**: Inherit, Isolated, or Sandboxed based on operation risk
+- **Network Policy**: AllowList, DenyList, Denied, or Full network access  
+- **File System Policy**: None, ReadOnly, ReadWrite, or Full access
+- **Resource Limits**: CPU, memory, time, and I/O constraints
+- **Security Flags**: Syscall filtering, memory protection, monitoring settings
+
+### Automatic Profile Derivation
+
+The `StepProfileDeriver` analyzes RTFS expressions to automatically determine appropriate security settings:
+
+```rust
+use rtfs_compiler::ccos::orchestrator::StepProfileDeriver;
+
+let step_expr = parse_expression("(call :http.fetch {:url \"https://api.example.com\"})");
+let profile = StepProfileDeriver::derive_profile("fetch-data", &step_expr, &runtime_context)?;
+
+// Automatically derives:
+// - IsolationLevel::Isolated (network operation)
+// - NetworkPolicy::AllowList(["api.example.com"])
+// - SecurityFlags::enable_network_acl = true
+// - Resource limits appropriate for network operations
+```
+
+### Integration with Orchestrator
+
+The step profile system integrates with the CCOS Orchestrator:
+
+```rust
+// Derive profile for a step before execution
+orchestrator.derive_step_profile(step_name, &step_expr, &runtime_context)?;
+
+// Get current step profile during execution
+let profile = orchestrator.get_current_step_profile();
+
+// Clear profile after step completion
+orchestrator.clear_step_profile();
+```
+
+### RTFS Step Special Form Integration
+
+The `(step ...)` special form now automatically derives and applies security profiles:
+
+```clojure
+; This step will automatically get appropriate security profiles
+(step "Fetch external data"
+  (call :http.fetch {:url "https://api.example.com/data"}))
+
+; The step special form:
+; 1. Derives security profile from the expression
+; 2. Logs StepProfileDerived action to Causal Chain
+; 3. Applies profile to execution context
+; 4. Executes with appropriate isolation level
+```
+
+### Causal Chain Integration
+
+All step profile decisions are logged to the Causal Chain:
+
+```rust
+// StepProfileDerived action logged to Causal Chain
+let action = Action::new(
+    ActionType::StepProfileDerived,
+    step_name,
+    profile.clone(),
+    metadata
+);
+causal_chain.append(action).await?;
+```
+
+### Example Integration Flow
+
+```rust
+// 1. RTFS step expression parsed
+let step_expr = parse_expression("(call :http.fetch {:url \"https://api.com\"})");
+
+// 2. Profile automatically derived
+let profile = StepProfileDeriver::derive_profile("fetch-data", &step_expr, &runtime_context)?;
+
+// 3. Profile logged to Causal Chain
+let action = Action::new(ActionType::StepProfileDerived, "fetch-data", profile.clone(), metadata);
+causal_chain.append(action).await?;
+
+// 4. Profile applied to execution context
+host.set_step_profile(profile);
+
+// 5. RTFS execution with security controls
+let result = rtfs_runtime.execute(&step_expr, &host).await?;
+
+// 6. Profile cleared after execution
+host.clear_step_profile();
+```
+
 ## Performance Considerations
 
 ### Runtime Selection
