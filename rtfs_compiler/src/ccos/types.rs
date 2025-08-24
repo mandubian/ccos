@@ -184,6 +184,7 @@ pub enum ActionType {
     // Execution
     CapabilityCall,
     InternalStep,
+    StepProfileDerived,
     
     // Intent Lifecycle (new)
     IntentCreated,

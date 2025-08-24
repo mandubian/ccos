@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use crate::ccos::execution_context::IsolationLevel;
+use crate::runtime::microvm::config::MicroVMConfig;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 
 /// Central security authorizer for capability execution
@@ -174,6 +175,8 @@ pub struct RuntimeContext {
     pub exposed_context_prefixes: Vec<String>,
     /// Allowlist of capability "tags" eligible for context exposure (matched against capability metadata)
     pub exposed_context_tags: HashSet<String>,
+    /// Optional override for per-step MicroVM configuration
+    pub microvm_config_override: Option<MicroVMConfig>,
 }
 
 impl RuntimeContext {
@@ -193,6 +196,7 @@ impl RuntimeContext {
             exposed_context_caps: HashSet::new(),
             exposed_context_prefixes: Vec::new(),
             exposed_context_tags: HashSet::new(),
+            microvm_config_override: None,
         }
     }
     
@@ -212,6 +216,7 @@ impl RuntimeContext {
             exposed_context_caps: HashSet::new(),
             exposed_context_prefixes: Vec::new(),
             exposed_context_tags: HashSet::new(),
+            microvm_config_override: None,
         }
     }
     
@@ -231,6 +236,7 @@ impl RuntimeContext {
             exposed_context_caps: HashSet::new(),
             exposed_context_prefixes: Vec::new(),
             exposed_context_tags: HashSet::new(),
+            microvm_config_override: None,
         }
     }
     
@@ -334,6 +340,17 @@ impl RuntimeContext {
     pub fn enable_context_exposure_tag(&mut self, tag: &str) {
         self.expose_readonly_context = true;
         self.exposed_context_tags.insert(tag.to_string());
+    }
+
+    /// Builder: attach a MicroVM configuration override
+    pub fn with_microvm_config(mut self, config: MicroVMConfig) -> Self {
+        self.microvm_config_override = Some(config);
+        self
+    }
+
+    /// Mutably set a MicroVM configuration override
+    pub fn set_microvm_config(&mut self, config: MicroVMConfig) {
+        self.microvm_config_override = Some(config);
     }
 }
 
