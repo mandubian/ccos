@@ -71,10 +71,19 @@
 (set! x 42)
 (set! config {:host "localhost" :port 8080})
 ```
-- Assigns a value to a symbol in the current environment
-- Creates new bindings or shadows existing ones
-- Works in both AST and IR runtimes
-- Returns nil
+- Rebinds a symbol in the current lexical frame only (shadows outer bindings if needed)
+- Creates the binding if missing in the current frame
+- Works in both AST and IR runtimes; returns nil
+- See Mutation & State spec for shared mutability via Atoms
+
+#### Atoms (Mutable References)
+```clojure
+(let [a (atom 0)]
+  (do (swap! a inc) (deref a))) ; => 1
+```
+- Shared, mutable reference cells: `atom`, `deref`, `reset!`, `swap!`
+- Use when multiple scopes/closures must observe and update the same evolving value
+- Immutable-by-default model otherwise; see [16-mutation-and-state.md](16-mutation-and-state.md)
 
 ### 2. Data Structures ✅ IMPLEMENTED
 

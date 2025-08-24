@@ -564,3 +564,30 @@ Plans can dynamically interact with the Intent Graph:
 ```
 
 This comprehensive integration ensures that the Intent Graph serves as the central nervous system of CCOS, connecting strategic goals with tactical execution while maintaining a complete audit trail of all system behavior.
+
+### 11.4. Orchestrator → Intent Graph Status Wiring
+
+When the Orchestrator begins executing a `Plan`, it now performs a two-phase status update on the primary associated `Intent` in the `IntentGraph`:
+
+1. **Start**: Transition `Active → Executing` (best-effort). This marks the intent as in-flight and is useful for UIs / monitoring to distinguish queued vs running work.
+2. **Completion**: After plan evaluation, transition `Executing → Completed | Failed` based on the `ExecutionResult`.
+
+If the initial transition cannot be recorded (e.g. transient lock error), plan execution proceeds; the final terminal status update is still attempted.
+
+Current terminal transitions implemented:
+```
+Active -----> Executing -----> Completed
+   \                          /
+  \-----> Executing -----> Failed
+```
+Other pre-existing statuses (Suspended, Archived) are not modified by the Orchestrator; policies may later block execution if an intent is not `Active`.
+
+On successful execution, the `Intent.status` becomes `Completed` and `updated_at` is refreshed.
+On failure, the `Intent.status` becomes `Failed` and `updated_at` is refreshed. The intent's `metadata` may contain audit entries recording the failure reason via the `IntentLifecycleManager` (future enhancement).
+
+Implementation notes:
+- Start phase uses a new `set_intent_status(intent_id, IntentStatus::Executing)` helper (best-effort, non-fatal on error).
+- Completion phase calls `update_intent(intent, &ExecutionResult)` which derives `Completed` / `Failed` and persists.
+- Both operations refresh `updated_at`.
+- Future: emit `IntentStatusChanged` causal actions for each transition (currently implicit through plan lifecycle actions).
+

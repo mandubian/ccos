@@ -68,6 +68,9 @@ impl Evaluator {
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
     special_forms.insert("set!".to_string(), Self::eval_set_form);
+    // Core iteration forms
+    special_forms.insert("dotimes".to_string(), Self::eval_dotimes_form);
+    special_forms.insert("for".to_string(), Self::eval_for_form);
         // Add other evaluator-level special forms here in the future
         
         // LLM execution bridge (M1)
@@ -1335,9 +1338,9 @@ impl Evaluator {
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
 
-                // Bind arguments to parameters
-                for (param, arg) in closure.params.iter().zip(args.iter()) {
-                    func_env.define(param, arg.clone());
+                // Bind arguments to parameter patterns (supports destructuring)
+                for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
+                    self.bind_pattern(pat, arg, &mut func_env)?;
                 }
 
                 // Execute function body
@@ -1351,26 +1354,10 @@ impl Evaluator {
                             let map_key = crate::ast::MapKey::Keyword(keyword);
                             Ok(map.get(&map_key).cloned().unwrap_or(Value::Nil))
                         }
+                        Value::Nil => Ok(Value::Nil),
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
-                            actual: match &args[0] {
-                                Value::Nil => "Nil".to_string(),
-                                Value::Boolean(_) => "Boolean".to_string(),
-                                Value::Integer(_) => "Integer".to_string(),
-                                Value::Float(_) => "Float".to_string(),
-                                Value::String(_) => "String".to_string(),
-                                Value::Timestamp(_) => "Timestamp".to_string(),
-                                Value::Uuid(_) => "Uuid".to_string(),
-                                Value::ResourceHandle(_) => "ResourceHandle".to_string(),
-                                Value::Symbol(_) => "Symbol".to_string(),
-                                Value::Keyword(_) => "Keyword".to_string(),
-                                Value::Vector(_) => "Vector".to_string(),
-                                Value::List(_) => "List".to_string(),
-                                Value::Map(_) => "Map".to_string(),
-                                Value::Function(_) => "Function".to_string(),
-                                Value::FunctionPlaceholder(_) => "FunctionPlaceholder".to_string(),
-                                Value::Error(_) => "Error".to_string(),
-                            },
+                            actual: args[0].type_name().to_string(),
                             operation: "keyword lookup".to_string(),
                         }),
                     }
@@ -1381,26 +1368,10 @@ impl Evaluator {
                             let map_key = crate::ast::MapKey::Keyword(keyword);
                             Ok(map.get(&map_key).cloned().unwrap_or(args[1].clone()))
                         }
+                        Value::Nil => Ok(args[1].clone()),
                         _ => Err(RuntimeError::TypeError {
                             expected: "map".to_string(),
-                            actual: match &args[0] {
-                                Value::Nil => "Nil".to_string(),
-                                Value::Boolean(_) => "Boolean".to_string(),
-                                Value::Integer(_) => "Integer".to_string(),
-                                Value::Float(_) => "Float".to_string(),
-                                Value::String(_) => "String".to_string(),
-                                Value::Timestamp(_) => "Timestamp".to_string(),
-                                Value::Uuid(_) => "Uuid".to_string(),
-                                Value::ResourceHandle(_) => "ResourceHandle".to_string(),
-                                Value::Symbol(_) => "Symbol".to_string(),
-                                Value::Keyword(_) => "Keyword".to_string(),
-                                Value::Vector(_) => "Vector".to_string(),
-                                Value::List(_) => "List".to_string(),
-                                Value::Map(_) => "Map".to_string(),
-                                Value::Function(_) => "Function".to_string(),
-                                Value::FunctionPlaceholder(_) => "FunctionPlaceholder".to_string(),
-                                Value::Error(_) => "Error".to_string(),
-                            },
+                            actual: args[0].type_name().to_string(),
                             operation: "keyword lookup".to_string(),
                         }),
                     }
@@ -1728,9 +1699,20 @@ impl Evaluator {
         try_expr: &TryCatchExpr,
         env: &mut Environment,
     ) -> RuntimeResult<Value> {
-        match self.eval_do_body(&try_expr.try_body, env) {
-            Ok(value) => Ok(value),
+        let try_result = self.eval_do_body(&try_expr.try_body, env);
+        match try_result {
+            Ok(value) => {
+                // Success path: run finally if present, propagate finally error if it fails
+                if let Some(finally_body) = &try_expr.finally_body {
+                    // Execute finally in the original environment
+                    let finally_result = self.eval_do_body(finally_body, env);
+                    if let Err(fe) = finally_result { return Err(fe); }
+                }
+                Ok(value)
+            }
             Err(e) => {
+                // Error path: try to match catch clauses
+                let mut handled: Option<Value> = None;
                 for catch_clause in &try_expr.catch_clauses {
                     let mut catch_env = Environment::with_parent(Rc::new(env.clone()));
                     if self.match_catch_pattern(
@@ -1739,10 +1721,27 @@ impl Evaluator {
                         &mut catch_env,
                         Some(&catch_clause.binding),
                     )? {
-                        return self.eval_do_body(&catch_clause.body, &mut catch_env);
+                        // If catch body errors, preserve that error (after running finally)
+                        match self.eval_do_body(&catch_clause.body, &mut catch_env) {
+                            Ok(v) => { handled = Some(v); }
+                            Err(catch_err) => {
+                                // Run finally then return catch error
+                                if let Some(finally_body) = &try_expr.finally_body {
+                                    if let Err(fe) = self.eval_do_body(finally_body, env) { return Err(fe); }
+                                }
+                                return Err(catch_err);
+                            }
+                        }
+                        break;
                     }
                 }
-                Err(e)
+
+                // Run finally if present
+                if let Some(finally_body) = &try_expr.finally_body {
+                    if let Err(fe) = self.eval_do_body(finally_body, env) { return Err(fe); }
+                }
+
+                if let Some(v) = handled { Ok(v) } else { Err(e) }
             }
         }
     }
@@ -1754,6 +1753,7 @@ impl Evaluator {
                 .iter()
                 .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
+            fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
             Box::new(Expression::Do(DoExpr {
                 expressions: fn_expr.body.clone(),
             })),
@@ -1816,6 +1816,7 @@ impl Evaluator {
                 .iter()
                 .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
+            defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
             Box::new(Expression::Do(DoExpr {
                 expressions: defn_expr.body.clone(),
             })),
@@ -1889,6 +1890,80 @@ impl Evaluator {
         
         Ok(constructor_value)
     }
+  
+    /// Special form: (dotimes [i n] body)
+    fn eval_dotimes_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch { function: "dotimes".into(), expected: "2".into(), actual: args.len() });
+        }
+        // Evaluate binding vector
+        let binding_val = self.eval_expr(&args[0], env)?;
+        let (sym, count) = match binding_val {
+            Value::Vector(v) if v.len() == 2 => {
+                let sym = match &v[0] { Value::Symbol(s) => s.clone(), other => return Err(RuntimeError::TypeError{ expected: "symbol".into(), actual: other.type_name().into(), operation: "dotimes".into() }) };
+                let n = match &v[1] { Value::Integer(i) => *i, other => return Err(RuntimeError::TypeError{ expected: "integer".into(), actual: other.type_name().into(), operation: "dotimes".into() }) };
+                (sym, n)
+            }
+            other => return Err(RuntimeError::TypeError{ expected: "[symbol integer]".into(), actual: other.type_name().into(), operation: "dotimes".into() })
+        };
+        if count <= 0 { return Ok(Value::Nil); }
+        let mut last = Value::Nil;
+        for i in 0..count {
+            let mut loop_env = Environment::with_parent(Rc::new(env.clone()));
+            loop_env.define(&sym, Value::Integer(i));
+            last = self.eval_expr(&args[1], &mut loop_env)?;
+        }
+        Ok(last)
+    }
+
+    /// Special form: (for [x coll] body) or (for [x coll y coll2 ...] body)
+    /// Multi-binding form nests loops left-to-right and returns a vector of results
+    fn eval_for_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch { function: "for".into(), expected: "2".into(), actual: args.len() });
+        }
+        let binding_val = self.eval_expr(&args[0], env)?;
+        let bindings_vec = match binding_val {
+            Value::Vector(v) => v,
+            other => return Err(RuntimeError::TypeError{ expected: "vector of [sym coll] pairs".into(), actual: other.type_name().into(), operation: "for".into() })
+        };
+        if bindings_vec.len() % 2 != 0 || bindings_vec.is_empty() {
+            return Err(RuntimeError::Generic("for requires an even number of binding elements [sym coll ...]".into()));
+        }
+
+        // Convert into Vec<(Symbol, Vec<Value>)>
+        let mut pairs: Vec<(Symbol, Vec<Value>)> = Vec::new();
+        let mut i = 0;
+        while i < bindings_vec.len() {
+            let sym = match &bindings_vec[i] { Value::Symbol(s) => s.clone(), other => return Err(RuntimeError::TypeError{ expected: "symbol".into(), actual: other.type_name().into(), operation: "for binding symbol".into() }) };
+            let coll_val = bindings_vec[i+1].clone();
+            let items = match coll_val { Value::Vector(v) => v, other => return Err(RuntimeError::TypeError{ expected: "vector".into(), actual: other.type_name().into(), operation: "for binding collection".into() }) };
+            pairs.push((sym, items));
+            i += 2;
+        }
+
+        // Recursive nested iteration
+        let mut out: Vec<Value> = Vec::new();
+        self.for_nest(&pairs, 0, env, &args[1], &mut out)?;
+        Ok(Value::Vector(out))
+    }
+
+    fn for_nest(&self, pairs: &[(Symbol, Vec<Value>)], depth: usize, env: &Environment, body: &Expression, out: &mut Vec<Value>) -> RuntimeResult<()> {
+        if depth == pairs.len() {
+            // Evaluate body in current env clone
+            let mut eval_env = env.clone();
+            let v = self.eval_expr(body, &mut eval_env)?;
+            out.push(v);
+            return Ok(());
+        }
+        let (sym, items) = &pairs[depth];
+        for it in items.clone() {
+            let mut loop_env = Environment::with_parent(Rc::new(env.clone()));
+            loop_env.define(sym, it);
+            self.for_nest(pairs, depth + 1, &loop_env, body, out)?;
+        }
+        Ok(())
+    }
 
     fn match_catch_pattern(
         &self,
@@ -1899,7 +1974,12 @@ impl Evaluator {
     ) -> RuntimeResult<bool> {
         match pattern {
             CatchPattern::Symbol(s) => {
+                // Define both the pattern symbol and the optional binding (if provided)
                 env.define(s, value.clone());
+                if let Some(b) = binding {
+                    // Avoid double-define if same symbol name; Environment::define typically overwrites which is fine
+                    env.define(b, value.clone());
+                }
                 Ok(true)
             }
             CatchPattern::Wildcard => {
@@ -1908,10 +1988,21 @@ impl Evaluator {
                 }
                 Ok(true)
             }
-            CatchPattern::Keyword(k) => Ok(Value::Keyword(k.clone()) == *value),
+            CatchPattern::Keyword(k) => {
+                let matches = Value::Keyword(k.clone()) == *value;
+                if matches {
+                    if let Some(b) = binding {
+                        env.define(b, value.clone());
+                    }
+                }
+                Ok(matches)
+            }
             CatchPattern::Type(_t) => {
                 // This is a placeholder implementation. A real implementation would need to
-                // check the type of the value against the type expression t.
+                // check the type of the value against the type expression t. For now, it always matches.
+                if let Some(b) = binding {
+                    env.define(b, value.clone());
+                }
                 Ok(true)
             }
         }
@@ -2461,8 +2552,15 @@ impl Evaluator {
                                 // Handle :keys [key1 key2] syntax
                                 for symbol in symbols {
                                     // Convert symbol to keyword for map lookup
+                                    // Symbols in :keys bindings are plain identifiers; map keys are keywords
+                                    // so prefix with ':' to form the proper Keyword value used in map keys.
+                                    let kw_text = if symbol.0.starts_with(":") {
+                                        symbol.0.clone()
+                                    } else {
+                                        format!(":{}", symbol.0)
+                                    };
                                     let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(
-                                        symbol.0.clone(),
+                                        kw_text,
                                     ));
                                     bound_keys.insert(key.clone());
                                     if let Some(map_value) = map_values.get(&key) {

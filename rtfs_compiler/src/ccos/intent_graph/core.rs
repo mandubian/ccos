@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,13 +15,14 @@ use super::{
     virtualization::{IntentGraphVirtualization, VirtualizationConfig, VirtualizedIntentGraph, VirtualizedSearchResult, VirtualizationStats},
     processing::{IntentLifecycleManager},
 };
+use std::sync::Arc;
 
 /// Main Intent Graph implementation with persistent storage
 pub struct IntentGraph {
     pub storage: IntentGraphStorage,
     pub virtualization: IntentGraphVirtualization,
     pub lifecycle: IntentLifecycleManager,
-    pub event_sink: Arc<dyn IntentEventSink>,
+    pub intent_event_sink: Arc<dyn IntentEventSink>,
     pub rt: tokio::runtime::Handle,
 }
 
@@ -39,7 +40,8 @@ impl std::fmt::Debug for IntentGraph {
 
 impl IntentGraph {
     pub fn new() -> Result<Self, RuntimeError> {
-        Self::with_config(IntentGraphConfig::default())
+        // Default to Noop sink (legacy callers). Production should use with_event_sink.
+    Self::with_config_and_event_sink(IntentGraphConfig::default(), Arc::new(crate::ccos::event_sink::NoopIntentEventSink::default()))
     }
 
     pub fn with_config(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
@@ -52,8 +54,8 @@ impl IntentGraph {
     }
 
     pub fn with_config_and_event_sink(
-        config: IntentGraphConfig, 
-        event_sink: Arc<dyn IntentEventSink>
+        config: IntentGraphConfig,
+        intent_event_sink: Arc<dyn IntentEventSink>,
     ) -> Result<Self, RuntimeError> {
         // For synchronous creation, we need to handle the case where no runtime exists
         let rt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -81,7 +83,7 @@ impl IntentGraph {
             storage,
             virtualization: IntentGraphVirtualization::new(),
             lifecycle: IntentLifecycleManager,
-            event_sink,
+            intent_event_sink,
             rt,
         })
     }
@@ -94,19 +96,17 @@ impl IntentGraph {
 
     pub async fn new_async_with_event_sink(
         config: IntentGraphConfig,
-        event_sink: Arc<dyn IntentEventSink>
+        intent_event_sink: Arc<dyn IntentEventSink>
     ) -> Result<Self, RuntimeError> {
         let storage = IntentGraphStorage::new(config).await;
-        
         // Get the current runtime handle for future operations
         let rt = tokio::runtime::Handle::try_current()
             .map_err(|_| RuntimeError::StorageError("No tokio runtime available".to_string()))?;
-
         Ok(Self {
             storage,
             virtualization: IntentGraphVirtualization::new(),
             lifecycle: IntentLifecycleManager,
-            event_sink,
+            intent_event_sink,
             rt,
         })
     }
@@ -145,8 +145,8 @@ impl IntentGraph {
         intent: StorableIntent,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
-        let intent_id = intent.intent_id.clone();
-        let event_sink = self.event_sink.clone();
+    let intent_id = intent.intent_id.clone();
+    let event_sink = self.intent_event_sink.clone();
         
         if tokio::runtime::Handle::try_current().is_ok() {
             futures::executor::block_on(async { 
@@ -166,6 +166,113 @@ impl IntentGraph {
                     result,
                 ).await
             })
+        }
+    }
+
+    /// Update intent and optionally emit an IntentStatusChanged into the causal chain describing final result.
+    pub fn update_intent_with_audit(
+        &mut self,
+        mut intent: StorableIntent,
+        result: &ExecutionResult,
+        plan_id_opt: Option<&str>,
+        triggering_action_id: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        let updated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let old_status = format!("{:?}", intent.status.clone());
+
+        intent.updated_at = updated_at;
+        intent.status = if result.success {
+            IntentStatus::Completed
+        } else {
+            IntentStatus::Failed
+        };
+
+        // Persist
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async { self.storage.update_intent(&intent).await })?;
+        } else {
+            self.rt.block_on(async { self.storage.update_intent(&intent).await })?;
+        }
+
+        let plan_id_owned = plan_id_opt.unwrap_or("");
+        self.intent_event_sink.log_intent_status_change(
+            plan_id_owned,
+            &intent.intent_id,
+            &old_status,
+            &format!("{:?}", intent.status),
+            "IntentGraph: update_intent result",
+            triggering_action_id,
+        )?;
+
+        Ok(())
+    }
+
+    /// Set an intent's status explicitly (e.g. Active -> Executing) without marking terminal completion.
+    /// This is used by the Orchestrator when a plan begins executing an intent.
+    pub fn set_intent_status(&mut self, intent_id: &IntentId, new_status: IntentStatus) -> Result<(), RuntimeError> {
+        // Fetch current intent
+        let maybe_intent = if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+        } else {
+            self.rt.block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+        };
+        if let Some(mut intent) = maybe_intent {
+            intent.status = new_status;
+            intent.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            if tokio::runtime::Handle::try_current().is_ok() {
+                futures::executor::block_on(async { self.storage.update_intent(&intent).await })
+            } else {
+                self.rt.block_on(async { self.storage.update_intent(&intent).await })
+            }
+        } else {
+            Err(RuntimeError::StorageError(format!("Intent not found: {}", intent_id)))
+        }
+    }
+
+    /// Set an intent's status and optionally emit an IntentStatusChanged into the Causal Chain.
+    pub fn set_intent_status_with_audit(
+        &mut self,
+        intent_id: &IntentId,
+        new_status: IntentStatus,
+        plan_id_opt: Option<&str>,
+        triggering_action_id: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        // Fetch current intent
+        let maybe_intent = if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+        } else {
+            self.rt.block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+        };
+
+        if let Some(mut intent) = maybe_intent {
+            let old_status = format!("{:?}", intent.status.clone());
+            intent.status = new_status.clone();
+            intent.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+            // Persist
+            if tokio::runtime::Handle::try_current().is_ok() {
+                futures::executor::block_on(async { self.storage.update_intent(&intent).await })?;
+            } else {
+                self.rt.block_on(async { self.storage.update_intent(&intent).await })?;
+            }
+
+            let plan_id_owned = plan_id_opt.unwrap_or("");
+            self.intent_event_sink.log_intent_status_change(
+                plan_id_owned,
+                intent_id,
+                &old_status,
+                &format!("{:?}", new_status),
+                "IntentGraph: explicit status set",
+                triggering_action_id,
+            )?;
+
+            Ok(())
+        } else {
+            Err(RuntimeError::StorageError(format!("Intent not found: {}", intent_id)))
         }
     }
 
@@ -829,7 +936,7 @@ impl IntentGraph {
 
     /// Archive completed intents
     pub fn archive_completed_intents(&mut self) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.archive_completed_intents(&mut self.storage, event_sink.as_ref()).await
         })
@@ -837,7 +944,7 @@ impl IntentGraph {
 
     /// Complete an intent with execution result
     pub fn complete_intent(&mut self, intent_id: &IntentId, result: &ExecutionResult) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.complete_intent(&mut self.storage, event_sink.as_ref(), intent_id, result).await
         })
@@ -845,7 +952,7 @@ impl IntentGraph {
 
     /// Fail an intent with error message
     pub fn fail_intent(&mut self, intent_id: &IntentId, error_message: String) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message).await
         })
@@ -853,7 +960,7 @@ impl IntentGraph {
 
     /// Suspend an intent with reason
     pub fn suspend_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.suspend_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
@@ -861,7 +968,7 @@ impl IntentGraph {
 
     /// Resume a suspended intent
     pub fn resume_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.resume_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
@@ -869,7 +976,7 @@ impl IntentGraph {
 
     /// Archive an intent with reason
     pub fn archive_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.archive_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
@@ -877,7 +984,7 @@ impl IntentGraph {
 
     /// Reactivate an archived intent
     pub fn reactivate_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.reactivate_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
         })
@@ -925,7 +1032,7 @@ impl IntentGraph {
         new_status: IntentStatus,
         reason: String,
     ) -> Result<Vec<IntentId>, RuntimeError> {
-        let event_sink = self.event_sink.clone();
+        let event_sink = self.intent_event_sink.clone();
         self.rt.block_on(async {
             self.lifecycle.bulk_transition_intents(&mut self.storage, event_sink.as_ref(), intent_ids, new_status, reason).await
         })

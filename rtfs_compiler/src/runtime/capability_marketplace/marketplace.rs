@@ -5,6 +5,7 @@ use crate::runtime::values::Value;
 use crate::ast::{MapKey, TypeExpr};
 use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, VerificationContext};
 use crate::runtime::streaming::{StreamType, StreamingProvider};
+use crate::runtime::security::RuntimeContext;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -465,7 +466,9 @@ impl CapabilityMarketplace {
         } else {
             let registry = self.capability_registry.read().await;
             let args = vec![inputs.clone()];
-            return registry.execute_capability_with_microvm(id, args);
+            // For marketplace fallback, use a controlled runtime context
+            let runtime_context = RuntimeContext::controlled(vec![id.to_string()]);
+            return registry.execute_capability_with_microvm(id, args, Some(&runtime_context));
         };
 
         // Prepare boundary verification context

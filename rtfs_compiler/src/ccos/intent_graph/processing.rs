@@ -94,6 +94,7 @@ impl IntentSummarizer {
             .iter()
             .map(|intent| match intent.status {
                 IntentStatus::Active => 1.0,
+                IntentStatus::Executing => 0.95,
                 IntentStatus::Failed => 0.8,
                 IntentStatus::Suspended => 0.6,
                 IntentStatus::Completed => 0.4,
@@ -183,6 +184,7 @@ impl IntentSummarizer {
 
         let status_text = match dominant_status {
             IntentStatus::Active => "actively being pursued",
+            IntentStatus::Executing => "currently executing",
             IntentStatus::Completed => "completed",
             IntentStatus::Failed => "failed",
             IntentStatus::Suspended => "suspended",
@@ -259,6 +261,7 @@ impl IntentPruningEngine {
         // Status-based scoring
         score += match intent.status {
             IntentStatus::Active => 1.0,
+            IntentStatus::Executing => 0.95,
             IntentStatus::Suspended => 0.8,
             IntentStatus::Failed => 0.6,
             IntentStatus::Completed => 0.4,
@@ -312,6 +315,7 @@ impl IntentPruningEngine {
     fn calculate_base_relevance(&self, intent: &StorableIntent) -> f64 {
         match intent.status {
             IntentStatus::Active => 0.9,
+            IntentStatus::Executing => 0.85,
             IntentStatus::Failed => 0.7,
             IntentStatus::Suspended => 0.5,
             IntentStatus::Completed => 0.3,
@@ -401,10 +405,12 @@ impl IntentLifecycleManager {
         storage.update_intent(intent).await?;
         
         // Emit status change event for mandatory audit
-        event_sink.emit_status_change(
+        // NOTE: We don't yet have a concrete plan_id wired here; pass empty string until orchestration plumbs it.
+        event_sink.log_intent_status_change(
+            "", // plan_id placeholder
             &intent.intent_id,
-            &old_status,
-            &new_status,
+            self.status_to_string(&old_status),
+            self.status_to_string(&new_status),
             &reason,
             triggering_plan_id,
         )?;
@@ -605,29 +611,39 @@ impl IntentLifecycleManager {
         to: &IntentStatus,
     ) -> Result<(), RuntimeError> {
         match (from, to) {
-            // Active can transition to any other status
+            // Active can transition to Executing, Suspended, Archived, Failed (edge), Completed (unlikely direct), or stay Active
             (IntentStatus::Active, _) => Ok(()),
-            
+
+            // Executing can complete, fail, suspend, return to Active (rollback), or archive (edge case)
+            (IntentStatus::Executing, IntentStatus::Completed) => Ok(()),
+            (IntentStatus::Executing, IntentStatus::Failed) => Ok(()),
+            (IntentStatus::Executing, IntentStatus::Suspended) => Ok(()),
+            (IntentStatus::Executing, IntentStatus::Active) => Ok(()),
+            (IntentStatus::Executing, IntentStatus::Archived) => Ok(()),
+            (IntentStatus::Executing, _) => Err(RuntimeError::Generic(
+                format!("Cannot transition from Executing to {:?}", to)
+            )),
+
             // Completed can only transition to Archived
             (IntentStatus::Completed, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Completed, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Completed to {:?}", to)
             )),
-            
+
             // Failed can transition to Active (retry) or Archived
             (IntentStatus::Failed, IntentStatus::Active) => Ok(()),
             (IntentStatus::Failed, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Failed, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Failed to {:?}", to)
             )),
-            
+
             // Suspended can transition to Active (resume) or Archived
             (IntentStatus::Suspended, IntentStatus::Active) => Ok(()),
             (IntentStatus::Suspended, IntentStatus::Archived) => Ok(()),
             (IntentStatus::Suspended, _) => Err(RuntimeError::Generic(
                 format!("Cannot transition from Suspended to {:?}", to)
             )),
-            
+
             // Archived can transition to Active (reactivate)
             (IntentStatus::Archived, IntentStatus::Active) => Ok(()),
             (IntentStatus::Archived, _) => Err(RuntimeError::Generic(
@@ -640,6 +656,7 @@ impl IntentLifecycleManager {
     fn status_to_string(&self, status: &IntentStatus) -> &'static str {
         match status {
             IntentStatus::Active => "Active",
+            IntentStatus::Executing => "Executing",
             IntentStatus::Completed => "Completed",
             IntentStatus::Failed => "Failed",
             IntentStatus::Archived => "Archived",
