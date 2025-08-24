@@ -280,9 +280,12 @@ impl DelegatingArbiter {
         let response = self.llm_provider.generate_text(&prompt).await?;
         
         // Parse LLM response into intent structure
-        let intent = self.parse_llm_intent_response(&response, natural_language, context)?;
+    let mut intent = self.parse_llm_intent_response(&response, natural_language, context)?;
+
+    // Mark how this intent was generated so downstream code/tests can inspect it
+    intent.metadata.insert("generation_method".to_string(), Value::String("delegating_llm".to_string()));
         
-        Ok(intent)
+    Ok(intent)
     }
 
     /// Generate plan using LLM with agent delegation

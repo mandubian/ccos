@@ -216,8 +216,8 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         max_tokens: Some(1000),
         temperature: Some(0.7),
-        timeout_seconds: Some(30),
-        prompts: None,
+    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+    timeout_seconds: Some(30),
     };
 
     // Create arbiter configuration
@@ -296,8 +296,8 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         max_tokens: Some(1000),
         temperature: Some(0.7),
-        timeout_seconds: Some(30),
-        prompts: None,
+    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+    timeout_seconds: Some(30),
     };
 
     // Create delegation configuration with agents
@@ -416,8 +416,8 @@ async fn demo_llm_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         max_tokens: Some(1000),
         temperature: Some(0.7),
-        timeout_seconds: Some(30),
-        prompts: None,
+    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+    timeout_seconds: Some(30),
     };
 
     // Create arbiter configuration

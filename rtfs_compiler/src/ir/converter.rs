@@ -2265,9 +2265,15 @@ impl<'a> IrConverter<'a> {
                         }
                         MapDestructuringEntry::Keys(symbols) => {
                             for sym in symbols {
+                                let sym_text = sym.0.clone();
+                                let kw_text = if sym_text.starts_with(":") {
+                                    sym_text.clone()
+                                } else {
+                                    format!(":{}", sym_text)
+                                };
                                 ir_entries.push(IrMapPatternEntry {
-                                    key: MapKey::Keyword(Keyword(sym.0.clone())),
-                                    pattern: IrPattern::Variable(sym.0),
+                                    key: MapKey::Keyword(Keyword(kw_text)),
+                                    pattern: IrPattern::Variable(sym_text),
                                 });
                             }
                         }
@@ -2323,9 +2329,15 @@ impl<'a> IrConverter<'a> {
                         }
                         MapDestructuringEntry::Keys(symbols) => {
                             for sym in symbols {
+                                let sym_text = sym.0.clone();
+                                let kw_text = if sym_text.starts_with(":") {
+                                    sym_text.clone()
+                                } else {
+                                    format!(":{}", sym_text)
+                                };
                                 ir_entries.push(IrMapPatternEntry {
-                                    key: MapKey::Keyword(Keyword(sym.0.clone())),
-                                    pattern: IrPattern::Variable(sym.0),
+                                    key: MapKey::Keyword(Keyword(kw_text)),
+                                    pattern: IrPattern::Variable(sym_text),
                                 });
                             }
                         }
