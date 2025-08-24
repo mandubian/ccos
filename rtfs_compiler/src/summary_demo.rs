@@ -8,7 +8,7 @@ pub mod parser;
 pub mod runtime;
 mod tests;
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use ir::converter::IrConverter;
 
@@ -55,8 +55,8 @@ fn main() {
 fn demonstrate_ast_runtime() {
     println!("=== AST Runtime Demonstration ===");
 
-    let module_registry = Rc::new(ModuleRegistry::new());
-    let evaluator = Evaluator::new(module_registry);
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+    let evaluator = Evaluator::new(module_registry.clone());
 
     // Test various expressions including new features
     let test_cases = vec![

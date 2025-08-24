@@ -5,7 +5,6 @@
 /// evaluation pipeline - not just capability boundaries.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use rtfs_compiler::ast::{TypeExpr, PrimitiveType};
@@ -71,7 +70,7 @@ mod hybrid_runtime_integration_tests {
     use super::*;
 
     fn create_test_evaluator_optimized() -> Evaluator {
-        let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
         let static_map = HashMap::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();
@@ -81,7 +80,7 @@ mod hybrid_runtime_integration_tests {
     }
 
     fn create_test_evaluator_strict() -> Evaluator {
-        let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
         let static_map = HashMap::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();

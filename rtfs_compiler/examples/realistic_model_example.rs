@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let de = Arc::new(StaticDelegationEngine::new(static_map));
     
     // Create evaluator
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let mut evaluator = Evaluator::new(
-        module_registry,
+    module_registry,
         de,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,

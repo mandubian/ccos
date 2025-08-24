@@ -4,7 +4,6 @@ use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::parser::parse_expression;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::{MapKey, Keyword};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
@@ -18,7 +17,7 @@ struct SecureStdlibTestRunner {
 impl SecureStdlibTestRunner {
     fn new() -> Self {
         let env = SecureStandardLibrary::create_secure_environment();
-        let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
         let registry = Arc::new(RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(
             rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry)

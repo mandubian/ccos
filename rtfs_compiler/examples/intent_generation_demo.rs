@@ -11,7 +11,6 @@ use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::runtime::values::Value;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use regex::Regex; // Add dependency in Cargo.toml if not present
 use rtfs_compiler::ccos::types::Intent;
@@ -416,7 +415,7 @@ COMMON PATTERNS:
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
     let mut evaluator = Evaluator::new(
-        Rc::new(ModuleRegistry::new()),
+        std::sync::Arc::new(ModuleRegistry::new()),
         delegation,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,

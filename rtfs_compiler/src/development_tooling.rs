@@ -13,7 +13,6 @@ use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::rc::Rc;
 use std::sync::Mutex;
 
 // Placeholder IrStrategy implementation until the actual one is available
@@ -99,7 +98,7 @@ impl RtfsRepl {
         
         Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
-                Rc::new(module_registry.clone()),
+                std::sync::Arc::new(module_registry.clone()),
                 delegation_engine,
                 security_context,
                 host.clone(),
@@ -129,7 +128,7 @@ impl RtfsRepl {
                 ));
                 
                 Box::new(TreeWalkingStrategy::new(Evaluator::new(
-                    Rc::new(module_registry.clone()),
+                    std::sync::Arc::new(module_registry.clone()),
                     delegation_engine,
                     security_context,
                     host.clone(),
@@ -253,7 +252,7 @@ impl RtfsRepl {
                 ));
                 
                 self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
-                    Rc::new(self.module_registry.clone()),
+                    Arc::new(self.module_registry.clone()),
                     delegation_engine,
                     security_context,
                     host.clone(),
@@ -541,7 +540,7 @@ impl RtfsTestFramework {
         Self {
             tests: Vec::new(),
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
-                Rc::new(module_registry.clone()),
+                Arc::new(module_registry.clone()),
                 delegation_engine,
                 security_context,
                 host.clone(),

@@ -125,15 +125,11 @@ Reflect `.cursor/rules/rust-rules.mdc`:
 - Archived / Historical (for context only): `docs/rtfs-1.0/`.
 
 When adding or changing semantics: update appropriate spec file + reference commit hash in PR description.
-
 ---
-## 13. Extension Checklist (Before Opening PR)
-[ ] New capability registered & tested
-[ ] No new Action struct fields (or hash updated + migration rationale documented)
-[ ] Governance rule changes accompanied by spec update
-[ ] Delegation changes emit proper events
-[ ] No direct external side effects outside marketplace
-[ ] Tests deterministic & pass locally
+## 13. git and documentation
+- commit: commit as soon as a feature is implemented, don't wait for the end of worktree. Use present tense, imperative mood, reference issues/PRs when relevant.
+- PR: includea summary of changes, test results, known issues, and next steps.
+- docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. Link to these docs in your PR description.
 
 ---
 Need deeper drill‑down (grammar, delegation governance hook, capability example)? Create an issue or ask specifying the subsection number above.

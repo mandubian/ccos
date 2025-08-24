@@ -1,11 +1,9 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use std::rc::Rc;
 // Simple test for basic recursion functionality
 use rtfs_compiler::*;
 use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use std::cell::RefCell;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 
 #[test]
@@ -21,7 +19,7 @@ fn test_simple_mutual_recursion() {
   (vector (is-even 4) (is-odd 4) (is-even 7) (is-odd 7)))"#;
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -60,7 +58,7 @@ fn test_simple_factorial() {
   (fact 5))"#;
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));

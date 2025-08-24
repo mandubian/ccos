@@ -7,7 +7,6 @@ use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value,
 };
-use std::rc::Rc;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,7 +38,7 @@ pub fn create_test_evaluator() -> Evaluator {
         vec!["test-intent".to_string()],
         "root-action".to_string(),
     );
-    Evaluator::new(Rc::new(module_registry), de, security_context, host)
+    Evaluator::new(std::sync::Arc::new(module_registry), de, security_context, host)
 }
 
 /// Creates a new AST evaluator with a provided RuntimeContext.
@@ -60,7 +59,7 @@ pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::Runtime
         vec!["test-intent".to_string()],
         "root-action".to_string(),
     );
-    Evaluator::new(Rc::new(module_registry), de, ctx, host)
+    Evaluator::new(std::sync::Arc::new(module_registry), de, ctx, host)
 }
 
 /// Creates a new AST evaluator with LLM capability enabled (Controlled context)

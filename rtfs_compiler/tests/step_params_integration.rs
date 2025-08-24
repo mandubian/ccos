@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 #[test]
 fn step_params_binding_visible_in_body() -> Result<(), String> {
     // Build evaluator like test helpers would do but using only public APIs
-    let module_registry = std::rc::Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let delegation_engine = std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();

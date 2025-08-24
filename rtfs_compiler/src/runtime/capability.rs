@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::Symbol;
 use crate::runtime::environment::Environment;
@@ -17,12 +17,12 @@ pub struct Capability {
     /// Arity information for the callable
     pub arity: Arity,
     /// Actual implementation
-    pub func: Rc<dyn Fn(Vec<Value>) -> RuntimeResult<Value>>,
+    pub func: Arc<dyn Fn(Vec<Value>) -> RuntimeResult<Value> + Send + Sync>,
 }
 
 impl Capability {
     /// Helper constructor for Capability
-    pub fn new(id: String, arity: Arity, func: Rc<dyn Fn(Vec<Value>) -> RuntimeResult<Value>>) -> Self {
+    pub fn new(id: String, arity: Arity, func: Arc<dyn Fn(Vec<Value>) -> RuntimeResult<Value> + Send + Sync>) -> Self {
         Self { id, arity, func }
     }
     /// Convert this capability into a regular RTFS `Value::Function` that
@@ -34,7 +34,7 @@ impl Capability {
     /// executed.
     pub fn into_value<L>(self, logger: L) -> Value
     where
-        L: Fn(&str, &Vec<Value>) -> RuntimeResult<()> + 'static,
+        L: Fn(&str, &Vec<Value>) -> RuntimeResult<()> + 'static + Send + Sync,
     {
         let id_clone = self.id.clone();
         let inner = self.func.clone();
@@ -48,7 +48,7 @@ impl Capability {
         Value::Function(Function::Builtin(BuiltinFunction {
             name: self.id,
             arity: self.arity,
-            func: Rc::new(wrapped),
+            func: Arc::new(wrapped),
         }))
     }
 }
@@ -64,17 +64,17 @@ pub fn inject_capability<L>(
     logger: L,
 ) -> RuntimeResult<()>
 where
-    L: Fn(&str, &Vec<Value>) -> RuntimeResult<()> + 'static,
+    L: Fn(&str, &Vec<Value>) -> RuntimeResult<()> + 'static + Send + Sync,
 {
     let sym = Symbol(symbol_name.to_string());
     if let Some(orig_val) = env.lookup(&sym) {
         if let Value::Function(func) = orig_val {
-            let cap = Capability {
+                let cap = Capability {
                 id: capability_id.to_string(),
                 arity,
                 func: match func {
                     Function::Builtin(b) => b.func.clone(),
-                    _ => Rc::new(move |args| {
+                    _ => Arc::new(move |args| {
                         Err(RuntimeError::Generic(
                             "Only builtin functions can be wrapped as capabilities".to_string(),
                         ))

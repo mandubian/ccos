@@ -10,6 +10,7 @@ pub mod event_sink;
 pub mod wm_integration;
 pub mod intent_graph;
 pub mod intent_storage;
+pub mod intent_archive;
 pub mod types;
 pub mod governance_kernel;
 pub mod orchestrator;
@@ -54,7 +55,6 @@ pub use crate::ccos::arbiter::delegating_arbiter;
 // --- Core CCOS System ---
 
 use std::sync::{Arc, Mutex, RwLock};
-use std::rc::Rc;
 
 use crate::ccos::arbiter::{DelegatingArbiter, ArbiterEngine, Arbiter};
 use crate::config::types::AgentConfig;
@@ -141,7 +141,7 @@ impl CCOS {
             intent_graph,
             causal_chain,
             capability_marketplace,
-            rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(Rc::new(ModuleRegistry::new())))),
+            rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(Arc::new(ModuleRegistry::new())))),
             delegating_arbiter,
             agent_registry,
             agent_config,
