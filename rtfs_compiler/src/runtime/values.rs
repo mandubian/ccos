@@ -23,6 +23,9 @@ pub enum Value {
     Timestamp(String),
     Uuid(String),
     ResourceHandle(String),
+    /// Mutable reference type used by atom/deref/reset!/swap!
+    #[serde(skip_serializing, skip_deserializing)]
+    Atom(Rc<RefCell<Value>>),
     Symbol(Symbol),
     Keyword(Keyword),
     Vector(Vec<Value>),
@@ -52,6 +55,7 @@ impl fmt::Display for Value {
             Value::Timestamp(t) => write!(f, "#timestamp(\"{}\")", t),
             Value::Uuid(u) => write!(f, "#uuid(\"{}\")", u),
             Value::ResourceHandle(rh) => write!(f, "#resource-handle(\"{}\")", rh),
+            Value::Atom(_) => write!(f, "#<atom>"),
             Value::Symbol(s) => write!(f, "{}", s.0),
             Value::Keyword(k) => write!(f, ":{}", k.0),
             Value::Vector(v) => {
@@ -92,6 +96,7 @@ impl Value {
             Value::Timestamp(_) => "timestamp",
             Value::Uuid(_) => "uuid",
             Value::ResourceHandle(_) => "resource-handle",
+            Value::Atom(_) => "atom",
             Value::Symbol(_) => "symbol",
             Value::Keyword(_) => "keyword",
             Value::Vector(_) => "vector",
@@ -260,12 +265,14 @@ pub enum Function {
 impl Function {
     pub fn new_closure(
         params: Vec<Symbol>,
+        param_patterns: Vec<crate::ast::Pattern>,
         body: Box<Expression>,
         env: Rc<Environment>,
         delegation_hint: Option<crate::ast::DelegationHint>,
     ) -> Function {
         Function::Closure(Rc::new(Closure {
             params,
+            param_patterns,
             body,
             env,
             delegation_hint,
@@ -317,6 +324,8 @@ impl PartialEq for Function {
 #[derive(Clone, Debug)]
 pub struct Closure {
     pub params: Vec<Symbol>,
+    // Full parameter patterns to support destructuring during invocation
+    pub param_patterns: Vec<crate::ast::Pattern>,
     pub body: Box<Expression>,
     pub env: Rc<Environment>,
     pub delegation_hint: Option<crate::ast::DelegationHint>,
@@ -356,20 +365,20 @@ impl From<Expression> for Value {
                     arguments.len()
                 ))
             }
-            Expression::If(if_expr) => {
-                // For now, return a placeholder for if expressions
+            Expression::If(_) => {
+                    // For now, return a placeholder for if expressions
                 Value::String("#<if-expression>".to_string())
             }
-            Expression::Let(let_expr) => {
-                // For now, return a placeholder for let expressions
+            Expression::Let(_) => {
+                    // For now, return a placeholder for let expressions
                 Value::String("#<let-expression>".to_string())
             }
-            Expression::Do(do_expr) => {
-                // For now, return a placeholder for do expressions
+            Expression::Do(_) => {
+                    // For now, return a placeholder for do expressions
                 Value::String("#<do-expression>".to_string())
             }
-            Expression::Fn(fn_expr) => {
-                // For now, return a placeholder for function expressions
+            Expression::Fn(_) => {
+                    // For now, return a placeholder for function expressions
                 Value::String("#<fn-expression>".to_string())
             }
             Expression::Def(def_expr) => {
@@ -380,29 +389,29 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for defn expressions
                 Value::String(format!("#<defn: {}>", defn_expr.name.0))
             }
-            Expression::DiscoverAgents(discover_expr) => {
-                // For now, return a placeholder for discover-agents expressions
+            Expression::DiscoverAgents(_) => {
+                    // For now, return a placeholder for discover-agents expressions
                 Value::String("#<discover-agents>".to_string())
             }
-            Expression::TryCatch(try_expr) => {
-                // For now, return a placeholder for try-catch expressions
+            Expression::TryCatch(_) => {
+                    // For now, return a placeholder for try-catch expressions
                 Value::String("#<try-catch>".to_string())
             }
-            Expression::Parallel(parallel_expr) => {
-                // For now, return a placeholder for parallel expressions
+            Expression::Parallel(_) => {
+                    // For now, return a placeholder for parallel expressions
                 Value::String("#<parallel>".to_string())
             }
             Expression::WithResource(with_expr) => {
                 // For now, return a placeholder for with-resource expressions
                 Value::String(format!("#<with-resource: {}>", with_expr.resource_symbol.0))
             }
-            Expression::Match(match_expr) => {
+            Expression::Match(_) => {
                 // For now, return a placeholder for match expressions
                 Value::String("#<match>".to_string())
             }
             Expression::ResourceRef(resource_name) => {
                 // Return the resource name as a string
-                Value::String(format!("@{}", resource_name))
+                Value::String(resource_name)
             }
 
             Expression::LogStep(_log_expr) => {

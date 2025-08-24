@@ -53,6 +53,18 @@ impl MicroVMProvider for WasmMicroVMProvider {
             return Err(RuntimeError::Generic("WASM provider not initialized".to_string()));
         }
 
+        // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
+        // Just ensure the capability ID is present in permissions if specified
+        if let Some(capability_id) = &context.capability_id {
+            if !context.capability_permissions.contains(capability_id) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "execute_program".to_string(),
+                    capability: capability_id.clone(),
+                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                });
+            }
+        }
+
         let start_time = Instant::now();
         
         let result_value = match context.program {
@@ -90,8 +102,24 @@ impl MicroVMProvider for WasmMicroVMProvider {
         })
     }
 
-    fn execute_capability(&self, _context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
-        self.execute_program(_context)
+    fn execute_capability(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
+        if !self.initialized {
+            return Err(RuntimeError::Generic("WASM provider not initialized".to_string()));
+        }
+
+        // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
+        // Just ensure the capability ID is present in permissions if specified
+        if let Some(capability_id) = &context.capability_id {
+            if !context.capability_permissions.contains(capability_id) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "execute_capability".to_string(),
+                    capability: capability_id.clone(),
+                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                });
+            }
+        }
+
+        self.execute_program(context)
     }
 
     fn cleanup(&mut self) -> RuntimeResult<()> {

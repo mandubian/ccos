@@ -430,8 +430,8 @@ fn test_unknown_escape() {
         name: "test_unknown_escape".to_string(),
         should_compile: false,
         should_execute: false,
-        // Expect a parser/unescape error; match Pest or unescape handling
-        expected_error: Some("Pest"),
+    // Expect a parser/unescape error; we now surface InvalidEscapeSequence from the parser
+    expected_error: Some("InvalidEscapeSequence"),
         ..TestConfig::new("test_unknown_escape")
     });
 }

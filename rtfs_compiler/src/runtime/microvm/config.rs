@@ -21,7 +21,7 @@ pub struct MicroVMConfig {
     pub env_vars: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NetworkPolicy {
     /// No network access
     Denied,
@@ -33,7 +33,7 @@ pub enum NetworkPolicy {
     Full,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FileSystemPolicy {
     /// No file system access
     None,

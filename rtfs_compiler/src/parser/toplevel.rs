@@ -1,6 +1,7 @@
 use crate::ast::{
     ImportDefinition, ModuleDefinition,
     ModuleLevelDefinition, Symbol, TopLevel,
+    ResourceDefinition, Property, Keyword, Expression as AstExpression,
 };
 use crate::parser::common::{build_symbol, next_significant};
 use crate::parser::errors::{invalid_input_error, pair_to_source_span, PestParseError};
@@ -34,7 +35,83 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         | Rule::resource_ref
 
         | Rule::identifier
-        | Rule::namespaced_identifier => build_expression(pair).map(TopLevel::Expression),
+        | Rule::namespaced_identifier => {
+            // Build the expression first. If it's a (resource ...) top-level form,
+            // convert it into a TopLevel::Resource with parsed properties.
+            let expr = build_expression(pair.clone())?;
+            // Match FunctionCall(resource <name> <property>...)
+            if let AstExpression::FunctionCall { callee, arguments } = &expr {
+                if let AstExpression::Symbol(sym) = &**callee {
+                    if sym.0 == "resource" {
+                        // First arg should be the name (symbol possibly with @version)
+                        if arguments.is_empty() {
+                            return Err(super::errors::PestParseError::InvalidInput {
+                                message: "resource requires a name identifier".to_string(),
+                                span: Some(super::errors::pair_to_source_span(&pair)),
+                            });
+                        }
+                        // Extract name symbol and strip any @version suffix
+                        let name_expr = &arguments[0];
+                        let name_sym = match name_expr {
+                            AstExpression::Symbol(s) => s.0.clone(),
+                            _ => {
+                                return Err(super::errors::PestParseError::InvalidInput {
+                                    message: "resource name must be a symbol".to_string(),
+                                    span: Some(super::errors::pair_to_source_span(&pair)),
+                                });
+                            }
+                        };
+                        let base_name = if let Some(idx) = name_sym.find('@') {
+                            name_sym[..idx].to_string()
+                        } else {
+                            name_sym
+                        };
+
+                        // Parse property entries from remaining arguments
+                        let mut properties: Vec<Property> = Vec::new();
+                        for arg in arguments.iter().skip(1) {
+                            // Expect a FunctionCall (property :key value)
+                            if let AstExpression::FunctionCall { callee: prop_callee, arguments: prop_args } = arg {
+                                if let AstExpression::Symbol(prop_sym) = &**prop_callee {
+                                    if prop_sym.0 == "property" {
+                                        if prop_args.len() < 2 {
+                                            return Err(super::errors::PestParseError::InvalidInput {
+                                                message: "property requires a key and a value".to_string(),
+                                                span: Some(super::errors::pair_to_source_span(&pair)),
+                                            });
+                                        }
+                                        // key should be a Literal::Keyword
+                                        match &prop_args[0] {
+                                            AstExpression::Literal(lit) => {
+                                                match lit {
+                                                    crate::ast::Literal::Keyword(k) => {
+                                                        let value_expr = prop_args[1].clone();
+                                                        properties.push(Property { key: k.clone(), value: value_expr });
+                                                        continue;
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                        return Err(super::errors::PestParseError::InvalidInput {
+                                            message: "property key must be a keyword".to_string(),
+                                            span: Some(super::errors::pair_to_source_span(&pair)),
+                                        });
+                                    }
+                                }
+                            }
+                            // Non-property args are ignored for now (could be errors)
+                        }
+
+                        let res_def = ResourceDefinition { name: Symbol(base_name), properties };
+                        return Ok(TopLevel::Resource(res_def));
+                    }
+                }
+            }
+
+            Ok(TopLevel::Expression(expr))
+        }
         Rule::module_definition => build_module_definition(pair).map(TopLevel::Module),
         Rule::import_definition => Err(PestParseError::CustomError {
             message: "Import definition found outside of a module context".to_string(),

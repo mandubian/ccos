@@ -115,6 +115,7 @@ Reflect `.cursor/rules/rust-rules.mdc`:
 - Use `Vec::with_capacity` when size predictable.
 - Keep public surface documented (add `///` comments to new public items).
 - Prefer explicit pattern matches; ensure exhaustiveness for enums that may expand.
+- prefer module with `mod.rs` and several files will less than 1000 lines of code over flat structure; use `pub(crate)` for internal visibility.
 
 ---
 ## 12. Spec Link Map (Start Points)

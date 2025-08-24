@@ -7,11 +7,15 @@ pub mod config;
 pub mod core;
 pub mod factory;
 pub mod providers;
+pub mod settings;
+#[cfg(test)]
+pub mod tests;
 
 pub use config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
 pub use core::{Program, ExecutionContext, ExecutionResult, ExecutionMetadata, NetworkRequest, FileOperation};
 pub use factory::MicroVMFactory;
 pub use providers::MicroVMProvider;
+pub use settings::{MicroVMSettings, EnvironmentMicroVMConfig};
 
 // Re-export provider implementations
 pub use providers::mock::MockMicroVMProvider;

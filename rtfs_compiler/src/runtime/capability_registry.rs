@@ -13,6 +13,7 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::capability::Capability;
 use crate::runtime::capability_provider::CapabilityProvider;
 use crate::runtime::microvm::{MicroVMFactory, ExecutionContext, MicroVMConfig};
+use crate::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use crate::ast::Keyword;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -261,6 +262,10 @@ impl CapabilityRegistry {
                 provider_name, available_providers
             )));
         }
+        
+        // Initialize the provider when setting it
+        self.microvm_factory.initialize_provider(provider_name)?;
+        
         self.microvm_provider = Some(provider_name.to_string());
         Ok(())
     }
@@ -276,7 +281,7 @@ impl CapabilityRegistry {
     }
     
     /// Execute a capability that requires MicroVM isolation
-    fn execute_in_microvm(&self, capability_id: &str, args: Vec<Value>) -> RuntimeResult<Value> {
+    fn execute_in_microvm(&self, capability_id: &str, args: Vec<Value>, runtime_context: Option<&RuntimeContext>) -> RuntimeResult<Value> {
         // For HTTP operations, return a mock response for testing
         if capability_id == "ccos.network.http-fetch" {
             // Return mock response for testing without async runtime
@@ -309,20 +314,33 @@ impl CapabilityRegistry {
         let default_provider = "mock".to_string();
         let provider_name = self.microvm_provider.as_ref().unwrap_or(&default_provider);
         
-        // Get the provider and ensure it's initialized
+        // Get the provider (should already be initialized from set_microvm_provider)
         let provider = self.microvm_factory.get_provider(provider_name)
             .ok_or_else(|| RuntimeError::Generic(format!("MicroVM provider '{}' not found", provider_name)))?;
         
-        // Create execution context
+        // Central authorization: determine required permissions
+        let required_permissions = if let Some(rt_ctx) = runtime_context {
+            SecurityAuthorizer::authorize_capability(rt_ctx, capability_id, &args)?
+        } else {
+            // If no runtime context provided, use minimal permissions
+            vec![capability_id.to_string()]
+        };
+        
+        // Create execution context with authorized permissions
         let execution_context = ExecutionContext {
             execution_id: format!("exec_{}", uuid::Uuid::new_v4()),
             program: None,
             capability_id: Some(capability_id.to_string()),
-            capability_permissions: vec![capability_id.to_string()],
+            capability_permissions: required_permissions.clone(),
             args,
-            config: MicroVMConfig::default(),
-            runtime_context: None,
+            config: runtime_context
+                .and_then(|rc| rc.microvm_config_override.clone())
+                .unwrap_or_else(MicroVMConfig::default),
+            runtime_context: runtime_context.cloned(),
         };
+        
+        // Final validation: ensure execution context has all required permissions
+        SecurityAuthorizer::validate_execution_context(&required_permissions, &execution_context)?;
         
         // Execute in the MicroVM
         let result = provider.execute_capability(execution_context)?;
@@ -330,7 +348,7 @@ impl CapabilityRegistry {
     }
     
     /// Execute a capability, delegating to provider if registered
-    pub fn execute_capability_with_microvm(&self, capability_id: &str, args: Vec<Value>) -> RuntimeResult<Value> {
+    pub fn execute_capability_with_microvm(&self, capability_id: &str, args: Vec<Value>, runtime_context: Option<&RuntimeContext>) -> RuntimeResult<Value> {
         // If a provider is registered for this capability, delegate
         if let Some(provider) = self.providers.get(capability_id) {
             // Use default execution context for now
@@ -347,11 +365,12 @@ impl CapabilityRegistry {
             "ccos.io.open-file" | 
             "ccos.io.read-line" | 
             "ccos.io.write-line" | 
-            "ccos.io.close-file"
+            "ccos.io.close-file" |
+            "ccos.system.get-env"
         );
 
         if requires_microvm {
-            self.execute_in_microvm(capability_id, args)
+            self.execute_in_microvm(capability_id, args, runtime_context)
         } else {
             // For capabilities that don't require MicroVM, execute normally
             match self.get_capability(capability_id) {
@@ -676,6 +695,7 @@ impl CapabilityRegistry {
             Value::Timestamp(ts) => Ok(serde_json::Value::String(format!("@{}", ts))),
             Value::Uuid(uuid) => Ok(serde_json::Value::String(format!("@{}", uuid))),
             Value::ResourceHandle(handle) => Ok(serde_json::Value::String(format!("@{}", handle))),
+            Value::Atom(_) => Ok(serde_json::Value::String("<atom>".to_string())),
             Value::Function(_) => Err(RuntimeError::Generic(
                 "Cannot serialize functions to JSON".to_string(),
             )),

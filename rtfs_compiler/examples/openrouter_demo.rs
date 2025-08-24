@@ -26,6 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: Some(2000),
             temperature: Some(0.7),
             timeout_seconds: Some(60),
+            prompts: None,
         }),
         delegation_config: None,
         capability_config: rtfs_compiler::ccos::arbiter::CapabilityConfig::default(),
@@ -33,39 +34,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         template_config: None,
     };
 
-    // Check if API key is available
-    if config.llm_config.as_ref().unwrap().api_key.is_none() {
-        println!("⚠️  No OpenRouter API key found!");
-        println!("   Set OPENROUTER_API_KEY environment variable to use real LLM.");
-        println!("   Falling back to stub provider for demo...\n");
-        
-        // Fall back to stub provider
-        let stub_config = ArbiterConfig {
-            engine_type: rtfs_compiler::ccos::arbiter::ArbiterEngineType::Llm,
-            llm_config: Some(LlmConfig {
-                provider_type: LlmProviderType::Stub,
-                model: "stub-model".to_string(),
-                api_key: None,
-                base_url: None,
-                max_tokens: Some(1000),
-                temperature: Some(0.7),
-                timeout_seconds: Some(30),
-            }),
-            delegation_config: None,
-            capability_config: rtfs_compiler::ccos::arbiter::CapabilityConfig::default(),
-            security_config: rtfs_compiler::ccos::arbiter::SecurityConfig::default(),
-            template_config: None,
-        };
-        
-        run_demo(stub_config).await?;
-    } else {
-        println!("✅ OpenRouter API key found!");
-        println!("   Using model: {}", config.llm_config.as_ref().unwrap().model);
-        println!("   Base URL: {}", config.llm_config.as_ref().unwrap().base_url.as_ref().unwrap());
-        println!();
-        
-        run_demo(config).await?;
+    // CI-safe guard: if running in CI or without an API key, skip live calls.
+    let ci_running = std::env::var("CI").is_ok();
+    if ci_running || config.llm_config.as_ref().unwrap().api_key.is_none() {
+        println!("⚠️  Skipping live OpenRouter demo: no API key or CI detected.");
+        println!("   Set OPENROUTER_API_KEY and unset CI to run the full demo locally.");
+        return Ok(());
     }
+
+    println!("✅ OpenRouter API key found!");
+    println!("   Using model: {}", config.llm_config.as_ref().unwrap().model);
+    println!("   Base URL: {}", config.llm_config.as_ref().unwrap().base_url.as_ref().unwrap());
+    println!();
+
+    run_demo(config).await?;
 
     Ok(())
 }
@@ -123,6 +105,7 @@ mod tests {
                 max_tokens: Some(2000),
                 temperature: Some(0.7),
                 timeout_seconds: Some(60),
+                prompts: None,
             }),
             delegation_config: None,
             capability_config: rtfs_compiler::ccos::arbiter::CapabilityConfig::default(),

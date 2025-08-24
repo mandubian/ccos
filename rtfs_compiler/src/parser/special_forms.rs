@@ -924,12 +924,7 @@ pub(super) fn build_try_catch_expr(try_catch_expr_pair: Pair<Rule>) -> Result<Tr
         }
     }
 
-    if try_body_expressions.is_empty() {
-        return Err(PestParseError::InvalidInput { 
-            message: "try-catch requires a try block expression".to_string(), 
-            span: Some(try_catch_span.clone()) // Use overall span if try block is empty
-        });
-    }
+    // Allow empty try body. Semantics: evaluates to nil unless a catch handles an error or finally overrides via side effects.
 
     let mut catch_clauses = Vec::new();
     let mut finally_body: Option<Vec<Expression>> = None;
