@@ -1,9 +1,147 @@
 use super::types::*;
-use crate::runtime::error::RuntimeError;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::values::Value;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::path::Path;
+use std::any::Any;
+use tokio::fs;
+
+/// Enhanced discovery providers for different capability sources
+pub enum DiscoveryProvider {
+    /// Static built-in capabilities
+    Static(StaticDiscoveryProvider),
+    /// File-based manifest discovery
+    FileManifest(FileManifestDiscoveryProvider),
+    /// Network-based discovery (placeholder for future implementation)
+    Network(NetworkDiscoveryProvider),
+}
+
+/// Static discovery provider for built-in capabilities
+pub struct StaticDiscoveryProvider {
+    capabilities: Vec<CapabilityManifest>,
+}
+
+impl StaticDiscoveryProvider {
+    pub fn new() -> Self {
+        Self {
+            capabilities: vec![
+                // Add some static capabilities here
+                CapabilityManifest {
+                    id: "static.hello".to_string(),
+                    name: "Static Hello".to_string(),
+                    description: "A static hello capability".to_string(),
+                    provider: ProviderType::Local(LocalCapability {
+                        handler: Arc::new(|_| Ok(Value::String("Hello from static discovery!".to_string()))),
+                    }),
+                    version: "1.0.0".to_string(),
+                    input_schema: None,
+                    output_schema: None,
+                    attestation: None,
+                    provenance: Some(CapabilityProvenance {
+                        source: "static_discovery".to_string(),
+                        version: Some("1.0.0".to_string()),
+                        content_hash: "static_hello_hash".to_string(),
+                        custody_chain: vec!["static_discovery".to_string()],
+                        registered_at: chrono::Utc::now(),
+                    }),
+                    permissions: vec![],
+                    metadata: HashMap::new(),
+                },
+            ],
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CapabilityDiscovery for StaticDiscoveryProvider {
+    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+        Ok(self.capabilities.clone())
+    }
+    
+    fn name(&self) -> &str {
+        "StaticDiscovery"
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// File-based manifest discovery provider
+pub struct FileManifestDiscoveryProvider {
+    manifest_path: String,
+}
+
+impl FileManifestDiscoveryProvider {
+    pub fn new(manifest_path: String) -> Self {
+        Self { manifest_path }
+    }
+}
+
+#[async_trait::async_trait]
+impl CapabilityDiscovery for FileManifestDiscoveryProvider {
+    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+        if !Path::new(&self.manifest_path).exists() {
+            return Ok(vec![]); // Return empty if file doesn't exist
+        }
+
+        let content = fs::read_to_string(&self.manifest_path).await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read manifest file: {}", e)))?;
+
+        // For now, return empty since we don't have serde support
+        // In a real implementation, you'd parse JSON manifests here
+        eprintln!("File manifest discovery not yet implemented for: {}", self.manifest_path);
+        Ok(vec![])
+    }
+    
+    fn name(&self) -> &str {
+        "FileManifestDiscovery"
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Network discovery provider (placeholder for future implementation)
+pub struct NetworkDiscoveryProvider {
+    endpoint_url: String,
+    timeout_seconds: u64,
+}
+
+impl NetworkDiscoveryProvider {
+    pub fn new(endpoint_url: String, timeout_seconds: u64) -> Self {
+        Self {
+            endpoint_url,
+            timeout_seconds,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CapabilityDiscovery for NetworkDiscoveryProvider {
+    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+        // Placeholder implementation - in real implementation, this would:
+        // 1. Make HTTP request to endpoint_url
+        // 2. Parse response for capability manifests
+        // 3. Validate and return discovered capabilities
+        
+        // For now, return empty vector to avoid network dependencies
+        eprintln!("Network discovery not yet implemented for endpoint: {}", self.endpoint_url);
+        Ok(vec![])
+    }
+    
+    fn name(&self) -> &str {
+        "NetworkDiscovery"
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 pub struct NetworkDiscoveryAgent {
     pub(crate) registry_endpoint: String,
@@ -113,6 +251,14 @@ impl CapabilityDiscovery for NetworkDiscoveryAgent {
         };
         Ok(capabilities)
     }
+    
+    fn name(&self) -> &str {
+        "NetworkDiscoveryAgent"
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 pub struct LocalFileDiscoveryAgent {
@@ -151,6 +297,14 @@ impl CapabilityDiscovery for LocalFileDiscoveryAgent {
             }
         }
         Ok(manifests)
+    }
+    
+    fn name(&self) -> &str {
+        "LocalFileDiscoveryAgent"
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
