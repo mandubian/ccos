@@ -10,8 +10,22 @@ The delegation system consists of several components:
 
 1. **AgentConfig DelegationConfig** - Top-level configuration in agent config
 2. **Arbiter DelegationConfig** - Runtime configuration for the delegating arbiter
-3. **Agent Registry** - Registry of available agents with capabilities
+3. **Agent Registry** - Registry of available agents with skills/capabilities
 4. **Delegating Arbiter** - LLM-driven arbiter that can delegate to specialized agents
+
+### Important Distinction: Agents vs Capabilities
+
+**Agents** (AgentRegistry) are **composite cognitive services** that can handle entire intents:
+- Accept high-level goals and return plans or results
+- Have skills, trust scores, and performance metrics
+- Operate at intent granularity (dozens of agents)
+
+**Capabilities** (CapabilityRegistry) are **atomic operations**:
+- Execute single, deterministic functions
+- Have schemas, permissions, and attestation
+- Operate at call granularity (thousands of capabilities)
+
+See [Spec 018 - Agent Registry & Discovery Layers](018-agent-registry-and-discovery-layers.md) for the complete architectural separation.
 
 ## Configuration Structure
 
@@ -55,7 +69,8 @@ pub struct AgentDefinition {
     pub agent_id: String,
     /// Agent name/description
     pub name: String,
-    /// Agent capabilities
+    /// Agent skills/capabilities (for matching, not execution)
+    /// Note: These are skill tags for delegation matching, not executable capabilities
     pub capabilities: Vec<String>,
     /// Agent cost (per request)
     pub cost: f64,
@@ -66,9 +81,36 @@ pub struct AgentDefinition {
 }
 ```
 
-## Configuration Examples
+## Current Implementation vs Specification
 
-### Basic Delegation Configuration
+### Implementation Status
+The current implementation provides a **simplified foundation** for delegation:
+
+- **`AgentDefinition`**: Basic structure with essential fields for Milestone 3
+- **`AgentRegistryConfig`**: Simple in-memory registry configuration
+- **Delegation Logic**: Basic skill matching and trust score evaluation
+
+### Relationship to Spec 018
+This implementation is **compatible with** but **simpler than** the full `AgentDescriptor` specification:
+
+| Current Implementation | Spec 018 AgentDescriptor |
+|------------------------|--------------------------|
+| `agent_id` | `agent_id` |
+| `name` | `name` (implied) |
+| `capabilities` (skills) | `skills` |
+| `cost` | `cost_model` (simplified) |
+| `trust_score` | `trust_tier` (simplified) |
+| `metadata` | Various fields (simplified) |
+| ❌ Missing | `kind`, `supported_constraints`, `latency`, `historical_performance`, etc. |
+
+### Migration Path
+The current implementation can be **extended incrementally** to support the full specification:
+1. Add new fields as optional (backward compatible)
+2. Implement enhanced matching algorithms
+3. Add governance and security features
+4. Support advanced delegation scenarios
+
+## Configuration Examples
 
 ```rust
 let mut agent_config = AgentConfig::default();
@@ -183,12 +225,33 @@ When configuration values are not specified, the following defaults are used:
 
 ## Delegation Process
 
+### Current Implementation (Milestone 3)
 1. **Request Analysis**: The delegating arbiter analyzes the natural language request
-2. **Capability Extraction**: Required capabilities are identified
-3. **Agent Matching**: Agents are matched based on capabilities and trust scores
+2. **Skill Extraction**: Required skills are identified from the request
+3. **Agent Matching**: Agents are matched based on skill overlap and trust scores
 4. **Threshold Check**: Only agents above the threshold are considered
 5. **Delegation Decision**: The best matching agent is selected for delegation
 6. **Plan Generation**: A delegation plan is generated for the selected agent
+
+### Example Delegation Flow
+```
+User Request: "Analyze the sentiment of customer feedback"
+
+1. Skill Extraction: ["sentiment_analysis", "text_processing"]
+2. Agent Matching: 
+   - sentiment_agent: skills=["sentiment_analysis", "text_processing"], trust=0.9
+   - general_agent: skills=["general"], trust=0.7
+3. Selection: sentiment_agent (better skill match + higher trust)
+4. Delegation: Send intent to sentiment_agent
+5. Result: Agent returns plan or direct result
+```
+
+### Future Enhancement (Spec 018)
+The delegation process will evolve to include:
+- **Constraint Matching**: Budget, data locality, compliance requirements
+- **Performance Prediction**: Latency and cost estimation
+- **Multi-Agent Consideration**: Complex delegation scenarios
+- **Governance Validation**: Trust tier vs intent sensitivity matrix
 
 ## Testing
 
@@ -239,6 +302,33 @@ println!("Available agents: {}", registry.agents.len());
 println!("Selected agent: {}", selected_agent.agent_id);
 ```
 
+## Implementation Status and Roadmap
+
+### Current Implementation (Milestone 3)
+The current `AgentDefinition` is a simplified version for initial delegation support:
+
+- **Basic Fields**: `agent_id`, `name`, `capabilities` (skills), `cost`, `trust_score`, `metadata`
+- **Purpose**: Enable delegation configuration and basic agent matching
+- **Scope**: In-memory registry with simple skill-based matching
+
+### Future Evolution (Post-Milestone 4)
+The system will evolve toward the full `AgentDescriptor` specification from [Spec 018](018-agent-registry-and-discovery-layers.md):
+
+**Planned Additional Fields:**
+- `kind` (planner | analyzer | synthesizer | remote-arbiter | composite)
+- `supported_constraints` (budget, data locality, compliance labels)
+- `latency` (p50/p95 distribution)
+- `historical_performance` (success rate, calibration metrics)
+- `isolation_requirements` (network, data domains)
+- `provenance` (signature, build hash)
+- `quotas` (rate limits)
+
+**Enhanced Features:**
+- Embedding-based semantic retrieval
+- Multi-agent consensus for high-risk intents
+- Adaptive trust tier promotion/demotion
+- Federated agent trust recalibration
+
 ## Future Enhancements
 
 Planned improvements include:
@@ -248,3 +338,6 @@ Planned improvements include:
 3. **Load Balancing**: Distribute requests across multiple agents
 4. **Health Monitoring**: Track agent health and availability
 5. **Performance Metrics**: Detailed performance tracking and reporting
+6. **Advanced Agent Descriptors**: Full implementation of Spec 018 AgentDescriptor
+7. **Semantic Skill Matching**: Vector-based agent discovery
+8. **Multi-Agent Orchestration**: Complex delegation scenarios
