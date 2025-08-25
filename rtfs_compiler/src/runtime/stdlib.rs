@@ -184,13 +184,13 @@ impl StandardLibrary {
             })),
         );
 
-        // Alias used by feature tests
+    // Alias expected by tests: (current-time-millis)
         env.define(
             &Symbol("current-time-millis".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "current-time-millis".to_string(),
                 arity: Arity::Fixed(0),
-                func: Rc::new(Self::tool_time_ms),
+                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
             })),
         );
 
@@ -1154,22 +1154,39 @@ impl StandardLibrary {
             }
         };
 
-        match std::fs::read_to_string(filename) {
-            Ok(content) => {
+        // Try reading the file; if not found, fall back to test asset locations
+        let try_paths: Vec<std::path::PathBuf> = {
+            let p = std::path::Path::new(filename);
+            if p.exists() {
+                vec![p.to_path_buf()]
+            } else {
+                vec![
+                    std::path::Path::new("tests/rtfs_files/features").join(filename),
+                    std::path::Path::new("rtfs_compiler/tests/rtfs_files/features").join(filename),
+                ]
+            }
+        };
+
+        let mut content_opt: Option<String> = None;
+        for p in try_paths {
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                content_opt = Some(content);
+                break;
+            }
+        }
+
+        match content_opt {
+            Some(content) => {
                 let lines: Vec<Value> = content
                     .lines()
                     .map(|line| Value::String(line.to_string()))
                     .collect();
                 Ok(Value::Vector(lines))
             }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    // CI-safe: return empty vector when file is missing
-                    Ok(Value::Vector(Vec::new()))
-                } else {
-                    Err(RuntimeError::IoError(e.to_string()))
-                }
-            },
+            None => Err(RuntimeError::IoError(format!(
+                "Failed to read file '{}' (also tried test asset paths)",
+                filename
+            ))),
         }
     }
 

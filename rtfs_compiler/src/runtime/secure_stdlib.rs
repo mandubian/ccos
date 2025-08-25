@@ -458,6 +458,40 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // Map find: (find m k) -> [k v] or nil
+        env.define(
+            &Symbol("find".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "find".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch { function: "find".into(), expected: "2".into(), actual: args.len() });
+                    }
+                    let map_value = &args[0];
+                    let key_value = &args[1];
+                    let (map, key) = match (map_value, key_value) {
+                        (Value::Map(m), Value::Keyword(kw)) => (m, MapKey::Keyword(kw.clone())),
+                        (Value::Map(m), Value::String(s)) => (m, MapKey::String(s.clone())),
+                        (Value::Map(m), Value::Integer(i)) => (m, MapKey::Integer(*i)),
+                        (other, _) => {
+                            return Err(RuntimeError::TypeError { expected: "map".into(), actual: other.type_name().into(), operation: "find".into() })
+                        }
+                    };
+                    if let Some(v) = map.get(&key) {
+                        let key_val = match key {
+                            MapKey::Keyword(ref k) => Value::Keyword(k.clone()),
+                            MapKey::String(ref s) => Value::String(s.clone()),
+                            MapKey::Integer(i) => Value::Integer(i),
+                        };
+                        Ok(Value::Vector(vec![key_val, v.clone()]))
+                    } else {
+                        Ok(Value::Nil)
+                    }
+                }),
+            })),
+        );
+
         // Nth function - access element by index
         env.define(
             &Symbol("nth".to_string()),
