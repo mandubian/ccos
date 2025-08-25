@@ -15,8 +15,8 @@ program = { SOI ~ (module_definition | expression)* ~ EOI }
 // Removed function_call, relying on list + parser heuristic
 // Include anonymous and shorthand function forms before other possibilities so they capture '#(' sequences
 // and method-call style tokens ('.method'). Keep explicit order for precedence.
-// Order matters: parse task_context_access/resource_ref before generic symbol so "@foo" isn't treated as a plain symbol
-expression = _{ shorthand_fn | anon_fn | method_call_expr | literal | keyword | task_context_access | resource_ref | symbol | special_form | list | vector | map }
+// Ensure task_context_access (e.g., "@plan-id") takes precedence over generic symbols
+expression = _{ shorthand_fn | anon_fn | method_call_expr | literal | keyword | task_context_access | symbol | resource_ref | special_form | list | vector | map }
 
 // --- Basic Values ---
 
@@ -42,11 +42,11 @@ nil     = @{ "nil" ~ !identifier_chars }
 
 // --- Identifiers & Symbols ---
 // Based on grammar_spec.md, allowing common Lisp chars. '.' is for ns, '-' is common.
-// Allow dot-prefixed identifiers and shorthand placeholders like % for context tokens
+// Allow dot-prefixed identifiers and shorthand placeholders like % and @ for context tokens
 dot_prefixed_identifier = @{ "." ~ (ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" ) ~ (ASCII_ALPHANUMERIC | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | ".")* }
 
-identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" }
-identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
+identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" | "@" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | "@" }
 identifier            = @{ dot_prefixed_identifier | (identifier_start_char ~ identifier_chars*) }
 
 // --- Versioned Namespacing Extension ---
