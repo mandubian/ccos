@@ -6,4 +6,5 @@
     },
     "github.copilot.chat.agent.thinkingTool": true,
     "chat.tools.autoApprove": true,
+    // "remote.SSH.httpsProxy": "",
 }
