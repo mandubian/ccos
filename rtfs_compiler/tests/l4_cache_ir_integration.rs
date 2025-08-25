@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::rc::Rc;
 
 use bincode;
 use rtfs_compiler::{
@@ -75,7 +74,7 @@ fn test_ir_cached_execution() {
         Value::Function(Function::Builtin(BuiltinFunction {
             name: "+".to_string(),
             arity: Arity::Variadic(2),
-            func: std::rc::Rc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+            func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                 let sum = args
                     .iter()
                     .map(|v| match v {

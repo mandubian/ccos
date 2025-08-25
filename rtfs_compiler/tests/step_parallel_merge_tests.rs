@@ -19,7 +19,7 @@ fn test_step_parallel_deep_merge_policy() {
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("cc")));
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let evaluator = Evaluator::new(module_registry, de, RuntimeContext::pure(), host.clone());
 

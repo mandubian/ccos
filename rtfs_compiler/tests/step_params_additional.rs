@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 
 #[test]
 fn step_params_evaluation_error_prevents_body() -> Result<(), String> {
-    let module_registry = std::rc::Rc::new(ModuleRegistry::new());
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let delegation_engine = std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();
@@ -60,7 +60,7 @@ fn step_params_evaluation_error_prevents_body() -> Result<(), String> {
 
 #[test]
 fn step_params_non_string_key_rejected() -> Result<(), String> {
-    let module_registry = std::rc::Rc::new(ModuleRegistry::new());
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let delegation_engine = std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();
@@ -106,7 +106,7 @@ fn step_params_non_string_key_rejected() -> Result<(), String> {
 
 #[test]
 fn step_params_shadowing_for_nested_steps() -> Result<(), String> {
-    let module_registry = std::rc::Rc::new(ModuleRegistry::new());
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let delegation_engine = std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();

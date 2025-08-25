@@ -19,14 +19,14 @@ use crate::runtime::evaluator::Evaluator;
 use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
-use std::rc::Rc;
+// removed Rc: use Arc for shared ownership
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The Standard Library for the RTFS runtime.
@@ -93,7 +93,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/open-file".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_open_file),
+                func: Arc::new(|args: Vec<Value>| Self::tool_open_file(args)),
             })),
         );
 
@@ -103,7 +103,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/http-fetch".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_http_fetch),
+                func: Arc::new(|args: Vec<Value>| Self::tool_http_fetch(args)),
             })),
         );
 
@@ -112,7 +112,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "http-fetch".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_http_fetch),
+                func: std::sync::Arc::new(Self::tool_http_fetch),
             })),
         );
 
@@ -122,7 +122,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "http/get".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 {
                         return Err(RuntimeError::ArityMismatch { function: "http/get".to_string(), expected: "1".to_string(), actual: args.len() });
                     }
@@ -145,7 +145,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "db/query".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 {
                         return Err(RuntimeError::ArityMismatch { function: "db/query".to_string(), expected: "1".to_string(), actual: args.len() });
                     }
@@ -170,7 +170,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/log".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::tool_log),
+                func: Arc::new(|args: Vec<Value>| Self::tool_log(args)),
             })),
         );
 
@@ -180,17 +180,17 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/time-ms".to_string(),
                 arity: Arity::Fixed(0),
-                func: Rc::new(Self::tool_time_ms),
+                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
             })),
         );
 
-        // Alias used by feature tests
+    // Alias expected by tests: (current-time-millis)
         env.define(
             &Symbol("current-time-millis".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "current-time-millis".to_string(),
                 arity: Arity::Fixed(0),
-                func: Rc::new(Self::tool_time_ms),
+                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
             })),
         );
 
@@ -200,7 +200,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/serialize-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_serialize_json),
+                func: Arc::new(|args: Vec<Value>| Self::tool_serialize_json(args)),
             })),
         );
 
@@ -209,7 +209,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "serialize-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_serialize_json),
+                func: Arc::new(|args: Vec<Value>| Self::tool_serialize_json(args)),
             })),
         );
 
@@ -218,7 +218,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/parse-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_parse_json),
+                func: Arc::new(|args: Vec<Value>| Self::tool_parse_json(args)),
             })),
         );
 
@@ -227,7 +227,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "parse-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::tool_parse_json),
+                func: Arc::new(|args: Vec<Value>| Self::tool_parse_json(args)),
             })),
         );
 
@@ -237,7 +237,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "println".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::println),
+                func: Arc::new(|args: Vec<Value>| Self::println(args)),
             })),
         );
 
@@ -247,7 +247,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "thread/sleep".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::thread_sleep),
+                func: Arc::new(|args: Vec<Value>| Self::thread_sleep(args)),
             })),
         );
 
@@ -257,7 +257,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "read-lines".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::read_lines),
+                func: Arc::new(|args: Vec<Value>| Self::read_lines(args)),
             })),
         );
 
@@ -267,7 +267,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "step".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::step),
+                func: Arc::new(|args: Vec<Value>| Self::step(args)),
             })),
         );
 
@@ -279,7 +279,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "keys".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::keys),
+                func: Arc::new(|args: Vec<Value>| Self::keys(args)),
             })),
         );
 
@@ -289,7 +289,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "vals".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::vals),
+                func: Arc::new(|args: Vec<Value>| Self::vals(args)),
             })),
         );
 
@@ -299,7 +299,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "find".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::find),
+                func: Arc::new(Self::find),
             })),
         );
 
@@ -309,7 +309,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "update".to_string(),
                 arity: Arity::Variadic(3), // allow 3 or 4, runtime validates upper bound
-                func: Rc::new(Self::update),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::update(args, evaluator, env)
+                }),
             })),
         );
 
@@ -319,7 +321,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "atom".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::atom_new),
+                func: Arc::new(|args: Vec<Value>| Self::atom_new(args)),
             })),
         );
         env.define(
@@ -327,7 +329,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "deref".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::atom_deref),
+                func: Arc::new(|args: Vec<Value>| Self::atom_deref(args)),
             })),
         );
         env.define(
@@ -335,7 +337,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "reset!".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::atom_reset),
+                func: Arc::new(|args: Vec<Value>| Self::atom_reset(args)),
             })),
         );
         env.define(
@@ -343,7 +345,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "swap!".to_string(),
                 arity: Arity::Variadic(2), // (swap! a f & args)
-                func: Rc::new(Self::atom_swap),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::atom_swap(args, evaluator, env)
+                }),
             })),
         );
         env.define(
@@ -351,7 +355,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "coordinate-work".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::coordinate_work_stub),
+                func: std::sync::Arc::new(Self::coordinate_work_stub),
             })),
         );
     }
@@ -366,7 +370,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "println".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::println),
+                func: std::sync::Arc::new(Self::println),
             })),
         );
 
@@ -376,7 +380,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "thread/sleep".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::thread_sleep),
+                func: std::sync::Arc::new(Self::thread_sleep),
             })),
         );
 
@@ -386,7 +390,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "read-lines".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::read_lines),
+                func: std::sync::Arc::new(Self::read_lines),
             })),
         );
 
@@ -396,7 +400,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "step".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::step),
+                func: std::sync::Arc::new(Self::step),
             })),
         );
 
@@ -408,7 +412,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "keys".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::keys),
+                func: std::sync::Arc::new(Self::keys),
             })),
         );
 
@@ -418,7 +422,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "vals".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::vals),
+                func: std::sync::Arc::new(Self::vals),
             })),
         );
 
@@ -428,7 +432,7 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "update".to_string(),
                 arity: Arity::Variadic(3),
-                func: Rc::new(Self::update),
+                func: std::sync::Arc::new(Self::update),
             })),
         );
 
@@ -438,7 +442,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "getMessage".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 {
                         return Err(RuntimeError::ArityMismatch { function: "getMessage".to_string(), expected: "1".to_string(), actual: args.len() });
                     }
@@ -455,7 +459,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "process-data".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::process_data),
+                func: std::sync::Arc::new(Self::process_data),
             })),
         );
         env.define(
@@ -463,7 +467,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "read-file".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::read_file),
+                func: std::sync::Arc::new(Self::read_file),
             })),
         );
     // set! is an evaluator special-form; not registered here.
@@ -472,7 +476,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "deftype".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::deftype),
+                func: std::sync::Arc::new(Self::deftype),
             })),
         );
 
@@ -482,7 +486,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "Exception.".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.is_empty() {
                         return Err(RuntimeError::ArityMismatch { function: "Exception.".to_string(), expected: "1+".to_string(), actual: args.len() });
                     }
@@ -501,7 +505,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "throw".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 { 
                         return Err(RuntimeError::ArityMismatch { function: "throw".to_string(), expected: "1".to_string(), actual: args.len() });
                     }
@@ -520,7 +524,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "first".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::first),
+                func: std::sync::Arc::new(Self::first),
             })),
         );
 
@@ -530,7 +534,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "rest".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::rest),
+                func: std::sync::Arc::new(Self::rest),
             })),
         );
 
@@ -540,7 +544,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "nth".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::nth),
+                func: std::sync::Arc::new(Self::nth),
             })),
         );
 
@@ -550,47 +554,47 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "range".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::range),
+                func: std::sync::Arc::new(Self::range),
             })),
         );
 
-        // Predicate functions: even?
+    // Predicate functions: even?
         env.define(
             &Symbol("even?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "even?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::even),
+        func: Arc::new(|args: Vec<Value>| Self::even(args)),
             })),
         );
 
-        // Predicate functions: odd?
+    // Predicate functions: odd?
         env.define(
             &Symbol("odd?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "odd?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::odd),
+        func: Arc::new(|args: Vec<Value>| Self::odd(args)),
             })),
         );
 
-        // Arithmetic functions: inc
+    // Arithmetic functions: inc
         env.define(
             &Symbol("inc".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "inc".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::inc),
+        func: Arc::new(|args: Vec<Value>| Self::inc(args)),
             })),
         );
 
-        // String functions: str
+    // String functions: str
         env.define(
             &Symbol("str".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "str".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::str),
+        func: Arc::new(|args: Vec<Value>| Self::str(args)),
             })),
         );
 
@@ -600,7 +604,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "map".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::map),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::map(args, evaluator, env)
+                }),
             })),
         );
 
@@ -610,7 +616,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "filter".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::filter),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::filter(args, evaluator, env)
+                }),
             })),
         );
 
@@ -620,7 +628,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "reduce".to_string(),
                 arity: Arity::Range(2, 3),
-                func: Rc::new(Self::reduce),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::reduce(args, evaluator, env)
+                }),
             })),
         );
 
@@ -630,7 +640,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "remove".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::remove),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::remove(args, evaluator, env)
+                }),
             })),
         );
 
@@ -640,7 +652,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "some?".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::some),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::some(args, evaluator, env)
+                }),
             })),
         );
 
@@ -650,17 +664,19 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "every?".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::every),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::every(args, evaluator, env)
+                }),
             })),
         );
 
-        // Sorting functions: sort
+    // Sorting functions: sort
         env.define(
             &Symbol("sort".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "sort".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::sort),
+        func: Arc::new(|args: Vec<Value>| Self::sort(args)),
             })),
         );
 
@@ -670,47 +686,49 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "sort-by".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::sort_by),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::sort_by(args, evaluator, env)
+                }),
             })),
         );
 
-        // Collection analysis: frequencies
+    // Collection analysis: frequencies
         env.define(
             &Symbol("frequencies".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "frequencies".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::frequencies),
+        func: Arc::new(|args: Vec<Value>| Self::frequencies(args)),
             })),
         );
 
-        // Collection utilities: distinct
+    // Collection utilities: distinct
         env.define(
             &Symbol("distinct".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "distinct".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::distinct),
+        func: Arc::new(|args: Vec<Value>| Self::distinct(args)),
             })),
         );
 
-        // Map utilities: merge
+    // Map utilities: merge
         env.define(
             &Symbol("merge".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "merge".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::merge),
+        func: Arc::new(|args: Vec<Value>| Self::merge(args)),
             })),
         );
 
-        // Collection utilities: contains?
+    // Collection utilities: contains?
         env.define(
             &Symbol("contains?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "contains?".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::contains),
+        func: Arc::new(|args: Vec<Value>| Self::contains(args)),
             })),
         );
 
@@ -720,7 +738,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "map-indexed".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::map_indexed),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::map_indexed(args, evaluator, env)
+                }),
             })),
         );
 
@@ -730,7 +750,9 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "some".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::some),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::some(args, evaluator, env)
+                }),
             })),
         );
 
@@ -740,37 +762,39 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "every?".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::every),
+                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                    Self::every(args, evaluator, env)
+                }),
             })),
         );
 
-        // String functions: str
+    // String functions: str
         env.define(
             &Symbol("str".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "str".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::str),
+        func: Arc::new(|args: Vec<Value>| Self::str(args)),
             })),
         );
 
-        // Number functions: inc
+    // Number functions: inc
         env.define(
             &Symbol("inc".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "inc".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::inc),
+        func: Arc::new(|args: Vec<Value>| Self::inc(args)),
             })),
         );
 
-        // Predicate functions: odd?
+    // Predicate functions: odd?
         env.define(
             &Symbol("odd?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "odd?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::odd),
+        func: Arc::new(|args: Vec<Value>| Self::odd(args)),
             })),
         );
     }
@@ -786,7 +810,7 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "call".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::call_capability),
+                func: std::sync::Arc::new(Self::call_capability),
             })),
         );
     }
@@ -1130,22 +1154,39 @@ impl StandardLibrary {
             }
         };
 
-        match std::fs::read_to_string(filename) {
-            Ok(content) => {
+        // Try reading the file; if not found, fall back to test asset locations
+        let try_paths: Vec<std::path::PathBuf> = {
+            let p = std::path::Path::new(filename);
+            if p.exists() {
+                vec![p.to_path_buf()]
+            } else {
+                vec![
+                    std::path::Path::new("tests/rtfs_files/features").join(filename),
+                    std::path::Path::new("rtfs_compiler/tests/rtfs_files/features").join(filename),
+                ]
+            }
+        };
+
+        let mut content_opt: Option<String> = None;
+        for p in try_paths {
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                content_opt = Some(content);
+                break;
+            }
+        }
+
+        match content_opt {
+            Some(content) => {
                 let lines: Vec<Value> = content
                     .lines()
                     .map(|line| Value::String(line.to_string()))
                     .collect();
                 Ok(Value::Vector(lines))
             }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    // CI-safe: return empty vector when file is missing
-                    Ok(Value::Vector(Vec::new()))
-                } else {
-                    Err(RuntimeError::IoError(e.to_string()))
-                }
-            },
+            None => Err(RuntimeError::IoError(format!(
+                "Failed to read file '{}' (also tried test asset paths)",
+                filename
+            ))),
         }
     }
 
@@ -2438,14 +2479,14 @@ impl StandardLibrary {
     /// Atoms: (atom v)
     fn atom_new(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 { return Err(RuntimeError::ArityMismatch { function: "atom".into(), expected: "1".into(), actual: args.len() }); }
-        Ok(Value::Atom(Rc::new(RefCell::new(args[0].clone()))))
+        Ok(Value::Atom(Arc::new(RwLock::new(args[0].clone()))))
     }
 
     /// (deref a)
     fn atom_deref(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 { return Err(RuntimeError::ArityMismatch { function: "deref".into(), expected: "1".into(), actual: args.len() }); }
         match &args[0] {
-            Value::Atom(rc) => Ok(rc.borrow().clone()),
+            Value::Atom(rc) => Ok(rc.read().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))?.clone()),
             other => Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "deref".into() })
         }
     }
@@ -2454,7 +2495,7 @@ impl StandardLibrary {
     fn atom_reset(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 2 { return Err(RuntimeError::ArityMismatch { function: "reset!".into(), expected: "2".into(), actual: args.len() }); }
         match &args[0] {
-            Value::Atom(rc) => { *rc.borrow_mut() = args[1].clone(); Ok(args[1].clone()) }
+            Value::Atom(rc) => { *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = args[1].clone(); Ok(args[1].clone()) }
             other => Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "reset!".into() })
         }
     }
@@ -2463,14 +2504,14 @@ impl StandardLibrary {
     fn atom_swap(args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
         if args.len() < 2 { return Err(RuntimeError::ArityMismatch { function: "swap!".into(), expected: "at least 2".into(), actual: args.len() }); }
         let (atom_val, f_val, rest) = (&args[0], &args[1], &args[2..]);
-        let rc = match atom_val { Value::Atom(rc) => rc.clone(), other => return Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "swap!".into() }) };
-        // Build call args current, rest...
-        let current = rc.borrow().clone();
+    let rc = match atom_val { Value::Atom(rc) => rc.clone(), other => return Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "swap!".into() }) };
+    // Build call args current, rest...
+    let current = rc.read().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))?.clone();
         let mut call_args = Vec::with_capacity(1 + rest.len());
         call_args.push(current);
         call_args.extend_from_slice(rest);
         let new_val = evaluator.call_function(f_val.clone(), &call_args, env)?;
-        *rc.borrow_mut() = new_val.clone();
+    *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = new_val.clone();
         Ok(new_val)
     }
 
@@ -2683,8 +2724,8 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
                 forms: vec![],
                 source_location: None,
             },
-            exports: RefCell::new(exports),
-            namespace: Rc::new(RefCell::new(IrEnvironment::new())),
+            exports: std::sync::RwLock::new(exports),
+            namespace: std::sync::Arc::new(std::sync::RwLock::new(IrEnvironment::new())),
             dependencies: vec![],
         };
 

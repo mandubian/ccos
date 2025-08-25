@@ -12,9 +12,8 @@ use crate::runtime::host::RuntimeHost;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::capability_registry::CapabilityRegistry;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
-use std::cell::RefCell;
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
 
 /// Creates a new capability registry wrapped in Arc<RwLock<>>
@@ -35,9 +34,9 @@ pub fn create_capability_marketplace_with_registry(
     CapabilityMarketplace::new(registry)
 }
 
-/// Creates a new causal chain wrapped in Rc<RefCell<>>
-pub fn create_causal_chain() -> Rc<RefCell<CausalChain>> {
-    Rc::new(RefCell::new(CausalChain::new().unwrap()))
+/// Creates a new causal chain wrapped in Arc<Mutex<>>
+pub fn create_causal_chain() -> std::sync::Arc<std::sync::Mutex<CausalChain>> {
+    std::sync::Arc::new(std::sync::Mutex::new(CausalChain::new().unwrap()))
 }
 
 /// Creates a new delegation engine with empty configuration
@@ -45,9 +44,9 @@ pub fn create_delegation_engine() -> Arc<StaticDelegationEngine> {
     Arc::new(StaticDelegationEngine::new(HashMap::new()))
 }
 
-/// Creates a new module registry wrapped in Rc<>
-pub fn create_module_registry() -> Rc<ModuleRegistry> {
-    Rc::new(ModuleRegistry::new())
+/// Creates a new module registry wrapped in Arc<>
+pub fn create_module_registry() -> Arc<ModuleRegistry> {
+    Arc::new(ModuleRegistry::new())
 }
 
 /// Creates a runtime host with the specified security context

@@ -14,19 +14,33 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```rust,no_run
 //! use rtfs_compiler::ccos::arbiter::{
 //!     ArbiterConfig,
 //!     ArbiterFactory,
 //!     ArbiterEngine,
 //! };
+//! use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
+//! use std::sync::{Arc, Mutex};
 //!
-//! // Create arbiter from configuration
-//! let config = ArbiterConfig::default();
-//! let arbiter = ArbiterFactory::create_arbiter(config, intent_graph, None).await?;
+//! // Create a Tokio runtime for async operations in this example
+//! let rt = tokio::runtime::Runtime::new().unwrap();
+//! rt.block_on(async {
+//!     // Create arbiter from configuration
+//!     let config = ArbiterConfig::default();
+//!     let intent_graph = Arc::new(Mutex::new(IntentGraph::new().unwrap()));
 //!
-//! // Process natural language request
-//! let result = arbiter.process_natural_language("Analyze sentiment", None).await?;
+//!     // Instantiate arbiter
+//!     let arbiter = ArbiterFactory::create_arbiter(config, intent_graph, None)
+//!         .await
+//!         .expect("failed to create arbiter");
+//!
+//!     // Process natural language request
+//!     let _result = arbiter
+//!         .process_natural_language("Analyze sentiment", None)
+//!         .await
+//!         .expect("arbiter processing failed");
+//! });
 //! ```
 
 pub mod arbiter_config;

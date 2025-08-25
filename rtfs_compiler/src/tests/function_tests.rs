@@ -6,7 +6,6 @@ mod function_tests {
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
-    use std::rc::Rc;
     use crate::ccos::delegation::{StaticDelegationEngine, ExecTarget};
     use std::sync::Arc;
     use std::collections::HashMap;
@@ -172,7 +171,7 @@ mod function_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure(), host);
+    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure(), host);
         println!("Symbols in environment: {:?}", evaluator.env.symbol_names());
         println!(
             "Map lookupable: {:?}",
@@ -202,7 +201,7 @@ mod function_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context, host);
+    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), de, security_context, host);
         evaluator.eval_toplevel(&parsed)
     }
 }

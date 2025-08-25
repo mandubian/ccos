@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use rtfs_compiler::bytecode::WasmBackend;
@@ -50,7 +49,7 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
         capability_marketplace,
         security_context.clone(),
     ));
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let mut evaluator = Evaluator::new(Arc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let symbol_add = Symbol("add".to_string());
     // Create a dummy closure that won't actually be executed when delegation takes L4 path.
     let dummy_closure = Function::new_closure(
@@ -60,7 +59,7 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
             Pattern::Symbol(Symbol("y".to_string())),
         ],
         Box::new(rtfs_compiler::ast::Expression::Literal(Literal::Nil)),
-        Rc::new(Environment::new()),
+    Arc::new(Environment::new()),
         None,
     );
     evaluator.env.define(&symbol_add, Value::Function(dummy_closure));
@@ -100,7 +99,7 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(Rc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(Arc::new(module_registry), de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     let code = "(do (defn add [x y] nil) (add 1 2))";
     let expr = parse_expression(code).unwrap();

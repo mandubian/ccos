@@ -199,6 +199,19 @@ impl AgentConfigParser {
 
 The documentation is now **fully synchronized** with our MicroVM and security context implementation. All major features are properly documented with:
 
+## ➕ Storage Backend Updates (This Branch)
+
+- Updated `docs/ccos/specs/file_backend.md` to document:
+    - Sharded on-disk layout `aa/bb/<hash>.json`
+    - Atomic writes for data and `index.json`
+    - Integrity verification aligned with `index.json`
+- Updated `docs/ccos/specs/intent_backup_format.md` to document:
+    - v1.1 hybrid JSON+RTFS backup format
+    - Atomic write behavior in implementation
+- Code aligned:
+    - `FileArchive` uses deterministic sharded paths + persistent `index.json` with atomic writes
+    - `IntentStorage` backup/save use atomic writes
+
 - ✅ **Complete API documentation**
 - ✅ **Comprehensive examples**
 - ✅ **Integration guides**

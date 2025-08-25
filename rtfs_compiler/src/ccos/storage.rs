@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// 
 /// This trait enables content-addressable storage with automatic integrity verification.
 /// All archived entities must be serializable to ensure thread-safety and persistence.
-pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync {
+pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> {
     /// Generate a content hash for this entity
     fn content_hash(&self) -> String {
         let serialized = serde_json::to_string(self).unwrap_or_default();
@@ -33,7 +33,7 @@ pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> + Se
 /// 
 /// This trait provides the core storage interface used by all CCOS archives.
 /// Implementations must be thread-safe and support concurrent access.
-pub trait ContentAddressableArchive<T: Archivable>: Send + Sync {
+pub trait ContentAddressableArchive<T: Archivable> {
     /// Store an entity, returning its content hash
     fn store(&self, entity: T) -> Result<String, String>;
     
@@ -185,6 +185,8 @@ impl<T: Archivable> ContentAddressableArchive<T> for InMemoryArchive<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccos::storage_backends::file_archive::FileArchive;
+    use tempfile::tempdir;
     
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestEntity {
@@ -294,5 +296,27 @@ mod tests {
         assert!(stats.total_size_bytes > 0);
         assert!(stats.oldest_timestamp.is_some());
         assert!(stats.newest_timestamp.is_some());
+    }
+
+    #[test]
+    fn test_hash_stability_across_backends() {
+        // Same entity should produce the same content hash in memory and on disk
+        let entity = TestEntity {
+            id: "x".to_string(),
+            name: "Stable".to_string(),
+            value: 7,
+        };
+
+        // In-memory
+        let mem = InMemoryArchive::<TestEntity>::new();
+        let h1 = mem.store(entity.clone()).expect("mem store");
+
+        // File-backed
+        let dir = tempdir().unwrap();
+        let file = FileArchive::new(dir.path()).expect("file archive");
+        let h2 = <FileArchive as ContentAddressableArchive<TestEntity>>::store(&file, entity)
+            .expect("file store");
+
+        assert_eq!(h1, h2);
     }
 }

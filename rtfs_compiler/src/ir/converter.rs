@@ -1084,7 +1084,13 @@ impl<'a> IrConverter<'a> {
                 if let Some(registry) = self.module_registry {
                     if let Some(module) = registry.get_module(module_name) {
                         // Check exported functions/values
-                        if let Some(export) = module.exports.borrow().get(symbol_name) {
+                        let guard = match module.exports.read() {
+                            Ok(g) => g,
+                            Err(e) => {
+                                return Err(IrConversionError::InternalError { message: format!("RwLock poisoned: {}", e) });
+                            }
+                        };
+                        if let Some(export) = guard.get(symbol_name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: module_name.to_string(),
@@ -1117,7 +1123,13 @@ impl<'a> IrConverter<'a> {
                 // Check if it's available in the stdlib module
                 if let Some(registry) = self.module_registry {
                     if let Some(stdlib_module) = registry.get_module("stdlib") {
-                        if let Some(export) = stdlib_module.exports.borrow().get(&name) {
+                        let guard = match stdlib_module.exports.read() {
+                            Ok(g) => g,
+                            Err(e) => {
+                                return Err(IrConversionError::InternalError { message: format!("RwLock poisoned: {}", e) });
+                            }
+                        };
+                        if let Some(export) = guard.get(&name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: "stdlib".to_string(),

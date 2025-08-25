@@ -6,7 +6,6 @@ use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::env;
 
@@ -103,14 +102,14 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
                 capability_marketplace,
                 rtfs_compiler::runtime::security::RuntimeContext::full(),
             ));
-            let mut evaluator = Evaluator::with_environment(
-                Rc::new(ModuleRegistry::new()),
+            let evaluator = Evaluator::with_environment(
+                Arc::new(ModuleRegistry::new()),
                 stdlib_env,
                 delegation,
                 RuntimeContext::full(),
                 host,
             );
-            let exec_plan_name = plan_name.unwrap_or_else(|| "run-plan".to_string());
+            let _exec_plan_name = plan_name.unwrap_or_else(|| "run-plan".to_string());
             for (i, step_expr) in steps_vec.iter().enumerate() {
                 // TODO: Set execution context when HostInterface supports it
                 let normalized_step = normalize_keywords_to_strings(step_expr);

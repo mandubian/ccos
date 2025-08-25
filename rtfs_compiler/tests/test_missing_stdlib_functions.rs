@@ -1,5 +1,4 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use std::rc::Rc;
 use std::sync::Arc;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::evaluator::Evaluator;
@@ -9,7 +8,7 @@ use rtfs_compiler::runtime::values::Value;
 #[test]
 fn test_missing_stdlib_functions() {
     let mut env = StandardLibrary::create_global_environment();
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));

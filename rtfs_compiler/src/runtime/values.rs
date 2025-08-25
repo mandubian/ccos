@@ -8,12 +8,11 @@ use crate::runtime::error::RuntimeResult;
 use crate::runtime::Evaluator;
 use crate::runtime::IrEnvironment;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
     Nil,
     Boolean(bool),
@@ -25,7 +24,7 @@ pub enum Value {
     ResourceHandle(String),
     /// Mutable reference type used by atom/deref/reset!/swap!
     #[serde(skip_serializing, skip_deserializing)]
-    Atom(Rc<RefCell<Value>>),
+    Atom(Arc<RwLock<Value>>),
     Symbol(Symbol),
     Keyword(Keyword),
     Vector(Vec<Value>),
@@ -34,7 +33,7 @@ pub enum Value {
     #[serde(skip_serializing, skip_deserializing)]
     Function(Function),
     #[serde(skip_serializing, skip_deserializing)]
-    FunctionPlaceholder(Rc<RefCell<Value>>),
+    FunctionPlaceholder(Arc<RwLock<Value>>),
     Error(ErrorValue),
 }
 
@@ -243,23 +242,23 @@ pub struct ResourceHandle {
 pub struct BuiltinFunction {
     pub name: String,
     pub arity: Arity,
-    pub func: Rc<dyn Fn(Vec<Value>) -> RuntimeResult<Value>>,
+    pub func: Arc<dyn Fn(Vec<Value>) -> RuntimeResult<Value> + Send + Sync>,
 }
 
 #[derive(Clone)]
 pub struct BuiltinFunctionWithContext {
     pub name: String,
     pub arity: Arity,
-    pub func: Rc<dyn Fn(Vec<Value>, &Evaluator, &mut Environment) -> RuntimeResult<Value>>,
+    pub func: Arc<dyn Fn(Vec<Value>, &Evaluator, &mut Environment) -> RuntimeResult<Value> + Send + Sync>,
 }
 
 #[derive(Clone)]
 pub enum Function {
     Builtin(BuiltinFunction),
     BuiltinWithContext(BuiltinFunctionWithContext),
-    Closure(Rc<Closure>),
+    Closure(Arc<Closure>),
     Native(BuiltinFunction),
-    Ir(Rc<IrLambda>),
+    Ir(Arc<IrLambda>),
 }
 
 impl Function {
@@ -267,10 +266,10 @@ impl Function {
         params: Vec<Symbol>,
         param_patterns: Vec<crate::ast::Pattern>,
         body: Box<Expression>,
-        env: Rc<Environment>,
+        env: Arc<Environment>,
         delegation_hint: Option<crate::ast::DelegationHint>,
     ) -> Function {
-        Function::Closure(Rc::new(Closure {
+        Function::Closure(Arc::new(Closure {
             params,
             param_patterns,
             body,
@@ -283,9 +282,9 @@ impl Function {
         params: Vec<IrNode>,
         variadic_param: Option<Box<IrNode>>,
         body: Vec<IrNode>,
-        closure_env: Box<IrEnvironment>,
+    closure_env: Box<IrEnvironment>,
     ) -> Function {
-        Function::Ir(Rc::new(IrLambda {
+    Function::Ir(Arc::new(IrLambda {
             params,
             variadic_param,
             body,
@@ -314,8 +313,52 @@ impl PartialEq for Function {
             (Function::BuiltinWithContext(a), Function::BuiltinWithContext(b)) => {
                 a.name == b.name && a.arity == b.arity
             }
-            (Function::Closure(a), Function::Closure(b)) => Rc::ptr_eq(a, b),
-            (Function::Ir(a), Function::Ir(b)) => Rc::ptr_eq(a, b),
+            (Function::Closure(a), Function::Closure(b)) => Arc::ptr_eq(a, b),
+            (Function::Ir(a), Function::Ir(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        use Value::*;
+        match (self, other) {
+            (Nil, Nil) => true,
+            (Boolean(a), Boolean(b)) => a == b,
+            (Integer(a), Integer(b)) => a == b,
+            (Float(a), Float(b)) => a == b,
+            (String(a), String(b)) => a == b,
+            (Timestamp(a), Timestamp(b)) => a == b,
+            (Uuid(a), Uuid(b)) => a == b,
+            (ResourceHandle(a), ResourceHandle(b)) => a == b,
+            (Symbol(a), Symbol(b)) => a == b,
+            (Keyword(a), Keyword(b)) => a.0 == b.0,
+            (Vector(a), Vector(b)) => a == b,
+            (List(a), List(b)) => a == b,
+            (Map(a), Map(b)) => a == b,
+            (Error(a), Error(b)) => a == b,
+            (Function(a), Function(b)) => a == b,
+            (Atom(a), Atom(b)) | (FunctionPlaceholder(a), FunctionPlaceholder(b)) => {
+                // If pointers equal, they're equal
+                if Arc::ptr_eq(a, b) {
+                    return true;
+                }
+
+                // Acquire read locks in address order to avoid deadlocks
+                let pa = Arc::as_ptr(a) as usize;
+                let pb = Arc::as_ptr(b) as usize;
+
+                if pa <= pb {
+                    let ra = a.read().unwrap_or_else(|e| e.into_inner());
+                    let rb = b.read().unwrap_or_else(|e| e.into_inner());
+                    *ra == *rb
+                } else {
+                    let rb = b.read().unwrap_or_else(|e| e.into_inner());
+                    let ra = a.read().unwrap_or_else(|e| e.into_inner());
+                    *ra == *rb
+                }
+            }
             _ => false,
         }
     }
@@ -327,7 +370,7 @@ pub struct Closure {
     // Full parameter patterns to support destructuring during invocation
     pub param_patterns: Vec<crate::ast::Pattern>,
     pub body: Box<Expression>,
-    pub env: Rc<Environment>,
+    pub env: Arc<Environment>,
     pub delegation_hint: Option<crate::ast::DelegationHint>,
 }
 

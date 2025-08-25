@@ -16,7 +16,7 @@ use crate::runtime::microvm::{MicroVMFactory, ExecutionContext, MicroVMConfig};
 use crate::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use crate::ast::Keyword;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Registry of CCOS capabilities that require special execution
 pub struct CapabilityRegistry {
@@ -62,30 +62,30 @@ impl CapabilityRegistry {
         // Environment access capability
         self.capabilities.insert(
             "ccos.system.get-env".to_string(),
-            Capability {
+                Capability {
                 id: "ccos.system.get-env".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| Self::get_env_capability(args)),
+                func: Arc::new(|args| Self::get_env_capability(args)),
             },
         );
         
         // Time access capability
         self.capabilities.insert(
             "ccos.system.current-time".to_string(),
-            Capability {
+                Capability {
                 id: "ccos.system.current-time".to_string(),
                 arity: Arity::Fixed(0),
-                func: Rc::new(|args| Self::current_time_capability(args)),
+                func: Arc::new(|args| Self::current_time_capability(args)),
             },
         );
         
         // Timestamp capability
         self.capabilities.insert(
             "ccos.system.current-timestamp-ms".to_string(),
-            Capability {
+                Capability {
                 id: "ccos.system.current-timestamp-ms".to_string(),
                 arity: Arity::Fixed(0),
-                func: Rc::new(|args| Self::current_timestamp_ms_capability(args)),
+                func: Arc::new(|args| Self::current_timestamp_ms_capability(args)),
             },
         );
     }
@@ -97,7 +97,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.file-exists".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| Self::file_exists_capability(args)),
+                func: Arc::new(|args| Self::file_exists_capability(args)),
             },
         );
         
@@ -106,7 +106,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.open-file".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|args| Self::open_file_capability(args)),
+                func: Arc::new(|args| Self::open_file_capability(args)),
             },
         );
         
@@ -115,7 +115,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.read-line".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| Self::read_line_capability(args)),
+                func: Arc::new(|args| Self::read_line_capability(args)),
             },
         );
         
@@ -124,7 +124,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.write-line".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(|args| Self::write_line_capability(args)),
+                func: Arc::new(|args| Self::write_line_capability(args)),
             },
         );
         
@@ -133,7 +133,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.close-file".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| Self::close_file_capability(args)),
+                func: Arc::new(|args| Self::close_file_capability(args)),
             },
         );
         
@@ -143,7 +143,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.data.parse-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| Self::parse_json_capability(args)),
+                func: Arc::new(|args| Self::parse_json_capability(args)),
             },
         );
         
@@ -152,7 +152,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.data.serialize-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| Self::serialize_json_capability(args)),
+                func: Arc::new(|args| Self::serialize_json_capability(args)),
             },
         );
         
@@ -162,7 +162,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.log".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|args| Self::log_capability(args)),
+                func: Arc::new(|args| Self::log_capability(args)),
             },
         );
         
@@ -171,7 +171,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.print".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|args| Self::print_capability(args)),
+                func: Arc::new(|args| Self::print_capability(args)),
             },
         );
         
@@ -180,7 +180,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.println".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|args| Self::println_capability(args)),
+                func: Arc::new(|args| Self::println_capability(args)),
             },
         );
     }
@@ -192,7 +192,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.network.http-fetch".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|_args| {
+                func: Arc::new(|_args| {
                     // HTTP operations must be executed through MicroVM isolation
                     Err(RuntimeError::Generic(
                         "Network operations must be executed through MicroVM isolation. Use CapabilityRegistry::execute_capability_with_microvm()".to_string(),
@@ -209,7 +209,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.discover-agents".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(|args| Self::discover_agents_capability(args)),
+                func: Arc::new(|args| Self::discover_agents_capability(args)),
             },
         );
         
@@ -218,7 +218,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.task-coordination".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(|args| Self::task_coordination_capability(args)),
+                func: Arc::new(|args| Self::task_coordination_capability(args)),
             },
         );
         
@@ -227,7 +227,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.ask-human".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(|args| Self::ask_human_capability(args)),
+                func: Arc::new(|args| Self::ask_human_capability(args)),
             },
         );
         
@@ -236,7 +236,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.discover-and-assess-agents".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(|args| Self::discover_and_assess_agents_capability(args)),
+                func: Arc::new(|args| Self::discover_and_assess_agents_capability(args)),
             },
         );
         
@@ -245,7 +245,7 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.establish-system-baseline".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(|args| Self::establish_system_baseline_capability(args)),
+                func: Arc::new(|args| Self::establish_system_baseline_capability(args)),
             },
         );
     }

@@ -9,7 +9,7 @@ use rtfs_compiler::runtime::Value;
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::rc::Rc;
+// use std::rc::Rc; // legacy
 
 fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
     let parsed = parser::parse(input).expect("Failed to parse");
@@ -26,7 +26,7 @@ fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         capability_marketplace,
         security_context.clone(),
     ));
-    let mut evaluator = Evaluator::new(Rc::new(module_registry), de, security_context, host);
+    let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
     evaluator.eval_toplevel(&parsed)
 }
 

@@ -1,8 +1,8 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
 use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, IfExpr, Keyword, LetExpr,
-    Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr,
+ IfExpr, Keyword, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr};
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
@@ -13,19 +13,17 @@ use crate::runtime::security::RuntimeContext;
 use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, ValidationLevel, VerificationContext};
 use crate::ccos::types::ExecutionResult;
 use crate::ccos::execution_context::{ContextManager, IsolationLevel};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
 use crate::ccos::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
-use std::sync::{Arc, Mutex};
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
-
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 type SpecialFormHandler = fn(&Evaluator, &[Expression], &mut Environment) -> RuntimeResult<Value>;
 
 #[derive(Clone, Debug)]
 pub struct Evaluator {
-    module_registry: Rc<ModuleRegistry>,
+    module_registry: Arc<ModuleRegistry>,
     pub env: Environment,
     recursion_depth: usize,
     max_recursion_depth: usize,
@@ -81,7 +79,7 @@ impl Evaluator {
 
     /// Create a new evaluator with secure environment and default security context
     pub fn new(
-        module_registry: Rc<ModuleRegistry>, 
+        module_registry: Arc<ModuleRegistry>, 
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
@@ -110,7 +108,7 @@ impl Evaluator {
 
     /// Create a new evaluator with default security context (pure)
     pub fn new_with_defaults(
-        module_registry: Rc<ModuleRegistry>, 
+        module_registry: Arc<ModuleRegistry>, 
         delegation_engine: Arc<dyn DelegationEngine>,
         host: Arc<dyn HostInterface>,
     ) -> Self {
@@ -136,7 +134,7 @@ impl Evaluator {
 
     /// Create evaluator with optimized type checking for production
     pub fn new_optimized(
-        module_registry: Rc<ModuleRegistry>,
+        module_registry: Arc<ModuleRegistry>,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
@@ -153,7 +151,7 @@ impl Evaluator {
 
     /// Create evaluator with strict type checking for development
     pub fn new_strict(
-        module_registry: Rc<ModuleRegistry>,
+        module_registry: Arc<ModuleRegistry>,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
@@ -588,7 +586,7 @@ impl Evaluator {
             match bind_parameters(&param_map, &mut eval_cb) {
                 Ok(bound) => {
                     // Create a child environment with the current env as parent
-                    let parent_rc = Rc::new(env.clone());
+                    let parent_rc = Arc::new(env.clone());
                     let mut child = Environment::with_parent(parent_rc);
                     // Insert bound params into child environment under reserved symbol %params
                     let mut map_vals = std::collections::HashMap::new();
@@ -850,8 +848,8 @@ impl Evaluator {
                     self.host.notify_step_failed(&step_action_id, &e.to_string())?;
                     // Exit step context on failure
                     let mut context_manager = self.context_manager.borrow_mut();
-                let _ = context_manager.exit_step();
-                self.host.clear_step_exposure_override();
+                    let _ = context_manager.exit_step();
+                    self.host.clear_step_exposure_override();
                     return Err(e);
                 }
             };
@@ -1237,7 +1235,8 @@ impl Evaluator {
     ) -> RuntimeResult<Value> {
         match func_value {
             Value::FunctionPlaceholder(cell) => {
-                let f = cell.borrow().clone();
+                let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                let f = guard.clone();
                 if let Value::Function(f) = f {
                     self.call_function(Value::Function(f), args, env)
                 } else {
@@ -1563,7 +1562,7 @@ impl Evaluator {
     }
 
     fn eval_let_simple(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        let mut let_env = Environment::with_parent(Rc::new(env.clone()));
+    let mut let_env = Environment::with_parent(Arc::new(env.clone()));
 
         for binding in &let_expr.bindings {
             // Evaluate each binding value in the accumulated let environment
@@ -1580,13 +1579,13 @@ impl Evaluator {
         let_expr: &LetExpr,
         env: &mut Environment,
     ) -> RuntimeResult<Value> {
-        let mut letrec_env = Environment::with_parent(Rc::new(env.clone()));
-        let mut placeholders = Vec::new();
+    let mut letrec_env = Environment::with_parent(Arc::new(env.clone()));
+    let mut placeholders = Vec::new();
 
         // First pass: create placeholders for all function bindings
         for binding in &let_expr.bindings {
             if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
-                let placeholder_cell = Rc::new(RefCell::new(Value::Nil));
+                let placeholder_cell = Arc::new(RwLock::new(Value::Nil));
                 letrec_env.define(symbol, Value::FunctionPlaceholder(placeholder_cell.clone()));
                 placeholders.push((symbol.clone(), binding.value.clone(), placeholder_cell));
             } else {
@@ -1600,7 +1599,8 @@ impl Evaluator {
         for (symbol, value_expr, placeholder_cell) in placeholders {
             let value = self.eval_expr(&value_expr, &mut letrec_env)?;
             if matches!(value, Value::Function(_)) {
-                *placeholder_cell.borrow_mut() = value;
+                let mut guard = placeholder_cell.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                *guard = value;
             } else {
                 return Err(RuntimeError::TypeError {
                     expected: "function".to_string(),
@@ -1633,7 +1633,7 @@ impl Evaluator {
         let value_to_match = self.eval_expr(&match_expr.expression, env)?;
 
         for clause in &match_expr.clauses {
-            let mut clause_env = Environment::with_parent(Rc::new(env.clone()));
+            let mut clause_env = Environment::with_parent(Arc::new(env.clone()));
             if self.match_match_pattern(&clause.pattern, &value_to_match, &mut clause_env)? {
                 if let Some(guard) = &clause.guard {
                     let guard_result = self.eval_expr(guard, &mut clause_env)?;
@@ -1714,7 +1714,7 @@ impl Evaluator {
                 // Error path: try to match catch clauses
                 let mut handled: Option<Value> = None;
                 for catch_clause in &try_expr.catch_clauses {
-                    let mut catch_env = Environment::with_parent(Rc::new(env.clone()));
+                    let mut catch_env = Environment::with_parent(Arc::new(env.clone()));
                     if self.match_catch_pattern(
                         &catch_clause.pattern,
                         &e.to_value(),
@@ -1757,7 +1757,7 @@ impl Evaluator {
             Box::new(Expression::Do(DoExpr {
                 expressions: fn_expr.body.clone(),
             })),
-            Rc::new(env.clone()),
+            Arc::new(env.clone()),
             fn_expr.delegation_hint.clone(),
         )))
     }
@@ -1768,7 +1768,7 @@ impl Evaluator {
         env: &mut Environment,
     ) -> RuntimeResult<Value> {
         let resource = self.eval_expr(&with_expr.resource_init, env)?;
-        let mut resource_env = Environment::with_parent(Rc::new(env.clone()));
+    let mut resource_env = Environment::with_parent(Arc::new(env.clone()));
         resource_env.define(&with_expr.resource_symbol, resource);
         self.eval_do_body(&with_expr.body, &mut resource_env)
     }
@@ -1820,7 +1820,7 @@ impl Evaluator {
             Box::new(Expression::Do(DoExpr {
                 expressions: defn_expr.body.clone(),
             })),
-            Rc::new(env.clone()),
+            Arc::new(env.clone()),
             defn_expr.delegation_hint.clone(),
         ));
         env.define(&defn_expr.name, function.clone());
@@ -1837,7 +1837,7 @@ impl Evaluator {
         let constructor = Function::BuiltinWithContext(BuiltinFunctionWithContext {
             name: format!("{}.new", struct_name),
             arity: Arity::Fixed(1), // Takes a map as input
-            func: Rc::new(move |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| -> RuntimeResult<Value> {
+            func: Arc::new(move |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| -> RuntimeResult<Value> {
                 if args.len() != 1 {
                     return Err(RuntimeError::ArityMismatch {
                         function: struct_name_clone.clone(),
@@ -1909,7 +1909,7 @@ impl Evaluator {
         if count <= 0 { return Ok(Value::Nil); }
         let mut last = Value::Nil;
         for i in 0..count {
-            let mut loop_env = Environment::with_parent(Rc::new(env.clone()));
+            let mut loop_env = Environment::with_parent(Arc::new(env.clone()));
             loop_env.define(&sym, Value::Integer(i));
             last = self.eval_expr(&args[1], &mut loop_env)?;
         }
@@ -1958,7 +1958,7 @@ impl Evaluator {
         }
         let (sym, items) = &pairs[depth];
         for it in items.clone() {
-            let mut loop_env = Environment::with_parent(Rc::new(env.clone()));
+            let mut loop_env = Environment::with_parent(Arc::new(env.clone()));
             loop_env.define(sym, it);
             self.for_nest(pairs, depth + 1, &loop_env, body, out)?;
         }
@@ -2775,7 +2775,7 @@ impl Evaluator {
     }
 
     pub fn with_environment(
-        module_registry: Rc<ModuleRegistry>,
+        module_registry: Arc<ModuleRegistry>,
         env: Environment,
         delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
@@ -2801,7 +2801,7 @@ impl Evaluator {
 
 impl Default for Evaluator {
     fn default() -> Self {
-        let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
         let static_map = std::collections::HashMap::new();
         let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();

@@ -46,8 +46,8 @@ pub fn create_delegation_engine() -> Arc<StaticDelegationEngine> {
 }
 
 /// Creates a new module registry wrapped in Rc<>
-pub fn create_module_registry() -> Rc<ModuleRegistry> {
-    Rc::new(ModuleRegistry::new())
+pub fn create_module_registry() -> std::sync::Arc<ModuleRegistry> {
+    std::sync::Arc::new(ModuleRegistry::new())
 }
 
 /// Creates a runtime host with the specified security context

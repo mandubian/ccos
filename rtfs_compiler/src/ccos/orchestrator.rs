@@ -35,7 +35,6 @@ use crate::ast::{Expression, Literal, Symbol};
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
 use crate::runtime::host_interface::HostInterface;
-use std::rc::Rc;
 use std::collections::HashMap;
 use sha2::{Digest, Sha256};
 use super::checkpoint_archive::{CheckpointArchive, CheckpointRecord};
@@ -593,7 +592,7 @@ impl Orchestrator {
             context.clone(),
         ));
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), plan_action_id.clone());
-        let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let host_iface: Arc<dyn HostInterface> = host.clone();
         let evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);

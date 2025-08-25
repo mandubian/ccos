@@ -676,14 +676,14 @@ mod tests {
     #[test]
     fn test_capability_creation() {
         use crate::runtime::values::Arity;
-        use std::rc::Rc;
+    use std::sync::Arc;
         use crate::runtime::error::RuntimeResult;
         use crate::runtime::values::Value;
 
         let capability = Capability::new(
             "image-processing/sharpen".to_string(),
             Arity::Fixed(2),
-            Rc::new(|_args: Vec<Value>| -> RuntimeResult<Value> {
+            Arc::new(|_args: Vec<Value>| -> RuntimeResult<Value> {
                 Ok(Value::Nil)
             })
         );
