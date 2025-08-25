@@ -1,18 +1,18 @@
-# wt/archive-storage — bootstrap
+wt/observability-foundation — planned — SEP-003: Add Causal Chain Event Stream + Wire Working Memory Ingestor
 
-Planned scope (from issues):
-- File-based Storage Backend for Unified Archive (#73)
-- Database Storage Backend for Unified Archive (#74)
-- Archive Manager Integration with Unified Storage (#75)
-- Intent Graph Archive Integration (#76)
+Goals & references:
+- Issue #6 follow-up: Add Causal Chain Event Stream + Wire Working Memory Ingestor
+- #56, [CCOS] Observability: Metrics, logging, and dashboards
+- #34, [CCOS] Metrics and logging for critical flows
+- #37, [CCOS] Dashboards for intent graph, causal chain, and capability usage (#38)
 
-Source issue: https://github.com/mandubian/ccos/issues/120
-
-Initial tasks:
-- [ ] Define a storage backend trait abstraction and API surface for the Unified Archive.
-- [ ] Implement a simple file-based backend with deterministic paths and versioning.
-- [ ] Add integration tests that exercise archiving and retrieval of IntentGraph snapshots.
-- [ ] Implement a database-backed backend (sqlite) and a migration test harness.
+Planned work:
+- Add event stream hooks to CausalChain append path (ActionType::CapabilityCall, delegation events).
+- Wire a Working Memory ingestor to publish selected events to stream/metrics.
+- Add basic metrics (counters/histograms) for capability calls, delegation approvals, failures.
+- Add logging integration points and a small dashboard spec for intent graph & capability usage.
 
 Notes:
-Aim for a pluggable storage layer. Keep interfaces small and test-driven; ensure consistent metadata and hash stability across backends.
+- Base branch: origin/main
+- Keep changes minimal and well-tested; add integration tests for event emission.
+
