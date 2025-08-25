@@ -1084,13 +1084,7 @@ impl<'a> IrConverter<'a> {
                 if let Some(registry) = self.module_registry {
                     if let Some(module) = registry.get_module(module_name) {
                         // Check exported functions/values
-                        let guard = match module.exports.read() {
-                            Ok(g) => g,
-                            Err(e) => {
-                                return Err(IrConversionError::InternalError { message: format!("RwLock poisoned: {}", e) });
-                            }
-                        };
-                        if let Some(export) = guard.get(symbol_name) {
+                        if let Some(export) = module.exports.read().unwrap().get(symbol_name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: module_name.to_string(),
@@ -1123,13 +1117,7 @@ impl<'a> IrConverter<'a> {
                 // Check if it's available in the stdlib module
                 if let Some(registry) = self.module_registry {
                     if let Some(stdlib_module) = registry.get_module("stdlib") {
-                        let guard = match stdlib_module.exports.read() {
-                            Ok(g) => g,
-                            Err(e) => {
-                                return Err(IrConversionError::InternalError { message: format!("RwLock poisoned: {}", e) });
-                            }
-                        };
-                        if let Some(export) = guard.get(&name) {
+                        if let Some(export) = stdlib_module.exports.read().unwrap().get(&name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: "stdlib".to_string(),
@@ -2376,14 +2364,9 @@ impl<'a> IrConverter<'a> {
                         MapDestructuringEntry::Keys(symbols) => {
                             for sym in symbols {
                                 let sym_text = sym.0.clone();
-                                // Normalize keyword WITHOUT leading ':' to match internal representation
-                                let kw_text = if sym_text.starts_with(':') {
-                                    sym_text.trim_start_matches(':').to_string()
-                                } else {
-                                    sym_text.clone()
-                                };
+                                // Keywords are represented without leading ':' in AST/Values
                                 ir_entries.push(IrMapPatternEntry {
-                                    key: MapKey::Keyword(Keyword(kw_text)),
+                                    key: MapKey::Keyword(Keyword(sym_text.clone())),
                                     pattern: IrPattern::Variable(sym_text),
                                 });
                             }
@@ -2441,14 +2424,9 @@ impl<'a> IrConverter<'a> {
                         MapDestructuringEntry::Keys(symbols) => {
                             for sym in symbols {
                                 let sym_text = sym.0.clone();
-                                // Normalize keyword WITHOUT leading ':' to match internal representation
-                                let kw_text = if sym_text.starts_with(':') {
-                                    sym_text.trim_start_matches(':').to_string()
-                                } else {
-                                    sym_text.clone()
-                                };
+                                // Keywords are represented without leading ':' in AST/Values
                                 ir_entries.push(IrMapPatternEntry {
-                                    key: MapKey::Keyword(Keyword(kw_text)),
+                                    key: MapKey::Keyword(Keyword(sym_text.clone())),
                                     pattern: IrPattern::Variable(sym_text),
                                 });
                             }

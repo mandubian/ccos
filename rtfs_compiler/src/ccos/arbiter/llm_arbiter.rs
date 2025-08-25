@@ -10,6 +10,7 @@ use crate::runtime::error::RuntimeError;
 use crate::ccos::types::{Intent, Plan, StorableIntent, IntentStatus, GenerationContext, TriggerSource, ExecutionResult};
 use crate::runtime::values::Value;
 use crate::ccos::intent_graph::IntentGraph;
+use crate::ccos::delegation_keys::{generation, agent};
 use regex;
 
 use super::arbiter_engine::ArbiterEngine;
@@ -380,7 +381,7 @@ impl ArbiterEngine for LlmArbiter {
     intent.original_request = natural_language.to_string();
 
     // Mark generation method for downstream consumers/tests
-    intent.metadata.insert("generation_method".to_string(), crate::runtime::values::Value::String("llm".to_string()));
+            intent.metadata.insert(generation::GENERATION_METHOD.to_string(), crate::runtime::values::Value::String(generation::methods::LLM.to_string()));
 
     // Store the generated intent
     self.store_intent(&intent).await?;

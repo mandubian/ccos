@@ -8,9 +8,18 @@ pub enum TrustTier { T0Sandbox, T1Trusted, T2Privileged }
 #[derive(Debug, Clone, Default)]
 pub struct LatencyStats { pub p50_ms: f64, pub p95_ms: f64 }
 
-/// Success & reliability metrics (decay‑weighted counts in future iterations).
+/// Success & reliability metrics with decay-weighted historical performance.
 #[derive(Debug, Clone, Default)]
-pub struct SuccessStats { pub success_rate: f64, pub samples: u64 }
+pub struct SuccessStats { 
+    pub success_rate: f64, 
+    pub samples: u64,
+    /// Decay-weighted success rate for adaptive threshold calculations
+    pub decay_weighted_rate: f64,
+    /// Decay factor for historical performance (0.0-1.0, higher = more recent bias)
+    pub decay_factor: f64,
+    /// Timestamp of last update for decay calculations
+    pub last_update: Option<std::time::SystemTime>,
+}
 
 /// Cost model (simplified placeholder).
 #[derive(Debug, Clone, Default)]

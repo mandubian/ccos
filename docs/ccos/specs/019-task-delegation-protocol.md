@@ -104,7 +104,7 @@ Upon a `TaskResult`, success boolean feeds AgentRegistry `record_feedback`, adju
 |-----------|-------------|--------------|
 | Structured Params Derivation | Populate `params` via AST capability extraction pass | #91 |
 | Orchestrator Wiring & Transport | Implement dispatch + ingestion pipeline | #92 |
-| Adaptive Threshold Influence | Dynamic delegation gate based on rolling success | #96 |
+| Adaptive Threshold Influence | Dynamic delegation gate based on rolling success | ✅ #96 (Implemented) |
 | Streaming / Incremental Results | Introduce `TaskUpdate` & finalize success on terminal message | (TBD) |
 | Security Envelope | Signatures, nonce, integrity hash, optional encryption | (TBD) |
 | Version Field | Add `protocol_version` once first incompatible change needed | (TBD) |

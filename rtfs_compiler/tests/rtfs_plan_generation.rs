@@ -50,6 +50,7 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
         max_candidates: 3,
         min_skill_hits: None,
         agent_registry: rtfs_compiler::ccos::arbiter::arbiter_config::AgentRegistryConfig::default(),
+        adaptive_threshold: None,
     };
 
     let intent_graph = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::intent_graph::IntentGraph::new().unwrap()));
