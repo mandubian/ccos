@@ -189,7 +189,7 @@ pub struct DelegatingArbiter {
     llm_provider: Box<dyn LlmProvider>,
     agent_registry: AgentRegistry,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
-
+    adaptive_threshold_calculator: Option<crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator>,
 }
 
 /// Agent registry for managing available agents
@@ -259,7 +259,9 @@ impl DelegatingArbiter {
         // Create agent registry
         let agent_registry = AgentRegistry::new(delegation_config.agent_registry.clone());
         
-
+        // Create adaptive threshold calculator if configured
+        let adaptive_threshold_calculator = delegation_config.adaptive_threshold.as_ref()
+            .map(|config| crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator::new(config.clone()));
         
         Ok(Self {
             llm_config,
@@ -267,6 +269,7 @@ impl DelegatingArbiter {
             llm_provider,
             agent_registry,
             intent_graph,
+            adaptive_threshold_calculator,
         })
     }
 
@@ -318,7 +321,29 @@ impl DelegatingArbiter {
         let response = self.llm_provider.generate_text(&prompt).await?;
         
         // Parse delegation analysis
-        let analysis = self.parse_delegation_analysis(&response)?;
+        let mut analysis = self.parse_delegation_analysis(&response)?;
+        
+        // Apply adaptive threshold if configured
+        if let Some(calculator) = &self.adaptive_threshold_calculator {
+            // Get base threshold from config
+            let base_threshold = self.delegation_config.threshold;
+            
+            // For now, we'll use a default agent ID for threshold calculation
+            // In the future, this could be based on the specific agent being considered
+            let adaptive_threshold = calculator.calculate_threshold("default_agent", base_threshold);
+            
+            // Adjust delegation decision based on adaptive threshold
+            analysis.should_delegate = analysis.should_delegate && 
+                analysis.delegation_confidence >= adaptive_threshold;
+            
+            // Update reasoning to include adaptive threshold information
+            analysis.reasoning = format!(
+                "{} [Adaptive threshold: {:.3}, Confidence: {:.3}]", 
+                analysis.reasoning, 
+                adaptive_threshold, 
+                analysis.delegation_confidence
+            );
+        }
         
         Ok(analysis)
     }
@@ -627,6 +652,32 @@ Plan:"#,
         response.to_string()
     }
 
+    /// Record feedback for delegation performance
+    pub fn record_delegation_feedback(&mut self, agent_id: &str, success: bool) {
+        if let Some(calculator) = &mut self.adaptive_threshold_calculator {
+            calculator.update_performance(agent_id, success);
+        }
+    }
+
+    /// Get adaptive threshold for a specific agent
+    pub fn get_adaptive_threshold(&self, agent_id: &str) -> Option<f64> {
+        if let Some(calculator) = &self.adaptive_threshold_calculator {
+            let base_threshold = self.delegation_config.threshold;
+            Some(calculator.calculate_threshold(agent_id, base_threshold))
+        } else {
+            None
+        }
+    }
+
+    /// Get performance data for a specific agent
+    pub fn get_agent_performance(&self, agent_id: &str) -> Option<&crate::ccos::adaptive_threshold::AgentPerformance> {
+        if let Some(calculator) = &self.adaptive_threshold_calculator {
+            calculator.get_performance(agent_id)
+        } else {
+            None
+        }
+    }
+
     /// Parse delegation plan response
     fn parse_delegation_plan(
         &self,
@@ -865,6 +916,7 @@ mod tests {
                     },
                 ],
             },
+            adaptive_threshold: None,
         };
 
         (llm_config, delegation_config)

@@ -28,6 +28,7 @@ pub mod execution_context; // Hierarchical execution context management
 pub mod delegation;
 pub mod delegation_keys;
 pub mod delegation_l4;
+pub mod adaptive_threshold;
 pub mod remote_models;
 pub mod local_models;
 
