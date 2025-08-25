@@ -52,7 +52,7 @@ pub use crate::ccos::arbiter::delegating_arbiter;
 
 // --- Core CCOS System ---
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::rc::Rc;
 
 use crate::ccos::arbiter::{DelegatingArbiter, ArbiterEngine, Arbiter};
@@ -96,8 +96,17 @@ impl CCOS {
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
     let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
-        // TODO: The marketplace should be initialized with discovered capabilities.
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
+        // Initialize capability marketplace with registry
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let mut capability_marketplace = CapabilityMarketplace::with_causal_chain(
+            Arc::clone(&capability_registry),
+            Some(Arc::clone(&causal_chain))
+        );
+        
+        // Bootstrap the marketplace with discovered capabilities
+        capability_marketplace.bootstrap().await?;
+        
+        let capability_marketplace = Arc::new(capability_marketplace);
 
     // Load agent configuration (placeholder: default; future: parse RTFS (agent.config ...) form)
     let agent_config = Arc::new(AgentConfig::default());

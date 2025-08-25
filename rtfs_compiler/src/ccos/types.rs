@@ -193,6 +193,12 @@ pub enum ActionType {
     IntentRelationshipModified,
     IntentArchived,
     IntentReactivated,
+    
+    // Capability Lifecycle (new)
+    CapabilityRegistered,
+    CapabilityRemoved,
+    CapabilityUpdated,
+    CapabilityDiscoveryCompleted,
 }
 
 /// Represents the outcome of an executed action or plan.

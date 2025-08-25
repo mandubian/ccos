@@ -53,6 +53,11 @@ impl CapabilityRegistry {
         self.providers.get(provider_id)
     }
     
+    /// Get all registered capabilities
+    pub fn get_capabilities(&self) -> &HashMap<String, Capability> {
+        &self.capabilities
+    }
+    
     fn register_system_capabilities(&mut self) {
         // Environment access capability
         self.capabilities.insert(
