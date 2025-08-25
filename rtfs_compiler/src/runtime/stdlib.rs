@@ -299,7 +299,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "find".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::find),
+                func: Arc::new(Self::find),
             })),
         );
 
