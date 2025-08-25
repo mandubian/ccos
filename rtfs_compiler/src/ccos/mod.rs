@@ -54,7 +54,7 @@ pub use crate::ccos::arbiter::delegating_arbiter;
 
 // --- Core CCOS System ---
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use crate::ccos::arbiter::{DelegatingArbiter, ArbiterEngine, Arbiter};
 use crate::config::types::AgentConfig;
@@ -99,7 +99,7 @@ impl CCOS {
     let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
         // Initialize capability marketplace with registry
         let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
-        let mut capability_marketplace = CapabilityMarketplace::with_causal_chain(
+        let capability_marketplace = CapabilityMarketplace::with_causal_chain(
             Arc::clone(&capability_registry),
             Some(Arc::clone(&causal_chain))
         );

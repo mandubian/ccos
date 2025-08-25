@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::ccos::intent_graph::core::IntentGraph;
     use crate::ccos::types::{StorableIntent, EdgeType, IntentStatus};
     use crate::ccos::intent_graph::config::IntentGraphConfig;
     use crate::ccos::intent_graph::virtualization::VirtualizationConfig;
     use crate::ccos::intent_storage::IntentFilter;
-    use crate::ccos::intent_graph::storage::Edge;
+    
     use tempfile::tempdir;
     use std::collections::HashMap;
 

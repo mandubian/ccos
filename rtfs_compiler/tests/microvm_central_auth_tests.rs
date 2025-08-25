@@ -1,6 +1,6 @@
 use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::runtime::security::{RuntimeContext, SecurityAuthorizer, SecurityLevel};
+use rtfs_compiler::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use rtfs_compiler::runtime::microvm::core::Program;
 
 #[test]

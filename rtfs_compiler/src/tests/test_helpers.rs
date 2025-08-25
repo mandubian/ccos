@@ -13,7 +13,6 @@ use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::capability_registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
 
 /// Creates a new capability registry wrapped in Arc<RwLock<>>
@@ -165,7 +164,7 @@ pub fn create_mcp_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::security::RuntimeContext;
+    
 
     #[test]
     fn test_create_capability_registry() {

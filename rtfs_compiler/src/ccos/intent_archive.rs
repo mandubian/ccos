@@ -3,10 +3,8 @@
 //! Implements robust, efficient archival and retrieval using the unified CCOS storage abstraction.
 
 use crate::runtime::error::RuntimeError;
-use crate::runtime::values::Value;
 use super::types::{Intent, IntentId};
 use super::storage::{Archivable, ContentAddressableArchive, InMemoryArchive};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Implementation of Archivable for Intent
@@ -113,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_in_memory_intent_archive() {
-        let mut archive = create_in_memory_intent_archive();
+        let archive = create_in_memory_intent_archive();
         let intent = Intent {
             intent_id: "intent-123".to_string(),
             name: Some("Test Intent".to_string()),

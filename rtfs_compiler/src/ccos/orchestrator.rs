@@ -30,7 +30,7 @@ use crate::ccos::execution_context::IsolationLevel;
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
 use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody, IntentStatus};
-use crate::ast::{Expression, Literal, Symbol};
+use crate::ast::{Expression, Literal};
 
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};

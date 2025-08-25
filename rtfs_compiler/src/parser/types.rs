@@ -136,7 +136,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                     }
                     Rule::map_type_entry_braced => {
                         // Parse braced map entries: {:host :string :port :int}
-                        let mut entry_inner = map_entry_pair.into_inner();
+                        let entry_inner = map_entry_pair.into_inner();
                         let mut current_key = None;
                         
                         for entry_pair in entry_inner {
@@ -147,7 +147,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                                 Rule::type_expr => {
                                     if let Some(key) = current_key.take() {
                                         // Check for optional marker in the remaining pairs
-                                        let mut optional = false;
+                                        let optional = false;
                                         // Note: We can't easily check for optional markers here since we're iterating
                                         // For now, assume no optional markers in braced form
                                         entries.push(MapTypeEntry {
@@ -588,8 +588,8 @@ fn build_predicate_expr(pair: Pair<Rule>) -> Result<TypePredicate, PestParseErro
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::ast::{TypeExpr, PrimitiveType, Symbol, Literal, Keyword, ArrayDimension, TypePredicate};
+    
+    
     use crate::parser::parse_type_expression;
 
     #[test]

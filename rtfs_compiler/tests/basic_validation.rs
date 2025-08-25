@@ -1,7 +1,5 @@
 // Test file to validate basic functionality without tokio timeout dependency
-use std::path::Path;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use rtfs_compiler::runtime::Runtime;
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::Evaluator;
 use rtfs_compiler::runtime::RuntimeResult;

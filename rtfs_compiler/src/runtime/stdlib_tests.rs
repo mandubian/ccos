@@ -2,7 +2,7 @@
 mod test_stdlib_loading {
     use crate::runtime::stdlib::load_stdlib;
     use crate::runtime::module_runtime::ModuleRegistry;
-    use crate::runtime::RuntimeError;
+    
 
     #[test]
     fn test_load_stdlib_creates_module() {

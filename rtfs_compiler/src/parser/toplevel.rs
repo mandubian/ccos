@@ -1,7 +1,7 @@
 use crate::ast::{
     ImportDefinition, ModuleDefinition,
     ModuleLevelDefinition, Symbol, TopLevel,
-    ResourceDefinition, Property, Keyword, Expression as AstExpression,
+    ResourceDefinition, Property, Expression as AstExpression,
 };
 use crate::parser::common::{build_symbol, next_significant};
 use crate::parser::errors::{invalid_input_error, pair_to_source_span, PestParseError};
