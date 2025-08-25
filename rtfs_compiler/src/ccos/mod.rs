@@ -130,11 +130,41 @@ impl CCOS {
             Arc::clone(&intent_graph),
         ));
 
-        // Initialize AgentRegistry (M4)
+        // Initialize AgentRegistry (M4) from agent configuration
         let agent_registry = Arc::new(std::sync::RwLock::new(crate::ccos::agent_registry::InMemoryAgentRegistry::new()));
 
-        // Optional: delegating arbiter behind feature flag/env var
-        let delegating_arbiter = None; // TODO: Implement delegating arbiter integration
+        // Initialize delegating arbiter if delegation is enabled in agent config
+        let delegating_arbiter = if agent_config.delegation.enabled.unwrap_or(false) {
+            // Create LLM config for delegating arbiter
+            let llm_config = crate::ccos::arbiter::arbiter_config::LlmConfig {
+                provider_type: crate::ccos::arbiter::arbiter_config::LlmProviderType::Stub,
+                model: "stub-model".to_string(),
+                api_key: None,
+                base_url: None,
+                max_tokens: Some(1000),
+                temperature: Some(0.7),
+                timeout_seconds: Some(30),
+                prompts: None,
+            };
+
+            // Convert agent config delegation to arbiter delegation config
+            let delegation_config = agent_config.delegation.to_arbiter_config();
+
+            // Create delegating arbiter
+            match crate::ccos::arbiter::DelegatingArbiter::new(
+                llm_config,
+                delegation_config,
+                Arc::clone(&intent_graph),
+            ).await {
+                Ok(arbiter) => Some(Arc::new(arbiter)),
+                Err(e) => {
+                    eprintln!("Warning: Failed to initialize delegating arbiter: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(Self {
             arbiter,

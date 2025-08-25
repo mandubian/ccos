@@ -15,9 +15,19 @@ wt/arbiter-delegation-enhancements — progress log
   - Updated all arbiter implementations and examples to use constants.
   - Result: All tests passing, no raw metadata keys in codebase.
 
+- Milestone 3: Introduce DelegationConfig in agent config; plumb through registry → arbiter ✅
+  - Extended `DelegationConfig` in `AgentConfig` to include `AgentRegistryConfig`.
+  - Added `AgentRegistryConfig`, `RegistryType`, and `AgentDefinition` structs.
+  - Implemented `to_arbiter_config()` conversion method for seamless integration.
+  - Updated CCOS initialization to automatically wire delegation configuration.
+  - Added comprehensive test suite for delegation configuration.
+  - Created detailed documentation in `docs/ccos/specs/022-delegation-configuration.md`.
+  - Result: Delegation configuration fully integrated from agent config to arbiter.
+
 Try locally:
 ```bash
 cargo test --test integration_tests -- --nocapture --test-threads 1
 cargo test --test ast_coverage -- --nocapture
 cargo test delegation_keys --lib
+cargo test config::types::tests --lib
 ```
