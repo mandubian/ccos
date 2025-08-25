@@ -24,10 +24,23 @@ wt/arbiter-delegation-enhancements — progress log
   - Created detailed documentation in `docs/ccos/specs/022-delegation-configuration.md`.
   - Result: Delegation configuration fully integrated from agent config to arbiter.
 
+- Milestone 4: Implement adaptive threshold using rolling success stats with bounds and env/config overrides ✅
+  - Created `AdaptiveThresholdConfig` with comprehensive configuration options.
+  - Implemented `AdaptiveThresholdCalculator` with decay-weighted performance tracking.
+  - Enhanced `SuccessStats` structure with decay-weighted rates and timestamps.
+  - Integrated adaptive threshold into `DelegatingArbiter` decision logic.
+  - Added environment variable overrides with configurable prefix.
+  - Implemented bounds enforcement (min/max threshold values).
+  - Added minimum samples requirement before adaptive threshold applies.
+  - Created comprehensive test suite for adaptive threshold functionality.
+  - Added feedback recording methods for delegation performance tracking.
+  - Result: Adaptive delegation threshold fully implemented with deterministic tests.
+
 Try locally:
 ```bash
 cargo test --test integration_tests -- --nocapture --test-threads 1
 cargo test --test ast_coverage -- --nocapture
 cargo test delegation_keys --lib
 cargo test config::types::tests --lib
+cargo test adaptive_threshold --lib
 ```
