@@ -86,6 +86,8 @@ pub struct DelegationConfig {
     pub min_skill_hits: Option<usize>,
     /// Agent registry configuration
     pub agent_registry: AgentRegistryConfig,
+    /// Adaptive threshold configuration
+    pub adaptive_threshold: Option<crate::config::types::AdaptiveThresholdConfig>,
 }
 
 /// Agent registry configuration
@@ -410,6 +412,7 @@ impl ArbiterConfig {
                         .ok()
                         .and_then(|s| s.parse().ok()),
                     agent_registry: AgentRegistryConfig::default(),
+                    adaptive_threshold: None,
                 };
                 config.delegation_config = Some(delegation_config);
             }

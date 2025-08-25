@@ -11,6 +11,7 @@ When you have successfully implemented and tested a feature, you MUST:
 ### 1. **Document First** 📝
 - **Update relevant documentation** immediately after feature completion
 - **Add comprehensive comments** to the code explaining the implementation
+- **Update SPEC files** spec files for CCOS are in docs/ccos/specs and for RTFS-2.0 in docs/rtfs-2.0/specs
 - **Update README files** if the feature affects user-facing functionality
 - **Update progress reports** (like WORKTREE_PROGRESS.md) with completion status
 - **Add usage examples** if the feature is user-facing
