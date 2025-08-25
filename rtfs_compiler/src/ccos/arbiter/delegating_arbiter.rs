@@ -14,6 +14,7 @@ use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, Stora
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition};
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
+use crate::ccos::delegation_keys::{generation, agent};
 
 use crate::ast::TopLevel;
 
@@ -283,7 +284,7 @@ impl DelegatingArbiter {
     let mut intent = self.parse_llm_intent_response(&response, natural_language, context)?;
 
     // Mark how this intent was generated so downstream code/tests can inspect it
-    intent.metadata.insert("generation_method".to_string(), Value::String("delegating_llm".to_string()));
+            intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
         
     Ok(intent)
     }
@@ -651,10 +652,10 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("delegation".to_string()));
-                meta.insert("delegated_agent".to_string(), Value::String(agent.agent_id.clone()));
-                meta.insert("agent_trust_score".to_string(), Value::Float(agent.trust_score));
-                meta.insert("agent_cost".to_string(), Value::Float(agent.cost));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATION.to_string()));
+                meta.insert(agent::DELEGATED_AGENT.to_string(), Value::String(agent.agent_id.clone()));
+                meta.insert(agent::AGENT_TRUST_SCORE.to_string(), Value::Float(agent.trust_score));
+                meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost));
                 meta
             },
             input_schema: None,
@@ -685,7 +686,7 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("direct".to_string()));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DIRECT.to_string()));
                 meta.insert("llm_provider".to_string(), Value::String(format!("{:?}", self.llm_config.provider_type)));
                 meta
             },
@@ -808,12 +809,12 @@ impl ArbiterEngine for DelegatingArbiter {
                 let mut meta = HashMap::new();
                 meta.insert("plan_id".to_string(), Value::String(plan.plan_id.clone()));
                 meta.insert("delegating_engine".to_string(), Value::String("delegating".to_string()));
-                if let Some(generation_method) = plan.metadata.get("generation_method") {
-                    meta.insert("generation_method".to_string(), generation_method.clone());
-                }
-                if let Some(delegated_agent) = plan.metadata.get("delegated_agent") {
-                    meta.insert("delegated_agent".to_string(), delegated_agent.clone());
-                }
+                        if let Some(generation_method) = plan.metadata.get(generation::GENERATION_METHOD) {
+            meta.insert(generation::GENERATION_METHOD.to_string(), generation_method.clone());
+        }
+        if let Some(delegated_agent) = plan.metadata.get(agent::DELEGATED_AGENT) {
+            meta.insert(agent::DELEGATED_AGENT.to_string(), delegated_agent.clone());
+        }
                 meta
             },
         })
@@ -911,7 +912,7 @@ mod tests {
         ).await.unwrap();
         
         // tolerant check: ensure metadata contains a generation_method string mentioning 'delegat'
-        if let Some(v) = intent.metadata.get("generation_method") {
+        if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {
                 assert!(s.to_lowercase().contains("delegat"));
             } else {

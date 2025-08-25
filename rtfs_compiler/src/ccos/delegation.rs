@@ -12,6 +12,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::ccos::caching::CacheStats;
 use crate::ccos::caching::l1_delegation::{L1DelegationCache, DelegationPlan};
+use crate::ccos::delegation_keys::{intent, generation, agent};
 
 /// Where the evaluator should send the execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -561,8 +562,8 @@ mod tests {
         let metadata = DelegationMetadata::new()
             .with_confidence(0.95)
             .with_reasoning("Intent analysis suggests local execution for mathematical operations".to_string())
-            .with_context("intent_type".to_string(), "mathematical".to_string())
-            .with_context("complexity".to_string(), "low".to_string())
+            .with_context(intent::INTENT_TYPE.to_string(), "mathematical".to_string())
+            .with_context(intent::COMPLEXITY.to_string(), "low".to_string())
             .with_source("intent-analyzer".to_string());
         
         let ctx = CallContext::new("math/add", 0x12345678, 0xABCDEF01)
@@ -582,7 +583,7 @@ mod tests {
         let (_, plan) = plans.first().unwrap();
         assert_eq!(plan.confidence, 0.95);
         assert!(plan.reasoning.contains("Intent analysis suggests"));
-        assert_eq!(plan.metadata.get("intent_type"), Some(&"mathematical".to_string()));
-        assert_eq!(plan.metadata.get("complexity"), Some(&"low".to_string()));
+        assert_eq!(plan.metadata.get(intent::INTENT_TYPE), Some(&"mathematical".to_string()));
+        assert_eq!(plan.metadata.get(intent::COMPLEXITY), Some(&"low".to_string()));
     }
 }
