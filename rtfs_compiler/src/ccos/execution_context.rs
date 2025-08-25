@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_context_creation() {
-        let mut context = ExecutionContext::new(Some("test".to_string()));
+        let context = ExecutionContext::new(Some("test".to_string()));
         assert_eq!(context.metadata.step_name, Some("test".to_string()));
         assert_eq!(context.metadata.isolation_level, IsolationLevel::Inherit);
     }

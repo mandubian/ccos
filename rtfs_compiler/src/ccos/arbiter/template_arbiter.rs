@@ -13,7 +13,6 @@ use crate::runtime::values::Value;
 use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, IntentStatus, StorableIntent};
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate};
-use crate::ccos::arbiter::FallbackBehavior;
 
 /// Template-based arbiter that uses pattern matching and predefined templates
 pub struct TemplateArbiter {

@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod function_tests {
-    use crate::runtime::capability_registry::CapabilityRegistry;
+    
     use crate::{
-        ast::TopLevel,
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };

@@ -3,8 +3,6 @@
 use rtfs_compiler::ccos::execution_context::{ContextManager, IsolationLevel, ConflictResolution};
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::error::RuntimeResult;
-use rtfs_compiler::ast::MapKey;
-use std::collections::HashMap;
 
 #[test]
 fn test_context_creation_and_basic_operations() -> RuntimeResult<()> {

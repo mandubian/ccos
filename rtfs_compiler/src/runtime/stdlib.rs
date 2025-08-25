@@ -23,7 +23,6 @@ use std::sync::{Arc, RwLock};
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 // removed Rc: use Arc for shared ownership

@@ -3,7 +3,7 @@ mod primitives_tests {
     use crate::{
         ast::{Keyword, TopLevel},
         parser,
-        runtime::{module_runtime::ModuleRegistry, Environment, Evaluator, RuntimeResult, Value},
+        runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
     use crate::ccos::delegation::StaticDelegationEngine;
     use std::collections::HashMap;

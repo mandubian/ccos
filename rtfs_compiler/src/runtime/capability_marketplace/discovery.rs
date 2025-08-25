@@ -1,5 +1,5 @@
 use super::types::*;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use async_trait::async_trait;
 use chrono::Utc;

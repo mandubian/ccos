@@ -8,7 +8,6 @@ use rtfs_compiler::ccos::local_models::LocalLlamaModel;
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

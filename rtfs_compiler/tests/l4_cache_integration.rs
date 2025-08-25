@@ -1,17 +1,13 @@
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use rtfs_compiler::bytecode::WasmBackend;
 use rtfs_compiler::ccos::caching::l4_content_addressable::{L4CacheClient, RtfsModuleMetadata};
-use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
 use rtfs_compiler::ccos::delegation_l4::L4AwareDelegationEngine;
-use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry, Value, RuntimeResult};
 use rtfs_compiler::runtime::environment::Environment;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::values::{Function};
-use rtfs_compiler::ast::{Literal, Symbol, Expression, Pattern};
+use rtfs_compiler::ast::{Literal, Symbol, Pattern};
 use wat::parse_str;
 use rtfs_compiler::parser::parse_expression;
 

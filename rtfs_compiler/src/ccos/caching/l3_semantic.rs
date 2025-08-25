@@ -335,7 +335,7 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> CacheLayer<String, T> f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    
 
     #[test]
     fn test_embedding_generator() {
