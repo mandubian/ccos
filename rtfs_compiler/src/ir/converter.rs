@@ -1084,7 +1084,7 @@ impl<'a> IrConverter<'a> {
                 if let Some(registry) = self.module_registry {
                     if let Some(module) = registry.get_module(module_name) {
                         // Check exported functions/values
-                        if let Some(export) = module.exports.borrow().get(symbol_name) {
+                        if let Some(export) = module.exports.read().unwrap().get(symbol_name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: module_name.to_string(),
@@ -1117,7 +1117,7 @@ impl<'a> IrConverter<'a> {
                 // Check if it's available in the stdlib module
                 if let Some(registry) = self.module_registry {
                     if let Some(stdlib_module) = registry.get_module("stdlib") {
-                        if let Some(export) = stdlib_module.exports.borrow().get(&name) {
+                        if let Some(export) = stdlib_module.exports.read().unwrap().get(&name) {
                             return Ok(IrNode::QualifiedSymbolRef {
                                 id,
                                 module: "stdlib".to_string(),
