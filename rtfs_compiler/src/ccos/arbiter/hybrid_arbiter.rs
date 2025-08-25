@@ -15,6 +15,7 @@ use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, Inten
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior, LlmConfig};
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
+use crate::ccos::delegation_keys::{generation, agent};
 use crate::ccos::arbiter::prompt::{PromptManager, FilePromptStore, PromptConfig};
 use crate::ast::TopLevel;
 
@@ -298,7 +299,7 @@ impl HybridArbiter {
             updated_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("template".to_string()));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::TEMPLATE.to_string()));
                 meta.insert("pattern_name".to_string(), Value::String(pattern.name.clone()));
                 meta
             },
@@ -349,7 +350,7 @@ impl HybridArbiter {
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("template".to_string()));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::TEMPLATE.to_string()));
                 meta.insert("template_name".to_string(), Value::String(template.name.clone()));
                 meta
             },
@@ -481,7 +482,7 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("llm".to_string()));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::LLM.to_string()));
                 meta.insert("llm_provider".to_string(), Value::String(format!("{:?}", self.llm_config.provider_type)));
                 meta
             },
@@ -583,7 +584,7 @@ impl ArbiterEngine for HybridArbiter {
                 let mut intent = self.generate_intent_with_llm(natural_language, context).await?;
 
                 // Mark this as LLM-generated for tests and downstream code
-                intent.metadata.insert("generation_method".to_string(), Value::String("llm".to_string()));
+                intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::LLM.to_string()));
 
                 // Store the intent
                 self.store_intent(&intent).await?;
@@ -659,8 +660,8 @@ impl ArbiterEngine for HybridArbiter {
                 let mut meta = HashMap::new();
                 meta.insert("plan_id".to_string(), Value::String(plan.plan_id.clone()));
                 meta.insert("hybrid_engine".to_string(), Value::String("hybrid".to_string()));
-                if let Some(generation_method) = plan.metadata.get("generation_method") {
-                    meta.insert("generation_method".to_string(), generation_method.clone());
+                if let Some(generation_method) = plan.metadata.get(generation::GENERATION_METHOD) {
+                    meta.insert(generation::GENERATION_METHOD.to_string(), generation_method.clone());
                 }
                 meta
             },
@@ -761,7 +762,7 @@ mod tests {
         ).await.unwrap();
         
         assert!(intent.name.is_some() && intent.name.as_ref().unwrap().contains("sentiment"));
-        if let Some(v) = intent.metadata.get("generation_method") {
+        if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {
                 assert!(s.to_lowercase().contains("template") || s.to_lowercase().contains("tmpl"));
             } else {
@@ -789,7 +790,7 @@ mod tests {
             None
         ).await.unwrap();
         
-        if let Some(v) = intent.metadata.get("generation_method") {
+        if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {
                 assert!(s.to_lowercase().contains("llm") || s.to_lowercase().contains("language"));
             } else {

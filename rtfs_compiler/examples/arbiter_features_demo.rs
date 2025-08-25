@@ -3,6 +3,7 @@ use rtfs_compiler::ccos::arbiter::{
     LlmConfig, DelegationConfig, ArbiterFactory, LlmProviderType,
 };
 use rtfs_compiler::ccos::arbiter::arbiter_config::{AgentRegistryConfig, AgentDefinition, RegistryType};
+use rtfs_compiler::ccos::delegation_keys::{generation, agent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -269,7 +270,7 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(metadata) = result.metadata.get("hybrid_engine") {
                     println!("   Engine: {}", metadata);
                 }
-                if let Some(metadata) = result.metadata.get("generation_method") {
+                if let Some(metadata) = result.metadata.get(generation::GENERATION_METHOD) {
                     println!("   Method: {}", metadata);
                 }
             }
@@ -386,10 +387,10 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(metadata) = result.metadata.get("delegating_engine") {
                     println!("   Engine: {}", metadata);
                 }
-                if let Some(metadata) = result.metadata.get("generation_method") {
+                if let Some(metadata) = result.metadata.get(generation::GENERATION_METHOD) {
                     println!("   Method: {}", metadata);
                 }
-                if let Some(metadata) = result.metadata.get("delegated_agent") {
+                if let Some(metadata) = result.metadata.get(agent::DELEGATED_AGENT) {
                     println!("   Delegated Agent: {}", metadata);
                 }
             }
@@ -467,7 +468,7 @@ async fn demo_llm_arbiter() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(metadata) = result.metadata.get("llm_engine") {
                     println!("   Engine: {}", metadata);
                 }
-                if let Some(metadata) = result.metadata.get("generation_method") {
+                if let Some(metadata) = result.metadata.get(generation::GENERATION_METHOD) {
                     println!("   Method: {}", metadata);
                 }
             }
