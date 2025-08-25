@@ -14,6 +14,7 @@ use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, Stora
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition};
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
+use crate::ccos::delegation_keys::{generation, agent};
 
 use crate::ast::TopLevel;
 
@@ -188,7 +189,7 @@ pub struct DelegatingArbiter {
     llm_provider: Box<dyn LlmProvider>,
     agent_registry: AgentRegistry,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
-
+    adaptive_threshold_calculator: Option<crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator>,
 }
 
 /// Agent registry for managing available agents
@@ -258,7 +259,9 @@ impl DelegatingArbiter {
         // Create agent registry
         let agent_registry = AgentRegistry::new(delegation_config.agent_registry.clone());
         
-
+        // Create adaptive threshold calculator if configured
+        let adaptive_threshold_calculator = delegation_config.adaptive_threshold.as_ref()
+            .map(|config| crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator::new(config.clone()));
         
         Ok(Self {
             llm_config,
@@ -266,6 +269,7 @@ impl DelegatingArbiter {
             llm_provider,
             agent_registry,
             intent_graph,
+            adaptive_threshold_calculator,
         })
     }
 
@@ -283,7 +287,7 @@ impl DelegatingArbiter {
     let mut intent = self.parse_llm_intent_response(&response, natural_language, context)?;
 
     // Mark how this intent was generated so downstream code/tests can inspect it
-    intent.metadata.insert("generation_method".to_string(), Value::String("delegating_llm".to_string()));
+            intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
         
     Ok(intent)
     }
@@ -317,7 +321,29 @@ impl DelegatingArbiter {
         let response = self.llm_provider.generate_text(&prompt).await?;
         
         // Parse delegation analysis
-        let analysis = self.parse_delegation_analysis(&response)?;
+        let mut analysis = self.parse_delegation_analysis(&response)?;
+        
+        // Apply adaptive threshold if configured
+        if let Some(calculator) = &self.adaptive_threshold_calculator {
+            // Get base threshold from config
+            let base_threshold = self.delegation_config.threshold;
+            
+            // For now, we'll use a default agent ID for threshold calculation
+            // In the future, this could be based on the specific agent being considered
+            let adaptive_threshold = calculator.calculate_threshold("default_agent", base_threshold);
+            
+            // Adjust delegation decision based on adaptive threshold
+            analysis.should_delegate = analysis.should_delegate && 
+                analysis.delegation_confidence >= adaptive_threshold;
+            
+            // Update reasoning to include adaptive threshold information
+            analysis.reasoning = format!(
+                "{} [Adaptive threshold: {:.3}, Confidence: {:.3}]", 
+                analysis.reasoning, 
+                adaptive_threshold, 
+                analysis.delegation_confidence
+            );
+        }
         
         Ok(analysis)
     }
@@ -626,6 +652,32 @@ Plan:"#,
         response.to_string()
     }
 
+    /// Record feedback for delegation performance
+    pub fn record_delegation_feedback(&mut self, agent_id: &str, success: bool) {
+        if let Some(calculator) = &mut self.adaptive_threshold_calculator {
+            calculator.update_performance(agent_id, success);
+        }
+    }
+
+    /// Get adaptive threshold for a specific agent
+    pub fn get_adaptive_threshold(&self, agent_id: &str) -> Option<f64> {
+        if let Some(calculator) = &self.adaptive_threshold_calculator {
+            let base_threshold = self.delegation_config.threshold;
+            Some(calculator.calculate_threshold(agent_id, base_threshold))
+        } else {
+            None
+        }
+    }
+
+    /// Get performance data for a specific agent
+    pub fn get_agent_performance(&self, agent_id: &str) -> Option<&crate::ccos::adaptive_threshold::AgentPerformance> {
+        if let Some(calculator) = &self.adaptive_threshold_calculator {
+            calculator.get_performance(agent_id)
+        } else {
+            None
+        }
+    }
+
     /// Parse delegation plan response
     fn parse_delegation_plan(
         &self,
@@ -651,10 +703,10 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("delegation".to_string()));
-                meta.insert("delegated_agent".to_string(), Value::String(agent.agent_id.clone()));
-                meta.insert("agent_trust_score".to_string(), Value::Float(agent.trust_score));
-                meta.insert("agent_cost".to_string(), Value::Float(agent.cost));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATION.to_string()));
+                meta.insert(agent::DELEGATED_AGENT.to_string(), Value::String(agent.agent_id.clone()));
+                meta.insert(agent::AGENT_TRUST_SCORE.to_string(), Value::Float(agent.trust_score));
+                meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost));
                 meta
             },
             input_schema: None,
@@ -685,7 +737,7 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert("generation_method".to_string(), Value::String("direct".to_string()));
+                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DIRECT.to_string()));
                 meta.insert("llm_provider".to_string(), Value::String(format!("{:?}", self.llm_config.provider_type)));
                 meta
             },
@@ -808,12 +860,12 @@ impl ArbiterEngine for DelegatingArbiter {
                 let mut meta = HashMap::new();
                 meta.insert("plan_id".to_string(), Value::String(plan.plan_id.clone()));
                 meta.insert("delegating_engine".to_string(), Value::String("delegating".to_string()));
-                if let Some(generation_method) = plan.metadata.get("generation_method") {
-                    meta.insert("generation_method".to_string(), generation_method.clone());
-                }
-                if let Some(delegated_agent) = plan.metadata.get("delegated_agent") {
-                    meta.insert("delegated_agent".to_string(), delegated_agent.clone());
-                }
+                        if let Some(generation_method) = plan.metadata.get(generation::GENERATION_METHOD) {
+            meta.insert(generation::GENERATION_METHOD.to_string(), generation_method.clone());
+        }
+        if let Some(delegated_agent) = plan.metadata.get(agent::DELEGATED_AGENT) {
+            meta.insert(agent::DELEGATED_AGENT.to_string(), delegated_agent.clone());
+        }
                 meta
             },
         })
@@ -864,6 +916,7 @@ mod tests {
                     },
                 ],
             },
+            adaptive_threshold: None,
         };
 
         (llm_config, delegation_config)
@@ -911,7 +964,7 @@ mod tests {
         ).await.unwrap();
         
         // tolerant check: ensure metadata contains a generation_method string mentioning 'delegat'
-        if let Some(v) = intent.metadata.get("generation_method") {
+        if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {
                 assert!(s.to_lowercase().contains("delegat"));
             } else {
