@@ -18,7 +18,6 @@ use rtfs_compiler::ccos::local_models::LocalLlamaModel;
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry, Value};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 // --- CCOS Simulation Components ---
@@ -118,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     static_map.insert("analyze-dependencies".to_string(), ExecTarget::LocalModel("local-analyzer".to_string()));
     let de = Arc::new(StaticDelegationEngine::new(static_map));
     
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(

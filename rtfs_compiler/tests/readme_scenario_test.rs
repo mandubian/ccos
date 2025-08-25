@@ -23,14 +23,14 @@ async fn test_readme_scenario() {
     
     // Create required components for evaluator
     use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-    use std::rc::Rc;
+  use std::sync::Arc as StdArc;
     use rtfs_compiler::runtime::security::RuntimeContext;
     use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
     use rtfs_compiler::runtime::host::RuntimeHost;
     use rtfs_compiler::ccos::causal_chain::CausalChain;
     use std::sync::Mutex;
     
-    let module_registry = Rc::new(ModuleRegistry::new());
+  let module_registry = StdArc::new(ModuleRegistry::new());
     let delegation_engine = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let security_context = RuntimeContext::pure();
     

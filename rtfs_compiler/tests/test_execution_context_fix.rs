@@ -10,7 +10,6 @@ use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::parser::parse;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -59,7 +58,7 @@ fn test_host_interface_execution_context_methods() {
 #[test]
 fn test_execution_context_validation() {
     // Create test components
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let security_context = RuntimeContext::pure();
     

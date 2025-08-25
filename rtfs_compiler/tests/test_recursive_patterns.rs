@@ -2,9 +2,8 @@ use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::security::RuntimeContext;
-use std::cell::RefCell;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use std::rc::Rc;
+use std::sync::Arc;
 // Test for recursive function patterns
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::*;
@@ -14,7 +13,7 @@ fn test_mutual_recursion_pattern() {
     let code = include_str!("rtfs_files/test_mutual_recursion.rtfs");
 
     let parsed = parser::parse(code).expect("Should parse successfully");
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -55,7 +54,7 @@ fn test_nested_recursion_pattern() {
     let code = include_str!("rtfs_files/test_nested_recursion.rtfs");
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -84,7 +83,7 @@ fn test_higher_order_recursion_pattern() {
     let code = include_str!("rtfs_files/test_higher_order_recursion.rtfs");
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -113,7 +112,7 @@ fn test_three_way_recursion_pattern() {
     let code = include_str!("rtfs_files/test_three_way_recursion.rtfs");
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));

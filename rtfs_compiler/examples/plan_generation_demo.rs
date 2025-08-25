@@ -17,7 +17,6 @@ use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityPolicies};
 use rtfs_compiler::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::fs;
 
@@ -151,8 +150,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         capability_marketplace,
         pure_context.clone(),
     ));
-    let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()),
+    let evaluator = Evaluator::with_environment(
+        Arc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         pure_context,
@@ -190,8 +189,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         controlled_context.clone(),
     ));
 
-    let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()),
+    let evaluator = Evaluator::with_environment(
+        Arc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         controlled_context,
@@ -229,8 +228,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         full_context.clone(),
     ));
 
-    let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()),
+    let evaluator = Evaluator::with_environment(
+        Arc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         full_context,
@@ -276,8 +275,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         math_context.clone(),
     ));
 
-    let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()),
+    let evaluator = Evaluator::with_environment(
+        Arc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         math_context,
@@ -327,7 +326,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
         plan_context.clone(),
     ));    
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()),
+        Arc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation.clone(),
         plan_context,
@@ -524,7 +523,7 @@ GENERATED RTFS PLAN:
     ));
     
     let mut evaluator = Evaluator::with_environment(
-        Rc::new(ModuleRegistry::new()),
+        Arc::new(ModuleRegistry::new()),
         stdlib_env,
         delegation,
         RuntimeContext::full(),
@@ -561,7 +560,7 @@ GENERATED RTFS PLAN:
                              // Helper to extract :steps property from plan expression
                              fn extract_steps(expr: &rtfs_compiler::Expression) -> Option<&Vec<rtfs_compiler::Expression>> {
                                  use rtfs_compiler::Expression::*;
-                                 if let FunctionCall { callee, arguments } = expr {
+                                 if let FunctionCall { callee: _, arguments } = expr {
                                      // Look for :steps keyword in arguments
                                      let mut args_iter = arguments.iter();
                                      while let Some(arg) = args_iter.next() {

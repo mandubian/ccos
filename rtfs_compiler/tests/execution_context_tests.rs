@@ -194,7 +194,6 @@ fn test_parent_wins_merge_policy_default() -> RuntimeResult<()> {
 fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
     use rtfs_compiler::runtime::evaluator::Evaluator;
     use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-    use std::rc::Rc;
     use std::sync::{Arc, Mutex};
     use rtfs_compiler::runtime::security::RuntimeContext;
     use rtfs_compiler::runtime::host::RuntimeHost;
@@ -202,7 +201,7 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
     use rtfs_compiler::ast::{Expression, Literal};
 
     // Minimal evaluator setup
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let capability_marketplace = {
         use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
@@ -222,7 +221,7 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
 
     // Build a step-parallel expression with :merge-policy :overwrite
     // (step-parallel :merge-policy :overwrite (do (quote nil)) (do (quote nil)))
-    let expr = Expression::List(vec![
+    let _expr = Expression::List(vec![
         Expression::Symbol(rtfs_compiler::ast::Symbol("step-parallel".to_string())),
         Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword("merge-policy".to_string()))),
         Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword("overwrite".to_string()))),

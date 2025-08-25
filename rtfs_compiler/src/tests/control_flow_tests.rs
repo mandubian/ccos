@@ -6,7 +6,6 @@ mod control_flow_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
     use crate::runtime::capability_registry::CapabilityRegistry;
-    use std::rc::Rc;
     use crate::ccos::delegation::StaticDelegationEngine;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -56,7 +55,7 @@ mod control_flow_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-        let mut evaluator = Evaluator::new(Rc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);
+    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);
 
         // Evaluate all top-level forms in sequence using the evaluator's environment
         let result = evaluator.eval_toplevel(&parsed);

@@ -1,11 +1,9 @@
 // Module Runtime - Comprehensive module system for RTFS
 // Handles module loading, dependency resolution, namespacing, and import/export mechanisms
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::ir::converter::{BindingInfo, BindingKind, IrConverter};
 use crate::ir::core::{IrNode, IrType};
@@ -15,19 +13,19 @@ use sha2::{Sha256, Digest};
 use crate::ccos::caching::l4_content_addressable::L4CacheClient;
 
 /// Module registry that manages all loaded modules
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModuleRegistry {
     /// Map from module name to compiled module
-    modules: RefCell<HashMap<String, Rc<Module>>>,
+    modules: RwLock<HashMap<String, Arc<Module>>>,
 
     /// Map from module name to module namespace environment
-    module_environments: RefCell<HashMap<String, Rc<RefCell<IrEnvironment>>>>,
+    module_environments: RwLock<HashMap<String, Arc<RwLock<IrEnvironment>>>>,
 
     /// Module loading paths
     module_paths: Vec<PathBuf>,
 
     /// Currently loading modules (for circular dependency detection)
-    loading_stack: RefCell<Vec<String>>,
+    loading_stack: RwLock<Vec<String>>,
 
     /// Optional L4 cache client for content-addressable bytecode reuse
     l4_cache: Option<Arc<L4CacheClient>>,
@@ -37,7 +35,7 @@ pub struct ModuleRegistry {
 }
 
 /// A compiled module with its metadata and runtime environment
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Module {
     /// Module metadata
     pub metadata: ModuleMetadata,
@@ -46,13 +44,30 @@ pub struct Module {
     pub ir_node: IrNode,
 
     /// Module's exported symbols
-    pub exports: RefCell<HashMap<String, ModuleExport>>,
+    pub exports: RwLock<HashMap<String, ModuleExport>>,
 
     /// Module's private namespace
-    pub namespace: Rc<RefCell<IrEnvironment>>,
+    pub namespace: Arc<RwLock<IrEnvironment>>,
 
     /// Module dependencies
     pub dependencies: Vec<String>,
+}
+
+impl Clone for Module {
+    fn clone(&self) -> Self {
+        // Clone exports by reading the lock and cloning the inner map
+        let exports_cloned = match self.exports.read() {
+            Ok(g) => g.clone(),
+            Err(_) => HashMap::new(),
+        };
+        Module {
+            metadata: self.metadata.clone(),
+            ir_node: self.ir_node.clone(),
+            exports: RwLock::new(exports_cloned),
+            namespace: self.namespace.clone(),
+            dependencies: self.dependencies.clone(),
+        }
+    }
 }
 
 /// Module metadata
@@ -132,10 +147,10 @@ impl ModuleRegistry {
     /// Create a new module registry
     pub fn new() -> Self {
         ModuleRegistry {
-            modules: RefCell::new(HashMap::new()),
-            module_environments: RefCell::new(HashMap::new()),
+            modules: RwLock::new(HashMap::new()),
+            module_environments: RwLock::new(HashMap::new()),
             module_paths: vec![PathBuf::from(".")],
-            loading_stack: RefCell::new(Vec::new()),
+            loading_stack: RwLock::new(Vec::new()),
             l4_cache: None,
             bytecode_backend: None,
         }
@@ -175,13 +190,15 @@ impl ModuleRegistry {
 
         // Store the module environment
         self.module_environments
-            .borrow_mut()
+            .write()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
             .insert(module_name.clone(), module.namespace.clone());
 
         // Register the module
         self.modules
-            .borrow_mut()
-            .insert(module_name, Rc::new(module));
+            .write()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+            .insert(module_name, Arc::new(module));
 
         Ok(())
     }
@@ -190,19 +207,20 @@ impl ModuleRegistry {
         &mut self,
         module_name: &str,
         ir_runtime: &mut IrRuntime,
-    ) -> RuntimeResult<Rc<Module>> {
+    ) -> RuntimeResult<Arc<Module>> {
         // If already loaded, return it.
-        if let Some(module) = self.modules.borrow().get(module_name) {
+        if let Some(module) = self.modules.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(module_name) {
             return Ok(module.clone());
         }
-        // If module is not found, we need to load it from file.
+
         // Check for circular dependency.
         if self
             .loading_stack
-            .borrow()
+            .read()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
             .contains(&module_name.to_string())
         {
-            // It's a cycle. We'll create and register a temporary, empty module to break the cycle.
+            // It's a cycle. Create and register a temporary placeholder module to break the cycle.
             let placeholder_metadata = ModuleMetadata {
                 name: module_name.to_string(),
                 docstring: Some("placeholder for circular dependency".to_string()),
@@ -210,63 +228,60 @@ impl ModuleRegistry {
                 version: None,
                 compiled_at: std::time::SystemTime::now(),
             };
-            let placeholder_module = Rc::new(Module {
+            let placeholder_module = Arc::new(Module {
                 metadata: placeholder_metadata,
                 ir_node: IrNode::Do {
-                    id: 0,                // placeholder ID for circular dependency breaking
-                    ir_type: IrType::Any, // placeholder type
+                    id: 0,
+                    ir_type: IrType::Any,
                     expressions: vec![],
                     source_location: None,
                 },
-                exports: RefCell::new(HashMap::new()),
-                namespace: Rc::new(RefCell::new(IrEnvironment::new())),
+                exports: RwLock::new(HashMap::new()),
+                namespace: Arc::new(RwLock::new(IrEnvironment::new())),
                 dependencies: Vec::new(),
             });
 
             // Register the placeholder to allow dependent modules to compile.
             self.modules
-                .borrow_mut()
+                .write()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
                 .insert(module_name.to_string(), placeholder_module.clone());
 
             return Ok(placeholder_module);
         }
 
-        self.loading_stack
-            .borrow_mut()
-            .push(module_name.to_string());
+        // Push module onto loading stack
+        {
+            let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            guard.push(module_name.to_string());
+        }
 
         // Compile the module from source, getting back the module structure and the bindings map.
-        let (compiled_module, bindings) = match self.load_module_from_file(module_name, ir_runtime)
-        {
+        let (compiled_module, bindings) = match self.load_module_from_file(module_name, ir_runtime) {
             Ok(result) => result,
             Err(e) => {
-                self.loading_stack.borrow_mut().pop();
+                // Pop loading stack on error
+                let _ = { let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?; guard.pop(); };
                 return Err(e);
             }
         };
 
-        // Now, execute the module's IR to populate its namespace.
-        // The module's environment is internal to the CompiledModule structure.
-        ir_runtime
-            .execute_node(
-                &compiled_module.ir_node,
-                &mut compiled_module.namespace.borrow_mut(),
-                false,
-                self,
-            )
-            .map_err(|e| {
-                self.loading_stack.borrow_mut().pop();
-                e
-            })?;
+        // Execute the module's IR to populate its namespace.
+        {
+            let mut ns_guard = compiled_module.namespace.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            match ir_runtime.execute_node(&compiled_module.ir_node, &mut *ns_guard, false, self) {
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = { let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?; guard.pop(); };
+                    return Err(e);
+                }
+            }
+        }
 
         // After execution, populate the exports using the bindings map and the populated environment.
-        if let IrNode::Module {
-            exports: export_names,
-            ..
-        } = &compiled_module.ir_node
-        {
-            let mut exports_map = compiled_module.exports.borrow_mut();
-            let module_env_borrow = compiled_module.namespace.borrow();
+        if let IrNode::Module { exports: export_names, .. } = &compiled_module.ir_node {
+            let mut exports_map = compiled_module.exports.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let module_env_borrow = compiled_module.namespace.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
 
             // DEBUG: Print bindings and environment keys before export population
             #[cfg(debug_assertions)]
@@ -289,14 +304,11 @@ impl ModuleRegistry {
                             export_name: export_name.to_string(),
                             value: value.clone(),
                             ir_type: binding_info.ir_type.clone(),
-                            export_type: match value {
-                                Value::Function(_) => ExportType::Function,
-                                _ => ExportType::Variable,
-                            },
+                            export_type: match value { Value::Function(_) => ExportType::Function, _ => ExportType::Variable },
                         };
                         exports_map.insert(export_name.to_string(), export);
                     } else {
-                        self.loading_stack.borrow_mut().pop();
+                        let _ = { let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?; guard.pop(); };
                         return Err(RuntimeError::ModuleError(format!(
                             "Exported symbol '{}' not found in module '{}' environment after execution.",
                             export_name, module_name
@@ -306,14 +318,20 @@ impl ModuleRegistry {
             }
         }
 
-        self.loading_stack.borrow_mut().pop();
+        // Pop the loading stack after successful compilation
+        {
+            let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let _ = guard.pop();
+        }
 
         // Register the definitive, fully-loaded module. This will overwrite any placeholders.
         self.modules
-            .borrow_mut()
+            .write()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
             .insert(module_name.to_string(), compiled_module.clone());
         self.module_environments
-            .borrow_mut()
+            .write()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
             .insert(module_name.to_string(), compiled_module.namespace.clone());
 
         // ----- L4 cache publishing prototype -----
@@ -323,7 +341,7 @@ impl ModuleRegistry {
             let bytecode = backend.compile_module(&compiled_module.ir_node);
 
             // Interface hash = SHA256(sorted export names)::hex
-            let mut export_names: Vec<String> = compiled_module.exports.borrow().keys().cloned().collect();
+            let mut export_names: Vec<String> = compiled_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.keys().cloned().collect();
             export_names.sort();
             let joined = export_names.join("::");
             let mut hasher = Sha256::new();
@@ -343,7 +361,7 @@ impl ModuleRegistry {
         &mut self,
         module_name: &str,
         ir_runtime: &mut IrRuntime,
-    ) -> RuntimeResult<(Rc<Module>, HashMap<String, BindingInfo>)> {
+    ) -> RuntimeResult<(Arc<Module>, HashMap<String, BindingInfo>)> {
         // Resolve module path from module name
         let module_path = self.resolve_module_path(module_name)?;
 
@@ -366,7 +384,7 @@ impl ModuleRegistry {
         module_def: crate::ast::ModuleDefinition,
         source_path: &std::path::Path,
         ir_runtime: &mut IrRuntime,
-    ) -> RuntimeResult<(Rc<Module>, HashMap<String, BindingInfo>)> {
+    ) -> RuntimeResult<(Arc<Module>, HashMap<String, BindingInfo>)> {
         use std::collections::HashMap;
 
         // Create module metadata
@@ -378,8 +396,8 @@ impl ModuleRegistry {
             compiled_at: std::time::SystemTime::now(),
         };
         // Create module namespace environment with stdlib as parent, wrapped for interior mutability
-        let stdlib_env = Rc::new(IrEnvironment::with_stdlib(self)?);
-        let module_env = Rc::new(RefCell::new(IrEnvironment::with_parent(stdlib_env)));
+    let stdlib_env = Arc::new(IrEnvironment::with_stdlib(self)?);
+    let module_env = Arc::new(RwLock::new(IrEnvironment::with_parent(stdlib_env)));
 
         // Process module dependencies first
         let mut dependencies = Vec::new();
@@ -410,7 +428,7 @@ impl ModuleRegistry {
                 match (&import_def.alias, &import_def.only) {
                     (Some(alias), None) => {
                         // Import with alias: (import [module :as alias])
-                        for (export_name, export) in loaded_dep_module.exports.borrow().iter() {
+                        for (export_name, export) in loaded_dep_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
                             let qualified_name = format!("{}/{}", alias.0, export_name);
                             let binding_id = ir_converter.next_id();
                             let binding_kind = match export.export_type {
@@ -433,7 +451,7 @@ impl ModuleRegistry {
                         for symbol_ast in only_symbols {
                             let export_name = &symbol_ast.0;
                             if let Some(export) =
-                                loaded_dep_module.exports.borrow().get(export_name)
+                                loaded_dep_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(export_name)
                             {
                                 let binding_id = ir_converter.next_id();
                                 let binding_kind = match export.export_type {
@@ -459,7 +477,7 @@ impl ModuleRegistry {
                     }
                     (None, None) => {
                         // Import all symbols, qualified by the full module name
-                        for (export_name, export) in loaded_dep_module.exports.borrow().iter() {
+                        for (export_name, export) in loaded_dep_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
                             let qualified_name = format!("{}/{}", dep_module_name, export_name);
                             let binding_id = ir_converter.next_id();
                             let binding_kind = match export.export_type {
@@ -567,20 +585,23 @@ impl ModuleRegistry {
         let compiled_module = Module {
             metadata,
             ir_node: module_ir_node,
-            exports: RefCell::new(HashMap::new()),
+            exports: RwLock::new(HashMap::new()),
             namespace: module_env,
             dependencies,
         };
 
-        Ok((Rc::new(compiled_module), bindings))
+        Ok((Arc::new(compiled_module), bindings))
     }
 
-    pub fn get_module(&self, module_name: &str) -> Option<Rc<Module>> {
-        self.modules.borrow().get(module_name).cloned()
+    pub fn get_module(&self, module_name: &str) -> Option<Arc<Module>> {
+        self.modules.read().map_err(|_e| ()).ok().and_then(|m| m.get(module_name).cloned())
     }
 
-    pub fn loaded_modules(&self) -> std::cell::Ref<HashMap<String, Rc<Module>>> {
-        self.modules.borrow()
+    pub fn loaded_modules(&self) -> std::collections::HashMap<String, Arc<Module>> {
+        match self.modules.read() {
+            Ok(guard) => guard.clone(),
+            Err(_) => HashMap::new(),
+        }
     }
     pub fn is_qualified_symbol(name: &str) -> bool {
         if let Some(slash_pos) = name.find('/') {
@@ -603,7 +624,7 @@ impl ModuleRegistry {
         let symbol_name = parts[1];
 
         if let Some(module) = self.get_module(module_name) {
-            if let Some(export) = module.exports.borrow().get(symbol_name) {
+            if let Some(export) = module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(symbol_name) {
                 Ok(export.value.clone())
             } else {
                 Err(RuntimeError::SymbolNotFound(format!(
@@ -617,7 +638,7 @@ impl ModuleRegistry {
             let mut ir_runtime = IrRuntime::new_compat(delegation_engine); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
-                    if let Some(export) = module.exports.borrow().get(symbol_name) {
+                    if let Some(export) = module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(symbol_name) {
                         Ok(export.value.clone())
                     } else {
                         Err(RuntimeError::SymbolNotFound(format!(
@@ -699,6 +720,32 @@ impl ModuleRegistry {
     }
 }
 
+impl Clone for ModuleRegistry {
+    fn clone(&self) -> Self {
+        let modules_map = match self.modules.read() {
+            Ok(g) => g.clone(),
+            Err(_) => HashMap::new(),
+        };
+        let module_envs = match self.module_environments.read() {
+            Ok(g) => g.clone(),
+            Err(_) => HashMap::new(),
+        };
+        let loading = match self.loading_stack.read() {
+            Ok(g) => g.clone(),
+            Err(_) => Vec::new(),
+        };
+
+        ModuleRegistry {
+            modules: RwLock::new(modules_map),
+            module_environments: RwLock::new(module_envs),
+            module_paths: self.module_paths.clone(),
+            loading_stack: RwLock::new(loading),
+            l4_cache: self.l4_cache.clone(),
+            bytecode_backend: self.bytecode_backend.clone(),
+        }
+    }
+}
+
 /// Module-aware runtime that extends IrRuntime
 pub struct ModuleAwareRuntime {
     /// Core IR runtime
@@ -761,8 +808,7 @@ impl ModuleAwareRuntime {
         } = module_node
         {
             // Create module environment
-            let module_env: Rc<RefCell<IrEnvironment>> =
-                Rc::new(RefCell::new(IrEnvironment::new()));
+            let module_env: Arc<RwLock<IrEnvironment>> = Arc::new(RwLock::new(IrEnvironment::new()));
             let mut module_exports = HashMap::new();
 
             // First, execute all definitions and collect them in the environment
@@ -787,56 +833,46 @@ impl ModuleAwareRuntime {
                             }),
                             refer_all: false, // This needs to be determined from AST
                         };
-                        self.module_registry.import_symbols(
-                            &import_spec,
-                            &mut module_env.borrow_mut(),
-                            &mut self.ir_runtime,
-                        )?;
+                        {
+                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                            self.module_registry.import_symbols(&import_spec, &mut *guard, &mut self.ir_runtime)?;
+                        }
                     }
                     IrNode::FunctionDef {
                         name: func_name,
                         lambda,
                         ..
                     } => {
-                        let func_value = self.ir_runtime.execute_node(
-                            lambda,
-                            &mut module_env.borrow_mut(),
-                            false,
-                            &mut self.module_registry,
-                        )?;
-                        module_env
-                            .borrow_mut()
-                            .define(func_name.clone(), func_value.clone());
+                        {
+                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                            let func_value = self.ir_runtime.execute_node(lambda, &mut *guard, false, &mut self.module_registry)?;
+                            guard.define(func_name.clone(), func_value.clone());
+                        }
                     }
                     IrNode::VariableDef {
                         name: var_name,
                         init_expr,
                         ..
                     } => {
-                        let var_value = self.ir_runtime.execute_node(
-                            init_expr,
-                            &mut module_env.borrow_mut(),
-                            false,
-                            &mut self.module_registry,
-                        )?;
-                        module_env
-                            .borrow_mut()
-                            .define(var_name.clone(), var_value.clone());
+                        {
+                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                            let var_value = self.ir_runtime.execute_node(init_expr, &mut *guard, false, &mut self.module_registry)?;
+                            guard.define(var_name.clone(), var_value.clone());
+                        }
                     }
                     _ => {
-                        self.ir_runtime.execute_node(
-                            definition,
-                            &mut module_env.borrow_mut(),
-                            false,
-                            &mut self.module_registry,
-                        )?;
+                        {
+                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                            self.ir_runtime.execute_node(definition, &mut *guard, false, &mut self.module_registry)?;
+                        }
                     }
                 }
             }
 
             // Now, register all exports listed in the exports vector
             for export_name in exports {
-                if let Some(value) = module_env.borrow().get(export_name) {
+                let guard = module_env.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                if let Some(value) = guard.get(export_name) {
                     let export_type = match &value {
                         Value::Function(_) => ExportType::Function,
                         _ => ExportType::Variable,
@@ -864,7 +900,7 @@ impl ModuleAwareRuntime {
                     compiled_at: std::time::SystemTime::now(),
                 },
                 ir_node: module_node.clone(),
-                exports: RefCell::new(module_exports),
+                exports: RwLock::new(module_exports),
                 namespace: module_env,
                 dependencies: Vec::new(),
             };
@@ -941,7 +977,7 @@ mod tests {
         assert_eq!(registry.loaded_modules().len(), 0);
     }
     #[test]
-    fn test_module_loading_from_file() {
+    fn test_module_loading_from_file() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
@@ -955,14 +991,15 @@ mod tests {
         let expected_exports = vec!["add", "multiply", "square"];
         for export in expected_exports {
             assert!(
-                module.exports.borrow().contains_key(export),
+                module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.contains_key(export),
                 "Missing export: {}",
                 export
             );
         }
+        Ok(())
     }
     #[test]
-    fn test_qualified_symbol_resolution() {
+    fn test_qualified_symbol_resolution() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
@@ -972,8 +1009,9 @@ mod tests {
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
 
         // Resolve qualified symbol - should succeed now
-        let result = registry.resolve_qualified_symbol("math.utils/add");
-        assert!(result.is_ok(), "Should resolve math.utils/add symbol");
+    let result = registry.resolve_qualified_symbol("math.utils/add");
+    assert!(result.is_ok(), "Should resolve math.utils/add symbol");
+    Ok(())
     }
 
     #[test]
@@ -981,7 +1019,9 @@ mod tests {
         let mut registry = ModuleRegistry::new();
         registry
             .loading_stack
-            .borrow_mut()
+            .write()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))
+            .unwrap()
             .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
@@ -990,12 +1030,7 @@ mod tests {
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();
         assert_eq!(module.metadata.name, "module-a");
-        assert!(module
-            .metadata
-            .docstring
-            .as_deref()
-            .unwrap_or("")
-            .contains("placeholder"));
+    assert!(module.metadata.docstring.as_deref().unwrap_or("").contains("placeholder"));
     }
     #[test]
     fn test_module_aware_runtime() {

@@ -11,7 +11,6 @@ use rtfs_compiler::ccos::remote_models::{
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use reqwest::blocking::Client;
 
@@ -116,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let delegation_engine = setup_delegation_engine();
 
     // Create evaluator
-    let module_registry = Rc::new(ModuleRegistry::new());
+    let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(

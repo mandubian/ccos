@@ -20,7 +20,7 @@ use crate::ccos::{
 use crate::ast::{Expression, TopLevel};
 use crate::parser;
 use std::sync::Arc;
-use std::rc::Rc;
+// switched to Arc for ModuleRegistry
 #[allow(unused_imports)]
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -132,7 +132,7 @@ impl CCOSEnvironment {
         let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         // Create evaluator
         let evaluator = Evaluator::new(
-            Rc::new(module_registry),
+            std::sync::Arc::new(module_registry),
             delegation_engine,
             runtime_context,
             host.clone(),

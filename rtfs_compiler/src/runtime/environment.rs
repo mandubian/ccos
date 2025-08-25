@@ -6,12 +6,12 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::Value;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// The runtime environment, which manages the scope chain for variable lookups for the AST evaluator.
 #[derive(Debug, Clone)]
 pub struct Environment {
-    parent: Option<Rc<Environment>>,
+    parent: Option<Arc<Environment>>,
     bindings: HashMap<Symbol, Value>,
 }
 
@@ -25,7 +25,7 @@ impl Environment {
     }
 
     /// Creates a new child environment that inherits from a parent.
-    pub fn with_parent(parent: Rc<Environment>) -> Self {
+    pub fn with_parent(parent: Arc<Environment>) -> Self {
         Environment {
             parent: Some(parent),
             bindings: HashMap::new(),
@@ -52,7 +52,7 @@ impl Environment {
         let mut names = self.bindings.keys().map(|s| s.0.clone()).collect::<Vec<_>>();
         
         // Also collect names from parent environments to ensure we get all stdlib functions
-        if let Some(parent) = &self.parent {
+    if let Some(parent) = &self.parent {
             let mut parent_names = parent.symbol_names();
             names.append(&mut parent_names);
         }
@@ -81,7 +81,7 @@ impl Environment {
 /// The runtime environment for the IR interpreter.
 #[derive(Debug, Clone, Default)]
 pub struct IrEnvironment {
-    parent: Option<Rc<IrEnvironment>>,
+    parent: Option<Arc<IrEnvironment>>,
     bindings: HashMap<String, Value>,
 }
 
@@ -95,14 +95,14 @@ impl IrEnvironment {
     pub fn with_stdlib(module_registry: &ModuleRegistry) -> Result<Self, RuntimeError> {
         let mut env = Self::new();
         if let Some(stdlib_module) = module_registry.get_module("stdlib") {
-            for (name, export) in stdlib_module.exports.borrow().iter() {
+            for (name, export) in stdlib_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
                 env.define(name.clone(), export.value.clone());
             }
         }
         Ok(env)
     }
 
-    pub fn with_parent(parent: Rc<IrEnvironment>) -> Self {
+    pub fn with_parent(parent: Arc<IrEnvironment>) -> Self {
         IrEnvironment {
             parent: Some(parent),
             bindings: HashMap::new(),
@@ -112,7 +112,7 @@ impl IrEnvironment {
     /// Creates a new child environment that inherits from a parent.
     pub fn new_child(&self) -> Self {
         IrEnvironment {
-            parent: Some(Rc::new(self.clone())),
+            parent: Some(Arc::new(self.clone())),
             bindings: HashMap::new(),
         }
     }

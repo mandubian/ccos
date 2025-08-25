@@ -12,7 +12,7 @@ use crate::runtime::environment::Environment;
 use crate::runtime::evaluator::Evaluator;
 use crate::ast::Symbol;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Secure Standard Library - contains only pure, safe functions
 pub struct SecureStandardLibrary;
@@ -40,7 +40,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "+".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::add),
+                func: Arc::new(Self::add),
             })),
         );
         
@@ -49,7 +49,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "-".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::subtract),
+                func: Arc::new(Self::subtract),
             })),
         );
         
@@ -58,7 +58,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "*".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::multiply),
+                func: Arc::new(Self::multiply),
             })),
         );
         
@@ -67,7 +67,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "/".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::divide),
+                func: Arc::new(Self::divide),
             })),
         );
 
@@ -77,7 +77,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "max".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::max_value),
+                func: Arc::new(Self::max_value),
             })),
         );
 
@@ -87,7 +87,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "min".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::min_value),
+                func: Arc::new(Self::min_value),
             })),
         );
 
@@ -97,7 +97,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "inc".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| {
+                func: Arc::new(|args| {
                     if args.len() != 1 {
                         return Err(RuntimeError::Generic(
                             "inc expects exactly 1 argument".to_string(),
@@ -118,7 +118,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "dec".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(|args| {
+                func: Arc::new(|args| {
                     if args.len() != 1 {
                         return Err(RuntimeError::Generic(
                             "dec expects exactly 1 argument".to_string(),
@@ -139,7 +139,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "factorial".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::factorial),
+                func: Arc::new(Self::factorial),
             })),
         );
 
@@ -149,7 +149,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "abs".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::abs),
+                func: Arc::new(Self::abs),
             })),
         );
 
@@ -159,7 +159,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "mod".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::modulo),
+                func: Arc::new(Self::modulo),
             })),
         );
 
@@ -169,7 +169,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "sqrt".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::sqrt),
+                func: Arc::new(Self::sqrt),
             })),
         );
 
@@ -179,7 +179,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "pow".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::pow),
+                func: Arc::new(Self::pow),
             })),
         );
     }
@@ -191,7 +191,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "=".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::equal),
+                func: Arc::new(Self::equal),
             })),
         );
         
@@ -200,7 +200,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "!=".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::not_equal),
+                func: Arc::new(Self::not_equal),
             })),
         );
         
@@ -209,7 +209,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "not=".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::not_equal),
+                func: Arc::new(Self::not_equal),
             })),
         );
         
@@ -218,7 +218,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: ">".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::greater_than),
+                func: Arc::new(Self::greater_than),
             })),
         );
 
@@ -227,7 +227,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "<".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::less_than),
+                func: Arc::new(Self::less_than),
             })),
         );
 
@@ -236,7 +236,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: ">=".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::greater_equal),
+                func: Arc::new(Self::greater_equal),
             })),
         );
 
@@ -245,7 +245,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "<=".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::less_equal),
+                func: Arc::new(Self::less_equal),
             })),
         );
     }
@@ -257,7 +257,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "and".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(|args| Self::and(args)),
+                func: Arc::new(|args| Self::and(args)),
             })),
         );
         
@@ -266,7 +266,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "or".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(|args| Self::or(args)),
+                func: Arc::new(|args| Self::or(args)),
             })),
         );
         
@@ -275,7 +275,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "not".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::not),
+                func: Arc::new(Self::not),
             })),
         );
     }
@@ -287,7 +287,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "str".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::str),
+                func: Arc::new(Self::str),
             })),
         );
         
@@ -296,7 +296,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string-length".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::string_length),
+                func: Arc::new(Self::string_length),
             })),
         );
 
@@ -305,7 +305,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "substring".to_string(),
                 arity: Arity::Variadic(2),
-                func: Rc::new(Self::substring),
+                func: Arc::new(Self::substring),
             })),
         );
         
@@ -314,7 +314,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string-contains".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::string_contains),
+                func: Arc::new(Self::string_contains),
             })),
         );
 
@@ -324,7 +324,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string-upper".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::string_upper),
+                func: Arc::new(Self::string_upper),
             })),
         );
 
@@ -334,7 +334,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string-lower".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::string_lower),
+                func: Arc::new(Self::string_lower),
             })),
         );
 
@@ -344,7 +344,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string-trim".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::string_trim),
+                func: Arc::new(Self::string_trim),
             })),
         );
     }
@@ -357,7 +357,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "map".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::map_with_context),
+                func: Arc::new(Self::map_with_context),
             })),
         );
 
@@ -367,7 +367,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "filter".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::filter_with_context),
+                func: Arc::new(Self::filter_with_context),
             })),
         );
 
@@ -377,7 +377,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "reduce".to_string(),
                 arity: Arity::Range(2, 3),
-                func: Rc::new(Self::reduce_with_context),
+                func: Arc::new(Self::reduce_with_context),
             })),
         );
 
@@ -387,7 +387,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "empty?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::empty_p),
+                func: Arc::new(Self::empty_p),
             })),
         );
 
@@ -397,7 +397,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "cons".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::cons),
+                func: Arc::new(Self::cons),
             })),
         );
         
@@ -406,7 +406,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "first".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::first),
+                func: Arc::new(Self::first),
             })),
         );
         
@@ -415,7 +415,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "rest".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::rest),
+                func: Arc::new(Self::rest),
             })),
         );
 
@@ -425,7 +425,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "get-in".to_string(),
                 arity: Arity::Variadic(2),
-                func: Rc::new(Self::get_in),
+                func: Arc::new(Self::get_in),
             })),
         );
 
@@ -435,7 +435,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "partition".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::partition),
+                func: Arc::new(Self::partition),
             })),
         );
 
@@ -445,7 +445,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "conj".to_string(),
                 arity: Arity::Variadic(1),
-                func: Rc::new(Self::conj),
+                func: Arc::new(Self::conj),
             })),
         );
         
@@ -454,7 +454,41 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "get".to_string(),
                 arity: Arity::Variadic(2),
-                func: Rc::new(Self::get),
+                func: Arc::new(Self::get),
+            })),
+        );
+
+        // Map find: (find m k) -> [k v] or nil
+        env.define(
+            &Symbol("find".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "find".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch { function: "find".into(), expected: "2".into(), actual: args.len() });
+                    }
+                    let map_value = &args[0];
+                    let key_value = &args[1];
+                    let (map, key) = match (map_value, key_value) {
+                        (Value::Map(m), Value::Keyword(kw)) => (m, MapKey::Keyword(kw.clone())),
+                        (Value::Map(m), Value::String(s)) => (m, MapKey::String(s.clone())),
+                        (Value::Map(m), Value::Integer(i)) => (m, MapKey::Integer(*i)),
+                        (other, _) => {
+                            return Err(RuntimeError::TypeError { expected: "map".into(), actual: other.type_name().into(), operation: "find".into() })
+                        }
+                    };
+                    if let Some(v) = map.get(&key) {
+                        let key_val = match key {
+                            MapKey::Keyword(ref k) => Value::Keyword(k.clone()),
+                            MapKey::String(ref s) => Value::String(s.clone()),
+                            MapKey::Integer(i) => Value::Integer(i),
+                        };
+                        Ok(Value::Vector(vec![key_val, v.clone()]))
+                    } else {
+                        Ok(Value::Nil)
+                    }
+                }),
             })),
         );
 
@@ -464,7 +498,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "nth".to_string(),
                 arity: Arity::Variadic(2),
-                func: Rc::new(Self::nth),
+                func: Arc::new(Self::nth),
             })),
         );
 
@@ -474,7 +508,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "concat".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::concat),
+                func: Arc::new(Self::concat),
             })),
         );
 
@@ -484,7 +518,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "subvec".to_string(),
                 arity: Arity::Variadic(2),
-                func: Rc::new(Self::subvec),
+                func: Arc::new(Self::subvec),
             })),
         );
 
@@ -494,7 +528,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "assoc".to_string(),
                 arity: Arity::Variadic(3),
-                func: Rc::new(Self::assoc),
+                func: Arc::new(Self::assoc),
             })),
         );
 
@@ -504,7 +538,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "dissoc".to_string(),
                 arity: Arity::Variadic(2),
-                func: Rc::new(Self::dissoc),
+                func: Arc::new(Self::dissoc),
             })),
         );
         
@@ -513,7 +547,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "count".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::count),
+                func: Arc::new(Self::count),
             })),
         );
         
@@ -522,7 +556,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "vector".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::vector),
+                func: Arc::new(Self::vector),
             })),
         );
         
@@ -531,7 +565,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "hash-map".to_string(),
                 arity: Arity::Variadic(0),
-                func: Rc::new(Self::hash_map),
+                func: Arc::new(Self::hash_map),
             })),
         );
 
@@ -540,7 +574,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "range".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::range),
+                func: Arc::new(Self::range),
             })),
         );
 
@@ -550,7 +584,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "length".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::length),
+                func: Arc::new(Self::length),
             })),
         );
 
@@ -560,7 +594,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "type-name".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::type_name),
+                func: Arc::new(Self::type_name),
             })),
         );
 
@@ -570,7 +604,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "reverse".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::reverse),
+                func: Arc::new(Self::reverse),
             })),
         );
 
@@ -580,7 +614,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "last".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::last),
+                func: Arc::new(Self::last),
             })),
         );
 
@@ -590,7 +624,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "take".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::take),
+                func: Arc::new(Self::take),
             })),
         );
 
@@ -600,7 +634,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "drop".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::drop),
+                func: Arc::new(Self::drop),
             })),
         );
 
@@ -610,7 +644,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "distinct".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::distinct),
+                func: Arc::new(Self::distinct),
             })),
         );
 
@@ -620,7 +654,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "every?".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::every_with_context),
+                func: Arc::new(Self::every_with_context),
             })),
         );
 
@@ -630,7 +664,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "some?".to_string(),
                 arity: Arity::Fixed(2),
-                func: Rc::new(Self::some_with_context),
+                func: Arc::new(Self::some_with_context),
             })),
         );
     }
@@ -642,7 +676,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "int?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::int_p),
+                func: Arc::new(Self::int_p),
             })),
         );
         
@@ -651,7 +685,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "float?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::float_p),
+                func: Arc::new(Self::float_p),
             })),
         );
 
@@ -660,7 +694,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "number?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::number_p),
+                func: Arc::new(Self::number_p),
             })),
         );
 
@@ -669,7 +703,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::string_p),
+                func: Arc::new(Self::string_p),
             })),
         );
 
@@ -678,7 +712,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "string-p".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::string_p),
+                func: Arc::new(Self::string_p),
             })),
         );
 
@@ -687,7 +721,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "bool?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::bool_p),
+                func: Arc::new(Self::bool_p),
             })),
         );
 
@@ -696,7 +730,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "nil?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::nil_p),
+                func: Arc::new(Self::nil_p),
             })),
         );
 
@@ -705,7 +739,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "map?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::map_p),
+                func: Arc::new(Self::map_p),
             })),
         );
 
@@ -714,7 +748,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "vector?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::vector_p),
+                func: Arc::new(Self::vector_p),
             })),
         );
 
@@ -723,7 +757,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "keyword?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::keyword_p),
+                func: Arc::new(Self::keyword_p),
             })),
         );
 
@@ -732,7 +766,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "symbol?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::symbol_p),
+                func: Arc::new(Self::symbol_p),
             })),
         );
 
@@ -741,7 +775,7 @@ impl SecureStandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "fn?".to_string(),
                 arity: Arity::Fixed(1),
-                func: Rc::new(Self::fn_p),
+                func: Arc::new(Self::fn_p),
             })),
         );
     }

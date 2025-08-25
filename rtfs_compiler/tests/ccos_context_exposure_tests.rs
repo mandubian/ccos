@@ -1,4 +1,3 @@
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use rtfs_compiler::parser;
@@ -36,7 +35,7 @@ fn test_context_exposure_with_step_overrides() {
     ctx.enable_context_exposure_for("ccos.echo");
 
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, ctx));
-    let module_registry = Rc::new(ModuleRegistry::new());
+  let module_registry = Arc::new(ModuleRegistry::new());
     let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let mut evaluator = Evaluator::new(module_registry, de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host.clone());
 

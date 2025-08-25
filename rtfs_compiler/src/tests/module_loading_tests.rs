@@ -8,7 +8,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_file_based_module_loading() {
+    fn test_file_based_module_loading() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         
         // Add our test modules directory to the search path
@@ -23,7 +23,7 @@ mod tests {
         match result {
             Ok(module) => {
                 println!("✅ Successfully loaded module: {}", module.metadata.name);
-                println!("   Exports: {:?}", module.exports.borrow().keys().collect::<Vec<_>>());
+                    println!("   Exports: {:?}", module.exports.read().map_err(|e| format!("RwLock poisoned: {}", e))?.keys().collect::<Vec<_>>());
                 assert_eq!(module.metadata.name, "math.utils");
             }
             Err(e) => {
@@ -37,7 +37,7 @@ mod tests {
         match result {
             Ok(module) => {
                 println!("✅ Successfully loaded module: {}", module.metadata.name);
-                println!("   Exports: {:?}", module.exports.borrow().keys().collect::<Vec<_>>());
+                println!("   Exports: {:?}", module.exports.read().map_err(|e| format!("RwLock poisoned: {}", e))?.keys().collect::<Vec<_>>());
                 assert_eq!(module.metadata.name, "string.helpers");
             }
             Err(e) => {
@@ -62,7 +62,8 @@ mod tests {
         
         // Test that we can list loaded modules
         let loaded_modules = registry.loaded_modules();
-        println!("📋 Loaded modules: {:?}", loaded_modules);
+    println!("📋 Loaded modules: {:?}", loaded_modules);
+    Ok(())
     }
 
     #[test]

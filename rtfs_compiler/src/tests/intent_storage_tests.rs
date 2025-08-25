@@ -140,3 +140,56 @@ mod intent_graph_update_integration {
         assert_eq!(got2.status, IntentStatus::Failed);
     }
 }
+
+#[cfg(test)]
+mod intent_graph_backup_restore_integration {
+    use crate::ccos::intent_graph::IntentGraph;
+    use crate::ccos::intent_graph::config::IntentGraphConfig;
+    use crate::ccos::types::{StorableIntent, EdgeType};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_intent_graph_backup_and_restore_file_storage() {
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("graph_store.json");
+        let backup_path = dir.path().join("graph_backup.json");
+
+        // Create graph with file-backed storage
+        let mut graph = IntentGraph::new_async(IntentGraphConfig::with_file_storage(store_path.clone())).await.expect("create graph");
+
+        // Create two intents and store
+        let intent_a = StorableIntent::new("Backup intent A".to_string());
+        let id_a = intent_a.intent_id.clone();
+        let intent_b = StorableIntent::new("Backup intent B".to_string());
+        let id_b = intent_b.intent_id.clone();
+
+        graph.storage.store_intent(intent_a).await.expect("store a");
+        graph.storage.store_intent(intent_b).await.expect("store b");
+
+        // Add an edge A -> B
+        graph.storage.create_edge(id_a.clone(), id_b.clone(), EdgeType::DependsOn).await.expect("create edge");
+
+        // Create backup
+        graph.storage.backup(&backup_path).await.expect("backup");
+        assert!(backup_path.exists());
+
+        // New fresh graph backed by a different file
+        let mut graph2 = IntentGraph::new_async(IntentGraphConfig::with_file_storage(dir.path().join("graph_store_restored.json"))).await.expect("create graph2");
+
+        // Restore into graph2
+        graph2.storage.restore(&backup_path).await.expect("restore");
+
+        // Verify intents present
+        let got_a = graph2.storage.get_intent(&id_a).await.expect("get a");
+        assert!(got_a.is_some());
+        assert_eq!(got_a.unwrap().goal, "Backup intent A");
+
+        let got_b = graph2.storage.get_intent(&id_b).await.expect("get b");
+        assert!(got_b.is_some());
+        assert_eq!(got_b.unwrap().goal, "Backup intent B");
+
+        // Verify edge exists
+        let edges_for_a = graph2.storage.get_edges_for_intent(&id_a).await.expect("edges a");
+        assert!(edges_for_a.iter().any(|e| e.to == id_b && e.from == id_a));
+    }
+}

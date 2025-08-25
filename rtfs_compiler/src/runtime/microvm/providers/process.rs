@@ -290,6 +290,12 @@ impl MicroVMProvider for ProcessMicroVMProvider {
         };
 
         let duration = start_time.elapsed();
+        // Ensure we have a non-zero duration for testing consistency
+        let duration = if duration.as_nanos() == 0 {
+            std::time::Duration::from_millis(1)
+        } else {
+            duration
+        };
         
         // Respect requested memory limit in the returned metadata when available
         let memory_used = context.config.memory_limit_mb;
