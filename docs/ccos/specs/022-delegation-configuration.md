@@ -49,6 +49,34 @@ pub struct DelegationConfig {
     pub feedback_decay: Option<f64>,
     /// Agent registry configuration
     pub agent_registry: Option<AgentRegistryConfig>,
+    /// Adaptive threshold configuration for dynamic delegation decisions
+    pub adaptive_threshold: Option<AdaptiveThresholdConfig>,
+}
+
+### Adaptive Threshold Configuration
+
+The `AdaptiveThresholdConfig` structure provides dynamic threshold adjustment based on agent performance:
+
+```rust
+pub struct AdaptiveThresholdConfig {
+    /// Whether adaptive threshold is enabled (default: true)
+    pub enabled: Option<bool>,
+    /// Base threshold value (default: 0.65)
+    pub base_threshold: Option<f64>,
+    /// Minimum threshold value (default: 0.3)
+    pub min_threshold: Option<f64>,
+    /// Maximum threshold value (default: 0.9)
+    pub max_threshold: Option<f64>,
+    /// Weight for success rate influence (default: 0.3)
+    pub success_rate_weight: Option<f64>,
+    /// Weight for historical performance (default: 0.2)
+    pub historical_weight: Option<f64>,
+    /// Decay factor for performance tracking (default: 0.95)
+    pub decay_factor: Option<f64>,
+    /// Minimum samples before adaptive threshold applies (default: 10)
+    pub min_samples: Option<u32>,
+    /// Environment variable override prefix (default: "CCOS_ADAPTIVE")
+    pub env_prefix: Option<String>,
 }
 ```
 
@@ -80,6 +108,45 @@ pub struct AgentDefinition {
     pub metadata: HashMap<String, String>,
 }
 ```
+
+## Adaptive Threshold Functionality
+
+The adaptive threshold system dynamically adjusts delegation decisions based on historical agent performance:
+
+### Key Features
+- **Decay-weighted Performance Tracking**: Historical success rates with configurable decay factors
+- **Dynamic Threshold Calculation**: Thresholds adjust based on agent performance metrics
+- **Bounds Enforcement**: Configurable minimum and maximum threshold values
+- **Environment Variable Overrides**: Runtime configuration via environment variables
+- **Minimum Samples Requirement**: Adaptive threshold only applies after sufficient performance data
+
+### Configuration Example
+```rust
+let adaptive_config = AdaptiveThresholdConfig {
+    enabled: Some(true),
+    base_threshold: Some(0.65),
+    min_threshold: Some(0.3),
+    max_threshold: Some(0.9),
+    success_rate_weight: Some(0.3),
+    historical_weight: Some(0.2),
+    decay_factor: Some(0.95),
+    min_samples: Some(10),
+    env_prefix: Some("CCOS_ADAPTIVE".to_string()),
+};
+
+agent_config.delegation.adaptive_threshold = Some(adaptive_config);
+```
+
+### Environment Variables
+The adaptive threshold system supports environment variable overrides:
+- `CCOS_ADAPTIVE_ENABLED`: Enable/disable adaptive threshold
+- `CCOS_ADAPTIVE_BASE_THRESHOLD`: Set base threshold value
+- `CCOS_ADAPTIVE_MIN_THRESHOLD`: Set minimum threshold value
+- `CCOS_ADAPTIVE_MAX_THRESHOLD`: Set maximum threshold value
+- `CCOS_ADAPTIVE_SUCCESS_RATE_WEIGHT`: Set success rate weight
+- `CCOS_ADAPTIVE_HISTORICAL_WEIGHT`: Set historical performance weight
+- `CCOS_ADAPTIVE_DECAY_FACTOR`: Set decay factor
+- `CCOS_ADAPTIVE_MIN_SAMPLES`: Set minimum samples requirement
 
 ## Current Implementation vs Specification
 
