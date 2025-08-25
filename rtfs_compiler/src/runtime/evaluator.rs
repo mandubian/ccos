@@ -18,7 +18,7 @@ use crate::ccos::delegation::StaticDelegationEngine;
 use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 type SpecialFormHandler = fn(&Evaluator, &[Expression], &mut Environment) -> RuntimeResult<Value>;
 
 #[derive(Clone, Debug)]
@@ -1837,7 +1837,7 @@ impl Evaluator {
         let constructor = Function::BuiltinWithContext(BuiltinFunctionWithContext {
             name: format!("{}.new", struct_name),
             arity: Arity::Fixed(1), // Takes a map as input
-            func: Rc::new(move |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| -> RuntimeResult<Value> {
+            func: Arc::new(move |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| -> RuntimeResult<Value> {
                 if args.len() != 1 {
                     return Err(RuntimeError::ArityMismatch {
                         function: struct_name_clone.clone(),

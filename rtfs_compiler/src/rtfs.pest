@@ -42,11 +42,11 @@ nil     = @{ "nil" ~ !identifier_chars }
 
 // --- Identifiers & Symbols ---
 // Based on grammar_spec.md, allowing common Lisp chars. '.' is for ns, '-' is common.
-// Allow dot-prefixed identifiers and shorthand placeholders like % and @ for context tokens
+// Allow dot-prefixed identifiers and shorthand placeholders like % for context tokens
 dot_prefixed_identifier = @{ "." ~ (ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" ) ~ (ASCII_ALPHANUMERIC | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | ".")* }
 
-identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" | "@" }
-identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | "@" }
+identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
 identifier            = @{ dot_prefixed_identifier | (identifier_start_char ~ identifier_chars*) }
 
 // --- Versioned Namespacing Extension ---
