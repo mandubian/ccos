@@ -7,6 +7,8 @@
 - [SEP-000: System Architecture](./000-ccos-architecture.md)
 - [SEP-003: Causal Chain](./003-causal-chain.md)
 - [SEP-009: Context Horizon](./009-context-horizon.md)
+ - [SEP-023: Observability Foundation](./023-observability-foundation.md)
+ - [SEP-024: Observability Ingestor Capability](./024-observability-ingestor-capability.md)
 
 ## 1. Abstract
 
@@ -40,7 +42,7 @@ graph TD
 
     CC -- "1. Actions appended" --> Orch((Orchestrator));
     Orch -- "2. Ingestor subscribes to append feed" --> MI;
-    MI -- "3. Derives & persists distilled entries" --> WM;
+    MI -- "3. Derives & persists distilled entries" --> WM; %% See SEP-023/024
     CH -- "4. Queries for relevant wisdom" --> WM;
     CH -- "5. Builds token-aware payload" --> Arbiter;
 ```

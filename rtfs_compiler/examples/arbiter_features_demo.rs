@@ -305,6 +305,7 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
     let delegation_config = DelegationConfig {
         enabled: true,
         threshold: 0.65,
+        adaptive_threshold: None,
         max_candidates: 3,
         min_skill_hits: Some(1),
         agent_registry: AgentRegistryConfig {
