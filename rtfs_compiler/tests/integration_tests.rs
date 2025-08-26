@@ -1538,3 +1538,30 @@ async fn test_capability_marketplace_resource_monitoring_disabled() {
     
     assert!(result.is_ok(), "Capability should execute without resource monitoring");
 }
+
+// --- Observability: Prometheus exporter smoke test (feature-gated) ---
+#[cfg(feature = "metrics_exporter")]
+#[test]
+fn observability_prometheus_render_smoke() {
+    use std::sync::{Arc, Mutex};
+    use rtfs_compiler::runtime::RuntimeContext;
+    use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::host::RuntimeHost;
+    use rtfs_compiler::runtime::metrics_exporter::render_prometheus_text;
+
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
+    let causal_chain = Arc::new(Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().expect("chain")));
+    let host = RuntimeHost::new(
+        Arc::clone(&causal_chain),
+        Arc::clone(&capability_marketplace),
+        RuntimeContext::pure(),
+    );
+    let _ = host.record_delegation_event_for_test("intent-z", "approved", std::collections::HashMap::new());
+    let text = {
+        let guard = causal_chain.lock().unwrap();
+        render_prometheus_text(&*guard)
+    };
+    assert!(text.contains("ccos_total_cost"));
+}

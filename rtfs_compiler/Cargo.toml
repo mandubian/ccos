@@ -13,6 +13,7 @@ pest = ["dep:pest"]
 regex = ["dep:regex"]
 repl = ["rustyline"]
 cuda = ["llama_cpp/cuda"]
+metrics_exporter = []
 
 [[bin]]
 name = "rtfs_compiler"
