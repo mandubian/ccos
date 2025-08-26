@@ -1,64 +1,52 @@
-# PR: wt/archive-storage — File-backed content-addressable archive + backups
+# PR: wt/observability-foundation — Causal Chain observability, WM ingestor, and minimal metrics exporter
 
-Branch: wt/archive-storage
+Branch: wt/observability-foundation
 
 Summary
-- Adds a deterministic, file-backed ContentAddressableArchive with two-level sharding
-  (aa/bb/<hash>.json), an on-disk `index.json` mapping, and robust atomic writes
-  (temp-file write + file fsync + rename + parent-directory fsync).
-- Adds a hybrid JSON+RTFS backup format (StorageBackupData v1.1) and updates
-  `FileStorage` and `InMemoryStorage` to produce atomic backups that include an
-  optional human-readable RTFS snapshot and a small manifest.
-- Adds an integration test exercising IntentGraph backup & restore using the
-  file-backed storage. Adds a sqlite-backed archive scaffold (thread-safe via
-  Arc<Mutex<Connection>>) and focused tests for sqlite store/retrieve and
-  hash-stability across backends.
+- Modularizes the Causal Chain (ledger, signing, provenance, metrics) and adds event sinks.
+- Wires a Working Memory sink for continuous ingestion + a replay helper.
+- Adds local capability `observability.ingestor:v1.ingest` supporting single, batch, and replay.
+- Introduces lightweight in-memory performance metrics and structured JSON logs.
+- Implements a feature-gated Prometheus-like exporter (text format) and a tiny single-request HTTP server.
+- Adds a small example `serve_metrics` and updates specs/guides with quickstart and exporter docs.
 
 Files changed (high level)
-- `rtfs_compiler/src/ccos/storage_backends/file_archive.rs` — new/updated file archive
-- `rtfs_compiler/src/ccos/intent_storage.rs` — backup format v1.1 + atomic backup writes
-- `rtfs_compiler/src/ccos/storage_backends/sqlite_archive.rs` — sqlite scaffold + tests
-- `rtfs_compiler/src/tests/intent_storage_tests.rs` — integration test for IntentGraph backup/restore
-- `docs/ccos/specs/` — documentation updated/added describing file backend and backup format
-- `WORKTREE_COMPLETION_REPORT.md` — completion report for this worktree
+- `rtfs_compiler/src/ccos/causal_chain/` — modular chain with metrics, logs, sinks.
+- `rtfs_compiler/src/runtime/host.rs` — exposes metrics/log getters.
+- `rtfs_compiler/src/runtime/ccos_environment.rs` — WM sink + ingestor capability registration.
+- `rtfs_compiler/src/runtime/metrics_exporter.rs` — exporter (HELP/TYPE, label escaping, avg gauges, duration histograms) + minimal HTTP.
+- `rtfs_compiler/examples/serve_metrics.rs` — test-only server example under `metrics_exporter` feature.
+- `docs/ccos/specs/023-observability-foundation.md` (and 024) — specs updated with exporter notes and examples.
+- `WORKTREE_COMPLETION_REPORT.md` — this report.
 
 What I verified locally
-- Focused unit tests for the new file archive and sqlite scaffold passed locally.
-- Integration test `intent_graph_backup_and_restore_file_storage` passed in focused runs.
-- File-level atomic write and parent-dir fsync implemented and used for index and backups.
+- Build succeeds with and without `--features metrics_exporter` (warnings only).
+- Exporter unit test `runtime::metrics_exporter::tests::test_render_and_server_smoke` passes.
+- Feature-gated integration smoke present; metrics output includes cost, counters, gauges, and duration histograms.
 
-Suggested commands to reproduce the focused storage test runs
+Suggested commands (focused)
 ```bash
 cd rtfs_compiler
-# file archive unit test
-cargo test ccos::storage_backends::file_archive::tests::test_file_archive_store_and_retrieve -- --nocapture
-# intent graph backup/restore integration test
-cargo test tests::intent_storage_tests::intent_graph_backup_restore_integration::test_intent_graph_backup_and_restore_file_storage -- --nocapture
-# sqlite focused tests (if you added sqlite feature dependency)
-cargo test ccos::storage_backends::sqlite_archive::tests::test_sqlite_store_and_retrieve -- --nocapture
+cargo test --features metrics_exporter --no-run
+cargo test --features metrics_exporter runtime::metrics_exporter::tests::test_render_and_server_smoke -- --nocapture
+# Optional example server
+cargo run --example serve_metrics --features metrics_exporter &
+sleep 1 && curl -s http://127.0.0.1:9898/metrics | head -n 20
 ```
 
 Known issues / CI notes
-- The full crate test-suite currently reports unrelated failures in parser/arbiter
-  tests on this host; those failures are outside the scope of this storage work
-  (they affect other subsystems). The storage-focused tests above passed.
-- SQLite implementation is an initial scaffold that serializes DB access via
-  `Arc<Mutex<Connection)>` for simplicity; consider adding a connection pool
-  (r2d2 or similar) later for performance.
+- Exporter is dev/test-focused and disabled by default via feature gate; no external deps added.
+- Histogram aggregation is computed on render from in-memory actions; adequate for the intended scope.
 
 Reviewer guidance
-- Review the file archive layout and `index.json` usage first — that's the
-  critical change for the archive behavior.
-- The backup format is intentionally hybrid: canonical JSON is authoritative for
-  restore; the `rtfs` field is optional and human-friendly.
-- See `docs/ccos/specs` for a short rationale and operational notes.
+- Confirm Causal Chain modularization and metrics/log surfaces in `host`.
+- Check feature-gated exporter’s HELP/TYPE lines, label escaping, and histogram format.
+- Skim `023-observability-foundation.md` “Try it locally” and metrics list for clarity.
 
 Next steps (post-merge)
-- Optionally replace sqlite connection locking with a pool for performance.
-- Add more migration & cross-backend end-to-end tests if you want DB-backed
-  archives in production.
+- Consider adding ActionType counters and WM ingest latency metrics.
+- If needed, add persistent/cached aggregates for large chains.
 
 ---
 
-Files to include in PR (suggested): full diff in this branch; include the
-`WORKTREE_COMPLETION_REPORT.md` and docs under `docs/ccos/specs` for context.
+Include this report and the updated specs in the PR for context.
