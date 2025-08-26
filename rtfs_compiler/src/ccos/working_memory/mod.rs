@@ -28,5 +28,5 @@ pub use types::{WorkingMemoryId, WorkingMemoryEntry, WorkingMemoryMeta};
 pub use backend::{WorkingMemoryBackend, WorkingMemoryError, QueryParams, QueryResult};
 pub use backend_inmemory::InMemoryJsonlBackend;
 pub use facade::WorkingMemory;
-pub use ingestor::{MemoryIngestor, DerivedEntry};
+pub use ingestor::{MemoryIngestor, DerivedEntry, WorkingMemorySink};
 pub use boundaries::{Boundary, BoundaryType, ReductionStrategy};
