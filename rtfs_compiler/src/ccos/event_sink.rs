@@ -88,7 +88,7 @@ impl IntentEventSink for CausalChainIntentEventSink {
 /// Trait for components that want to observe Causal Chain append events.
 /// Used by adapters (for example, a Working Memory ingestion sink) to
 /// react to actions appended to the ledger.
-pub trait CausalChainEventSink: Debug {
+pub trait CausalChainEventSink: Debug + Send + Sync {
     /// Called synchronously after an action is appended to the causal chain.
     /// Implementations should remain lightweight and non-blocking.
     fn on_action_appended(&self, action: &Action);

@@ -14,540 +14,46 @@ impl CausalQuery {
     }
 }
 
-/// Causal Chain Implementation
-///
-/// This module implements the Causal Chain of Thought - an immutable, verifiable ledger
-/// that records every significant action with its complete audit trail.
-
+/// Causal Chain Implementation split into focused submodules.
 use super::event_sink::CausalChainEventSink;
-use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// Immutable ledger storage
+pub mod ledger;
+pub mod signing;
+pub mod provenance;
+pub mod metrics;
+
+use crate::ccos::causal_chain::ledger::ImmutableLedger;
+use crate::ccos::causal_chain::signing::CryptographicSigning;
+use crate::ccos::causal_chain::provenance::ProvenanceTracker;
+use crate::ccos::causal_chain::metrics::{PerformanceMetrics, CapabilityMetrics, FunctionMetrics};
+use crate::ccos::causal_chain::provenance::ActionProvenance;
+use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
+
+/// Simple in-memory log buffer for structured JSON logs (test-friendly)
 #[derive(Debug)]
-pub struct ImmutableLedger {
-    // In a full implementation, this would be append-only file storage
-    actions: Vec<Action>,
-    hash_chain: Vec<String>,
-    indices: LedgerIndices,
+struct LogBuffer {
+    entries: Vec<String>,
+    capacity: usize,
 }
 
-impl ImmutableLedger {
-    /// Get children actions for a given parent_action_id
-    pub fn get_children(&self, parent_id: &ActionId) -> Vec<&Action> {
-        self.indices.get_children(parent_id)
-            .iter()
-            .filter_map(|id| self.get_action(id))
-            .collect()
+impl LogBuffer {
+    fn new(capacity: usize) -> Self {
+        Self { entries: Vec::with_capacity(capacity.min(1024)), capacity }
     }
-
-    /// Get parent action for a given action_id
-    pub fn get_parent(&self, action_id: &ActionId) -> Option<&Action> {
-        self.get_action(action_id)
-            .and_then(|action| action.parent_action_id.as_ref())
-            .and_then(|parent_id| self.get_action(parent_id))
+    fn push(&mut self, entry: String) {
+        if self.entries.len() >= self.capacity { self.entries.remove(0); }
+        self.entries.push(entry);
     }
-    pub fn new() -> Self {
-        Self {
-            actions: Vec::new(),
-            hash_chain: Vec::new(),
-            indices: LedgerIndices::new(),
-        }
-    }
-
-    pub fn append_action(&mut self, action: &Action) -> Result<(), RuntimeError> {
-        // Calculate hash for this action
-        let action_hash = self.calculate_action_hash(action);
-
-        // Calculate the chain hash (includes previous hash)
-        let chain_hash = self.calculate_chain_hash(&action_hash);
-
-        // Append to ledger
-        self.actions.push(action.clone());
-        self.hash_chain.push(chain_hash);
-
-        // Update indices
-        self.indices.index_action(action)?;
-
-        Ok(())
-    }
-
-    pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
-        self.append_action(action)?;
-        Ok(action.action_id.clone())
-    }
-
-    pub fn get_action(&self, action_id: &ActionId) -> Option<&Action> {
-        self.actions.iter().find(|a| a.action_id == *action_id)
-    }
-
-    pub fn get_actions_by_intent(&self, intent_id: &IntentId) -> Vec<&Action> {
-        self.indices
-            .intent_actions
-            .get(intent_id)
-            .map(|action_ids| {
-                action_ids
-                    .iter()
-                    .filter_map(|id| self.get_action(id))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn get_actions_by_plan(&self, plan_id: &PlanId) -> Vec<&Action> {
-        self.indices
-            .plan_actions
-            .get(plan_id)
-            .map(|action_ids| {
-                action_ids
-                    .iter()
-                    .filter_map(|id| self.get_action(id))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn get_actions_by_capability(&self, capability_id: &CapabilityId) -> Vec<&Action> {
-        self.indices
-            .capability_actions
-            .get(capability_id)
-            .map(|action_ids| {
-                action_ids
-                    .iter()
-                    .filter_map(|id| self.get_action(id))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn get_all_actions(&self) -> &[Action] {
-        &self.actions
-    }
-
-    pub fn verify_integrity(&self) -> Result<bool, RuntimeError> {
-        let mut last_chain_hash: Option<&String> = None;
-        for (i, action) in self.actions.iter().enumerate() {
-            let action_hash = self.calculate_action_hash(action);
-            let mut hasher = Sha256::new();
-            if let Some(prev_hash) = last_chain_hash {
-                hasher.update(prev_hash.as_bytes());
-            }
-            hasher.update(action_hash.as_bytes());
-            let expected_chain_hash = format!("{:x}", hasher.finalize());
-
-            if self.hash_chain[i] != expected_chain_hash {
-                return Ok(false);
-            }
-            last_chain_hash = Some(&self.hash_chain[i]);
-        }
-        Ok(true)
-    }
-
-    fn calculate_action_hash(&self, action: &Action) -> String {
-        let mut hasher = Sha256::new();
-
-        // Hash all action fields
-        hasher.update(action.action_id.as_bytes());
-        hasher.update(action.plan_id.as_bytes());
-        hasher.update(action.intent_id.as_bytes());
-        if let Some(function_name) = &action.function_name {
-            hasher.update(function_name.as_bytes());
-        }
-        hasher.update(action.timestamp.to_string().as_bytes());
-
-        // Hash arguments
-        if let Some(args) = &action.arguments {
-            for arg in args { hasher.update(format!("{:?}", arg).as_bytes()); }
-        }
-
-        // Hash result
-        if let Some(result) = &action.result {
-            hasher.update(format!("{:?}", result).as_bytes());
-        }
-
-        // Hash metadata
-        for (key, value) in &action.metadata {
-            hasher.update(key.as_bytes());
-            hasher.update(format!("{:?}", value).as_bytes());
-        }
-
-        format!("{:x}", hasher.finalize())
-    }
-
-    fn calculate_chain_hash(&self, action_hash: &str) -> String {
-        let mut hasher = Sha256::new();
-
-        // Include previous hash in chain
-        if let Some(prev_hash) = self.hash_chain.last() {
-            hasher.update(prev_hash.as_bytes());
-        }
-
-        hasher.update(action_hash.as_bytes());
-        format!("{:x}", hasher.finalize())
-    }
-}
-
-/// Indices for fast lookup
-#[derive(Debug)]
-pub struct LedgerIndices {
-    intent_actions: HashMap<IntentId, Vec<ActionId>>,
-    plan_actions: HashMap<PlanId, Vec<ActionId>>,
-    capability_actions: HashMap<CapabilityId, Vec<ActionId>>,
-    function_actions: HashMap<String, Vec<ActionId>>,
-    timestamp_index: Vec<ActionId>, // Chronological order
-    parent_to_children: HashMap<ActionId, Vec<ActionId>>, // Tree traversal
-}
-
-impl LedgerIndices {
-    pub fn get_children(&self, parent_id: &ActionId) -> Vec<ActionId> {
-        self.parent_to_children
-            .get(parent_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-    pub fn new() -> Self {
-        Self {
-            intent_actions: HashMap::new(),
-            plan_actions: HashMap::new(),
-            capability_actions: HashMap::new(),
-            function_actions: HashMap::new(),
-            timestamp_index: Vec::new(),
-            parent_to_children: HashMap::new(),
-        }
-    }
-
-    pub fn index_action(&mut self, action: &Action) -> Result<(), RuntimeError> {
-        // Index by intent
-        self.intent_actions
-            .entry(action.intent_id.clone())
-            .or_insert_with(Vec::new)
-            .push(action.action_id.clone());
-
-        // Index by plan
-        self.plan_actions
-            .entry(action.plan_id.clone())
-            .or_insert_with(Vec::new)
-            .push(action.action_id.clone());
-
-        // Index by capability (stored in function_name for capability calls)
-        if action.action_type == ActionType::CapabilityCall {
-            if let Some(function_name) = &action.function_name {
-                self.capability_actions
-                    .entry(function_name.clone())
-                    .or_insert_with(Vec::new)
-                    .push(action.action_id.clone());
-            }
-        }
-
-        // Index by function
-        if let Some(function_name) = &action.function_name {
-            self.function_actions
-                .entry(function_name.clone())
-                .or_insert_with(Vec::new)
-                .push(action.action_id.clone());
-        }
-
-        // Index by timestamp
-        self.timestamp_index.push(action.action_id.clone());
-
-        // Index by parent_action_id for tree traversal
-        if let Some(parent_id) = &action.parent_action_id {
-            self.parent_to_children
-                .entry(parent_id.clone())
-                .or_insert_with(Vec::new)
-                .push(action.action_id.clone());
-        }
-
-        Ok(())
-    }
-}
-
-/// Cryptographic signing for actions
-#[derive(Debug)]
-pub struct CryptographicSigning {
-    // In a full implementation, this would use proper PKI
-    signing_key: String,
-    verification_keys: HashMap<String, String>,
-}
-
-impl CryptographicSigning {
-    pub fn new() -> Self {
-        Self {
-            signing_key: format!("key-{}", Uuid::new_v4()),
-            verification_keys: HashMap::new(),
-        }
-    }
-
-    pub fn sign_action(&self, action: &Action) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(self.signing_key.as_bytes());
-        hasher.update(action.action_id.as_bytes());
-        hasher.update(action.timestamp.to_string().as_bytes());
-        format!("{:x}", hasher.finalize())
-    }
-
-    pub fn verify_signature(&self, action: &Action, signature: &str) -> bool {
-        let expected_signature = self.sign_action(action);
-        signature == expected_signature
-    }
-
-    pub fn add_verification_key(&mut self, key_id: String, public_key: String) {
-        self.verification_keys.insert(key_id, public_key);
-    }
-}
-
-/// Provenance tracking
-#[derive(Debug)]
-pub struct ProvenanceTracker {
-    action_provenance: HashMap<ActionId, ActionProvenance>,
-}
-
-impl ProvenanceTracker {
-    pub fn new() -> Self {
-        Self {
-            action_provenance: HashMap::new(),
-        }
-    }
-
-    pub fn track_action(&mut self, action: &Action, _intent: &Intent) -> Result<(), RuntimeError> {
-        let provenance = ActionProvenance {
-            action_id: action.action_id.clone(),
-            intent_id: action.intent_id.clone(),
-            plan_id: action.plan_id.clone(),
-            capability_id: action.function_name.clone(),
-            execution_context: ExecutionContext::new(),
-            data_sources: Vec::new(),
-            ethical_rules: Vec::new(),
-            timestamp: action.timestamp,
-        };
-
-        self.action_provenance
-            .insert(action.action_id.clone(), provenance);
-        Ok(())
-    }
-
-    pub fn get_provenance(&self, action_id: &ActionId) -> Option<&ActionProvenance> {
-        self.action_provenance.get(action_id)
-    }
-}
-
-/// Complete provenance information for an action
-#[derive(Debug, Clone)]
-pub struct ActionProvenance {
-    pub action_id: ActionId,
-    pub intent_id: IntentId,
-    pub plan_id: PlanId,
-    pub capability_id: Option<CapabilityId>,
-    pub execution_context: ExecutionContext,
-    pub data_sources: Vec<String>,
-    pub ethical_rules: Vec<String>,
-    pub timestamp: u64,
-}
-
-/// Execution context for an action
-#[derive(Debug, Clone)]
-pub struct ExecutionContext {
-    pub user_id: Option<String>,
-    pub session_id: Option<String>,
-    pub environment: HashMap<String, Value>,
-    pub security_level: SecurityLevel,
-}
-
-impl ExecutionContext {
-    pub fn new() -> Self {
-        Self {
-            user_id: None,
-            session_id: None,
-            environment: HashMap::new(),
-            security_level: SecurityLevel::Standard,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum SecurityLevel {
-    Public,
-    Standard,
-    Confidential,
-    Secret,
-}
-
-/// Performance metrics tracking
-#[derive(Debug)]
-pub struct PerformanceMetrics {
-    capability_metrics: HashMap<CapabilityId, CapabilityMetrics>,
-    function_metrics: HashMap<String, FunctionMetrics>,
-    cost_tracking: CostTracker,
-}
-
-impl PerformanceMetrics {
-    pub fn new() -> Self {
-        Self {
-            capability_metrics: HashMap::new(),
-            function_metrics: HashMap::new(),
-            cost_tracking: CostTracker::new(),
-        }
-    }
-
-    pub fn record_action(&mut self, action: &Action) -> Result<(), RuntimeError> {
-        // Update capability metrics (for capability calls)
-        if action.action_type == ActionType::CapabilityCall {
-            if let Some(function_name) = &action.function_name {
-                let metrics = self
-                    .capability_metrics
-                    .entry(function_name.clone())
-                    .or_insert_with(CapabilityMetrics::new);
-                metrics.record_action(action);
-            }
-        }
-
-        // Update function metrics
-        if let Some(function_name) = &action.function_name {
-            let function_metrics = self
-                .function_metrics
-                .entry(function_name.clone())
-                .or_insert_with(FunctionMetrics::new);
-            function_metrics.record_action(action);
-        }
-
-        // Update cost tracking
-        self.cost_tracking.record_cost(action.cost.unwrap_or(0.0));
-
-        Ok(())
-    }
-
-    pub fn get_capability_metrics(
-        &self,
-        capability_id: &CapabilityId,
-    ) -> Option<&CapabilityMetrics> {
-        self.capability_metrics.get(capability_id)
-    }
-
-    pub fn get_function_metrics(&self, function_name: &str) -> Option<&FunctionMetrics> {
-        self.function_metrics.get(function_name)
-    }
-
-    pub fn get_total_cost(&self) -> f64 {
-        self.cost_tracking.total_cost
-    }
-}
-
-/// Metrics for a specific capability
-#[derive(Debug, Clone)]
-pub struct CapabilityMetrics {
-    pub total_calls: u64,
-    pub successful_calls: u64,
-    pub failed_calls: u64,
-    pub total_cost: f64,
-    pub total_duration_ms: u64,
-    pub average_duration_ms: f64,
-    pub reliability_score: f64,
-}
-
-impl CapabilityMetrics {
-    pub fn new() -> Self {
-        Self {
-            total_calls: 0,
-            successful_calls: 0,
-            failed_calls: 0,
-            total_cost: 0.0,
-            total_duration_ms: 0,
-            average_duration_ms: 0.0,
-            reliability_score: 1.0,
-        }
-    }
-
-    pub fn record_action(&mut self, action: &Action) {
-        self.total_calls += 1;
-        self.total_cost += action.cost.unwrap_or(0.0);
-        self.total_duration_ms += action.duration_ms.unwrap_or(0);
-
-        // Success/failure tracking removed: Action does not have a success field
-
-        self.average_duration_ms = self.total_duration_ms as f64 / self.total_calls as f64;
-        self.reliability_score = self.successful_calls as f64 / self.total_calls as f64;
-    }
-}
-
-/// Metrics for a specific function
-#[derive(Debug, Clone)]
-pub struct FunctionMetrics {
-    pub total_calls: u64,
-    pub successful_calls: u64,
-    pub failed_calls: u64,
-    pub total_cost: f64,
-    pub total_duration_ms: u64,
-    pub average_duration_ms: f64,
-}
-
-impl FunctionMetrics {
-    pub fn new() -> Self {
-        Self {
-            total_calls: 0,
-            successful_calls: 0,
-            failed_calls: 0,
-            total_cost: 0.0,
-            total_duration_ms: 0,
-            average_duration_ms: 0.0,
-        }
-    }
-
-    pub fn record_action(&mut self, action: &Action) {
-        self.total_calls += 1;
-        self.total_cost += action.cost.unwrap_or(0.0);
-        self.total_duration_ms += action.duration_ms.unwrap_or(0);
-
-        // Success/failure tracking removed: Action does not have a success field
-
-        self.average_duration_ms = self.total_duration_ms as f64 / self.total_calls as f64;
-    }
-}
-
-/// Cost tracking
-#[derive(Debug)]
-pub struct CostTracker {
-    pub total_cost: f64,
-    pub cost_by_intent: HashMap<IntentId, f64>,
-    pub cost_by_plan: HashMap<PlanId, f64>,
-    pub cost_by_capability: HashMap<CapabilityId, f64>,
-}
-
-impl CostTracker {
-    pub fn new() -> Self {
-        Self {
-            total_cost: 0.0,
-            cost_by_intent: HashMap::new(),
-            cost_by_plan: HashMap::new(),
-            cost_by_capability: HashMap::new(),
-        }
-    }
-
-    pub fn record_cost(&mut self, cost: f64) {
-        self.total_cost += cost;
-    }
-
-    pub fn record_action_cost(&mut self, action: &Action) {
-        let cost = action.cost.unwrap_or(0.0);
-
-        // Track by intent
-        *self
-            .cost_by_intent
-            .entry(action.intent_id.clone())
-            .or_insert(0.0) += cost;
-
-        // Track by plan
-        *self
-            .cost_by_plan
-            .entry(action.plan_id.clone())
-            .or_insert(0.0) += cost;
-
-        // Track by capability: Action does not have capability_id field, skip
+    fn recent(&self, max: usize) -> Vec<String> {
+        let len = self.entries.len();
+        let start = len.saturating_sub(max);
+        self.entries[start..].to_vec()
     }
 }
 
@@ -559,6 +65,7 @@ pub struct CausalChain {
     provenance: ProvenanceTracker,
     metrics: PerformanceMetrics,
     event_sinks: Vec<Arc<dyn CausalChainEventSink>>,
+    logs: LogBuffer,
 }
 
 impl CausalChain {
@@ -600,6 +107,7 @@ impl CausalChain {
             provenance: ProvenanceTracker::new(),
             metrics: PerformanceMetrics::new(),
             event_sinks: Vec::new(),
+            logs: LogBuffer::new(std::env::var("CCOS_LOG_BUFFER_CAPACITY").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(256)),
         })
     }
 
@@ -613,6 +121,22 @@ impl CausalChain {
         for sink in &self.event_sinks {
             sink.on_action_appended(action);
         }
+    }
+
+    fn log_action_json(&mut self, action: &Action, event: &str) {
+        // Minimal JSON without pulling serde_json dependency at runtime
+        let fn_name = action.function_name.as_deref().unwrap_or("");
+        let json = format!(
+            "{{\"event\":\"{}\",\"action_type\":\"{:?}\",\"action_id\":\"{}\",\"function_name\":\"{}\",\"intent_id\":\"{}\",\"plan_id\":\"{}\",\"timestamp\":{}}}",
+            event,
+            action.action_type,
+            action.action_id,
+            fn_name,
+            action.intent_id,
+            action.plan_id,
+            action.timestamp
+        );
+        self.logs.push(json);
     }
 
     /// Create a new action from an intent, with audit metadata provided by privileged system components
@@ -674,6 +198,9 @@ impl CausalChain {
 
         // Notify event sinks
         self.notify_sinks(&action);
+
+    // Log structured line
+    self.log_action_json(&action, "action_result_recorded");
 
         Ok(())
     }
@@ -774,6 +301,9 @@ impl CausalChain {
         // Append to ledger & metrics
         self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
+
+    // Log structured line
+    self.log_action_json(&signed_action, "plan_event");
 
         // Notify event sinks
         self.notify_sinks(&signed_action);
@@ -1029,6 +559,9 @@ impl CausalChain {
         self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
 
+    // Log structured line
+    self.log_action_json(&signed_action, "capability_call");
+
         Ok(signed_action)
     }
 
@@ -1036,11 +569,14 @@ impl CausalChain {
         // Append to ledger
         self.ledger.append_action(action)?;
         
-        // Record metrics
+    // Record metrics
         self.metrics.record_action(action)?;
         
-        // Notify event sinks
+    // Notify event sinks
         self.notify_sinks(action);
+        
+    // Log structured line
+    self.log_action_json(action, "action_appended");
         
         Ok(action.action_id.clone())
     }
@@ -1086,7 +622,14 @@ impl CausalChain {
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
         self.notify_sinks(&action);
+        // Log structured line
+        self.log_action_json(&action, "delegation_event");
         Ok(())
+    }
+
+    /// Return up to `max` most recent structured log lines as JSON strings
+    pub fn recent_logs(&self, max: usize) -> Vec<String> {
+        self.logs.recent(max)
     }
 }
 
@@ -1189,5 +732,51 @@ mod tests {
         chain.record_result(action, result).unwrap();
 
         assert_eq!(chain.get_total_cost(), 0.0); // Default cost is 0.0
+    }
+
+    #[test]
+    fn test_event_sink_notification() {
+        use std::sync::{Arc, Mutex};
+
+        // Simple mock sink that records received action ids.
+        #[derive(Debug)]
+        struct MockSink {
+            received: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl crate::ccos::event_sink::CausalChainEventSink for MockSink {
+            fn on_action_appended(&self, action: &Action) {
+                let mut guard = self.received.lock().unwrap();
+                guard.push(action.action_id.clone());
+            }
+        }
+
+        let mut chain = CausalChain::new().unwrap();
+
+        // Shared vec to assert notifications
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let sink = MockSink {
+            received: received.clone(),
+        };
+
+        // Register sink
+        let arc_sink: Arc<dyn crate::ccos::event_sink::CausalChainEventSink> = Arc::new(sink);
+        chain.register_event_sink(arc_sink);
+
+        // Create and record an action - record_result triggers notify_sinks
+        let intent = Intent::new("Notify goal".to_string());
+        let action = chain.create_action(intent, None).unwrap();
+
+        let result = ExecutionResult {
+            success: true,
+            value: Value::Nil,
+            metadata: HashMap::new(),
+        };
+
+        chain.record_result(action.clone(), result).unwrap();
+
+        // Ensure the sink got the action id
+        let guard = received.lock().unwrap();
+        assert!(guard.iter().any(|id| id == &action.action_id));
     }
 }

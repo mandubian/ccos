@@ -854,6 +854,7 @@ mod tests {
     use crate::ccos::event_sink::CausalChainIntentEventSink;
     use crate::ccos::types::{PlanStatus, StorableIntent};
     use crate::runtime::security::SecurityLevel;
+    use crate::ast::Symbol;
 
     fn test_context() -> RuntimeContext {
         RuntimeContext {

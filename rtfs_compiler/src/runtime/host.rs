@@ -49,6 +49,30 @@ impl RuntimeHost {
         }
     }
 
+    /// Get a snapshot of capability metrics for a given capability id, if available.
+    /// Returns a cloned `CapabilityMetrics` to avoid holding locks or lifetimes.
+    pub fn get_capability_metrics(&self, capability_id: &str) -> Option<crate::ccos::causal_chain::metrics::CapabilityMetrics> {
+        let guard = self.get_causal_chain().ok()?;
+        guard.get_capability_metrics(&capability_id.to_string()).cloned()
+    }
+
+    /// Get function metrics by function name (e.g., step or capability id)
+    pub fn get_function_metrics(&self, function_name: &str) -> Option<crate::ccos::causal_chain::metrics::FunctionMetrics> {
+        let guard = self.get_causal_chain().ok()?;
+        guard.get_function_metrics(function_name).cloned()
+    }
+
+    /// Get recent structured logs from the Causal Chain (test-friendly)
+    pub fn get_recent_logs(&self, max: usize) -> Vec<String> {
+        if let Ok(guard) = self.get_causal_chain() { guard.recent_logs(max) } else { Vec::new() }
+    }
+
+    /// Test helper: record a delegation event into the chain
+    pub fn record_delegation_event_for_test(&self, intent_id: &str, event_kind: &str, metadata: std::collections::HashMap<String, Value>) -> RuntimeResult<()> {
+        let mut chain = self.get_causal_chain()?;
+        chain.record_delegation_event(&intent_id.to_string(), event_kind, metadata).map_err(|e| RuntimeError::Generic(format!("record_delegation_event error: {:?}", e)))
+    }
+
     fn build_context_snapshot(&self, step_name: &str, args: &[Value], capability_id: &str) -> Option<Value> {
         // Policy gate: allow exposing read-only context for this capability?
         // Evaluate dynamic policy using manifest metadata (tags) when available.
@@ -114,6 +138,13 @@ impl RuntimeHost {
 
     fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<CausalChain>> {
         self.causal_chain.lock().map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))
+    }
+
+    /// Returns a vector snapshot of all actions currently in the Causal Chain.
+    /// Keeps the lock only for the duration of the copy; intended for read-only use.
+    pub fn snapshot_actions(&self) -> RuntimeResult<Vec<Action>> {
+        let chain = self.get_causal_chain()?;
+        Ok(chain.get_all_actions().to_vec())
     }
 
     fn get_context(&self) -> RuntimeResult<HostPlanContext> {
