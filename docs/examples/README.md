@@ -43,6 +43,10 @@ The configuration implements all required sections from the MicroVM deployment p
 - MicroVM seccomp + minimal kernel reduce attack surface
 - Causal Chain anchored periodically for tamper detection
 
+### MCP Introspection Demo
+
+See `mcp_introspection_demo.md` for a step-by-step guide to run the `rtfs_compiler` example that introspects an MCP server, registers discovered tools as CCOS capabilities, and executes one via the Capability Marketplace.
+
 ## Related Documentation
 
 - [MicroVM Deployment Profile Specification](../rtfs-2.0/specs-incoming/19-microvm-deployment-profile.md)
