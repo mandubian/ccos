@@ -161,7 +161,7 @@ mod function_tests {
         // Load stdlib to get map and other builtin functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context =  crate::runtime::security::RuntimeContext::pure();
@@ -191,7 +191,7 @@ mod function_tests {
         let parsed = parser::parse(input).expect("Failed to parse");
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context = crate::runtime::security::RuntimeContext::pure();

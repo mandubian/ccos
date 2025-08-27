@@ -4,7 +4,7 @@ use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::environment::Environment;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::parser::parse;
 use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ast::Keyword;

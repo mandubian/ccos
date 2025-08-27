@@ -45,7 +45,7 @@ mod control_flow_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get arithmetic functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context = crate::runtime::security::RuntimeContext::pure();

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::capability_provider::{
+use crate::runtime::capabilities::provider::{
     CapabilityProvider,
     CapabilityDescriptor,
     SecurityRequirements,
@@ -86,7 +86,7 @@ impl CapabilityProvider for LocalLlmProvider {
         }
     }
 
-    fn initialize(&mut self, _config: &crate::runtime::capability_provider::ProviderConfig) -> Result<(), String> {
+    fn initialize(&mut self, _config: &crate::runtime::capabilities::provider::ProviderConfig) -> Result<(), String> {
         Ok(())
     }
 

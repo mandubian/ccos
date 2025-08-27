@@ -22,7 +22,7 @@ fn test_status_transition_success() {
     intent_graph.store_intent(intent).unwrap();
     let intent_graph = Arc::new(Mutex::new(intent_graph));
     let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()))
+        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
     );
     let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace));
 
@@ -60,7 +60,7 @@ fn test_status_transition_failure() {
     intent_graph.store_intent(intent).unwrap();
     let intent_graph = Arc::new(Mutex::new(intent_graph));
     let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()))
+        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
     );
     let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace));
 

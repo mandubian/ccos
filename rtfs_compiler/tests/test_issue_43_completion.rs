@@ -12,7 +12,7 @@ use rtfs_compiler::runtime::capability_marketplace::{
     CapabilityMarketplace, CapabilityManifest, CapabilityAttestation, CapabilityProvenance,
     LocalCapability, ProviderType
 };
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::{TypeExpr, PrimitiveType, MapTypeEntry, Keyword};
 use tokio::sync::RwLock;

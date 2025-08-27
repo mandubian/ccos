@@ -10,7 +10,7 @@ use crate::runtime::stdlib::StandardLibrary;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::host::RuntimeHost;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::capability_registry::CapabilityRegistry;
+use crate::runtime::capabilities::registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

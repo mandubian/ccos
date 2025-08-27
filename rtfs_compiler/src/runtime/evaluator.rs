@@ -2810,7 +2810,7 @@ impl Default for Evaluator {
         // This should be replaced with a proper host in production
         use crate::runtime::host::RuntimeHost;
         use crate::runtime::capability_marketplace::CapabilityMarketplace;
-        use crate::runtime::capability_registry::CapabilityRegistry;
+    use crate::runtime::capabilities::registry::CapabilityRegistry;
         use crate::ccos::causal_chain::CausalChain;
         use std::sync::Arc;
         use tokio::sync::RwLock;

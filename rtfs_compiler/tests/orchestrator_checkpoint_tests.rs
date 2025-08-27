@@ -11,7 +11,7 @@ fn test_checkpoint_and_resume_helpers() {
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
     let intent_graph = Arc::new(Mutex::new(IntentGraph::new().unwrap()));
     let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()))
+        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
     );
     let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace));
 
@@ -21,7 +21,7 @@ fn test_checkpoint_and_resume_helpers() {
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         causal_chain.clone(),
         Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-            Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()))
+            Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
         )),
         runtime_context.clone(),
     ));

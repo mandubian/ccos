@@ -100,7 +100,7 @@ impl CCOS {
     let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
     let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
         // Initialize capability marketplace with registry
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = CapabilityMarketplace::with_causal_chain(
             Arc::clone(&capability_registry),
             Some(Arc::clone(&causal_chain))

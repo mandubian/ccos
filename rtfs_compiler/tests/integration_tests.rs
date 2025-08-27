@@ -8,7 +8,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityIsolationPolicy;
 use rtfs_compiler::runtime::values::Value;
 
@@ -858,7 +858,7 @@ fn test_defstruct_evaluation_empty() {
 #[tokio::test]
 async fn test_capability_marketplace_bootstrap() {
     use rtfs_compiler::runtime::capability_marketplace::{CapabilityMarketplace, CapabilityIsolationPolicy};
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -890,7 +890,7 @@ async fn test_capability_marketplace_bootstrap() {
 #[tokio::test]
 async fn test_capability_marketplace_isolation_policy() {
     use rtfs_compiler::runtime::capability_marketplace::{CapabilityMarketplace, CapabilityIsolationPolicy};
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -925,7 +925,7 @@ async fn test_capability_marketplace_isolation_policy() {
 #[tokio::test]
 async fn test_capability_marketplace_dynamic_registration() {
     use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -963,7 +963,7 @@ async fn test_capability_marketplace_dynamic_registration() {
 #[tokio::test]
 async fn test_capability_marketplace_audit_events() {
     use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1019,7 +1019,7 @@ async fn test_capability_marketplace_enhanced_isolation() {
         CapabilityMarketplace, CapabilityIsolationPolicy, NamespacePolicy, 
         ResourceConstraints, TimeConstraints
     };
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1058,7 +1058,7 @@ async fn test_capability_marketplace_time_constraints() {
     use rtfs_compiler::runtime::capability_marketplace::{
         CapabilityMarketplace, CapabilityIsolationPolicy, TimeConstraints
     };
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1092,7 +1092,7 @@ async fn test_capability_marketplace_time_constraints() {
 #[tokio::test]
 async fn test_capability_marketplace_audit_integration() {
     use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1130,7 +1130,7 @@ async fn test_capability_marketplace_discovery_providers() {
     use rtfs_compiler::runtime::capability_marketplace::{
         CapabilityMarketplace, StaticDiscoveryProvider
     };
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1164,7 +1164,7 @@ async fn test_capability_marketplace_discovery_providers() {
 #[tokio::test]
 async fn test_capability_marketplace_causal_chain_integration() {
     use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
     use rtfs_compiler::ccos::causal_chain::CausalChain;
     use std::sync::Arc;
@@ -1234,7 +1234,7 @@ async fn test_capability_marketplace_resource_monitoring() {
         CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
         ResourceType, EnforcementLevel
     };
-    use crate::runtime::capability_registry::CapabilityRegistry;
+    use crate::runtime::capabilities::registry::CapabilityRegistry;
     use crate::runtime::capability_marketplace::CapabilityIsolationPolicy;
     use crate::runtime::values::Value;
     use std::collections::HashMap;
@@ -1291,7 +1291,7 @@ async fn test_capability_marketplace_gpu_resource_limits() {
         CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
         ResourceType, EnforcementLevel
     };
-    use crate::runtime::capability_registry::CapabilityRegistry;
+    use crate::runtime::capabilities::registry::CapabilityRegistry;
     use crate::runtime::capability_marketplace::CapabilityIsolationPolicy;
     use crate::runtime::values::Value;
     use std::collections::HashMap;
@@ -1344,7 +1344,7 @@ async fn test_capability_marketplace_environmental_limits() {
         CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
         ResourceType, EnforcementLevel
     };
-    use crate::runtime::capability_registry::CapabilityRegistry;
+    use crate::runtime::capabilities::registry::CapabilityRegistry;
     use crate::runtime::capability_marketplace::CapabilityIsolationPolicy;
     use crate::runtime::values::Value;
     use std::collections::HashMap;
@@ -1546,7 +1546,7 @@ fn observability_prometheus_render_smoke() {
     use std::sync::{Arc, Mutex};
     use rtfs_compiler::runtime::RuntimeContext;
     use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-    use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+    use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::host::RuntimeHost;
     use rtfs_compiler::runtime::metrics_exporter::render_prometheus_text;
 

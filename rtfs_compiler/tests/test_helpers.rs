@@ -11,7 +11,7 @@ use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::host_interface::HostInterface;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ pub fn create_runtime_host(security_context: RuntimeContext) -> std::sync::Arc<R
     let marketplace = Arc::new(create_capability_marketplace());
     let causal_chain = create_causal_chain();
     
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();

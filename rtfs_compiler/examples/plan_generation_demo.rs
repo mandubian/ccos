@@ -143,7 +143,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n1️⃣ Testing Pure Security Context");
     let pure_context = RuntimeContext::pure();
     let stdlib_env = StandardLibrary::create_global_environment();
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
@@ -181,7 +181,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n2️⃣ Testing Controlled Security Context");
     let controlled_context = SecurityPolicies::data_processing();
     let stdlib_env = StandardLibrary::create_global_environment();
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
@@ -220,7 +220,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n3️⃣ Testing Full Security Context");
     let full_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
@@ -267,7 +267,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n4️⃣ Testing Math Capability");
     let math_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
@@ -318,7 +318,7 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let plan_ast = parser::parse(plan_rtfs)?;
     let plan_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
@@ -514,7 +514,7 @@ GENERATED RTFS PLAN:
     
     let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
     let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),

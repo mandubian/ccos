@@ -1,6 +1,6 @@
 use crate::ast::TypeExpr;
 use crate::runtime::streaming::{StreamType, BidirectionalConfig, DuplexChannels, StreamConfig, StreamingProvider};
-use crate::runtime::capability_registry::CapabilityRegistry;
+use crate::runtime::capabilities::registry::CapabilityRegistry;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
 use chrono::{DateTime, Utc, Timelike, Datelike};

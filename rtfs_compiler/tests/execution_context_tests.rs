@@ -202,7 +202,7 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
     let module_registry = Arc::new(ModuleRegistry::new());
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let capability_marketplace = {
-        use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+        use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
         use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
         use tokio::sync::RwLock;
         Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(CapabilityRegistry::new()))))

@@ -635,7 +635,7 @@ impl CCOSContext<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime::capability::Capability;
+    use crate::runtime::capabilities::capability::Capability;
 
     use super::*;
 

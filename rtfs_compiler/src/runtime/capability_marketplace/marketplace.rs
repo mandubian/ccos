@@ -18,12 +18,12 @@ use tokio::sync::RwLock;
 use chrono::Utc;
 
 impl CapabilityMarketplace {
-    pub fn new(capability_registry: Arc<RwLock<crate::runtime::capability_registry::CapabilityRegistry>>) -> Self {
+    pub fn new(capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>) -> Self {
         Self::with_causal_chain(capability_registry, None)
     }
 
     pub fn with_causal_chain(
-        capability_registry: Arc<RwLock<crate::runtime::capability_registry::CapabilityRegistry>>,
+    capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>
     ) -> Self {
         let mut marketplace = Self {
@@ -46,7 +46,7 @@ impl CapabilityMarketplace {
 
     /// Create marketplace with resource monitoring enabled
     pub fn with_resource_monitoring(
-        capability_registry: Arc<RwLock<crate::runtime::capability_registry::CapabilityRegistry>>,
+    capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
         monitoring_config: ResourceMonitoringConfig,
     ) -> Self {
