@@ -7,7 +7,7 @@ pub mod marketplace;
 pub mod resource_monitor;
 // Temporarily disabled to fix resource monitoring tests
 // pub mod network_discovery;
-// pub mod mcp_discovery;
+pub mod mcp_discovery;
 // pub mod a2a_discovery;
 
 pub use types::*;
