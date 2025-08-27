@@ -23,6 +23,8 @@ pub mod type_validator;
 pub mod values;
 pub mod security;
 pub mod param_binding;
+#[cfg(feature = "metrics_exporter")]
+pub mod metrics_exporter;
 
 #[cfg(test)]
 mod stdlib_tests;

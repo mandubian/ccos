@@ -1,3 +1,7 @@
+## Guides
+
+- CCOS/RTFS Guides index: docs/ccos/guides/README.md
+
 # CCOS: Cognitive Computing Operating System (and RTFS, its kernel language)
 
 **An architecture for trustworthy, autonomous AI that can build, manage, and govern itself.**
