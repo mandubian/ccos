@@ -1,0 +1,29 @@
+;; CCOS MCP Capabilities Module
+;; Generated: 2025-08-27T22:20:07.173168063+00:00
+;; Server: demo_server
+;; Endpoint: http://localhost:3000
+
+(def mcp-capabilities-module
+  {
+    :module-type "ccos.capabilities.mcp:v1"
+    :server-config {
+      :name "demo_server"
+      :endpoint "http://localhost:3000"
+      :auth-token nil
+      :timeout-seconds 5
+      :protocol-version "2024-11-05"
+    }
+    :generated-at "2025-08-27T22:20:07.173173541+00:00"
+    :capabilities [
+      {
+        :capability {"id" "mcp.demo_server.echo", "description" "Echo back the input: { text: string }", "version" "1.0.0", "provider" {"type" "mcp", "tool_name" "echo", "server_endpoint" "http://localhost:3000", "timeout_seconds" 5, "protocol_version" "2024-11-05"}, "permissions" ["mcp:tool:execute"], "metadata" {"mcp_endpoint" "http://localhost:3000", "mcp_server" "demo_server", "tool_name" "echo", "protocol_version" "2024-11-05", "introspected_at" "2025-08-27T22:20:07.173120457+00:00"}, "name" "echo", "type" "ccos.capability:v1"},
+        :input-schema nil,
+        :output-schema nil
+      },
+      {
+        :capability {"provider" {"timeout_seconds" 5, "server_endpoint" "http://localhost:3000", "type" "mcp", "tool_name" "add", "protocol_version" "2024-11-05"}, "type" "ccos.capability:v1", "version" "1.0.0", "id" "mcp.demo_server.add", "description" "Add two numbers: { a: number, b: number }", "permissions" ["mcp:tool:execute"], "metadata" {"protocol_version" "2024-11-05", "mcp_server" "demo_server", "mcp_endpoint" "http://localhost:3000", "tool_name" "add", "introspected_at" "2025-08-27T22:20:07.173160908+00:00"}, "name" "add"},
+        :input-schema nil,
+        :output-schema nil
+      }
+    ]
+  })
