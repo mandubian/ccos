@@ -1,7 +1,5 @@
 // RTFS Compiler Library
 // Main library crate for the RTFS compiler
-
-pub mod agent;
 pub mod ast;
 pub mod capabilities;
 pub mod ccos;
@@ -25,9 +23,6 @@ mod tests;
 // to make them accessible to other parts of the crate or external users.
 
 // Re-export the main parsing function and the AST.
-pub use agent::{
-    AgentCommunicationClient, AgentDiscoveryClient, AgentProfileManager, AgentRegistry,
-};
 pub use ast::*;
 pub use development_tooling::{RtfsRepl, RtfsTestFramework};
 pub use parser::{errors::PestParseError, parse, parse_expression};
