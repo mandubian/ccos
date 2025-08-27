@@ -3,10 +3,7 @@
 //! High-level runtime entry points and small helpers. The heavy logic is
 //! implemented in the submodules listed below.
 
-pub mod capability;
 pub mod streaming;
-pub mod capability_registry;
-pub mod capability_provider;
 pub mod capability_marketplace;
 pub mod ccos_environment;
 pub mod environment;
@@ -45,7 +42,7 @@ use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
 use crate::runtime::host::RuntimeHost;
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::capability_registry::CapabilityRegistry;
+use crate::runtime::capabilities::registry::CapabilityRegistry;
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;

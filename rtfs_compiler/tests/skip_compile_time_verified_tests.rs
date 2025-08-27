@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::type_validator::{
     TypeValidator, TypeCheckingConfig, VerificationContext, ValidationLevel
 };

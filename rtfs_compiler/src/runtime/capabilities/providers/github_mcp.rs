@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tokio::time::Duration;
 
 use crate::runtime::{RuntimeError, RuntimeResult, Value as RuntimeValue};
-use crate::runtime::capability_provider::{
+use crate::runtime::capabilities::provider::{
 	CapabilityProvider, CapabilityDescriptor, SecurityRequirements,
 	NetworkAccess, ResourceLimits, HealthStatus, ProviderConfig, ProviderMetadata,
 	ExecutionContext

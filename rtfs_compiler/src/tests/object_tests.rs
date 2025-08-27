@@ -125,7 +125,7 @@ mod object_tests {
 
         // Execute the expression
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context =  crate::runtime::security::RuntimeContext::pure();
@@ -147,7 +147,7 @@ mod object_tests {
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
         let security_context =  crate::runtime::security::RuntimeContext::pure();

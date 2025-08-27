@@ -18,7 +18,7 @@ fn test_simple_mutual_recursion() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
@@ -52,7 +52,7 @@ fn test_simple_factorial() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();

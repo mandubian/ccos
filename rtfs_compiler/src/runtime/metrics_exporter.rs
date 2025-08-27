@@ -216,7 +216,7 @@ mod tests {
     fn test_render_and_server_smoke() {
         // Build a tiny environment: chain + host + minimal marketplace
         let chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capability_registry::CapabilityRegistry::new()));
+    let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::capability_registry::CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let host = RuntimeHost::new(chain.clone(), marketplace, RuntimeContext::full());
         // Execute a capability that likely doesn't exist; ignore error but ensure chain has at least one action via delegation event

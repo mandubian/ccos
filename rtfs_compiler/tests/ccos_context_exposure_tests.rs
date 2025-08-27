@@ -5,7 +5,7 @@ use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use tokio::sync::RwLock;
 use tokio::runtime::Runtime;
 use rtfs_compiler::runtime::stdlib::register_default_capabilities;

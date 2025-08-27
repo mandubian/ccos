@@ -6,7 +6,7 @@ use std::sync::Arc;
 // Import marketplace and streaming types
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::streaming::StreamConfig;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use tokio::sync::RwLock;
 
 #[tokio::main]

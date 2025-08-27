@@ -1,7 +1,6 @@
 // RTFS Compiler Library
 // Main library crate for the RTFS compiler
 pub mod ast;
-pub mod capabilities;
 pub mod ccos;
 pub mod config;
 pub mod development_tooling;

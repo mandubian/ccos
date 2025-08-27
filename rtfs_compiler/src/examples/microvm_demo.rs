@@ -2,7 +2,7 @@
 //!
 //! This example demonstrates the pluggable MicroVM architecture for RTFS/CCOS.
 
-use crate::runtime::capability_registry::CapabilityRegistry;
+use crate::runtime::capabilities::capability_registry::CapabilityRegistry;
 use crate::runtime::microvm::MicroVMSettings;
 use crate::runtime::values::Value;
 use crate::runtime::error::RuntimeResult;

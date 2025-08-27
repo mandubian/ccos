@@ -1,7 +1,7 @@
 use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, Literal, Keyword, MapTypeEntry};
 use rtfs_compiler::runtime::{Value, RuntimeResult, RuntimeError};
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

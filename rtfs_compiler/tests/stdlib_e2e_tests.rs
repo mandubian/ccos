@@ -17,7 +17,7 @@ impl StdlibTestRunner {
     fn new() -> Self {
         let env = StandardLibrary::create_global_environment();
     let module_registry = Arc::new(ModuleRegistry::new());
-        let registry = Arc::new(RwLock::new(rtfs_compiler::runtime::capability_registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(
             rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry)
         );

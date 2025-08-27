@@ -6,7 +6,7 @@ use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::host::RuntimeHost;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use tokio::sync::RwLock;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;

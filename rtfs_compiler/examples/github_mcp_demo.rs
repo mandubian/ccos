@@ -8,8 +8,8 @@
 //! Usage:
 //!   cargo run --example github_mcp_demo -- --token YOUR_GITHUB_TOKEN
 
-use rtfs_compiler::capabilities::GitHubMCPCapability;
-use rtfs_compiler::runtime::capability_provider::{ExecutionContext, ProviderConfig, CapabilityProvider};
+use rtfs_compiler::runtime::capabilities::providers::github_mcp::GitHubMCPCapability;
+use rtfs_compiler::runtime::capabilities::provider::{ExecutionContext, ProviderConfig, CapabilityProvider};
 use rtfs_compiler::runtime::Value as RuntimeValue;
 use rtfs_compiler::ast::{MapKey, Expression};
 use std::collections::HashMap;
