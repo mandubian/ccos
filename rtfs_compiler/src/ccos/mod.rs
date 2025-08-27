@@ -45,7 +45,7 @@ pub mod working_memory;
 
  // Orchestration/Arbiter components (if present in tree)
 // pub mod orchestrator;      // commented: module not present in tree
-pub mod agent_registry;
+pub mod agent; // consolidated agent module (registry + types)
 
 // Re-export some arbiter sub-modules at the ccos root for historic import paths
 // Tests and examples sometimes refer to `rtfs_compiler::ccos::delegating_arbiter` or
@@ -60,7 +60,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::ccos::arbiter::{DelegatingArbiter, ArbiterEngine, Arbiter};
 use crate::config::types::AgentConfig;
-use crate::ccos::agent_registry::AgentRegistry; // bring trait into scope for record_feedback
+use crate::ccos::agent::AgentRegistry; // bring trait into scope for record_feedback
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::{RTFSRuntime, Runtime, ModuleRegistry};
 use crate::runtime::error::RuntimeResult;
@@ -88,7 +88,7 @@ pub struct CCOS {
     rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>, 
     // Optional LLM-driven engine
     delegating_arbiter: Option<Arc<DelegatingArbiter>>, 
-    agent_registry: Arc<std::sync::RwLock<crate::ccos::agent_registry::InMemoryAgentRegistry>>, // M4
+    agent_registry: Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>>, // M4
     agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
 }
 
@@ -132,7 +132,7 @@ impl CCOS {
         ));
 
         // Initialize AgentRegistry (M4) from agent configuration
-        let agent_registry = Arc::new(std::sync::RwLock::new(crate::ccos::agent_registry::InMemoryAgentRegistry::new()));
+    let agent_registry = Arc::new(std::sync::RwLock::new(crate::ccos::agent::InMemoryAgentRegistry::new()));
 
         // Initialize delegating arbiter if delegation is enabled in agent config
         let delegating_arbiter = if agent_config.delegation.enabled.unwrap_or(false) {
@@ -291,7 +291,7 @@ impl CCOS {
         Arc::clone(&self.causal_chain)
     }
 
-    pub fn get_agent_registry(&self) -> Arc<std::sync::RwLock<crate::ccos::agent_registry::InMemoryAgentRegistry>> {
+    pub fn get_agent_registry(&self) -> Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>> {
         Arc::clone(&self.agent_registry)
     }
 

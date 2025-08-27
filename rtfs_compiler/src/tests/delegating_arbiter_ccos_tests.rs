@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::ccos::agent_registry::{AgentDescriptor, TrustTier, CostModel, LatencyStats, SuccessStats};
+use crate::ccos::agent::{AgentDescriptor, TrustTier, CostModel, LatencyStats, SuccessStats};
 use crate::ccos::CCOS;
 use crate::runtime::security::{RuntimeContext, SecurityLevel};
 use crate::runtime::values::Value;

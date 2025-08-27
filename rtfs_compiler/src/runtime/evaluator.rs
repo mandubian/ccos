@@ -1,6 +1,6 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
-use crate::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
+use crate::ccos::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
 use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr,
  IfExpr, Keyword, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr};
@@ -2178,7 +2178,7 @@ impl Evaluator {
                         },
                         "cache" | "cache-policy" | "cache_policy" => match value {
                             Value::String(policy) => {
-                                use crate::agent::SimpleCachePolicy;
+                                use crate::ccos::agent::SimpleCachePolicy;
                                 options.cache_policy = Some(match policy.as_str() {
                                     "use-cache" | "use_cache" => SimpleCachePolicy::UseCache,
                                     "no-cache" | "no_cache" => SimpleCachePolicy::NoCache,

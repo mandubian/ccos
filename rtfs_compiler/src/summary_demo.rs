@@ -1,4 +1,3 @@
-pub mod agent;
 mod ast;
 mod development_tooling;
 mod error_reporting;
