@@ -101,6 +101,10 @@ path = "examples/hierarchical_context_demo.rs"
 name = "context_types_demo"
 path = "examples/context_types_demo.rs"
 
+[[example]]
+name = "mcp_introspection_demo"
+path = "examples/mcp_introspection_demo.rs"
+
 [build-dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
