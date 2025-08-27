@@ -13,6 +13,9 @@
 use crate::ccos::working_memory::backend::WorkingMemoryError;
 use crate::ccos::working_memory::facade::WorkingMemory;
 use crate::ccos::working_memory::types::{WorkingMemoryEntry, WorkingMemoryId, WorkingMemoryMeta};
+use crate::ccos::event_sink::CausalChainEventSink;
+use crate::ccos::types::Action;
+use std::sync::{Arc, Mutex};
 use std::collections::HashSet;
 
 /// Minimal action-like record used by the ingestor to derive entries.
@@ -121,11 +124,85 @@ impl MemoryIngestor {
     }
 }
 
+/// Event-sink adapter that ingests Causal Chain actions into Working Memory.
+/// Keep this sink lightweight: it locks briefly and performs a small append.
+pub struct WorkingMemorySink {
+    wm: Arc<Mutex<WorkingMemory>>, // guarded for thread-safety; keep lock scope minimal
+}
+
+impl std::fmt::Debug for WorkingMemorySink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkingMemorySink").finish()
+    }
+}
+
+impl WorkingMemorySink {
+    pub fn new(wm: Arc<Mutex<WorkingMemory>>) -> Self {
+        Self { wm }
+    }
+
+    fn map_action(action: &Action) -> ActionRecord {
+        // Prefer function_name when present, otherwise use the action type.
+        let summary = action
+            .function_name
+            .clone()
+            .unwrap_or_else(|| format!("{:?}", action.action_type));
+
+        // Compact content string capturing key details without serialization deps.
+        let mut content = String::new();
+        content.push_str(&format!(
+            "type={:?}; plan={}; intent={}; ts={}",
+            action.action_type, action.plan_id, action.intent_id, action.timestamp
+        ));
+        if let Some(fn_name) = &action.function_name {
+            content.push_str(&format!("; fn={}", fn_name));
+        }
+        if let Some(args) = &action.arguments {
+            content.push_str(&format!("; args={}", args.len()));
+        }
+        if let Some(cost) = action.cost {
+            content.push_str(&format!("; cost={}", cost));
+        }
+        if let Some(d) = action.duration_ms {
+            content.push_str(&format!("; dur_ms={}", d));
+        }
+
+        ActionRecord {
+            action_id: action.action_id.clone(),
+            kind: format!("{:?}", action.action_type),
+            provider: action.function_name.clone(),
+            timestamp_s: action.timestamp, // note: upstream may use ms; WM treats as opaque
+            summary,
+            content,
+            plan_id: Some(action.plan_id.clone()),
+            intent_id: Some(action.intent_id.clone()),
+            step_id: None,
+            attestation_hash: action
+                .metadata
+                .get("signature")
+                .and_then(|v| match v { crate::runtime::values::Value::String(s) => Some(s.clone()), _ => None }),
+            content_hash: None,
+        }
+    }
+}
+
+impl CausalChainEventSink for WorkingMemorySink {
+    fn on_action_appended(&self, action: &Action) {
+        // Map the action and ingest; ignore ingestion errors to avoid blocking ledger writes.
+        let record = Self::map_action(action);
+        if let Ok(mut guard) = self.wm.lock() {
+            let _ = MemoryIngestor::ingest_action(&mut *guard, &record);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
     use crate::ccos::working_memory::backend::QueryParams;
+    use crate::ccos::causal_chain::CausalChain;
+    use crate::ccos::types::{Intent, ActionType};
 
     fn mk_action(id: &str, ts: u64, kind: &str, content: &str) -> ActionRecord {
         ActionRecord {
@@ -188,5 +265,38 @@ mod tests {
         MemoryIngestor::replay_all(&mut wm, &[a1.clone(), a2.clone(), a3.clone()]).unwrap();
         let res2 = wm.query(&QueryParams::default()).unwrap();
         assert_eq!(res2.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_wm_sink_receives_actions_from_causal_chain() {
+        // Prepare WM + sink
+        let backend = InMemoryJsonlBackend::new(None, Some(100), Some(10_000));
+        let wm = WorkingMemory::new(Box::new(backend));
+        let wm_arc = Arc::new(Mutex::new(wm));
+        let sink = WorkingMemorySink::new(wm_arc.clone());
+
+        // Prepare CausalChain and register sink
+        let mut chain = CausalChain::new().unwrap();
+        let sink_arc: Arc<dyn CausalChainEventSink> = Arc::new(sink);
+        chain.register_event_sink(sink_arc);
+
+        // Append a couple of actions via lifecycle helpers
+        let intent = Intent::new("WM sink goal".to_string());
+        let mut a = chain.create_action(intent.clone(), None).unwrap();
+        // Record a result to trigger append + notification
+        let result = crate::ccos::types::ExecutionResult { success: true, value: crate::runtime::values::Value::Nil, metadata: Default::default() };
+        chain.record_result(a.clone(), result).unwrap();
+
+        // Also log a plan lifecycle event, which also notifies sinks
+        chain.log_plan_event(&a.plan_id.clone(), &a.intent_id.clone(), ActionType::PlanStarted).unwrap();
+
+        // Inspect WM
+        let guard = wm_arc.lock().unwrap();
+        let res = guard.query(&QueryParams::default()).unwrap();
+        assert!(res.entries.len() >= 2);
+        // Ensure tags and content exist
+        let first = &res.entries[0];
+        assert!(first.tags.contains("causal-chain"));
+        assert!(!first.content.is_empty());
     }
 }
