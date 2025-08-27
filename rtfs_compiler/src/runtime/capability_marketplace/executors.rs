@@ -21,7 +21,8 @@ impl CapabilityExecutor for MCPExecutor {
     fn provider_type_id(&self) -> TypeId { TypeId::of::<MCPCapability>() }
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
         if let ProviderType::MCP(mcp) = provider {
-            let input_json = serde_json::to_value(inputs)
+            // Convert RTFS Value to JSON, preserving string/keyword map keys
+            let input_json = A2AExecutor::value_to_json(inputs)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;
             let client = reqwest::Client::new();
             let tool_name = if mcp.tool_name.is_empty() || mcp.tool_name == "*" {
