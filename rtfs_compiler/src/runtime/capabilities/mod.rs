@@ -7,7 +7,10 @@ pub mod providers;
 
 /// Common re-exports for ergonomic imports
 pub mod prelude {
-    pub use super::providers::{GitHubMCPCapability, WeatherMCPCapability};
+    // Provider implementations
+    pub use super::providers::{GitHubMCPCapability, WeatherMCPCapability, LocalLlmProvider};
+    // Core capability wrappers and helpers
+    pub use crate::runtime::capability::{Capability, inject_capability};
     pub use crate::runtime::capability_provider::{
         CapabilityProvider, CapabilityDescriptor, SecurityRequirements, Permission,
         NetworkAccess, ResourceLimits, HealthStatus, ProviderConfig, ProviderMetadata,
