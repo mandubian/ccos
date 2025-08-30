@@ -15,6 +15,7 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use rtfs_compiler::ccos::types::{IntentId, IntentStatus, EdgeType};
 use rtfs_compiler::ccos::intent_graph::IntentGraph;
@@ -28,6 +29,16 @@ use rtfs_compiler::ccos::arbiter::{
     arbiter_config::{ArbiterConfig, ArbiterEngineType, LlmConfig},
 };
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
+
+// TUI imports
+use crossterm::event::{self, Event as CEvent, KeyCode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::text::{Span, Spans};
+use ratatui::style::{Color, Style};
 
 #[derive(Parser, Debug)]
 #[command(name = "arbiter_rtfs_graph_demo")]
@@ -48,6 +59,10 @@ struct Args {
     /// Debug: print intent prompt, raw LLM responses, and parsed intent
     #[arg(long, default_value_t = false)]
     debug: bool,
+
+    /// Enable TUI visualization
+    #[arg(long, default_value_t = false)]
+    tui: bool,
 }
 
 #[tokio::main]
@@ -145,12 +160,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // NEW: Collect plans by intent for final pretty output
     let mut plans_by_intent: HashMap<IntentId, String> = HashMap::new();
 
+    // Optional TUI setup
+    let use_tui = args.tui && atty::is(atty::Stream::Stdout);
+    let mut terminal_opt: Option<Terminal<CrosstermBackend<std::io::Stdout>>> = None;
+    if use_tui {
+        enable_raw_mode().ok();
+        let stdout = std::io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).expect("create terminal");
+        terminal.clear().ok();
+        terminal_opt = Some(terminal);
+    }
+
+    let mut event_log: Vec<String> = Vec::with_capacity(128);
+    let mut last_draw = Instant::now();
+
     loop {
         if loop_count > MAX_LOOPS {
             println!("⚠️ Max loop count reached. Exiting.");
             break;
         }
-        let ready_intents = {
+    let ready_intents = {
             // Apply dependency semantics:
             // - An intent with DependsOn edges is ready only if all prerequisites are Completed.
             // - A parent intent (with incoming IsSubgoalOf edges) is ready only when all its subgoals are Completed.
@@ -214,6 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n  - Found ready intent: {} (Goal: \"{}\")", intent.intent_id, intent.goal);
             // 1. Generate a plan for this specific intent
             println!("    - Generating plan...");
+            event_log.push(format!("Plan: {}", intent.goal));
             let plan_result = arbiter.generate_plan_for_intent(&intent).await?;
             if let rtfs_compiler::ccos::types::PlanBody::Rtfs(code) = &plan_result.plan.body {
                 plans_by_intent.insert(intent.intent_id.clone(), code.clone());
@@ -226,9 +257,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 2. Execute the plan
             println!("    - Executing plan...");
+            event_log.push(format!("Exec: {}", intent.goal));
             let _ = orchestrator.execute_plan(&plan_result.plan, &ctx).await;
         }
         loop_count += 1;
+
+        // TUI draw cycle (throttle to ~30fps)
+        if let Some(terminal) = terminal_opt.as_mut() {
+            if last_draw.elapsed() > Duration::from_millis(33) {
+                let g = intent_graph.lock().unwrap();
+                terminal
+                    .draw(|f| {
+                        let chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Min(5),
+                                Constraint::Length(7),
+                            ])
+                            .split(f.size());
+
+                        // Left/top: Intent tree
+                        let mut items: Vec<ListItem> = Vec::new();
+                        build_tree_items(&g, &root_intent_id, 0, &mut items, &mut std::collections::HashSet::new());
+                        let tree = List::new(items)
+                            .block(Block::default().borders(Borders::ALL).title("Intents"));
+                        f.render_widget(tree, chunks[0]);
+
+                        // Bottom: Event log
+                        let tail: Vec<ListItem> = event_log.iter().rev().take(5).rev().map(|s| ListItem::new(s.as_str())).collect();
+                        let logw = List::new(tail)
+                            .block(Block::default().borders(Borders::ALL).title("Events"));
+                        f.render_widget(logw, chunks[1]);
+                    })
+                    .ok();
+                last_draw = Instant::now();
+            }
+
+            // Non-blocking key handling: press q to quit early
+            while event::poll(Duration::from_millis(1)).unwrap_or(false) {
+                if let Ok(CEvent::Key(k)) = event::read() {
+                    if k.code == KeyCode::Char('q') {
+                        disable_raw_mode().ok();
+                        terminal_opt.take();
+                        println!("\n👋 Quit by user (q)");
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     println!("\n📊 Final Graph State:");
@@ -237,6 +313,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Also print a detailed view with the RTFS plan body associated to each intent
     println!("\n🗺️  Graph with plans (detailed):");
     print_graph_with_plans(&intent_graph, &root_intent_id, &plans_by_intent);
+
+    if let Some(mut terminal) = terminal_opt {
+        disable_raw_mode().ok();
+        terminal.show_cursor().ok();
+    }
 
     Ok(())
 }
@@ -314,4 +395,35 @@ fn print_graph_with_plans(
 
     let mut seen = std::collections::HashSet::new();
     recurse(&g, root_id, plans_by_intent, 0, &mut seen);
+}
+
+// Build list items recursively with colored status
+fn build_tree_items(
+    g: &IntentGraph,
+    current: &IntentId,
+    depth: usize,
+    out: &mut Vec<ratatui::widgets::ListItem<'static>>,
+    seen: &mut std::collections::HashSet<IntentId>,
+) {
+    if seen.contains(current) { return; }
+    seen.insert(current.clone());
+    if let Some(intent) = g.get_intent(current) {
+        let name = intent.name.clone().unwrap_or_else(|| "<unnamed>".to_string());
+        let (color, status_str) = match intent.status {
+            IntentStatus::Active => (Color::Yellow, "Active"),
+            IntentStatus::Executing => (Color::Blue, "Executing"),
+            IntentStatus::Completed => (Color::Green, "Completed"),
+            IntentStatus::Failed => (Color::Red, "Failed"),
+            IntentStatus::Archived => (Color::Gray, "Archived"),
+            IntentStatus::Suspended => (Color::Magenta, "Suspended"),
+        };
+        let indent = "  ".repeat(depth);
+        let line = format!("{}• {} [{}] — {}", indent, name, status_str, intent.goal);
+        let spans = Spans::from(vec![Span::raw(indent), Span::raw("• "), Span::styled(name, Style::default().fg(color)), Span::raw(format!(" [{}] — {}", status_str, intent.goal))]);
+        out.push(ListItem::new(Spans::from(spans)));
+
+        for child in g.get_child_intents(&intent.intent_id) {
+            build_tree_items(g, &child.intent_id, depth + 1, out, seen);
+        }
+    }
 }
