@@ -1,46 +1,57 @@
-wt/arbiter-delegation-enhancements — progress log
+wt/causal-chain-event-stream — Issue #56: SEP-003 Causal Chain Event Stream implementation
 
-- Milestone 1: Make delegation/arbiter tests green ✅
-  - Fixed AST parsing for task context access: `@plan-id` now parsed as `ResourceRef`, `@:context-key` as `Symbol`.
-  - Corrected map destructuring `:keys` handling in both AST and IR runtimes (normalized keyword representation).
-  - Result: ast_coverage and integration tests passing locally.
+## Implementation Status: ✅ COMPLETE
 
-- Milestone 2: Centralize delegation metadata key constants ✅
-  - Created `delegation_keys` module with centralized constants for all metadata keys.
-  - Replaced string literals with constants throughout codebase:
-    - `intent::INTENT_TYPE`, `intent::COMPLEXITY`
-    - `generation::GENERATION_METHOD` with `methods::LLM/TEMPLATE/DELEGATION/etc.`
-    - `agent::DELEGATED_AGENT`, `agent::AGENT_TRUST_SCORE`, `agent::AGENT_COST`
-  - Added validation functions for key and value validation.
-  - Updated all arbiter implementations and examples to use constants.
-  - Result: All tests passing, no raw metadata keys in codebase.
+### Phase 1: Event Sink Infrastructure ✅
+- Added `CausalChainEventSink` trait for observer pattern
+- Implemented `register_event_sink()` and `notify_sinks()` methods in `CausalChain`
+- Wired notifications to all append paths (record_result, log_plan_event, etc.)
+- Lightweight, non-blocking design preserves causal chain performance
 
-- Milestone 3: Introduce DelegationConfig in agent config; plumb through registry → arbiter ✅
-  - Extended `DelegationConfig` in `AgentConfig` to include `AgentRegistryConfig`.
-  - Added `AgentRegistryConfig`, `RegistryType`, and `AgentDefinition` structs.
-  - Implemented `to_arbiter_config()` conversion method for seamless integration.
-  - Updated CCOS initialization to automatically wire delegation configuration.
-  - Added comprehensive test suite for delegation configuration.
-  - Created detailed documentation in `docs/ccos/specs/022-delegation-configuration.md`.
-  - Result: Delegation configuration fully integrated from agent config to arbiter.
+### Phase 2: Working Memory Ingestion Sink ✅
+- Implemented `WorkingMemorySink` and `WmIngestionSink` adapters
+- Added deterministic `Action` → `ActionRecord` mapping with:
+  - Proper timestamp conversion (ms → s)
+  - Provider/kind extraction
+  - Attestation hash forwarding from metadata
+  - Compact content string for idempotent hashing
+- Integrated with existing `MemoryIngestor` for automatic tagging
 
-- Milestone 4: Implement adaptive threshold using rolling success stats with bounds and env/config overrides ✅
-  - Created `AdaptiveThresholdConfig` with comprehensive configuration options.
-  - Implemented `AdaptiveThresholdCalculator` with decay-weighted performance tracking.
-  - Enhanced `SuccessStats` structure with decay-weighted rates and timestamps.
-  - Integrated adaptive threshold into `DelegatingArbiter` decision logic.
-  - Added environment variable overrides with configurable prefix.
-  - Implemented bounds enforcement (min/max threshold values).
-  - Added minimum samples requirement before adaptive threshold applies.
-  - Created comprehensive test suite for adaptive threshold functionality.
-  - Added feedback recording methods for delegation performance tracking.
-  - Result: Adaptive delegation threshold fully implemented with deterministic tests.
+### Phase 3: Wiring and Integration ✅
+- Registered WM sink in `CCOSEnvironment::new()` when enabled
+- Added environment variable controls: `CCOS_ENABLE_WM_INGESTOR`, `CCOS_WM_MAX_ENTRIES`, `CCOS_WM_MAX_TOKENS`
+- Implemented full observability ingestor capability: `observability.ingestor:v1.ingest`
+- Supports single, batch, and replay modes with proper error handling
 
-Try locally:
-```bash
-cargo test --test integration_tests -- --nocapture --test-threads 1
-cargo test --test ast_coverage -- --nocapture
-cargo test delegation_keys --lib
-cargo test config::types::tests --lib
-cargo test adaptive_threshold --lib
-```
+### Phase 4: Testing and Validation ✅
+- **Unit Tests**: Event sink registration/notification, action mapping determinism, hash stability
+- **Integration Tests**: End-to-end WM ingestion from causal chain events
+- **Capability Tests**: Observability ingestor single/batch/replay modes
+- **Idempotency Tests**: Replay produces same WM state as online ingestion
+
+### Key Features Implemented
+- **Event Stream API**: Clean trait-based observer pattern
+- **Automatic WM Ingestion**: Real-time distillation of causal chain actions
+- **Replay Capability**: Rebuild WM from full ledger history
+- **Tagging System**: Actions tagged with "wisdom", "causal-chain", "distillation", and action-type
+- **Security**: Preserves attestation and provenance through the pipeline
+- **Performance**: Non-blocking, lightweight observers don't impact causal chain critical sections
+
+### Files Modified/Added
+- `rtfs_compiler/src/ccos/event_sink.rs` - Event sink traits
+- `rtfs_compiler/src/ccos/causal_chain/mod.rs` - Event sink integration
+- `rtfs_compiler/src/ccos/working_memory/ingestor.rs` - WM ingestion sink
+- `rtfs_compiler/src/ccos/wm_integration.rs` - Bridge utilities
+- `rtfs_compiler/src/runtime/ccos_environment.rs` - Environment wiring
+- `rtfs_compiler/tests/working_memory_integration.rs` - End-to-end tests
+
+### Acceptance Criteria Met ✅
+- ✅ Causal Chain compiles and behaves identically when no sink registered
+- ✅ Appended actions produce WM entries with proper tags ("wisdom", "causal-chain", "distillation")
+- ✅ Replay from ledger produces identical WM state (idempotent)
+- ✅ Integration tests pass: Context Horizon can query distilled wisdom entries
+- ✅ No blocking/async operations in causal chain critical sections
+- ✅ Preserves ledger immutability and append-only semantics
+
+### Next Steps
+Ready for integration testing with Context Horizon and full CCOS orchestration flow.
