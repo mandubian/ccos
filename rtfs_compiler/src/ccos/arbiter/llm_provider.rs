@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use crate::runtime::error::RuntimeError;
 use crate::ccos::types::{Plan, PlanBody, PlanLanguage, StorableIntent, IntentStatus, TriggerSource, GenerationContext};
+use crate::parser; // for validating reduced-grammar RTFS plans
 
 /// Result of plan validation by an LLM provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +100,111 @@ impl OpenAILlmProvider {
         Ok(Self { config, client })
     }
     
+    /// Extracts the first top-level (do ...) s-expression from a text blob.
+    fn extract_do_block(text: &str) -> Option<String> {
+        let start = text.find("(do");
+        let start = match start { Some(s) => s, None => return None };
+        let mut depth = 0usize;
+        for (idx, ch) in text[start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    if depth == 0 { return None; }
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = start + idx + 1;
+                        return Some(text[start..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Extracts the first top-level (plan ...) s-expression from a text blob.
+    fn extract_plan_block(text: &str) -> Option<String> {
+        let start = text.find("(plan");
+        let start = match start { Some(s) => s, None => return None };
+        let mut depth = 0usize;
+        for (idx, ch) in text[start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    if depth == 0 { return None; }
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = start + idx + 1;
+                        return Some(text[start..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Very small helper to extract a quoted string value following a given keyword in a plan block.
+    /// Example: for key ":name" extracts the first "..." after it.
+    fn extract_quoted_value_after_key(plan_block: &str, key: &str) -> Option<String> {
+        if let Some(kpos) = plan_block.find(key) {
+            let after = &plan_block[kpos + key.len()..];
+            if let Some(q1) = after.find('"') {
+                let rest = &after[q1 + 1..];
+                if let Some(q2) = rest.find('"') {
+                    return Some(rest[..q2].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Extracts the first top-level s-expression immediately following a given keyword key.
+    /// Example: for key ":body", extracts the (do ...) s-expression right after it, skipping quoted text.
+    fn extract_s_expr_after_key(text: &str, key: &str) -> Option<String> {
+        let kpos = text.find(key)?;
+        let after = &text[kpos + key.len()..];
+        // Find the first unquoted '(' after the key
+        let mut in_string = false;
+        let mut prev: Option<char> = None;
+        let mut rel_start: Option<usize> = None;
+        for (i, ch) in after.char_indices() {
+            match ch {
+                '"' => {
+                    if prev != Some('\\') {
+                        in_string = !in_string;
+                    }
+                }
+                '(' if !in_string => {
+                    rel_start = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+            prev = Some(ch);
+        }
+        let rel_start = rel_start?;
+        let start = kpos + key.len() + rel_start;
+
+        // Extract balanced s-expression starting at start
+        let mut depth = 0usize;
+        for (idx, ch) in text[start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    if depth == 0 { return None; }
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = start + idx + 1;
+                        return Some(text[start..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     async fn make_request(&self, messages: Vec<OpenAIMessage>) -> Result<String, RuntimeError> {
         let api_key = self.config.api_key.as_ref()
             .ok_or_else(|| RuntimeError::Generic("API key required for OpenAI provider".to_string()))?;
@@ -214,6 +320,151 @@ impl OpenAILlmProvider {
     }
 }
 
+#[cfg(test)]
+mod extract_tests {
+        use super::*;
+
+        #[test]
+        fn test_extract_do_block_simple() {
+                let text = r#"
+Some header text
+(do
+    (step \"A\" (call :ccos.echo {:message \"hi\"}))
+    (step \"B\" (call :ccos.math.add 2 3))
+)
+Trailing
+"#;
+                let do_block = OpenAILlmProvider::extract_do_block(text).expect("should find do block");
+                assert!(do_block.starts_with("(do"));
+                assert!(do_block.contains(":ccos.echo"));
+                assert!(do_block.ends_with(")"));
+        }
+
+        #[test]
+        fn test_extract_plan_block_and_name_and_body() {
+                let text = r#"
+Intro
+(plan
+    :name "Sample Plan"
+    :language rtfs20
+    :body (do
+                     (step "Greet" (call :ccos.echo {:message "hi"}))
+                     (step "Add" (call :ccos.math.add 2 3)))
+    :annotations {:source "unit"}
+)
+Footer
+"#;
+
+                let plan_block = OpenAILlmProvider::extract_plan_block(text).expect("should find plan block");
+                assert!(plan_block.starts_with("(plan"));
+                let name = OpenAILlmProvider::extract_quoted_value_after_key(&plan_block, ":name")
+                        .expect("should extract name");
+                assert_eq!(name, "Sample Plan");
+                let do_block = OpenAILlmProvider::extract_do_block(&plan_block).expect("should find nested do block");
+                assert!(do_block.contains(":ccos.math.add 2 3"));
+        }
+
+    #[test]
+    fn test_extract_plan_block_with_fences_and_prose() {
+        let text = r#"
+Here is your plan. I've ensured it follows the schema:
+
+```rtfs
+(plan
+  :name "Fenced Plan"
+  :language rtfs20
+  :body (do
+       (step "Say" (call :ccos.echo {:message "yo"}))
+       (step "Sum" (call :ccos.math.add 1 2)))
+)
+```
+
+Some trailing commentary that should be ignored.
+"#;
+
+        let plan_block = OpenAILlmProvider::extract_plan_block(text).expect("should find plan inside fences");
+        assert!(plan_block.starts_with("(plan"));
+        let do_block = OpenAILlmProvider::extract_do_block(&plan_block).expect("nested do should be found");
+        assert!(do_block.contains(":ccos.echo"));
+    }
+
+    #[test]
+    fn test_extract_do_block_with_fences_and_prefix() {
+        let text = r#"
+Model: Here's the body you requested:
+
+```lisp
+(do
+  (step "One" (call :ccos.echo {:message "a"}))
+  (step "Two" (call :ccos.math.add 3 4))
+)
+```
+"#;
+
+        let do_block = OpenAILlmProvider::extract_do_block(text).expect("should find do inside fences");
+        assert!(do_block.starts_with("(do"));
+        assert!(parser::parse(&do_block).is_ok());
+    }
+
+    #[test]
+    fn test_extract_quoted_value_after_key_multiple_occurrences() {
+        let text = r#"
+(plan
+  :name "First"
+  :annotations {:name "not this one"}
+  :body (do (step "n" (call :ccos.echo {:message "m"})))
+)
+"#;
+        let plan_block = OpenAILlmProvider::extract_plan_block(text).unwrap();
+        let name = OpenAILlmProvider::extract_quoted_value_after_key(&plan_block, ":name").unwrap();
+        assert_eq!(name, "First");
+    }
+
+    #[test]
+    fn test_extract_do_after_body_key_normal() {
+        let text = r#"
+(plan
+  :name "X"
+  :language rtfs20
+  :body (do
+      (step "A" (call :ccos.echo {:message "m"}))
+      (step "B" (call :ccos.math.add 5 6)))
+)
+"#;
+        let plan_block = OpenAILlmProvider::extract_plan_block(text).unwrap();
+        let do_block = OpenAILlmProvider::extract_s_expr_after_key(&plan_block, ":body").unwrap();
+        assert!(do_block.starts_with("(do"));
+        assert!(do_block.contains(":ccos.math.add 5 6"));
+    }
+
+    #[test]
+    fn test_extract_do_after_body_key_missing_returns_none() {
+        let text = r#"
+(plan
+  :name "No Body"
+  :language rtfs20
+  :annotations {:note "no body key"}
+)
+"#;
+        let plan_block = OpenAILlmProvider::extract_plan_block(text).unwrap();
+        assert!(OpenAILlmProvider::extract_s_expr_after_key(&plan_block, ":body").is_none());
+    }
+
+    #[test]
+    fn test_extract_do_after_body_skips_quoted_parens() {
+        let text = r#"
+(plan
+  :name "Quoted"
+  :body "not this (do wrong)"
+  :body (do (step "Only" (call :ccos.echo {:message "ok"})))
+)
+"#;
+        let plan_block = OpenAILlmProvider::extract_plan_block(text).unwrap();
+        let do_block = OpenAILlmProvider::extract_s_expr_after_key(&plan_block, ":body").unwrap();
+        assert!(do_block.contains(":ccos.echo"));
+    }
+}
+
 #[async_trait]
 impl LlmProvider for OpenAILlmProvider {
     async fn generate_intent(
@@ -256,6 +507,14 @@ Only respond with valid JSON."#;
         ];
         
         let response = self.make_request(messages).await?;
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS").map(|v| v == "1").unwrap_or(false)
+            || std::env::var("CCOS_DEBUG").map(|v| v == "1").unwrap_or(false);
+        if show_prompts {
+            println!(
+                "\n=== LLM Raw Response (Plan Generation) ===\n{}\n=== END RESPONSE ===\n",
+                response
+            );
+        }
         self.parse_intent_from_json(&response)
     }
     
@@ -264,34 +523,102 @@ Only respond with valid JSON."#;
         intent: &StorableIntent,
         _context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError> {
-        let system_message = r#"You are an AI assistant that generates RTFS (Real-Time Functional Specification) plans to achieve intents.
+    // Choose prompt mode: full-plan or reduced (do ...) body only
+    let full_plan_mode = std::env::var("RTFS_FULL_PLAN").map(|v| v == "1").unwrap_or(false);
 
-Generate a JSON response with the following structure:
-{
-  "name": "descriptive_plan_name",
-  "steps": [
-    "(step \"Step Name\" (call :capability.name args))",
-    "(step \"Another Step\" (call :ccos.echo \"message\"))"
-  ]
-}
+    // Reduced RTFS grammar prompt (default): require direct (do ...) body with (step ...) and (call :cap ...)
+    let reduced_system_message = r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
 
-Use RTFS syntax with step special forms. Available capabilities include:
-- ccos.echo: Echo a message
-- ccos.math.add: Add numbers
-- ccos.data.fetch: Fetch data
-- ccos.report.generate: Generate reports
+Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences.
 
-Only respond with valid JSON."#;
+Allowed forms (reduced grammar):
+- (do <step> <step> ...)
+- (step "Descriptive Name" (<expr>)) ; name must be a double-quoted string
+- (call :cap.namespace.op <args...>)   ; capability ids MUST be RTFS keywords starting with a colon
 
-        let user_message = format!(
-            "Generate a plan to achieve this intent:\nGoal: {}\nConstraints: {:?}\nPreferences: {:?}",
-            intent.goal, intent.constraints, intent.preferences
-        );
+Arguments allowed:
+- strings: "..."
+- numbers: 1 2 3
+- simple maps with keyword keys: {:key "value" :a 1 :b 2}
 
-        let messages = vec![
+Capability signatures for this demo (STRICT):
+- :ccos.echo must be called with a single map argument containing :message string
+    Example: (call :ccos.echo {:message "hello"})
+- :ccos.math.add must be called with exactly two positional number arguments. Do NOT use map arguments for this capability.
+    Example: (call :ccos.math.add 2 3)
+
+Constraints:
+- Use ONLY the forms above. Do NOT return JSON or markdown. Do NOT include (plan ...) wrapper.
+- Available capabilities for this demo (whitelist): :ccos.echo, :ccos.math.add. You MUST use only capability ids from this list.
+- If you need to print/log, use :ccos.echo. If you need to add numbers, use :ccos.math.add.
+- Keep it multi-step if helpful. Ensure the s-expression parses.
+"#;
+
+    // Full plan prompt (opt-in): emit a (plan ...) wrapper without sensitive fields.
+    // The orchestrator will ignore/overwrite: plan_id, intent_ids, status, policies, capabilities_required, timestamps.
+    // Required: :body with a (do ...) form. Optional: :name (string), :language rtfs20, :annotations simple map.
+    let full_plan_system_message = r#"You translate an RTFS intent into a concrete RTFS plan using a constrained schema.
+
+Output format: ONLY a single well-formed RTFS s-expression starting with (plan ...). No prose, no JSON, no fences.
+
+Allowed keys in (plan ...):
+- :name "short descriptive name"            ; optional
+- :language rtfs20                           ; optional (will be set to rtfs20 if missing)
+- :body (do <step> <step> ...)               ; required; use reduced grammar for steps and calls
+- :annotations {:key "value" :k2 "v2"}     ; optional; keyword keys and string values only
+
+Forbidden or ignored (kernel-owned): :plan_id :intent_ids :status :policies :capabilities_required :created_at :metadata :input_schema :output_schema
+
+Reduced step/call grammar inside :body:
+- (step "Descriptive Name" (<expr>))
+- (call :cap.namespace.op <args...>)
+Arguments allowed: strings ("..."), numbers (1 2 3), simple maps with keyword keys ({:key "value"}).
+
+Capability whitelist for this demo: use ONLY these capability ids in :body
+- :ccos.echo  ; for printing/logging messages
+- :ccos.math.add  ; for adding numbers
+Do NOT invent or use other capability ids.
+
+Additional STRICT signature rules:
+- :ccos.echo must be called with a single map {:message "..."}
+- :ccos.math.add must be called with exactly two positional numbers, e.g., (call :ccos.math.add 2 3). Map arguments are NOT allowed for this capability.
+
+Return exactly one (plan ...) with these constraints.
+"#;
+
+        let user_message = if full_plan_mode {
+            format!(
+                "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (plan ...) now, following the constraints above:",
+                intent.goal, intent.constraints, intent.preferences
+            )
+        } else {
+            format!(
+                "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
+                intent.goal, intent.constraints, intent.preferences
+            )
+        };
+
+        // Optional: display prompts during live runtime when enabled
+        // Enable by setting RTFS_SHOW_PROMPTS=1 or CCOS_DEBUG=1
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS").map(|v| v == "1").unwrap_or(false)
+            || std::env::var("CCOS_DEBUG").map(|v| v == "1").unwrap_or(false);
+        if show_prompts {
+            let system_msg = if full_plan_mode {
+                full_plan_system_message
+            } else {
+                reduced_system_message
+            };
+            println!(
+                "\n=== LLM Plan Generation Prompt ===\n[system]\n{}\n\n[user]\n{}\n=== END PROMPT ===\n",
+                system_msg,
+                user_message
+            );
+        }
+
+    let messages = vec![
             OpenAIMessage {
                 role: "system".to_string(),
-                content: system_message.to_string(),
+        content: if full_plan_mode { full_plan_system_message.to_string() } else { reduced_system_message.to_string() },
             },
             OpenAIMessage {
                 role: "user".to_string(),
@@ -300,6 +627,67 @@ Only respond with valid JSON."#;
         ];
         
         let response = self.make_request(messages).await?;
+        if show_prompts {
+            println!(
+                "\n=== LLM Raw Response (Plan Generation) ===\n{}\n=== END RESPONSE ===\n",
+                response
+            );
+        }
+        // Preferred: try full-plan extraction first (if requested), then reduced (do ...) body
+        if full_plan_mode {
+            if let Some(plan_block) = Self::extract_plan_block(&response) {
+                // Prefer extracting the (do ...) right after :body; fallback to generic do search
+                if let Some(do_block) = Self::extract_s_expr_after_key(&plan_block, ":body")
+                    .or_else(|| Self::extract_do_block(&plan_block))
+                {
+                    if parser::parse(&do_block).is_ok() {
+                        let mut plan_name: Option<String> = None;
+                        if let Some(name) = Self::extract_quoted_value_after_key(&plan_block, ":name") {
+                            plan_name = Some(name);
+                        }
+                        return Ok(Plan {
+                            plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                            name: plan_name,
+                            intent_ids: vec![intent.intent_id.clone()],
+                            language: PlanLanguage::Rtfs20,
+                            body: PlanBody::Rtfs(do_block),
+                            status: crate::ccos::types::PlanStatus::Draft,
+                            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                            metadata: HashMap::new(),
+                            input_schema: None,
+                            output_schema: None,
+                            policies: HashMap::new(),
+                            capabilities_required: vec![],
+                            annotations: HashMap::new(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback: direct RTFS (do ...) body
+        if let Some(do_block) = Self::extract_do_block(&response) {
+            // Optional: validate parses; if not, fall back to legacy JSON path
+            if parser::parse(&do_block).is_ok() {
+                return Ok(Plan {
+                    plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                    name: None,
+                    intent_ids: vec![intent.intent_id.clone()],
+                    language: PlanLanguage::Rtfs20,
+                    body: PlanBody::Rtfs(do_block),
+                    status: crate::ccos::types::PlanStatus::Draft,
+                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    metadata: HashMap::new(),
+                    input_schema: None,
+                    output_schema: None,
+                    policies: HashMap::new(),
+                    capabilities_required: vec![],
+                    annotations: HashMap::new(),
+                });
+            }
+        }
+
+        // Fallback: previous JSON-wrapped steps contract
         self.parse_plan_from_json(&response, &intent.intent_id)
     }
     

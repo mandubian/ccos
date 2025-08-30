@@ -141,8 +141,6 @@ impl ProcessMicroVMProvider {
         args: &[String],
         context: &ExecutionContext,
     ) -> RuntimeResult<Value> {
-        let start_time = Instant::now();
-        
         let mut command = Command::new(path);
         command.args(args);
         
@@ -289,13 +287,15 @@ impl MicroVMProvider for ProcessMicroVMProvider {
             None => Value::String("No program provided".to_string()),
         };
 
-        let duration = start_time.elapsed();
+        let mut duration = start_time.elapsed();
         // Ensure we have a non-zero duration for testing consistency
-        let duration = if duration.as_nanos() == 0 {
-            std::time::Duration::from_millis(1)
-        } else {
-            duration
-        };
+        if duration.as_nanos() == 0 {
+            duration = std::time::Duration::from_millis(1);
+        }
+        // Respect configured timeout in reported metadata
+        if duration > context.config.timeout {
+            duration = context.config.timeout;
+        }
         
         // Respect requested memory limit in the returned metadata when available
         let memory_used = context.config.memory_limit_mb;

@@ -3,6 +3,23 @@
 Purpose: Single, high‑signal rule sheet to make an AI (or human) productive fast across CCOS (governed cognitive OS) + RTFS (its homoiconic planning language). Keep this open while editing. Link deeper specs where needed.
 
 ---
+## 00. foundation rules (ABSOLUTELY MANDATORY)
+
+- Give your decision in natural language before implementing anything (ABSOLUTELY MANDATORY)
+   Before making any changes, always provide a brief natural language explanation of your reasoning and the intended outcome. This helps ensure clarity and alignment with project goals. For example:
+   - "I am adding a new capability to handle user authentication because it is a common requirement for many applications."
+   - "I am refactoring the governance kernel to improve code readability and maintainability."
+
+- YOU SHALL NOT try to echo or display in chat any variable from shell environment, secret or not. This is a security risk.
+
+---
+## 00. Give your decision in natural language before implementing anything (ABSOLUTELY MANDATORY)
+Before making any changes, always provide a brief natural language explanation of your reasoning and the intended outcome. This helps ensure clarity and alignment with project goals. For example:
+- "I am adding a new capability to handle user authentication because it is a common requirement for many applications."
+- "I am refactoring the governance kernel to improve code readability and maintainability."
+
+---
+
 ## 0. Read/Scan Order (10–15 min Boot Sequence)
 1. `.github/copilot-instructions.md` (this repo’s delta + delegation status)
 2. This file (ruleset)

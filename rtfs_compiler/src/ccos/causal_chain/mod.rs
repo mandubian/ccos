@@ -117,9 +117,19 @@ impl CausalChain {
     }
 
     /// Notify all registered event sinks of an action append
-    fn notify_sinks(&self, action: &Action) {
+    fn notify_sinks(&mut self, action: &Action) {
+        use std::time::Instant;
+
         for sink in &self.event_sinks {
-            sink.on_action_appended(action);
+            if sink.is_wm_sink() {
+                // Measure latency for Working Memory ingestion
+                let start_time = Instant::now();
+                sink.on_action_appended(action);
+                let latency_ms = start_time.elapsed().as_millis() as u64;
+                self.metrics.record_wm_ingest_latency(latency_ms);
+            } else {
+                sink.on_action_appended(action);
+            }
         }
     }
 
@@ -173,36 +183,74 @@ impl CausalChain {
         mut action: Action,
         result: ExecutionResult,
     ) -> Result<(), RuntimeError> {
-        // Update action with result
-        action = action.with_result(result.clone());
+        if action.action_type == ActionType::CapabilityCall {
+            // For capability calls: write a separate CapabilityResult node linked to the call
+            let mut result_action = Action::new(
+                ActionType::CapabilityResult,
+                action.plan_id.clone(),
+                action.intent_id.clone(),
+            )
+            .with_parent(Some(action.action_id.clone()))
+            .with_name(action.function_name.as_deref().unwrap_or("<unknown>"))
+            .with_result(result.clone());
 
-        // Add metadata from result
-        for (key, value) in result.metadata {
-            action.metadata.insert(key, value);
+            // Attach metadata from result
+            for (key, value) in result.metadata {
+                result_action.metadata.insert(key, value);
+            }
+
+            // Sign the action
+            let signature = self.signing.sign_action(&result_action);
+            result_action
+                .metadata
+                .insert("signature".to_string(), Value::String(signature));
+
+            // Append to ledger
+            self.ledger.append_action(&result_action)?;
+
+            // Record metrics and cost
+            self.metrics.record_action(&result_action)?;
+            self.metrics.cost_tracking.record_action_cost(&result_action);
+
+            // Notify event sinks
+            self.notify_sinks(&result_action);
+
+            // Log structured line
+            self.log_action_json(&result_action, "capability_result_recorded");
+
+            Ok(())
+        } else {
+            // For all other actions, preserve behavior: append the same action with result
+            action = action.with_result(result.clone());
+
+            // Add metadata from result
+            for (key, value) in result.metadata {
+                action.metadata.insert(key, value);
+            }
+
+            // Sign the action
+            let signature = self.signing.sign_action(&action);
+            action
+                .metadata
+                .insert("signature".to_string(), Value::String(signature));
+
+            // Append to ledger
+            self.ledger.append_action(&action)?;
+
+            // Record metrics
+            self.metrics.record_action(&action)?;
+
+            // Record cost
+            self.metrics.cost_tracking.record_action_cost(&action);
+
+            // Notify event sinks
+            self.notify_sinks(&action);
+
+            // Log structured line
+            self.log_action_json(&action, "action_result_recorded");
+
+            Ok(())
         }
-
-        // Sign the action
-        let signature = self.signing.sign_action(&action);
-        action
-            .metadata
-            .insert("signature".to_string(), Value::String(signature));
-
-        // Append to ledger
-        self.ledger.append_action(&action)?;
-
-        // Record metrics
-        self.metrics.record_action(&action)?;
-
-        // Record cost
-        self.metrics.cost_tracking.record_action_cost(&action);
-
-        // Notify event sinks
-        self.notify_sinks(&action);
-
-    // Log structured line
-    self.log_action_json(&action, "action_result_recorded");
-
-        Ok(())
     }
 
     /// Get an action by ID
@@ -630,6 +678,11 @@ impl CausalChain {
     /// Return up to `max` most recent structured log lines as JSON strings
     pub fn recent_logs(&self, max: usize) -> Vec<String> {
         self.logs.recent(max)
+    }
+
+    /// Get Working Memory ingest latency metrics
+    pub fn get_wm_ingest_latency_metrics(&self) -> &crate::ccos::causal_chain::metrics::WmIngestLatencyMetrics {
+        self.metrics.get_wm_ingest_latency_metrics()
     }
 }
 

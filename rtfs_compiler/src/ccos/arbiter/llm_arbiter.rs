@@ -370,18 +370,49 @@ impl ArbiterEngine for LlmArbiter {
     ) -> Result<Intent, RuntimeError> {
         // Generate prompt for intent generation
         let prompt = self.generate_intent_prompt(natural_language, context.clone());
-        
+
+        // Debug mode flag (set RTFS_ARBITER_DEBUG=1 or reuse RTFS_SHOW_PROMPTS)
+        let debug = std::env::var("RTFS_ARBITER_DEBUG").map(|v| v == "1").unwrap_or(false)
+            || std::env::var("RTFS_SHOW_PROMPTS").is_ok();
+
+        if debug {
+            println!("\n📝 Intent generation prompt:");
+            println!("--- PROMPT START ---");
+            println!("{}", prompt);
+            println!("--- PROMPT END ---");
+        }
+
         // Use LLM provider to generate text response
         let response = self.llm_provider.generate_text(&prompt).await?;
-        
-    // Parse RTFS response into intent structure
-    let mut intent = self.parse_rtfs_intent_response(&response, natural_language, context)?;
+
+        if debug {
+            println!("\n🤖 LLM response (intent):");
+            println!("--- RESPONSE START ---");
+            println!("{}", response);
+            println!("--- RESPONSE END ---");
+        }
+
+        // Parse RTFS response into intent structure
+        let mut intent = self.parse_rtfs_intent_response(&response, natural_language, context)?;
 
     // Ensure the original user request is recorded on the intent
     intent.original_request = natural_language.to_string();
 
     // Mark generation method for downstream consumers/tests
             intent.metadata.insert(generation::GENERATION_METHOD.to_string(), crate::runtime::values::Value::String(generation::methods::LLM.to_string()));
+
+    if debug {
+        println!("\n📋 Parsed intent:");
+        println!("  Name: {}", intent.name.as_deref().unwrap_or("<none>"));
+        println!("  Goal: {}", intent.goal);
+        println!("  Original Request: {}", intent.original_request);
+        if !intent.constraints.is_empty() {
+            println!("  Constraints: {} keys", intent.constraints.len());
+        }
+        if !intent.preferences.is_empty() {
+            println!("  Preferences: {} keys", intent.preferences.len());
+        }
+    }
 
     // Store the generated intent
     self.store_intent(&intent).await?;

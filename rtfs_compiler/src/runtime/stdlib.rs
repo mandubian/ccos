@@ -2622,25 +2622,36 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
         "Adds numeric values".to_string(),
         Arc::new(|input| {
             match input {
-                Value::List(args) => {
-                    let mut sum = 0;
-                    for arg in args {
-                        match arg {
-                            Value::Integer(n) => sum += n,
-                            _ => {
-                                return Err(RuntimeError::TypeError {
-                                    expected: "integer".to_string(),
-                                    actual: arg.type_name().to_string(),
-                                    operation: "ccos.math.add".to_string(),
-                                })
+                // New calling convention: map with :args and optional :context
+                Value::Map(map) => {
+                    let args_val = map.get(&MapKey::Keyword(Keyword("args".to_string()))).cloned().unwrap_or(Value::List(vec![]));
+                    match args_val {
+                        Value::List(args) => {
+                            let mut sum = 0i64;
+                            for arg in args {
+                                match arg {
+                                    Value::Integer(n) => sum += n,
+                                    other => {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "integer".to_string(),
+                                            actual: other.type_name().to_string(),
+                                            operation: "ccos.math.add".to_string(),
+                                        })
+                                    }
+                                }
                             }
+                            Ok(Value::Integer(sum))
                         }
+                        other => Err(RuntimeError::TypeError {
+                            expected: "list".to_string(),
+                            actual: other.type_name().to_string(),
+                            operation: "ccos.math.add".to_string(),
+                        })
                     }
-                    Ok(Value::Integer(sum))
                 }
-                _ => Err(RuntimeError::TypeError {
-                    expected: "list".to_string(),
-                    actual: input.type_name().to_string(),
+                other => Err(RuntimeError::TypeError {
+                    expected: "map".to_string(),
+                    actual: other.type_name().to_string(),
                     operation: "ccos.math.add".to_string(),
                 })
             }

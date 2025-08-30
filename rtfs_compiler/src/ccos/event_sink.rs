@@ -92,5 +92,11 @@ pub trait CausalChainEventSink: Debug + Send + Sync {
     /// Called synchronously after an action is appended to the causal chain.
     /// Implementations should remain lightweight and non-blocking.
     fn on_action_appended(&self, action: &Action);
+
+    /// Returns true if this sink is a Working Memory ingestion sink.
+    /// Used by CausalChain to measure latency for WM operations specifically.
+    fn is_wm_sink(&self) -> bool {
+        false
+    }
 }
 

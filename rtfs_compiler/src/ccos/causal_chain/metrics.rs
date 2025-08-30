@@ -8,6 +8,7 @@ pub struct PerformanceMetrics {
     pub capability_metrics: HashMap<CapabilityId, CapabilityMetrics>,
     pub function_metrics: HashMap<String, FunctionMetrics>,
     pub cost_tracking: CostTracker,
+    pub wm_ingest_latency: WmIngestLatencyMetrics,
 }
 
 impl PerformanceMetrics {
@@ -16,6 +17,7 @@ impl PerformanceMetrics {
             capability_metrics: HashMap::new(),
             function_metrics: HashMap::new(),
             cost_tracking: CostTracker::new(),
+            wm_ingest_latency: WmIngestLatencyMetrics::new(),
         }
     }
 
@@ -59,6 +61,14 @@ impl PerformanceMetrics {
 
     pub fn get_total_cost(&self) -> f64 {
         self.cost_tracking.total_cost
+    }
+
+    pub fn get_wm_ingest_latency_metrics(&self) -> &WmIngestLatencyMetrics {
+        &self.wm_ingest_latency
+    }
+
+    pub fn record_wm_ingest_latency(&mut self, latency_ms: u64) {
+        self.wm_ingest_latency.record_ingest(latency_ms);
     }
 }
 
@@ -130,6 +140,68 @@ impl FunctionMetrics {
         // Success/failure tracking removed: Action does not have a success field
 
         self.average_duration_ms = self.total_duration_ms as f64 / self.total_calls as f64;
+    }
+}
+
+/// Working Memory ingest latency metrics
+#[derive(Debug)]
+pub struct WmIngestLatencyMetrics {
+    pub total_ingests: u64,
+    pub total_latency_ms: u64,
+    pub average_latency_ms: f64,
+    pub max_latency_ms: u64,
+    pub min_latency_ms: u64,
+    pub latency_histogram: HashMap<u64, u64>, // bucket_ms -> count
+}
+
+impl WmIngestLatencyMetrics {
+    pub fn new() -> Self {
+        let mut latency_histogram = HashMap::new();
+        // Initialize histogram buckets: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1000ms, 2500ms, 5000ms
+        for &bucket in &[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000] {
+            latency_histogram.insert(bucket, 0);
+        }
+
+        Self {
+            total_ingests: 0,
+            total_latency_ms: 0,
+            average_latency_ms: 0.0,
+            max_latency_ms: 0,
+            min_latency_ms: u64::MAX,
+            latency_histogram,
+        }
+    }
+
+    pub fn record_ingest(&mut self, latency_ms: u64) {
+        self.total_ingests += 1;
+        self.total_latency_ms += latency_ms;
+
+        if latency_ms > self.max_latency_ms {
+            self.max_latency_ms = latency_ms;
+        }
+
+        if latency_ms < self.min_latency_ms {
+            self.min_latency_ms = latency_ms;
+        }
+
+        self.average_latency_ms = self.total_latency_ms as f64 / self.total_ingests as f64;
+
+        // Update histogram
+        let bucket = self.find_histogram_bucket(latency_ms);
+        *self.latency_histogram.entry(bucket).or_insert(0) += 1;
+    }
+
+    fn find_histogram_bucket(&self, latency_ms: u64) -> u64 {
+        for &bucket in &[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000] {
+            if latency_ms <= bucket {
+                return bucket;
+            }
+        }
+        5000 // Max bucket
+    }
+
+    pub fn get_histogram_data(&self) -> &HashMap<u64, u64> {
+        &self.latency_histogram
     }
 }
 

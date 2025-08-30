@@ -11,6 +11,7 @@ pub mod parser;
 pub mod parser_error_reporter;
 pub mod runtime;
 pub mod supervisor;
+pub mod utils;
 pub mod validator;
 pub mod bytecode;
 
@@ -36,6 +37,9 @@ pub mod builders;
 pub use builders::{
     ActionBuilder, CapabilityBuilder, IntentBuilder, ModuleBuilder, PlanBuilder, ResourceBuilder,
 };
+
+// Re-export RTFS utilities
+pub use utils::*;
 
 // Re-export CCOS components
 pub use ccos::types::*;

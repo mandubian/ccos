@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
 use std::any::Any;
-use crate::ast::{Expression, Keyword, MapKey, Literal, Symbol};
+use crate::ast::{Expression, Keyword, MapKey, Literal, Symbol, TypeExpr, PrimitiveType, MapTypeEntry};
 use chrono::Utc;
 
 /// MCP Server configuration for discovery
@@ -288,77 +288,77 @@ impl MCPDiscoveryProvider {
         // Create RTFS capability definition as Expression
         let capability = Expression::Map(vec![
             (
-                MapKey::String("type".to_string()),
+                MapKey::Keyword(Keyword("type".to_string())),
                 Expression::Literal(Literal::String("ccos.capability:v1".to_string()))
             ),
             (
-                MapKey::String("id".to_string()),
+                MapKey::Keyword(Keyword("id".to_string())),
                 Expression::Literal(Literal::String(capability_id.clone()))
             ),
             (
-                MapKey::String("name".to_string()),
+                MapKey::Keyword(Keyword("name".to_string())),
                 Expression::Literal(Literal::String(tool.name.clone()))
             ),
             (
-                MapKey::String("description".to_string()),
+                MapKey::Keyword(Keyword("description".to_string())),
                 Expression::Literal(Literal::String(tool.description.clone().unwrap_or_else(|| format!("MCP tool '{}'", tool.name))))
             ),
             (
-                MapKey::String("version".to_string()),
+                MapKey::Keyword(Keyword("version".to_string())),
                 Expression::Literal(Literal::String("1.0.0".to_string()))
             ),
             (
-                MapKey::String("provider".to_string()),
+                MapKey::Keyword(Keyword("provider".to_string())),
                 Expression::Map(vec![
                     (
-                        MapKey::String("type".to_string()),
+                        MapKey::Keyword(Keyword("type".to_string())),
                         Expression::Literal(Literal::String("mcp".to_string()))
                     ),
                     (
-                        MapKey::String("server_endpoint".to_string()),
+                        MapKey::Keyword(Keyword("server_endpoint".to_string())),
                         Expression::Literal(Literal::String(self.config.endpoint.clone()))
                     ),
                     (
-                        MapKey::String("tool_name".to_string()),
+                        MapKey::Keyword(Keyword("tool_name".to_string())),
                         Expression::Literal(Literal::String(tool.name.clone()))
                     ),
                     (
-                        MapKey::String("timeout_seconds".to_string()),
+                        MapKey::Keyword(Keyword("timeout_seconds".to_string())),
                         Expression::Literal(Literal::Integer(self.config.timeout_seconds as i64))
                     ),
                     (
-                        MapKey::String("protocol_version".to_string()),
+                        MapKey::Keyword(Keyword("protocol_version".to_string())),
                         Expression::Literal(Literal::String(self.config.protocol_version.clone()))
                     ),
                 ].into_iter().collect())
             ),
             (
-                MapKey::String("permissions".to_string()),
+                MapKey::Keyword(Keyword("permissions".to_string())),
                 Expression::Vector(vec![
                     Expression::Literal(Literal::String("mcp:tool:execute".to_string()))
                 ])
             ),
             (
-                MapKey::String("metadata".to_string()),
+                MapKey::Keyword(Keyword("metadata".to_string())),
                 Expression::Map(vec![
                     (
-                        MapKey::String("mcp_server".to_string()),
+                        MapKey::Keyword(Keyword("mcp_server".to_string())),
                         Expression::Literal(Literal::String(self.config.name.clone()))
                     ),
                     (
-                        MapKey::String("mcp_endpoint".to_string()),
+                        MapKey::Keyword(Keyword("mcp_endpoint".to_string())),
                         Expression::Literal(Literal::String(self.config.endpoint.clone()))
                     ),
                     (
-                        MapKey::String("tool_name".to_string()),
+                        MapKey::Keyword(Keyword("tool_name".to_string())),
                         Expression::Literal(Literal::String(tool.name.clone()))
                     ),
                     (
-                        MapKey::String("protocol_version".to_string()),
+                        MapKey::Keyword(Keyword("protocol_version".to_string())),
                         Expression::Literal(Literal::String(self.config.protocol_version.clone()))
                     ),
                     (
-                        MapKey::String("introspected_at".to_string()),
+                        MapKey::Keyword(Keyword("introspected_at".to_string())),
                         Expression::Literal(Literal::String(Utc::now().to_rfc3339()))
                     ),
                 ].into_iter().collect())
@@ -613,58 +613,58 @@ impl MCPDiscoveryProvider {
         // Parse the content and create a basic structure that matches what we expect
 
         // Try to extract common fields we know exist in our capability format
-        // Format: "id" "mcp.demo_server.echo"
-        if let Some(id_start) = content.find("\"id\"") {
-            // Find the space after "id"
-            if let Some(space_pos) = content[id_start + 4..].find(' ') {
-                let value_start = id_start + 4 + space_pos + 1;
+        // Format: :id "mcp.demo_server.echo"
+        if let Some(id_start) = content.find(":id") {
+            // Find the space after ":id"
+            if let Some(space_pos) = content[id_start + 3..].find(' ') {
+                let value_start = id_start + 3 + space_pos + 1;
                 if value_start < content.len() && content.chars().nth(value_start) == Some('"') {
                     // Find the closing quote
                     if let Some(end_quote) = content[value_start + 1..].find('"') {
                         let id_value = &content[value_start + 1..value_start + 1 + end_quote];
-                        map.insert(MapKey::String("id".to_string()), Expression::Literal(Literal::String(id_value.to_string())));
+                        map.insert(MapKey::Keyword(Keyword("id".to_string())), Expression::Literal(Literal::String(id_value.to_string())));
                     }
                 }
             }
         }
 
-        if let Some(name_start) = content.find("\"name\"") {
-            // Find the space after "name"
-            if let Some(space_pos) = content[name_start + 6..].find(' ') {
-                let value_start = name_start + 6 + space_pos + 1;
+        if let Some(name_start) = content.find(":name") {
+            // Find the space after ":name"
+            if let Some(space_pos) = content[name_start + 5..].find(' ') {
+                let value_start = name_start + 5 + space_pos + 1;
                 if value_start < content.len() && content.chars().nth(value_start) == Some('"') {
                     // Find the closing quote
                     if let Some(end_quote) = content[value_start + 1..].find('"') {
                         let name_value = &content[value_start + 1..value_start + 1 + end_quote];
-                        map.insert(MapKey::String("name".to_string()), Expression::Literal(Literal::String(name_value.to_string())));
+                        map.insert(MapKey::Keyword(Keyword("name".to_string())), Expression::Literal(Literal::String(name_value.to_string())));
                     }
                 }
             }
         }
 
-        if let Some(desc_start) = content.find("\"description\"") {
-            // Find the space after "description"
-            if let Some(space_pos) = content[desc_start + 13..].find(' ') {
-                let value_start = desc_start + 13 + space_pos + 1;
+        if let Some(desc_start) = content.find(":description") {
+            // Find the space after ":description"
+            if let Some(space_pos) = content[desc_start + 12..].find(' ') {
+                let value_start = desc_start + 12 + space_pos + 1;
                 if value_start < content.len() && content.chars().nth(value_start) == Some('"') {
                     // Find the closing quote
                     if let Some(end_quote) = content[value_start + 1..].find('"') {
                         let desc_value = &content[value_start + 1..value_start + 1 + end_quote];
-                        map.insert(MapKey::String("description".to_string()), Expression::Literal(Literal::String(desc_value.to_string())));
+                        map.insert(MapKey::Keyword(Keyword("description".to_string())), Expression::Literal(Literal::String(desc_value.to_string())));
                     }
                 }
             }
         }
 
-        if let Some(version_start) = content.find("\"version\"") {
-            // Find the space after "version"
-            if let Some(space_pos) = content[version_start + 9..].find(' ') {
-                let value_start = version_start + 9 + space_pos + 1;
+        if let Some(version_start) = content.find(":version") {
+            // Find the space after ":version"
+            if let Some(space_pos) = content[version_start + 8..].find(' ') {
+                let value_start = version_start + 8 + space_pos + 1;
                 if value_start < content.len() && content.chars().nth(value_start) == Some('"') {
                     // Find the closing quote
                     if let Some(end_quote) = content[value_start + 1..].find('"') {
                         let version_value = &content[value_start + 1..value_start + 1 + end_quote];
-                        map.insert(MapKey::String("version".to_string()), Expression::Literal(Literal::String(version_value.to_string())));
+                        map.insert(MapKey::Keyword(Keyword("version".to_string())), Expression::Literal(Literal::String(version_value.to_string())));
                     }
                 }
             }
@@ -672,27 +672,27 @@ impl MCPDiscoveryProvider {
 
         // Create a basic provider structure
         let mut provider_map = HashMap::new();
-        provider_map.insert(MapKey::String("type".to_string()), Expression::Literal(Literal::String("mcp".to_string())));
-        provider_map.insert(MapKey::String("server_endpoint".to_string()), Expression::Literal(Literal::String("http://localhost:3000".to_string())));
-        provider_map.insert(MapKey::String("tool_name".to_string()), Expression::Literal(Literal::String("echo".to_string()))); // Default, will be overridden if we can parse it
-        provider_map.insert(MapKey::String("timeout_seconds".to_string()), Expression::Literal(Literal::Integer(5)));
-        provider_map.insert(MapKey::String("protocol_version".to_string()), Expression::Literal(Literal::String("2024-11-05".to_string())));
-        map.insert(MapKey::String("provider".to_string()), Expression::Map(provider_map));
+        provider_map.insert(MapKey::Keyword(Keyword("type".to_string())), Expression::Literal(Literal::String("mcp".to_string())));
+        provider_map.insert(MapKey::Keyword(Keyword("server_endpoint".to_string())), Expression::Literal(Literal::String("http://localhost:3000".to_string())));
+        provider_map.insert(MapKey::Keyword(Keyword("tool_name".to_string())), Expression::Literal(Literal::String("echo".to_string()))); // Default, will be overridden if we can parse it
+        provider_map.insert(MapKey::Keyword(Keyword("timeout_seconds".to_string())), Expression::Literal(Literal::Integer(5)));
+        provider_map.insert(MapKey::Keyword(Keyword("protocol_version".to_string())), Expression::Literal(Literal::String("2024-11-05".to_string())));
+        map.insert(MapKey::Keyword(Keyword("provider".to_string())), Expression::Map(provider_map));
 
         // Create permissions vector
         let permissions = vec![
             Expression::Literal(Literal::String("mcp:tool:execute".to_string()))
         ];
-        map.insert(MapKey::String("permissions".to_string()), Expression::Vector(permissions));
+        map.insert(MapKey::Keyword(Keyword("permissions".to_string())), Expression::Vector(permissions));
 
         // For metadata, create a basic structure
         let mut metadata_map = HashMap::new();
-        metadata_map.insert(MapKey::String("mcp_server".to_string()), Expression::Literal(Literal::String("demo_server".to_string())));
-        metadata_map.insert(MapKey::String("mcp_endpoint".to_string()), Expression::Literal(Literal::String("http://localhost:3000".to_string())));
-        metadata_map.insert(MapKey::String("tool_name".to_string()), Expression::Literal(Literal::String("echo".to_string()))); // Default
-        metadata_map.insert(MapKey::String("protocol_version".to_string()), Expression::Literal(Literal::String("2024-11-05".to_string())));
-        metadata_map.insert(MapKey::String("introspected_at".to_string()), Expression::Literal(Literal::String(Utc::now().to_rfc3339())));
-        map.insert(MapKey::String("metadata".to_string()), Expression::Map(metadata_map));
+        metadata_map.insert(MapKey::Keyword(Keyword("mcp_server".to_string())), Expression::Literal(Literal::String("demo_server".to_string())));
+        metadata_map.insert(MapKey::Keyword(Keyword("mcp_endpoint".to_string())), Expression::Literal(Literal::String("http://localhost:3000".to_string())));
+        metadata_map.insert(MapKey::Keyword(Keyword("tool_name".to_string())), Expression::Literal(Literal::String("echo".to_string()))); // Default
+        metadata_map.insert(MapKey::Keyword(Keyword("protocol_version".to_string())), Expression::Literal(Literal::String("2024-11-05".to_string())));
+        metadata_map.insert(MapKey::Keyword(Keyword("introspected_at".to_string())), Expression::Literal(Literal::String(Utc::now().to_rfc3339())));
+        map.insert(MapKey::Keyword(Keyword("metadata".to_string())), Expression::Map(metadata_map));
 
         Ok(Expression::Map(map))
     }
@@ -840,32 +840,32 @@ impl MCPDiscoveryProvider {
 
         for (key, value) in cap_map {
             match key {
-                MapKey::String(k) if k == "id" => {
+                MapKey::Keyword(k) if k.0 == "id" => {
                     if let Expression::Literal(Literal::String(s)) = value {
                         id = Some(s.clone());
                     }
                 },
-                MapKey::String(k) if k == "name" => {
+                MapKey::Keyword(k) if k.0 == "name" => {
                     if let Expression::Literal(Literal::String(s)) = value {
                         name = Some(s.clone());
                     }
                 },
-                MapKey::String(k) if k == "description" => {
+                MapKey::Keyword(k) if k.0 == "description" => {
                     if let Expression::Literal(Literal::String(s)) = value {
                         description = Some(s.clone());
                     }
                 },
-                MapKey::String(k) if k == "version" => {
+                MapKey::Keyword(k) if k.0 == "version" => {
                     if let Expression::Literal(Literal::String(s)) = value {
                         version = Some(s.clone());
                     }
                 },
-                MapKey::String(k) if k == "provider" => {
+                MapKey::Keyword(k) if k.0 == "provider" => {
                     if let Expression::Map(provider_map) = value {
                         provider_info = Some(provider_map.clone());
                     }
                 },
-                MapKey::String(k) if k == "permissions" => {
+                MapKey::Keyword(k) if k.0 == "permissions" => {
                     if let Expression::Vector(perm_vec) = value {
                         for perm in perm_vec {
                             if let Expression::Literal(Literal::String(s)) = perm {
@@ -874,11 +874,11 @@ impl MCPDiscoveryProvider {
                         }
                     }
                 },
-                MapKey::String(k) if k == "metadata" => {
+                MapKey::Keyword(k) if k.0 == "metadata" => {
                     if let Expression::Map(meta_map) = value {
                         for (meta_key, meta_value) in meta_map {
-                            if let (MapKey::String(k), Expression::Literal(Literal::String(v))) = (meta_key, meta_value) {
-                                metadata.insert(k.clone(), v.clone());
+                            if let (MapKey::Keyword(k), Expression::Literal(Literal::String(v))) = (meta_key, meta_value) {
+                                metadata.insert(k.0.clone(), v.clone());
                             }
                         }
                     }
@@ -899,14 +899,21 @@ impl MCPDiscoveryProvider {
             return Err(RuntimeError::Generic("RTFS capability missing provider info".to_string()));
         };
 
+        // Convert input/output schemas
+        let input_schema = rtfs_def.input_schema.as_ref()
+            .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
+
+        let output_schema = rtfs_def.output_schema.as_ref()
+            .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
+
         Ok(CapabilityManifest {
             id,
             name: name.clone(),
             description,
             provider,
             version,
-            input_schema: None, // TODO: Convert RTFS expression to TypeExpr
-            output_schema: None, // TODO: Convert RTFS expression to TypeExpr
+            input_schema,
+            output_schema,
             attestation: None,
             provenance: Some(crate::runtime::capability_marketplace::types::CapabilityProvenance {
                 source: "rtfs_persistence".to_string(),
@@ -951,17 +958,17 @@ impl MCPDiscoveryProvider {
 
         for (key, value) in provider_map {
             match key {
-                MapKey::String(k) if k == "server_endpoint" => {
+                MapKey::Keyword(k) if k.0 == "server_endpoint" => {
                     if let Expression::Literal(Literal::String(s)) = value {
                         server_endpoint = Some(s.clone());
                     }
                 },
-                MapKey::String(k) if k == "tool_name" => {
+                MapKey::Keyword(k) if k.0 == "tool_name" => {
                     if let Expression::Literal(Literal::String(s)) = value {
                         tool_name = Some(s.clone());
                     }
                 },
-                MapKey::String(k) if k == "timeout_seconds" => {
+                MapKey::Keyword(k) if k.0 == "timeout_seconds" => {
                     if let Expression::Literal(Literal::Integer(i)) = value {
                         timeout_seconds = *i as u64;
                     }
@@ -1055,20 +1062,62 @@ impl MCPDiscoveryProvider {
                             if let Ok(item_type) = self.convert_json_schema_to_rtfs(items) {
                                 Ok(Expression::Vector(vec![item_type]))
                             } else {
-                                Ok(Expression::Literal(Literal::String("array".to_string())))
+                                Ok(Expression::Symbol(Symbol("array".to_string())))
                             }
                         } else {
-                            Ok(Expression::Literal(Literal::String("array".to_string())))
+                            Ok(Expression::Symbol(Symbol("array".to_string())))
                         }
                     },
-                    "string" => Ok(Expression::Literal(Literal::String("string".to_string()))),
-                    "number" => Ok(Expression::Literal(Literal::String("number".to_string()))),
-                    "integer" => Ok(Expression::Literal(Literal::String("integer".to_string()))),
-                    "boolean" => Ok(Expression::Literal(Literal::String("boolean".to_string()))),
-                    _ => Ok(Expression::Literal(Literal::String("any".to_string()))),
+                    "string" => Ok(Expression::Symbol(Symbol("string".to_string()))),
+                    "number" => Ok(Expression::Symbol(Symbol("number".to_string()))),
+                    "integer" => Ok(Expression::Symbol(Symbol("integer".to_string()))),
+                    "boolean" => Ok(Expression::Symbol(Symbol("boolean".to_string()))),
+                    _ => Ok(Expression::Symbol(Symbol("any".to_string()))),
                 }
             },
-            _ => Ok(Expression::Literal(Literal::String("any".to_string()))),
+            _ => Ok(Expression::Symbol(Symbol("any".to_string()))),
+        }
+    }
+
+    /// Convert RTFS Expression back to TypeExpr for capability manifests
+    fn convert_rtfs_to_type_expr(&self, expr: &Expression) -> RuntimeResult<TypeExpr> {
+        match expr {
+            Expression::Symbol(symbol) => {
+                match symbol.0.as_str() {
+                    "string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+                    "integer" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+                    "number" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+                    "boolean" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+                    "any" => Ok(TypeExpr::Any),
+                    _ => Ok(TypeExpr::Primitive(PrimitiveType::Custom(Keyword(symbol.0.clone())))),
+                }
+            },
+            Expression::Map(map) => {
+                let mut entries = Vec::new();
+                for (key, value) in map {
+                    if let MapKey::String(key_str) = key {
+                        let value_type = self.convert_rtfs_to_type_expr(value)?;
+                        entries.push(MapTypeEntry {
+                            key: Keyword(key_str.clone()),
+                            value_type: Box::new(value_type),
+                            optional: false, // Default to required for now
+                        });
+                    }
+                }
+                Ok(TypeExpr::Map {
+                    entries,
+                    wildcard: None,
+                })
+            },
+            Expression::Vector(vec) => {
+                if vec.len() == 1 {
+                    let element_type = self.convert_rtfs_to_type_expr(&vec[0])?;
+                    Ok(TypeExpr::Vector(Box::new(element_type)))
+                } else {
+                    Ok(TypeExpr::Vector(Box::new(TypeExpr::Any)))
+                }
+            },
+            _ => Ok(TypeExpr::Any), // Default fallback
         }
     }
 
@@ -1437,7 +1486,7 @@ mod tests {
         provider.save_rtfs_capabilities(&rtfs_capabilities, temp_file).unwrap();
 
         // Load back
-        let loaded_module = MCPDiscoveryProvider::load_rtfs_capabilities(temp_file).unwrap();
+        let loaded_module = provider.load_rtfs_capabilities(temp_file).unwrap();
 
         // Verify
         assert_eq!(loaded_module.module_type, "ccos.capabilities.mcp:v1");
@@ -1447,12 +1496,20 @@ mod tests {
 
         // Verify capabilities
         let tool1_cap = loaded_module.capabilities.iter().find(|cap| {
-            matches!(&cap.capability, Expression::Map(map) => {
+            if let Expression::Map(map) = &cap.capability {
                 map.iter().any(|(key, value)| {
-                    matches!(key, MapKey::Keyword(kw) if kw.0 == "name") &&
-                    matches!(value, Expression::String(s) if s == "tool1")
+                    if let MapKey::Keyword(kw) = key {
+                        if kw.0 == "name" {
+                            if let Expression::Literal(Literal::String(s)) = value {
+                                return s == "tool1";
+                            }
+                        }
+                    }
+                    false
                 })
-            })
+            } else {
+                false
+            }
         });
         assert!(tool1_cap.is_some(), "Should find tool1 capability");
 

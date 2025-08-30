@@ -7,3 +7,5 @@ A practical set of how-to documents for CCOS/RTFS.
 - CCOS/RTFS Usage Guide (end-to-end programmatic + RTFS plan)
   - docs/ccos/guides/ccos-rtfs-usage.md
 - MCP Introspection Demo: see `mcp-introspection-guide.md`
+ - RTFS Demos Guide (single-intent and multi-intent examples)
+   - docs/ccos/guides/rtfs-demos.md
