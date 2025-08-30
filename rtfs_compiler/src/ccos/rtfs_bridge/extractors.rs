@@ -1,4 +1,4 @@
-use crate::ast::{Expression, MapKey, Literal};
+use crate::ast::{Expression, MapKey, Literal, Keyword};
 use crate::ccos::types::{Intent, Plan, IntentStatus};
 use crate::runtime::values::Value;
 use super::errors::RtfsBridgeError;
@@ -74,36 +74,30 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
     for arg in &arguments[1..] {
         if let Expression::Map(map) = arg {
             for (key, value) in map {
-                match key {
-                    MapKey::String(key_str) => {
-                        match key_str.as_str() {
-                            ":goal" => {
-                                goal = Some(expression_to_string(value));
-                            }
-                            ":constraints" => {
-                                if let Expression::Map(constraints_map) = value {
-                                    for (c_key, c_value) in constraints_map {
-                                        constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
-                                    }
-                                }
-                            }
-                            ":preferences" => {
-                                if let Expression::Map(prefs_map) = value {
-                                    for (p_key, p_value) in prefs_map {
-                                        preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
-                                    }
-                                }
-                            }
-                            ":success-criteria" => {
-                                success_criteria = Some(Value::from(value.clone()));
-                            }
-                            _ => {
-                                // Ignore unknown fields
+                let key_name = map_key_to_string(key);
+                match key_name.as_str() {
+                    ":goal" | "goal" => {
+                        goal = Some(expression_to_string(value));
+                    }
+                    ":constraints" | "constraints" => {
+                        if let Expression::Map(constraints_map) = value {
+                            for (c_key, c_value) in constraints_map {
+                                constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
                             }
                         }
                     }
+                    ":preferences" | "preferences" => {
+                        if let Expression::Map(prefs_map) = value {
+                            for (p_key, p_value) in prefs_map {
+                                preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
+                            }
+                        }
+                    }
+                    ":success-criteria" | "success-criteria" => {
+                        success_criteria = Some(Value::from(value.clone()));
+                    }
                     _ => {
-                        // Ignore non-string keys
+                        // Ignore unknown fields
                     }
                 }
             }
@@ -162,19 +156,19 @@ fn extract_intent_from_map(map: &HashMap<MapKey, Expression>) -> Result<Intent, 
     let mut preferences = HashMap::new();
     let mut success_criteria = None;
     
-    if let Some(Expression::Map(constraints_map)) = map.get(&MapKey::String(":constraints".to_string())) {
+    if let Some(Expression::Map(constraints_map)) = map_get(map, ":constraints") {
         for (key, value) in constraints_map {
             constraints.insert(map_key_to_string(key), expression_to_value(value));
         }
     }
     
-    if let Some(Expression::Map(prefs_map)) = map.get(&MapKey::String(":preferences".to_string())) {
+    if let Some(Expression::Map(prefs_map)) = map_get(map, ":preferences") {
         for (key, value) in prefs_map {
             preferences.insert(map_key_to_string(key), expression_to_value(value));
         }
     }
     
-    if let Some(criteria_expr) = map.get(&MapKey::String(":success-criteria".to_string())) {
+    if let Some(criteria_expr) = map_get(map, ":success-criteria") {
         success_criteria = Some(Value::from(criteria_expr.clone()));
     }
     
@@ -243,53 +237,47 @@ fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]
     for arg in &arguments[1..] {
         if let Expression::Map(map) = arg {
             for (key, value) in map {
-                match key {
-                    MapKey::String(key_str) => {
-                        match key_str.as_str() {
-                            ":body" => {
-                                body = Some(value.clone());
+                let key_name = map_key_to_string(key);
+                match key_name.as_str() {
+                    ":body" | "body" => {
+                        body = Some(value.clone());
+                    }
+                    ":intent-ids" | "intent-ids" => {
+                        if let Expression::Vector(ids_vec) = value {
+                            for id_expr in ids_vec {
+                                intent_ids.push(expression_to_string(id_expr));
                             }
-                            ":intent-ids" => {
-                                if let Expression::Vector(ids_vec) = value {
-                                    for id_expr in ids_vec {
-                                        intent_ids.push(expression_to_string(id_expr));
-                                    }
-                                }
+                        }
+                    }
+                    ":input-schema" | "input-schema" => {
+                        input_schema = Some(Value::from(value.clone()));
+                    }
+                    ":output-schema" | "output-schema" => {
+                        output_schema = Some(Value::from(value.clone()));
+                    }
+                    ":policies" | "policies" => {
+                        if let Expression::Map(policies_map) = value {
+                            for (p_key, p_value) in policies_map {
+                                policies.insert(map_key_to_string(p_key), Value::from(p_value.clone()));
                             }
-                            ":input-schema" => {
-                                input_schema = Some(Value::from(value.clone()));
+                        }
+                    }
+                    ":capabilities-required" | "capabilities-required" => {
+                        if let Expression::Vector(caps_vec) = value {
+                            for cap_expr in caps_vec {
+                                capabilities_required.push(expression_to_string(cap_expr));
                             }
-                            ":output-schema" => {
-                                output_schema = Some(Value::from(value.clone()));
-                            }
-                            ":policies" => {
-                                if let Expression::Map(policies_map) = value {
-                                    for (p_key, p_value) in policies_map {
-                                        policies.insert(map_key_to_string(p_key), Value::from(p_value.clone()));
-                                    }
-                                }
-                            }
-                            ":capabilities-required" => {
-                                if let Expression::Vector(caps_vec) = value {
-                                    for cap_expr in caps_vec {
-                                        capabilities_required.push(expression_to_string(cap_expr));
-                                    }
-                                }
-                            }
-                            ":annotations" => {
-                                if let Expression::Map(ann_map) = value {
-                                    for (a_key, a_value) in ann_map {
-                                        annotations.insert(map_key_to_string(a_key), Value::from(a_value.clone()));
-                                    }
-                                }
-                            }
-                            _ => {
-                                // Ignore unknown fields
+                        }
+                    }
+                    ":annotations" | "annotations" => {
+                        if let Expression::Map(ann_map) = value {
+                            for (a_key, a_value) in ann_map {
+                                annotations.insert(map_key_to_string(a_key), Value::from(a_value.clone()));
                             }
                         }
                     }
                     _ => {
-                        // Ignore non-string keys
+                        // Ignore unknown fields
                     }
                 }
             }
@@ -338,7 +326,7 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
             field: "name".to_string()
         })?;
     
-    let body = map.get(&MapKey::String(":body".to_string()))
+    let body = map_get(map, ":body")
         .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
             field: "body".to_string()
         })?;
@@ -351,33 +339,33 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
     let mut capabilities_required = Vec::new();
     let mut annotations = HashMap::new();
     
-    if let Some(Expression::Vector(ids_vec)) = map.get(&MapKey::String(":intent-ids".to_string())) {
+    if let Some(Expression::Vector(ids_vec)) = map_get(map, ":intent-ids") {
         for id_expr in ids_vec {
             intent_ids.push(expression_to_string(id_expr));
         }
     }
     
-    if let Some(schema) = map.get(&MapKey::String(":input-schema".to_string())) {
+    if let Some(schema) = map_get(map, ":input-schema") {
         input_schema = Some(Value::from(schema.clone()));
     }
     
-    if let Some(schema) = map.get(&MapKey::String(":output-schema".to_string())) {
+    if let Some(schema) = map_get(map, ":output-schema") {
         output_schema = Some(Value::from(schema.clone()));
     }
     
-    if let Some(Expression::Map(policies_map)) = map.get(&MapKey::String(":policies".to_string())) {
+    if let Some(Expression::Map(policies_map)) = map_get(map, ":policies") {
         for (key, value) in policies_map {
             policies.insert(map_key_to_string(key), Value::from(value.clone()));
         }
     }
     
-    if let Some(Expression::Vector(caps_vec)) = map.get(&MapKey::String(":capabilities-required".to_string())) {
+    if let Some(Expression::Vector(caps_vec)) = map_get(map, ":capabilities-required") {
         for cap_expr in caps_vec {
             capabilities_required.push(expression_to_string(cap_expr));
         }
     }
     
-    if let Some(Expression::Map(ann_map)) = map.get(&MapKey::String(":annotations".to_string())) {
+    if let Some(Expression::Map(ann_map)) = map_get(map, ":annotations") {
         for (key, value) in ann_map {
             annotations.insert(map_key_to_string(key), Value::from(value.clone()));
         }
@@ -473,12 +461,19 @@ fn map_key_to_string(key: &MapKey) -> String {
 }
 
 fn get_string_from_map(map: &HashMap<MapKey, Expression>, key: &str) -> Option<String> {
-    map.get(&MapKey::String(key.to_string()))
-        .and_then(|expr| match expr {
-            Expression::Literal(Literal::String(s)) => Some(s.clone()),
-            Expression::Symbol(s) => Some(s.0.clone()),
-            _ => None,
-        })
+    map_get(map, key).and_then(|expr| match expr {
+        Expression::Literal(Literal::String(s)) => Some(s.clone()),
+        Expression::Symbol(s) => Some(s.0.clone()),
+        _ => None,
+    })
+}
+
+fn map_get<'a>(map: &'a HashMap<MapKey, Expression>, key: &str) -> Option<&'a Expression> {
+    let kstr = key.to_string();
+    let trimmed = key.trim_start_matches(':');
+    map
+        .get(&MapKey::String(kstr))
+        .or_else(|| map.get(&MapKey::Keyword(Keyword(trimmed.to_string()))))
 }
 
 fn expression_to_value(expr: &Expression) -> Value {

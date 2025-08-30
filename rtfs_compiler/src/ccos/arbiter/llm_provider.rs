@@ -1297,6 +1297,17 @@ impl LlmProvider for StubLlmProvider {
     ) -> Result<String, RuntimeError> {
         // Check if this is a delegation analysis prompt
         let lower_prompt = prompt.to_lowercase();
+    // Shortcut: detect arbiter graph-generation marker and return RTFS (do ...) intent graph
+    if lower_prompt.contains("generate_intent_graph") || lower_prompt.contains("intent graph") {
+        return Ok(r#"(do
+  {:type "intent" :name "root" :goal "Say hi and add numbers"}
+  {:type "intent" :name "greet" :goal "Greet the user"}
+  {:type "intent" :name "compute" :goal "Add two numbers"}
+  (edge :IsSubgoalOf "greet" "root")
+  (edge :IsSubgoalOf "compute" "root")
+  (edge :DependsOn "compute" "greet")
+)"#.to_string());
+    }
         
         if lower_prompt.contains("delegation analysis") || lower_prompt.contains("should_delegate") || lower_prompt.contains("delegate") {
             // This is a delegation analysis request - return JSON

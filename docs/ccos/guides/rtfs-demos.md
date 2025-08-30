@@ -4,6 +4,7 @@ This guide walks you through the built-in RTFS demos, what they showcase, how to
 
 - Demo A: Single-intent LLM plan demo (`llm_rtfs_plan_demo.rs`)
 - Demo B: Multi-intent orchestration demo (`multi_intent_demo.rs`)
+- Demo C: Arbiter RTFS Graph Generation (`arbiter_rtfs_graph_demo.rs`)
 
 Both demos run entirely on CCOS components: Arbiter (intent/plan), GovernanceKernel validation, Orchestrator execution, CausalChain audit, and CapabilityMarketplace.
 
@@ -56,6 +57,39 @@ Troubleshooting
 - If you lack an API key, add `--stub` to use the deterministic provider.
 
 ---
+## Demo C: Arbiter RTFS Graph Generation (`examples/arbiter_rtfs_graph_demo.rs`)
+Purpose
+- Take a single natural-language goal and have the Arbiter produce a full intent graph in RTFS, then interpret it into the `IntentGraph` and orchestrate per-intent plans.
+- Validates the RTFS-first approach for intent graphs: the model emits `(do ...)` with `(intent ...)` and `(edge ...)`, interpreted by `graph_interpreter`.
+
+How it works
+1) Arbiter generates a prompt instructing the LLM to return a single `(do ...)` s-expression containing intents and edges.
+2) We extract the first `(do ...)` block, then call `build_graph_from_rtfs` to populate the `IntentGraph` and infer the root.
+3) For each ready intent, we generate a per-intent plan (stub or LLM) and execute via the Orchestrator.
+
+Common flags
+- `--goal "..."` natural-language goal (required)
+- `--stub` force deterministic stub (ignores API keys) and returns a canned graph
+- `--verbose` print a compact graph overview and plan bodies
+- `--debug` print graph prompt and raw LLM response
+
+Run examples
+- Stub (no API key):
+  cargo run --example arbiter_rtfs_graph_demo -- --goal "Say hi and add 2 and 3" --stub --verbose --debug
+- With an API key (OpenRouter or OpenAI):
+  export OPENROUTER_API_KEY=...  # or OPENAI_API_KEY
+  cargo run --example arbiter_rtfs_graph_demo -- --goal "Review latest log4j advisory and triage if critical" --verbose --debug
+
+What you’ll see
+- A root intent id and child nodes. With `--verbose`, a small overview lists children and any `DependsOn` edges.
+- Orchestration loop that finds ready intents, generates a per-intent RTFS plan, and executes it.
+- Final graph state with intent statuses updated to Completed/Failed.
+
+Troubleshooting
+- Use `--debug` to inspect the RTFS graph prompt and raw model output; only the first `(do ...)` is interpreted.
+- If the model emits prose or fences around the graph, the extractor still attempts to find `(do ...)` reliably; the stub path guarantees a valid graph for demos.
+
+---
 ## Demo B: Multi-intent orchestration (`examples/multi_intent_demo.rs`)
 Purpose
 - Demonstrates multiple intents run sequentially with per-intent lifecycle logs, multi-step plans, and a final summary.
@@ -93,6 +127,7 @@ Troubleshooting
 ## Quick reference
 - Single-intent demo file: `rtfs_compiler/examples/llm_rtfs_plan_demo.rs`
 - Multi-intent demo file: `rtfs_compiler/examples/multi_intent_demo.rs`
+- Graph generation demo file: `rtfs_compiler/examples/arbiter_rtfs_graph_demo.rs`
 - Capability whitelist in prompts: `:ccos.echo`, `:ccos.math.add`
 - Strict signature rules are embedded in the plan-generation prompt and enforced by governance validators.
 

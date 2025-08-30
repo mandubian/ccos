@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
-use crate::ccos::types::{ExecutionResult, Intent, Plan};
+use crate::ccos::types::{ExecutionResult, Intent, Plan, StorableIntent, IntentId};
+use super::plan_generation::PlanGenerationResult;
 
 /// High-level interface exposed by all Arbiter implementations.
 ///
@@ -55,5 +56,27 @@ pub trait ArbiterEngine {
         let result = self.execute_plan(&plan).await?;
         self.learn_from_execution(&intent, &plan, &result).await?;
         Ok(result)
+    }
+
+    /// Optional: Generate a full intent graph (root + subgoals/deps) from a natural language goal.
+    /// Default returns a Not Implemented error; specific engines can override.
+    async fn natural_language_to_graph(
+        &self,
+        _natural_language_goal: &str,
+    ) -> Result<IntentId, RuntimeError> {
+        Err(RuntimeError::Generic(
+            "natural_language_to_graph not implemented for this ArbiterEngine".to_string(),
+        ))
+    }
+
+    /// Optional: Generate a plan for a specific storable intent node in the graph.
+    /// Default returns a Not Implemented error; specific engines can override.
+    async fn generate_plan_for_intent(
+        &self,
+        _intent: &StorableIntent,
+    ) -> Result<PlanGenerationResult, RuntimeError> {
+        Err(RuntimeError::Generic(
+            "generate_plan_for_intent not implemented for this ArbiterEngine".to_string(),
+        ))
     }
 } 

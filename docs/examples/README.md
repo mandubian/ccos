@@ -47,6 +47,15 @@ The configuration implements all required sections from the MicroVM deployment p
 
 See `mcp_introspection_demo.md` for a step-by-step guide to run the `rtfs_compiler` example that introspects an MCP server, registers discovered tools as CCOS capabilities, and executes one via the Capability Marketplace.
 
+### Arbiter RTFS Graph Generation Demo
+
+See `rtfs_compiler/examples/arbiter_rtfs_graph_demo.rs` for a demo that:
+- Prompts an LLM to return a full RTFS intent graph `(do ... (intent ...) (edge ...) ...)` for a single NL goal,
+- Interprets it into the `IntentGraph`, and
+- Orchestrates per-intent RTFS plans to completion.
+
+For usage, flags, and troubleshooting, see the RTFS Demos Guide: `docs/ccos/guides/rtfs-demos.md` (Demo C).
+
 ## Related Documentation
 
 - [MicroVM Deployment Profile Specification](../rtfs-2.0/specs-incoming/19-microvm-deployment-profile.md)
