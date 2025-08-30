@@ -36,8 +36,8 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::text::{Span, Spans};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::text::{Line, Span};
 use ratatui::style::{Color, Style};
 
 #[derive(Parser, Debug)]
@@ -173,6 +173,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut event_log: Vec<String> = Vec::with_capacity(128);
+    // UI state
+    let mut collapsed: std::collections::HashSet<IntentId> = std::collections::HashSet::new();
+    let mut flat_rows: Vec<(usize, IntentId)> = Vec::new();
+    let mut selected_row: usize = 0;
+    let mut show_plan_steps: bool = true;
+    let mut current_executing: Option<IntentId> = None;
     let mut last_draw = Instant::now();
 
     loop {
@@ -240,7 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        for intent in ready_intents {
+    for intent in ready_intents {
             println!("\n  - Found ready intent: {} (Goal: \"{}\")", intent.intent_id, intent.goal);
             // 1. Generate a plan for this specific intent
             println!("    - Generating plan...");
@@ -258,7 +264,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 2. Execute the plan
             println!("    - Executing plan...");
             event_log.push(format!("Exec: {}", intent.goal));
+            // Track currently executing for TUI highlight
+            current_executing = Some(intent.intent_id.clone());
+            // Touch the value so the assignment is considered used even if UI draw happens later
+            let _ = current_executing.is_some();
             let _ = orchestrator.execute_plan(&plan_result.plan, &ctx).await;
+            current_executing = None;
         }
         loop_count += 1;
 
@@ -268,26 +279,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let g = intent_graph.lock().unwrap();
                 terminal
                     .draw(|f| {
-                        let chunks = Layout::default()
+                        let root_chunks = Layout::default()
                             .direction(Direction::Vertical)
                             .constraints([
-                                Constraint::Min(5),
+                                Constraint::Min(10),
                                 Constraint::Length(7),
                             ])
                             .split(f.size());
 
-                        // Left/top: Intent tree
-                        let mut items: Vec<ListItem> = Vec::new();
-                        build_tree_items(&g, &root_intent_id, 0, &mut items, &mut std::collections::HashSet::new());
+                        let top_chunks = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([
+                                Constraint::Percentage(60),
+                                Constraint::Percentage(40),
+                            ])
+                            .split(root_chunks[0]);
+
+                        // Rebuild flat rows based on collapsed set
+                        flat_rows.clear();
+                        build_flat_tree(&g, &root_intent_id, 0, &mut flat_rows, &mut std::collections::HashSet::new(), &collapsed);
+                        if selected_row >= flat_rows.len() && !flat_rows.is_empty() { selected_row = flat_rows.len() - 1; }
+
+                        // Left/top: Intent tree (flat list with indentation)
+                        let mut items: Vec<ListItem> = Vec::with_capacity(flat_rows.len());
+                        for (idx, (depth, id)) in flat_rows.iter().enumerate() {
+                            if let Some(intent) = g.get_intent(id) {
+                                let (color, status_str) = status_color_str(&intent.status);
+                                let bullet = "• ";
+                                // Expansion indicator if this node has children
+                                let has_children = !g.get_child_intents(&intent.intent_id).is_empty();
+                                let collapsed_here = collapsed.contains(&intent.intent_id);
+                                let indicator = if has_children { if collapsed_here { "▶ " } else { "▼ " } } else { "  " };
+                                let indent = "  ".repeat(*depth);
+                                let mut spans_vec = vec![Span::raw(indent), Span::raw(indicator), Span::raw(bullet), Span::styled(intent.name.clone().unwrap_or_else(|| "<unnamed>".to_string()), Style::default().fg(color)), Span::raw(format!(" [{}]", status_str))];
+                                if let Some(exec_id) = &current_executing { if exec_id == id { spans_vec.push(Span::raw(" ⏳")); } }
+                                let line = Line::from(spans_vec);
+                                let item = ListItem::new(line);
+                                if idx == selected_row { /* styling handled by color; optional underline could be added */ }
+                                items.push(item);
+                            }
+                        }
                         let tree = List::new(items)
-                            .block(Block::default().borders(Borders::ALL).title("Intents"));
-                        f.render_widget(tree, chunks[0]);
+                            .block(Block::default().borders(Borders::ALL).title("Intents (↑/↓ select, ←/→ collapse/expand, Enter toggle, a=expand all, z=collapse all, p=steps, q=quit)"));
+                        f.render_widget(tree, top_chunks[0]);
+
+                        // Right/top: Details / Steps for selected intent
+                        let detail_block = Block::default().borders(Borders::ALL).title("Details");
+                        let detail_area = top_chunks[1];
+                        if show_plan_steps && !flat_rows.is_empty() {
+                            let (_, selected_id) = &flat_rows[selected_row];
+                            let mut lines: Vec<Line> = Vec::new();
+                            if let Some(intent) = g.get_intent(selected_id) {
+                                lines.push(Line::from(vec![Span::styled("Intent:", Style::default().fg(Color::Cyan)), Span::raw(format!(" {}", intent.name.clone().unwrap_or_else(|| "<unnamed>".to_string())))]));
+                                lines.push(Line::raw(format!("Goal: {}", intent.goal)));
+                            }
+                            if let Some(plan) = plans_by_intent.get(selected_id) {
+                                let steps = extract_steps_from_plan(plan);
+                                lines.push(Line::from(Span::styled("Steps:", Style::default().fg(Color::Cyan))));
+                                if steps.is_empty() {
+                                    lines.push(Line::raw("(no steps found)"));
+                                } else {
+                                    for (i, s) in steps.iter().enumerate() {
+                                        lines.push(Line::raw(format!("{}. {}", i + 1, s)));
+                                    }
+                                }
+                            } else {
+                                lines.push(Line::raw("No plan generated yet."));
+                            }
+                            let para = Paragraph::new(lines).block(detail_block);
+                            f.render_widget(para, detail_area);
+                        } else {
+                            let para = Paragraph::new(Line::raw("(steps hidden, press 'p' to toggle)")).block(detail_block);
+                            f.render_widget(para, detail_area);
+                        }
 
                         // Bottom: Event log
                         let tail: Vec<ListItem> = event_log.iter().rev().take(5).rev().map(|s| ListItem::new(s.as_str())).collect();
                         let logw = List::new(tail)
                             .block(Block::default().borders(Borders::ALL).title("Events"));
-                        f.render_widget(logw, chunks[1]);
+                        f.render_widget(logw, root_chunks[1]);
                     })
                     .ok();
                 last_draw = Instant::now();
@@ -296,11 +366,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Non-blocking key handling: press q to quit early
             while event::poll(Duration::from_millis(1)).unwrap_or(false) {
                 if let Ok(CEvent::Key(k)) = event::read() {
-                    if k.code == KeyCode::Char('q') {
-                        disable_raw_mode().ok();
-                        terminal_opt.take();
-                        println!("\n👋 Quit by user (q)");
-                        break;
+                    match k.code {
+                        KeyCode::Char('q') => {
+                            disable_raw_mode().ok();
+                            terminal_opt.take();
+                            println!("\n👋 Quit by user (q)");
+                            break;
+                        }
+                        KeyCode::Up => { if selected_row > 0 { selected_row -= 1; } }
+                        KeyCode::Down => { if selected_row + 1 < flat_rows.len() { selected_row += 1; } }
+                        KeyCode::Left => { if let Some((_, id)) = flat_rows.get(selected_row) { collapsed.insert(id.clone()); } }
+                        KeyCode::Right => { if let Some((_, id)) = flat_rows.get(selected_row) { collapsed.remove(id); } }
+                        KeyCode::Enter => { if let Some((_, id)) = flat_rows.get(selected_row) { if !collapsed.insert(id.clone()) { collapsed.remove(id); } } }
+                        KeyCode::Char('z') => { // collapse all under root
+                            collapsed.clear();
+                            // collapse everything by default: add all nodes with children
+                            {
+                                let g = intent_graph.lock().unwrap();
+                                add_all_nodes_with_children(&g, &root_intent_id, &mut collapsed);
+                            }
+                        }
+                        KeyCode::Char('a') => { // expand all
+                            collapsed.clear();
+                        }
+                        KeyCode::Char('p') => { show_plan_steps = !show_plan_steps; }
+                        _ => {}
                     }
                 }
             }
@@ -418,12 +508,68 @@ fn build_tree_items(
             IntentStatus::Suspended => (Color::Magenta, "Suspended"),
         };
         let indent = "  ".repeat(depth);
-        let line = format!("{}• {} [{}] — {}", indent, name, status_str, intent.goal);
-        let spans = Spans::from(vec![Span::raw(indent), Span::raw("• "), Span::styled(name, Style::default().fg(color)), Span::raw(format!(" [{}] — {}", status_str, intent.goal))]);
-        out.push(ListItem::new(Spans::from(spans)));
+        let spans_vec = vec![
+            Span::raw(indent),
+            Span::raw("• "),
+            Span::styled(name, Style::default().fg(color)),
+            Span::raw(format!(" [{}] — {}", status_str, intent.goal)),
+        ];
+        out.push(ListItem::new(Line::from(spans_vec)));
 
         for child in g.get_child_intents(&intent.intent_id) {
             build_tree_items(g, &child.intent_id, depth + 1, out, seen);
         }
     }
+}
+
+// Build a flat list of (depth, intent_id), honoring collapsed nodes
+fn build_flat_tree(
+    g: &IntentGraph,
+    current: &IntentId,
+    depth: usize,
+    out: &mut Vec<(usize, IntentId)>,
+    seen: &mut std::collections::HashSet<IntentId>,
+    collapsed: &std::collections::HashSet<IntentId>,
+) {
+    if seen.contains(current) { return; }
+    seen.insert(current.clone());
+    out.push((depth, current.clone()));
+    if collapsed.contains(current) { return; }
+    for child in g.get_child_intents(current) {
+        build_flat_tree(g, &child.intent_id, depth + 1, out, seen, collapsed);
+    }
+}
+
+fn status_color_str(status: &IntentStatus) -> (Color, &'static str) {
+    match status {
+        IntentStatus::Active => (Color::Yellow, "Active"),
+        IntentStatus::Executing => (Color::Blue, "Executing"),
+        IntentStatus::Completed => (Color::Green, "Completed"),
+        IntentStatus::Failed => (Color::Red, "Failed"),
+        IntentStatus::Archived => (Color::Gray, "Archived"),
+        IntentStatus::Suspended => (Color::Magenta, "Suspended"),
+    }
+}
+
+fn add_all_nodes_with_children(g: &IntentGraph, current: &IntentId, collapsed: &mut std::collections::HashSet<IntentId>) {
+    let children = g.get_child_intents(current);
+    if !children.is_empty() {
+        collapsed.insert(current.clone());
+        for c in children { add_all_nodes_with_children(g, &c.intent_id, collapsed); }
+    }
+}
+
+// Extract step names from a plan body string by scanning for (step "...")
+fn extract_steps_from_plan(plan: &str) -> Vec<String> {
+    let mut steps = Vec::new();
+    let mut i = 0;
+    while let Some(pos) = plan[i..].find("(step \"") {
+        let start = i + pos + 7; // after (step "
+        if let Some(end_rel) = plan[start..].find('"') {
+            let end = start + end_rel;
+            steps.push(plan[start..end].to_string());
+            i = end + 1;
+        } else { break; }
+    }
+    steps
 }
