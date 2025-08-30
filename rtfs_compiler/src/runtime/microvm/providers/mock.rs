@@ -80,8 +80,12 @@ impl MicroVMProvider for MockMicroVMProvider {
             None => Value::String("No program provided".to_string()),
         };
 
-        let duration = start_time.elapsed();
-        
+        let mut duration = start_time.elapsed();
+        // Respect configured timeout in reported metadata
+        if duration > context.config.timeout {
+            duration = context.config.timeout;
+        }
+
         Ok(ExecutionResult {
             value: result_value,
             metadata: ExecutionMetadata {
@@ -133,14 +137,16 @@ impl MicroVMProvider for MockMicroVMProvider {
             Value::String("Mock capability execution: No capability ID provided".to_string())
         };
 
-        let duration = start_time.elapsed();
+        let mut duration = start_time.elapsed();
         
         // Ensure we have a non-zero duration for testing
-        let duration = if duration.as_nanos() == 0 {
-            std::time::Duration::from_millis(1)
-        } else {
-            duration
-        };
+        if duration.as_nanos() == 0 {
+            duration = std::time::Duration::from_millis(1);
+        }
+        // Respect configured timeout in reported metadata
+        if duration > context.config.timeout {
+            duration = context.config.timeout;
+        }
         
         Ok(ExecutionResult {
             value: result_value,

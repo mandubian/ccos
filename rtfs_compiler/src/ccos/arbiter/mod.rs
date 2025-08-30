@@ -54,6 +54,7 @@ pub mod llm_arbiter;
 pub mod template_arbiter;
 pub mod hybrid_arbiter;
 pub mod prompt;
+pub mod plan_generation;
 
 // Re-export main types for easy access
 pub use arbiter_config::ArbiterConfig;
@@ -67,6 +68,7 @@ pub use llm_arbiter::LlmArbiter;
 pub use template_arbiter::TemplateArbiter;
 pub use hybrid_arbiter::HybridArbiter;
 pub use prompt::{PromptManager, PromptConfig};
+pub use plan_generation::{PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider};
 
 // Re-export configuration types
 pub use arbiter_config::{

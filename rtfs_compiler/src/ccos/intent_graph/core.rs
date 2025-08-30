@@ -39,6 +39,20 @@ impl std::fmt::Debug for IntentGraph {
 }
 
 impl IntentGraph {
+    /// Helper to drive a future to completion safely whether we're already inside a Tokio runtime
+    /// or not. If inside a runtime, use a lightweight executor to avoid blocking the runtime thread.
+    /// Otherwise, use the owned runtime handle.
+    fn block_on_runtime<F, T>(&self, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(fut)
+        } else {
+            self.rt.block_on(fut)
+        }
+    }
+
     pub fn new() -> Result<Self, RuntimeError> {
         // Default to Noop sink (legacy callers). Production should use with_event_sink.
     Self::with_config_and_event_sink(IntentGraphConfig::default(), Arc::new(crate::ccos::event_sink::NoopIntentEventSink::default()))
@@ -459,35 +473,35 @@ impl IntentGraph {
 
     /// Get related intents for a given intent
     pub fn get_related_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
+        self.block_on_runtime(async {
             self.storage.get_related_intents(intent_id).await.unwrap_or_default()
         })
     }
 
     /// Get dependent intents for a given intent
     pub fn get_dependent_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
+        self.block_on_runtime(async {
             self.storage.get_dependent_intents(intent_id).await.unwrap_or_default()
         })
     }
 
     /// Get subgoals for a given intent
     pub fn get_subgoals(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
+        self.block_on_runtime(async {
             self.storage.get_subgoals(intent_id).await.unwrap_or_default()
         })
     }
 
     /// Get conflicting intents for a given intent
     pub fn get_conflicting_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
+        self.block_on_runtime(async {
             self.storage.get_conflicting_intents(intent_id).await.unwrap_or_default()
         })
     }
 
     /// Get all active intents
     pub fn get_active_intents(&self) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
+    self.block_on_runtime(async {
             let filter = IntentFilter {
                 status: Some(IntentStatus::Active),
                 ..Default::default()
@@ -498,7 +512,7 @@ impl IntentGraph {
 
     /// Get intent count by status
     pub fn get_intent_count_by_status(&self) -> HashMap<IntentStatus, usize> {
-        self.rt.block_on(async {
+    self.block_on_runtime(async {
             let all_intents = self.storage.list_intents(IntentFilter::default()).await.unwrap_or_default();
             let mut counts = HashMap::new();
 
@@ -518,9 +532,13 @@ impl IntentGraph {
         edge_type: EdgeType,
     ) -> Result<(), RuntimeError> {
         let edge = Edge::new(from_intent, to_intent, edge_type);
-        self.rt.block_on(async {
-            self.storage.store_edge(edge).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async { self.storage.store_edge(edge).await })
+        } else {
+            handle.block_on(async { self.storage.store_edge(edge).await })
+        }
     }
 
     /// Create an edge with weight and metadata
@@ -535,15 +553,21 @@ impl IntentGraph {
         let edge = Edge::new(from_intent, to_intent, edge_type)
             .with_weight(weight)
             .with_metadata(metadata);
-        self.rt.block_on(async {
-            self.storage.store_edge(edge).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async { self.storage.store_edge(edge).await })
+        } else {
+            handle.block_on(async { self.storage.store_edge(edge).await })
+        }
     }
 
     /// Get all edges for a specific intent
     pub fn get_edges_for_intent(&self, intent_id: &IntentId) -> Vec<Edge> {
-        self.rt.block_on(async {
-            self.storage.get_edges_for_intent(intent_id).await
+        self.block_on_runtime(async {
+            self.storage
+                .get_edges_for_intent(intent_id)
+                .await
                 .unwrap_or_else(|_| Vec::new())
         })
     }
@@ -710,29 +734,69 @@ impl IntentGraph {
 
     /// Health check for the storage backend
     pub fn health_check(&self) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
-            self.storage.health_check().await
-        })
+    self.block_on_runtime(async { self.storage.health_check().await })
     }
 
     /// Backup the intent graph to a file
     pub fn backup(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
-            self.storage.backup(path).await
-        })
+    self.block_on_runtime(async { self.storage.backup(path).await })
     }
 
     /// Restore the intent graph from a backup file
     pub fn restore(&mut self, path: &std::path::Path) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
-            self.storage.restore(path).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async { self.storage.restore(path).await })
+        } else {
+            handle.block_on(async { self.storage.restore(path).await })
+        }
     }
 
     /// Store an entire subgraph starting from a root intent
     /// This stores the root intent and all its descendants (children, grandchildren, etc.)
     pub fn store_subgraph_from_root(&mut self, root_intent_id: &IntentId, path: &std::path::Path) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
+        {
+            let in_rt = tokio::runtime::Handle::try_current().is_ok();
+            let handle = self.rt.clone();
+            if in_rt {
+                futures::executor::block_on(async {
+                    // Get the root intent
+                    let root_intent = self.storage.get_intent(root_intent_id).await?;
+                    if root_intent.is_none() {
+                        return Err(RuntimeError::StorageError(format!("Root intent {} not found", root_intent_id)));
+                    }
+                    
+                    // Collect all descendants recursively
+                    let mut subgraph_intents = vec![root_intent.unwrap()];
+                    let mut subgraph_edges = Vec::new();
+                    let mut visited = HashSet::new();
+                    
+                    self.collect_subgraph_recursive(root_intent_id, &mut subgraph_intents, &mut subgraph_edges, &mut visited).await?;
+                    
+                    // Create backup data for the subgraph
+                    let backup_data = SubgraphBackupData {
+                        intents: subgraph_intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
+                        edges: subgraph_edges,
+                        root_intent_id: root_intent_id.clone(),
+                        version: "1.0".to_string(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    };
+                    
+                    // Serialize and save
+                    let json = serde_json::to_string_pretty(&backup_data)
+                        .map_err(|e| RuntimeError::StorageError(format!("Serialization error: {}", e)))?;
+                    
+                    tokio::fs::write(path, json).await
+                        .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
+                    
+                    Ok(())
+                })
+            } else {
+                handle.block_on(async {
             // Get the root intent
             let root_intent = self.storage.get_intent(root_intent_id).await?;
             if root_intent.is_none() {
@@ -766,13 +830,55 @@ impl IntentGraph {
                 .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
             
             Ok(())
-        })
+                })
+            }
+        }
     }
 
     /// Store an entire subgraph containing a child intent and all its ancestors
     /// This stores the child intent and all its parents (up to root intents)
     pub fn store_subgraph_from_child(&mut self, child_intent_id: &IntentId, path: &std::path::Path) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
+        {
+            let in_rt = tokio::runtime::Handle::try_current().is_ok();
+            let handle = self.rt.clone();
+            if in_rt {
+                futures::executor::block_on(async {
+                    // Get the child intent
+                    let child_intent = self.storage.get_intent(child_intent_id).await?;
+                    if child_intent.is_none() {
+                        return Err(RuntimeError::StorageError(format!("Child intent {} not found", child_intent_id)));
+                    }
+                    
+                    // Collect all ancestors recursively
+                    let mut subgraph_intents = vec![child_intent.unwrap()];
+                    let mut subgraph_edges = Vec::new();
+                    let mut visited = HashSet::new();
+                    
+                    self.collect_ancestor_subgraph_recursive(child_intent_id, &mut subgraph_intents, &mut subgraph_edges, &mut visited).await?;
+                    
+                    // Create backup data for the subgraph
+                    let backup_data = SubgraphBackupData {
+                        intents: subgraph_intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
+                        edges: subgraph_edges,
+                        root_intent_id: child_intent_id.clone(), // For child-based subgraphs, use child as reference
+                        version: "1.0".to_string(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    };
+                    
+                    // Serialize and save
+                    let json = serde_json::to_string_pretty(&backup_data)
+                        .map_err(|e| RuntimeError::StorageError(format!("Serialization error: {}", e)))?;
+                    
+                    tokio::fs::write(path, json).await
+                        .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
+                    
+                    Ok(())
+                })
+            } else {
+                handle.block_on(async {
             // Get the child intent
             let child_intent = self.storage.get_intent(child_intent_id).await?;
             if child_intent.is_none() {
@@ -806,13 +912,19 @@ impl IntentGraph {
                 .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
             
             Ok(())
-        })
+                })
+            }
+        }
     }
 
     /// Restore a subgraph from a backup file
     /// This restores intents and edges without affecting existing data
     pub fn restore_subgraph(&mut self, path: &std::path::Path) -> Result<(), RuntimeError> {
-        self.rt.block_on(async {
+        {
+            let in_rt = tokio::runtime::Handle::try_current().is_ok();
+            let handle = self.rt.clone();
+            if in_rt {
+                futures::executor::block_on(async {
             // Read and deserialize the backup data
             let content = tokio::fs::read_to_string(path).await
                 .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
@@ -831,7 +943,30 @@ impl IntentGraph {
             }
             
             Ok(())
-        })
+                })
+            } else {
+                handle.block_on(async {
+                    // Read and deserialize the backup data
+                    let content = tokio::fs::read_to_string(path).await
+                        .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
+                    
+                    let backup_data: SubgraphBackupData = serde_json::from_str(&content)
+                        .map_err(|e| RuntimeError::StorageError(format!("Deserialization error: {}", e)))?;
+                    
+                    // Restore intents
+                    for (_, intent) in backup_data.intents {
+                        self.storage.store_intent(intent).await?;
+                    }
+                    
+                    // Restore edges
+                    for edge in backup_data.edges {
+                        self.storage.store_edge(edge).await?;
+                    }
+                    
+                    Ok(())
+                })
+            }
+        }
     }
 
     /// Helper method to collect all descendants of a root intent
@@ -937,92 +1072,167 @@ impl IntentGraph {
     /// Archive completed intents
     pub fn archive_completed_intents(&mut self) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.archive_completed_intents(&mut self.storage, event_sink.as_ref()).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .archive_completed_intents(&mut self.storage, event_sink.as_ref())
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .archive_completed_intents(&mut self.storage, event_sink.as_ref())
+                    .await
+            })
+        }
     }
 
     /// Complete an intent with execution result
     pub fn complete_intent(&mut self, intent_id: &IntentId, result: &ExecutionResult) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.complete_intent(&mut self.storage, event_sink.as_ref(), intent_id, result).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .complete_intent(&mut self.storage, event_sink.as_ref(), intent_id, result)
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .complete_intent(&mut self.storage, event_sink.as_ref(), intent_id, result)
+                    .await
+            })
+        }
     }
 
     /// Fail an intent with error message
     pub fn fail_intent(&mut self, intent_id: &IntentId, error_message: String) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message)
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message)
+                    .await
+            })
+        }
     }
 
     /// Suspend an intent with reason
     pub fn suspend_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.suspend_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .suspend_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .suspend_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        }
     }
 
     /// Resume a suspended intent
     pub fn resume_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.resume_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .resume_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .resume_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        }
     }
 
     /// Archive an intent with reason
     pub fn archive_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.archive_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .archive_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .archive_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        }
     }
 
     /// Reactivate an archived intent
     pub fn reactivate_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.reactivate_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .reactivate_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .reactivate_intent(&mut self.storage, event_sink.as_ref(), intent_id, reason)
+                    .await
+            })
+        }
     }
 
     /// Get intents by status
     pub fn get_intents_by_status(&self, status: IntentStatus) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
-            self.lifecycle.get_intents_by_status(&self.storage, status).await.unwrap_or_default()
-        })
+    // Only immutable borrows; safe to use helper
+    self.block_on_runtime(async { self.lifecycle.get_intents_by_status(&self.storage, status).await.unwrap_or_default() })
     }
 
     /// Get intent status transition history
     pub fn get_status_history(&self, intent_id: &IntentId) -> Vec<String> {
-        self.rt.block_on(async {
-            self.lifecycle.get_status_history(&self.storage, intent_id).await.unwrap_or_default()
-        })
+    self.block_on_runtime(async { self.lifecycle.get_status_history(&self.storage, intent_id).await.unwrap_or_default() })
     }
 
     /// Get intents that are ready for processing (Active status)
     pub fn get_ready_intents(&self) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
-            self.lifecycle.get_ready_intents(&self.storage).await.unwrap_or_default()
-        })
+    self.block_on_runtime(async { self.lifecycle.get_ready_intents(&self.storage).await.unwrap_or_default() })
     }
 
     /// Get intents that need attention (Failed or Suspended status)
     pub fn get_intents_needing_attention(&self) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
-            self.lifecycle.get_intents_needing_attention(&self.storage).await.unwrap_or_default()
-        })
+    self.block_on_runtime(async { self.lifecycle.get_intents_needing_attention(&self.storage).await.unwrap_or_default() })
     }
 
     /// Get intents that can be archived (Completed for more than specified days)
     pub fn get_intents_ready_for_archival(&self, days_threshold: u64) -> Vec<StorableIntent> {
-        self.rt.block_on(async {
-            self.lifecycle.get_intents_ready_for_archival(&self.storage, days_threshold).await.unwrap_or_default()
-        })
+    self.block_on_runtime(async { self.lifecycle.get_intents_ready_for_archival(&self.storage, days_threshold).await.unwrap_or_default() })
     }
 
     /// Bulk transition intents by status
@@ -1033,9 +1243,33 @@ impl IntentGraph {
         reason: String,
     ) -> Result<Vec<IntentId>, RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
-        self.rt.block_on(async {
-            self.lifecycle.bulk_transition_intents(&mut self.storage, event_sink.as_ref(), intent_ids, new_status, reason).await
-        })
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .bulk_transition_intents(
+                        &mut self.storage,
+                        event_sink.as_ref(),
+                        intent_ids,
+                        new_status,
+                        reason,
+                    )
+                    .await
+            })
+        } else {
+            handle.block_on(async {
+                self.lifecycle
+                    .bulk_transition_intents(
+                        &mut self.storage,
+                        event_sink.as_ref(),
+                        intent_ids,
+                        new_status,
+                        reason,
+                    )
+                    .await
+            })
+        }
     }
 }
 

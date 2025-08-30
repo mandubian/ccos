@@ -210,10 +210,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // - :original-request - The user's natural language request
 //
 // OPTIONAL PROPERTIES:
-// - :constraints - Map of constraints (e.g., { :input-type :string })
-// - :preferences - Map of preferences (e.g., { :tone :friendly })
+// - :constraints - Map of constraints (e.g., { :input-type :string :max-length 100 })
+// - :preferences - Map of preferences (e.g., { :tone :friendly :formality :casual })
 // - :success-criteria - Function that validates the result
 // - :status - String (default: "active")
+//
+// CRITICAL MAP SYNTAX RULES:
+// ==========================
+// ALL map keys MUST be keywords starting with ':' (colon)
+// CORRECT:   { :key1 "value1" :key2 "value2" }
+// WRONG:     { key1 "value1" key2 "value2" }      <-- Missing colons!
+// WRONG:     { "key1" "value1" "key2" "value2" }  <-- String keys, not keywords!
+//
+// Examples of correct map syntax:
+// - :constraints  { :input-type :string :required true :max-length 254 }
+// - :preferences  { :tone :friendly :language :english :style :formal }
 //
 // SUCCESS CRITERIA FUNCTIONS:
 // The :success-criteria must be a function: (fn [result] <validation-logic>)
@@ -232,6 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // 4. Use meaningful intent names (e.g., "analyze-sentiment", "validate-email")
 // 5. If user mentions validation requirements, translate them to success-criteria
 // 6. If user mentions constraints, map them to :constraints
+// 7. ALL MAP KEYS MUST START WITH ':' - this is non-negotiable!
 "#;
 
     const FEW_SHOTS: &str = r#"### Example 1: Simple Intent
@@ -329,7 +341,23 @@ RTFS:
   :status "active")
 "#;
 
-    const ANTI_PATTERNS: &str = r#"### ANTI-PATTERN 1: Mismatched Parentheses (Common Error!)
+    const ANTI_PATTERNS: &str = r#"### ANTI-PATTERN 1: Incorrect Map Key Syntax (MOST COMMON ERROR!)
+User request: "Validate user input with type and length constraints"
+INCORRECT RTFS (missing colons on map keys - this causes "expected map_key" parsing error):
+(intent validate-input
+  :goal "Validate user input with constraints"
+  :original-request "Validate user input with type and length constraints"
+  :constraints { input-type :string max-length 100 required true }
+  :success-criteria (fn [result] (string? result)))
+
+CORRECTED RTFS (ALL map keys must start with ':'):
+(intent validate-input
+  :goal "Validate user input with constraints"
+  :original-request "Validate user input with type and length constraints"
+  :constraints { :input-type :string :max-length 100 :required true }
+  :success-criteria (fn [result] (string? result)))
+
+### ANTI-PATTERN 2: Mismatched Parentheses (Common Error!)
 User request: "Validate a user's age is over 21"
 INCORRECT RTFS (missing a closing parenthesis at the end):
 (intent validate-age
@@ -361,8 +389,8 @@ STEP 1: ANALYZE USER REQUEST
 STEP 2: DESIGN INTENT STRUCTURE
 - Choose a descriptive intent name (verb-noun format)
 - Write a clear, specific :goal
-- Map user constraints to :constraints
-- Infer preferences and add to :preferences
+- Map user constraints to :constraints using ONLY keyword keys
+- Infer preferences and add to :preferences using ONLY keyword keys
 
 STEP 3: CREATE SUCCESS CRITERIA
 - Translate user validation requirements to RTFS functions
@@ -374,12 +402,14 @@ STEP 4: SYNTAX VALIDATION
 - CRITICAL: Double-check that all opening parentheses '(' are matched with a closing parenthesis ')'.
 - Ensure the final output is a single, complete `(intent ...)` block.
 - Verify keyword-argument pairs are correct (e.g., `:goal "..."`).
+- CRITICAL MAP SYNTAX: ALL map keys MUST start with ':' (e.g., :key-name, not key-name or "key-name")
 
 STEP 5: VALIDATE GENERATED INTENT
 - Ensure all required properties are present
 - Verify success criteria syntax is correct
 - Check that constraints are reasonable
 - Confirm intent name follows naming conventions
+- Double-check that ALL map keys use keyword syntax (:key-name)
 
 COMMON PATTERNS:
 - Data validation: (and (map? result) (contains? result :key) (type? (get result :key)))
@@ -430,7 +460,7 @@ COMMON PATTERNS:
     });
 
     let full_prompt = format!(
-        "You are an expert RTFS developer specializing in intent generation for AI systems. Your task is to translate natural language requests into precise, executable RTFS intent definitions that can be validated and executed by runtime systems.\n\n{}\n\n{}\n\n{}\n\n{}\n\n### TASK\nUser request: \"{}\"\n\nGenerate a complete RTFS intent definition that:\n1. Captures the user's intent accurately\n2. Includes appropriate constraints and preferences\n3. Has specific, testable success criteria\n4. Follows RTFS syntax and conventions\n\nRTFS:",
+        "You are an expert RTFS developer specializing in intent generation for AI systems. Your task is to translate natural language requests into precise, executable RTFS intent definitions that can be validated and executed by runtime systems.\n\n{}\n\n{}\n\n{}\n\n{}\n\n### TASK\nUser request: \"{}\"\n\nGenerate a complete RTFS intent definition that:\n1. Captures the user's intent accurately\n2. Includes appropriate constraints and preferences\n3. Has specific, testable success criteria\n4. Follows RTFS syntax and conventions\n5. CRITICAL: ALL map keys MUST start with ':' (e.g., :key-name, not key-name)\n\nRTFS:",
         INTENT_GRAMMAR_SNIPPET, GENERATION_STRATEGY, FEW_SHOTS, ANTI_PATTERNS, user_request
     );
 

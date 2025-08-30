@@ -183,6 +183,8 @@ pub enum ActionType {
     
     // Execution
     CapabilityCall,
+    /// Result of a capability call; appended after execution with the outcome.
+    CapabilityResult,
     InternalStep,
     StepProfileDerived,
     
