@@ -151,8 +151,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
         let ready_intents = {
+            // Apply dependency semantics:
+            // - An intent with DependsOn edges is ready only if all prerequisites are Completed.
+            // - A parent intent (with incoming IsSubgoalOf edges) is ready only when all its subgoals are Completed.
             let g = intent_graph.lock().unwrap();
-            g.get_ready_intents()
+            let mut all = g.get_ready_intents();
+
+            all.retain(|intent| {
+                // Check DependsOn prerequisites
+                let edges = g.get_edges_for_intent(&intent.intent_id);
+                for e in &edges {
+                    if e.edge_type == EdgeType::DependsOn && e.to == intent.intent_id {
+                        if let Some(dep) = g.get_intent(&e.from) {
+                            if dep.status != IntentStatus::Completed {
+                                return false;
+                            }
+                        } else {
+                            // Missing dependency -> not ready
+                            return false;
+                        }
+                    }
+                }
+
+                // If this intent is a parent (has subgoals pointing to it), ensure all subgoals are Completed
+                for e in &edges {
+                    if e.edge_type == EdgeType::IsSubgoalOf && e.to == intent.intent_id {
+                        if let Some(child) = g.get_intent(&e.from) {
+                            if child.status != IntentStatus::Completed {
+                                return false;
+                            }
+                        } else {
+                            // Missing child -> be conservative and not ready
+                            return false;
+                        }
+                    }
+                }
+
+                true
+            });
+
+            all
         };
 
         if ready_intents.is_empty() {
