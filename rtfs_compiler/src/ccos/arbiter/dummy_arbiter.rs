@@ -9,8 +9,11 @@ use crate::runtime::values::Value;
 
 use super::arbiter_config::ArbiterConfig;
 use super::arbiter_engine::ArbiterEngine;
+use super::plan_generation::{PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider};
 use crate::ccos::intent_graph::IntentGraph;
-use crate::ccos::types::{ExecutionResult, Intent, Plan, PlanBody, StorableIntent, IntentStatus, PlanLanguage, PlanStatus, TriggerSource, GenerationContext};
+use crate::ccos::types::{ExecutionResult, Intent, Plan, PlanBody, StorableIntent, IntentStatus, PlanLanguage, PlanStatus, TriggerSource, GenerationContext, IntentId};
+use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use tokio::sync::RwLock;
 
 /// A deterministic dummy arbiter for testing purposes.
 /// This arbiter provides predictable responses based on simple pattern matching
@@ -277,6 +280,57 @@ impl DummyArbiter {
 
         Ok(())
     }
+
+    /// Build a tiny demo graph: root → fetch → analyze → announce
+    fn build_demo_graph(&self, goal: &str) -> Result<IntentId, RuntimeError> {
+        let mut graph = self.intent_graph.lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let mk = |name: &str, goal: &str| StorableIntent {
+            intent_id: format!("intent-{}", uuid::Uuid::new_v4()),
+            name: Some(name.to_string()),
+            original_request: goal.to_string(),
+            rtfs_intent_source: format!("(intent {} :goal \"{}\")", name, goal),
+            goal: goal.to_string(),
+            constraints: HashMap::new(),
+            preferences: HashMap::new(),
+            success_criteria: None,
+            parent_intent: None,
+            child_intents: vec![],
+            triggered_by: TriggerSource::HumanRequest,
+            generation_context: GenerationContext { arbiter_version: "dummy-graph-1.0".to_string(), generation_timestamp: now, input_context: HashMap::new(), reasoning_trace: Some("programmatic demo graph".to_string()) },
+            status: IntentStatus::Active,
+            priority: 1,
+            created_at: now,
+            updated_at: now,
+            metadata: HashMap::new(),
+        };
+
+        let root = mk("root_objective", goal);
+        let fetch = mk("fetch_data", "Fetch data");
+        let analyze = mk("analyze_data", "Analyze fetched data");
+        let announce = mk("announce_results", "Announce the analysis result");
+
+        let root_id = root.intent_id.clone();
+        let fetch_id = fetch.intent_id.clone();
+        let analyze_id = analyze.intent_id.clone();
+        let announce_id = announce.intent_id.clone();
+
+        graph.store_intent(root)?;
+        graph.store_intent(fetch)?;
+        graph.store_intent(analyze)?;
+        graph.store_intent(announce)?;
+
+        use crate::ccos::types::EdgeType;
+        graph.create_edge(fetch_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf)?;
+        graph.create_edge(analyze_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf)?;
+        graph.create_edge(announce_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf)?;
+        graph.create_edge(analyze_id.clone(), fetch_id.clone(), EdgeType::DependsOn)?;
+        graph.create_edge(announce_id.clone(), analyze_id.clone(), EdgeType::DependsOn)?;
+
+        Ok(root_id)
+    }
 }
 
 #[async_trait(?Send)]
@@ -308,7 +362,7 @@ impl ArbiterEngine for DummyArbiter {
 
     async fn execute_plan(
         &self,
-        plan: &Plan,
+    _plan: &Plan,
     ) -> Result<ExecutionResult, RuntimeError> {
         // For dummy arbiter, we just return a success result
         // In a real implementation, this would execute the RTFS plan
@@ -327,6 +381,60 @@ impl ArbiterEngine for DummyArbiter {
     ) -> Result<(), RuntimeError> {
         // Dummy arbiter doesn't learn
         Ok(())
+    }
+
+    async fn natural_language_to_graph(
+        &self,
+        natural_language_goal: &str,
+    ) -> Result<IntentId, RuntimeError> {
+        // Try using RTFS graph interpreter for a deterministic tiny graph; fallback to programmatic
+        let rtfs = format!(
+            r#"(do
+  (intent "root_objective" {{:goal "{}"}})
+  (intent "fetch_data" {{:goal "Fetch data"}})
+  (intent "analyze_data" {{:goal "Analyze fetched data"}})
+  (intent "announce_results" {{:goal "Announce the analysis result"}})
+  (edge :IsSubgoalOf "fetch_data" "root_objective")
+  (edge :IsSubgoalOf "analyze_data" "root_objective")
+  (edge :IsSubgoalOf "announce_results" "root_objective")
+  (edge :DependsOn "analyze_data" "fetch_data")
+  (edge :DependsOn "announce_results" "analyze_data"))"#,
+            natural_language_goal.replace('"', "\"")
+        );
+
+        let mut g = self.intent_graph.lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+        match crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(&rtfs, &mut g) {
+            Ok(root_id) => Ok(root_id),
+            Err(_) => {
+                // Fallback to legacy programmatic builder
+                drop(g);
+                self.build_demo_graph(natural_language_goal)
+            }
+        }
+    }
+
+    async fn generate_plan_for_intent(
+        &self,
+        intent: &StorableIntent,
+    ) -> Result<PlanGenerationResult, RuntimeError> {
+        // Use the stub plan generator; marketplace isn't strictly needed for the stub
+        let provider = StubPlanGenerationProvider;
+        // Create a minimal marketplace placeholder for signature compatibility if needed later
+        let plan_res = provider.generate_plan(&Intent {
+            intent_id: intent.intent_id.clone(),
+            name: intent.name.clone(),
+            original_request: intent.original_request.clone(),
+            goal: intent.goal.clone(),
+            constraints: HashMap::new(),
+            preferences: HashMap::new(),
+            success_criteria: None,
+            status: IntentStatus::Active,
+            created_at: intent.created_at,
+            updated_at: intent.updated_at,
+            metadata: HashMap::new(),
+        }, Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()))))).await?;
+        Ok(plan_res)
     }
 }
 

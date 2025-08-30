@@ -10,10 +10,12 @@ use crate::runtime::error::RuntimeError;
 use crate::ccos::types::{Intent, Plan, StorableIntent, IntentStatus, GenerationContext, TriggerSource, ExecutionResult};
 use crate::runtime::values::Value;
 use crate::ccos::intent_graph::IntentGraph;
-use crate::ccos::delegation_keys::{generation, agent};
+use crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs;
+use crate::ccos::delegation_keys::generation;
 use regex;
 
 use super::arbiter_engine::ArbiterEngine;
+use super::plan_generation::{LlmRtfsPlanGenerationProvider, PlanGenerationResult, PlanGenerationProvider};
 use super::arbiter_config::ArbiterConfig;
 use super::prompt::{PromptManager, FilePromptStore, PromptConfig};
 use super::llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory};
@@ -278,7 +280,7 @@ Generate the plan:"#,
     fn parse_rtfs_intent_response(
         &self,
         response: &str,
-        natural_language: &str,
+    _natural_language: &str,
         _context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         // Extract the first top-level `(intent …)` s-expression from the response
@@ -299,6 +301,69 @@ Generate the plan:"#,
         } else {
             Err(RuntimeError::Generic("Parsed AST did not contain a top-level expression for the intent".to_string()))
         }
+    }
+
+    /// Generate a structured prompt instructing the LLM to emit a full RTFS intent graph.
+    /// Output must be a single (do ...) s-expression containing (intent ...) and (edge ...)
+    fn generate_graph_prompt(&self, natural_language_goal: &str) -> String {
+        // Marker to help stub provider route responses deterministically
+        let marker = "GENERATE_INTENT_GRAPH";
+
+        // Keep grammar aligned with graph_interpreter.rs docstring
+        format!(
+            r#"{marker}
+You are an Arbiter that translates a natural language goal into an RTFS intent graph.
+
+Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON.
+
+Inside (do ...), include:
+- One or more intent definitions using ONE of these forms (both accepted):
+    (intent "name" :goal "..." :constraints {{...}} :preferences {{...}} :success-criteria <expr>)
+    {{:type "intent" :name "name" :goal "..."}}
+- Zero or more edges using ONE of these forms:
+    (edge {{:from "child" :to "parent" :type :IsSubgoalOf}})
+    (edge :DependsOn "from" "to")
+
+Edge types allowed: :IsSubgoalOf, :DependsOn, :ConflictsWith, :Enables, :RelatedTo, :TriggeredBy, :Blocks
+
+Constraints:
+- Names must be simple strings. Goals must be clear strings.
+- Do NOT include markdown fences, comments, or extra text.
+
+Example shape (illustrative):
+(do
+  {{:type "intent" :name "root" :goal "Overall goal"}}
+  {{:type "intent" :name "fetch" :goal "Fetch data"}}
+  (edge :IsSubgoalOf "fetch" "root")
+)
+
+Now generate the RTFS graph for this goal:
+"{goal}""#,
+            marker = marker,
+            goal = natural_language_goal
+        )
+    }
+
+    /// Extract the first top-level (do ...) s-expression from a text blob.
+    fn extract_do_block(text: &str) -> Option<String> {
+        let start = text.find("(do");
+        let start = match start { Some(s) => s, None => return None };
+        let mut depth = 0usize;
+        for (idx, ch) in text[start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    if depth == 0 { return None; }
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = start + idx + 1;
+                        return Some(text[start..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Store intent in the intent graph
@@ -425,7 +490,7 @@ impl ArbiterEngine for LlmArbiter {
         intent: &Intent,
     ) -> Result<Plan, RuntimeError> {
         // Generate prompt for plan generation
-        let prompt = self.generate_plan_prompt(intent);
+    let _prompt = self.generate_plan_prompt(intent);
         
         // Use LLM provider to generate plan
         // Build a storable intent shell to pass to provider (using runtime intent fields)
@@ -455,6 +520,69 @@ impl ArbiterEngine for LlmArbiter {
 
     async fn execute_plan(&self, _plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
         Ok(ExecutionResult { success: true, value: Value::String("LLM arbiter execution placeholder".to_string()), metadata: HashMap::new() })
+    }
+
+    async fn natural_language_to_graph(
+        &self,
+        natural_language_goal: &str,
+    ) -> Result<String, RuntimeError> {
+        // Generate RTFS graph prompt and ask provider to emit a (do ...) graph form
+        let prompt = self.generate_graph_prompt(natural_language_goal);
+
+        let debug = std::env::var("RTFS_ARBITER_DEBUG").map(|v| v == "1").unwrap_or(false)
+            || std::env::var("RTFS_SHOW_PROMPTS").is_ok();
+        if debug {
+            println!("\n🧭 Intent-Graph generation prompt:\n--- PROMPT START ---\n{}\n--- PROMPT END ---", prompt);
+        }
+
+        let response = self.llm_provider.generate_text(&prompt).await?;
+        if debug {
+            println!("\n🤖 LLM response (graph):\n--- RESPONSE START ---\n{}\n--- RESPONSE END ---", response);
+        }
+
+        // Extract first (do ...) block from response
+        let do_block = Self::extract_do_block(&response)
+            .ok_or_else(|| RuntimeError::Generic("Could not locate a complete (do ...) RTFS graph block".to_string()))?;
+
+        // Populate IntentGraph using the interpreter and return root intent id
+        let mut graph = self.intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+        let root_id = build_graph_from_rtfs(&do_block, &mut graph)?;
+        Ok(root_id)
+    }
+
+    async fn generate_plan_for_intent(
+        &self,
+        intent: &StorableIntent,
+    ) -> Result<PlanGenerationResult, RuntimeError> {
+        // Use LLM provider-based plan generator
+        let provider_cfg = self
+            .config
+            .llm_config
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Generic("llm_config missing".to_string()))?
+            .to_provider_config();
+        let provider = LlmRtfsPlanGenerationProvider::new(provider_cfg);
+
+        // Convert storable intent back to runtime Intent (minimal fields)
+        let rt_intent = Intent {
+            intent_id: intent.intent_id.clone(),
+            name: intent.name.clone(),
+            original_request: intent.original_request.clone(),
+            goal: intent.goal.clone(),
+            constraints: HashMap::new(),
+            preferences: HashMap::new(),
+            success_criteria: None,
+            status: IntentStatus::Active,
+            created_at: intent.created_at,
+            updated_at: intent.updated_at,
+            metadata: HashMap::new(),
+        };
+
+        // For now, we don't pass a real marketplace; provider currently doesn't use it.
+        let marketplace = Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()))));
+        provider.generate_plan(&rt_intent, marketplace).await
     }
 }
 

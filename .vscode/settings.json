@@ -6,5 +6,23 @@
     },
     "github.copilot.chat.agent.thinkingTool": true,
     "chat.tools.autoApprove": true,
+    "chat.todoListTool.enabled": true,
+    "chat.edits2.enabled": true,
+    "chat.tools.terminal.autoApprove": {
+        "cd": true,
+        "ls": true,
+        "cargo": true,
+        "git": true,
+        "rm": false,
+        "rmdir": false,
+        "del": false,
+        "kill": false,
+        "curl": false,
+        "wget": false,
+        "eval": false,
+        "chmod": false,
+        "chown": false,
+        "/^Remove-Item\\b/i": false
+    },
     // "remote.SSH.httpsProxy": "",
 }
