@@ -46,6 +46,7 @@ pub mod working_memory;
  // Orchestration/Arbiter components (if present in tree)
 // pub mod orchestrator;      // commented: module not present in tree
 pub mod agent; // consolidated agent module (registry + types)
+pub mod runtime_service; // thin async runtime wrapper for embedding CCOS in apps (CLI/TUI/Web)
 
 // Re-export some arbiter sub-modules at the ccos root for historic import paths
 // Tests and examples sometimes refer to `rtfs_compiler::ccos::delegating_arbiter` or
