@@ -65,39 +65,117 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
         });
     };
     
-    // Extract other fields from keyword arguments
+    // Extract other fields from keyword arguments or a single Map arg
     let mut goal = None;
     let mut constraints = HashMap::new();
     let mut preferences = HashMap::new();
     let mut success_criteria = None;
-    
-    for arg in &arguments[1..] {
-        if let Expression::Map(map) = arg {
-            for (key, value) in map {
-                let key_name = map_key_to_string(key);
-                match key_name.as_str() {
-                    ":goal" | "goal" => {
-                        goal = Some(expression_to_string(value));
-                    }
-                    ":constraints" | "constraints" => {
-                        if let Expression::Map(constraints_map) = value {
-                            for (c_key, c_value) in constraints_map {
-                                constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
-                            }
+
+    // Helper to handle a map expression that may be provided as a single map arg
+    let mut handle_map = |map: &HashMap<MapKey, Expression>| {
+        for (key, value) in map {
+            let key_name = map_key_to_string(key);
+            match key_name.as_str() {
+                ":goal" | "goal" => {
+                    goal = Some(expression_to_string(value));
+                }
+                ":constraints" | "constraints" => {
+                    if let Expression::Map(constraints_map) = value {
+                        for (c_key, c_value) in constraints_map {
+                            constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
                         }
                     }
-                    ":preferences" | "preferences" => {
-                        if let Expression::Map(prefs_map) = value {
-                            for (p_key, p_value) in prefs_map {
-                                preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
-                            }
+                }
+                ":preferences" | "preferences" => {
+                    if let Expression::Map(prefs_map) = value {
+                        for (p_key, p_value) in prefs_map {
+                            preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
                         }
                     }
-                    ":success-criteria" | "success-criteria" => {
-                        success_criteria = Some(Value::from(value.clone()));
+                }
+                ":success-criteria" | "success-criteria" => {
+                    success_criteria = Some(Value::from(value.clone()));
+                }
+                _ => {
+                    // Ignore unknown fields
+                }
+            }
+        }
+    };
+
+    // Two supported styles from LLMs:
+    // 1) A single map argument: (intent "name" {:goal "..." :constraints {...}})
+    // 2) Keyword-style args: (intent "name" :goal "..." :constraints {...})
+    // Prefer the single map if present, otherwise parse keyword pairs directly.
+    if arguments.len() >= 2 {
+        // If a single map was provided as the second arg, handle it and ignore other args
+        if let Expression::Map(map) = &arguments[1] {
+            handle_map(map);
+        } else {
+            // Parse keyword-style pairs: iterate with index
+            let mut i = 1;
+            while i < arguments.len() {
+                match &arguments[i] {
+                    Expression::Literal(Literal::Keyword(kw)) => {
+                        // next element should be the value
+                        if i + 1 < arguments.len() {
+                            let val = &arguments[i + 1];
+                            // insert based on kw
+                            match kw.0.as_str() {
+                                "goal" => { goal = Some(expression_to_string(val)); }
+                                "constraints" => {
+                                    if let Expression::Map(constraints_map) = val {
+                                        for (c_key, c_value) in constraints_map {
+                                            constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
+                                        }
+                                    }
+                                }
+                                "preferences" => {
+                                    if let Expression::Map(prefs_map) = val {
+                                        for (p_key, p_value) in prefs_map {
+                                            preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
+                                        }
+                                    }
+                                }
+                                "success-criteria" => {
+                                    success_criteria = Some(Value::from(val.clone()));
+                                }
+                                _ => {}
+                            }
+                            i += 2;
+                        } else { break; }
+                    }
+                    // Accept bare symbol keys too
+                    Expression::Symbol(sym) => {
+                        if i + 1 < arguments.len() {
+                            let val = &arguments[i + 1];
+                            match sym.0.as_str() {
+                                "goal" => { goal = Some(expression_to_string(val)); }
+                                "constraints" => {
+                                    if let Expression::Map(constraints_map) = val {
+                                        for (c_key, c_value) in constraints_map {
+                                            constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
+                                        }
+                                    }
+                                }
+                                "preferences" => {
+                                    if let Expression::Map(prefs_map) = val {
+                                        for (p_key, p_value) in prefs_map {
+                                            preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
+                                        }
+                                    }
+                                }
+                                "success-criteria" => {
+                                    success_criteria = Some(Value::from(val.clone()));
+                                }
+                                _ => {}
+                            }
+                            i += 2;
+                        } else { break; }
                     }
                     _ => {
-                        // Ignore unknown fields
+                        // skip unknown shapes
+                        i += 1;
                     }
                 }
             }
@@ -472,8 +550,10 @@ fn map_get<'a>(map: &'a HashMap<MapKey, Expression>, key: &str) -> Option<&'a Ex
     let kstr = key.to_string();
     let trimmed = key.trim_start_matches(':');
     map
-        .get(&MapKey::String(kstr))
-        .or_else(|| map.get(&MapKey::Keyword(Keyword(trimmed.to_string()))))
+    // Try exact string (with colon), then plain string (no colon), then keyword form
+    .get(&MapKey::String(kstr))
+    .or_else(|| map.get(&MapKey::String(trimmed.to_string())))
+    .or_else(|| map.get(&MapKey::Keyword(Keyword(trimmed.to_string()))))
 }
 
 fn expression_to_value(expr: &Expression) -> Value {

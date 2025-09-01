@@ -17,6 +17,9 @@ use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 use crate::ccos::delegation_keys::{generation, agent};
 
 use crate::ast::TopLevel;
+use std::fs::OpenOptions;
+use std::io::Write;
+use serde_json::json;
 
 /// Extract the first top-level `(intent …)` s-expression from the given text.
 /// Returns `None` if no well-formed intent block is found.
@@ -283,13 +286,36 @@ impl DelegatingArbiter {
         
         let response = self.llm_provider.generate_text(&prompt).await?;
         
-        // Parse LLM response into intent structure
-    let mut intent = self.parse_llm_intent_response(&response, natural_language, context)?;
+        // Log provider, prompt, and response (best-effort, non-fatal)
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let entry = json!({"event":"llm_intent_generation","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
 
-    // Mark how this intent was generated so downstream code/tests can inspect it
-            intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
-        
-    Ok(intent)
+        // Parse LLM response into intent structure
+        let mut intent = self.parse_llm_intent_response(&response, natural_language, context)?;
+
+        // Mark how this intent was generated so downstream code/tests can inspect it
+        intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
+
+        // Append a compact JSONL entry with the generated intent for debugging
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            // Serialize a minimal intent snapshot
+            let intent_snapshot = json!({
+                "intent_id": intent.intent_id,
+                "name": intent.name,
+                "goal": intent.goal,
+                "metadata": intent.metadata,
+            });
+            let entry = json!({"event":"llm_intent_parsed","provider": format!("{:?}", self.llm_config.provider_type), "intent": intent_snapshot});
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
+
+        Ok(intent)
     }
 
     /// Generate plan using LLM with agent delegation
@@ -370,11 +396,20 @@ impl DelegatingArbiter {
         let prompt = self.create_delegation_plan_prompt(intent, selected_agent, context);
         
         let response = self.llm_provider.generate_text(&prompt).await?;
-        
-        // Parse delegation plan
-        let plan = self.parse_delegation_plan(&response, intent, selected_agent)?;
-        
-        Ok(plan)
+
+        // Log provider, prompt and response
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let entry = json!({"event":"llm_delegation_plan","provider": format!("{:?}", self.llm_config.provider_type), "agent": selected_agent.agent_id, "prompt": prompt, "response": response});
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
+
+    // Parse delegation plan
+    let plan = self.parse_delegation_plan(&response, intent, selected_agent)?;
+    // Log parsed plan for debugging
+    self.log_parsed_plan(&plan);
+    Ok(plan)
     }
 
     /// Generate plan without delegation
@@ -386,11 +421,20 @@ impl DelegatingArbiter {
         let prompt = self.create_direct_plan_prompt(intent, context);
         
         let response = self.llm_provider.generate_text(&prompt).await?;
-        
-        // Parse direct plan
-        let plan = self.parse_direct_plan(&response, intent)?;
-        
-        Ok(plan)
+
+        // Log provider, prompt and response
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let entry = json!({"event":"llm_direct_plan","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
+
+    // Parse direct plan
+    let plan = self.parse_direct_plan(&response, intent)?;
+    // Log parsed plan for debugging
+    self.log_parsed_plan(&plan);
+    Ok(plan)
     }
 
     /// Create prompt for intent generation
@@ -558,7 +602,7 @@ Plan:"#,
     fn parse_llm_intent_response(
         &self,
         response: &str,
-        natural_language: &str,
+        _natural_language: &str,
         _context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         // Extract the first top-level `(intent …)` s-expression from the response
@@ -749,28 +793,192 @@ Plan:"#,
         })
     }
 
-    /// Extract RTFS content from LLM response
+    // Note: This helper returns a Plan constructed from the RTFS body; we log the RTFS body for debugging.
+    fn log_parsed_plan(&self, plan: &Plan) {
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let entry = json!({"event":"llm_plan_parsed","plan_id": plan.plan_id, "rtfs_body": match &plan.body { crate::ccos::types::PlanBody::Rtfs(s) => s, _ => "" }});
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
+    }
+
+    /// Extract RTFS plan from LLM response, preferring a balanced (do ...) block
     fn extract_rtfs_from_response(&self, response: &str) -> Result<String, RuntimeError> {
-        // Look for RTFS content between parentheses
-        if let Some(start) = response.find('(') {
-            if let Some(end) = response.rfind(')') {
-                let rtfs_content = response[start..=end].trim();
-                if rtfs_content.starts_with('(') && rtfs_content.ends_with(')') {
-                    return Ok(rtfs_content.to_string());
+        // Normalize map-style intent objects (e.g. {:type "intent" :name "root" :goal "..."})
+        // into canonical `(intent "name" :goal "...")` forms so downstream parser
+        // doesn't see bare map literals that use :type keys.
+        fn normalize_map_style_intents(src: &str) -> String {
+            // Simple state machine: replace occurrences of `{:type "intent" ...}` with
+            // `(intent "<name>" :goal "<goal>" ...)` where available. This is intentionally
+            // conservative and only rewrites top-level map-like blocks that include `:type "intent"`.
+            let mut out = String::new();
+            let mut rest = src;
+            while let Some(start) = rest.find('{') {
+                // copy up to start
+                out.push_str(&rest[..start]);
+                if let Some(end) = rest[start..].find('}') {
+                    let block = &rest[start..start+end+1];
+                    // quick check for :type "intent"
+                    if block.contains(":type \"intent\"") || block.contains(":type 'intent'") {
+                        // parse simple key/value pairs inside block
+                        // remove surrounding braces and split on ':' keys (best-effort)
+                        let inner = &block[1..block.len()-1];
+                        // build a small map of keys to raw values
+                        let mut map = std::collections::HashMap::new();
+                        // split by whitespace-separated tokens of form :key value
+                        let mut iter = inner.split_whitespace().peekable();
+                        while let Some(token) = iter.next() {
+                            if token.starts_with(":") {
+                                let key = token.trim_start_matches(':').to_string();
+                                // collect the value token(s) until next key or end
+                                if let Some(val_tok) = iter.next() {
+                                    // if value begins with '"', consume until closing '"'
+                                    if val_tok.starts_with('"') && !val_tok.ends_with('"') {
+                                        let mut val = val_tok.to_string();
+                                        while let Some(next_tok) = iter.peek() {
+                                            let nt = *next_tok;
+                                            val.push(' ');
+                                            val.push_str(nt);
+                                            iter.next();
+                                            if nt.ends_with('"') { break; }
+                                        }
+                                        map.insert(key, val.trim().to_string());
+                                    } else {
+                                        map.insert(key, val_tok.trim().to_string());
+                                    }
+                                }
+                            }
+                        }
+
+                        // If map contains name/goal produce an (intent ...) form
+                        if let Some(name_raw) = map.get("name") {
+                            // strip surrounding quotes if present
+                            let name = name_raw.trim().trim_matches('"').to_string();
+                            let mut intent_form = format!("(intent \"{}\"", name);
+                            if let Some(goal_raw) = map.get("goal") {
+                                let goal = goal_raw.trim().trim_matches('"');
+                                intent_form.push_str(&format!(" :goal \"{}\"", goal));
+                            }
+                            // add other known keys as keyword pairs
+                            for (k, v) in map.iter() {
+                                if k == "name" || k == "type" || k == "goal" { continue; }
+                                let val = v.trim();
+                                intent_form.push_str(&format!(" :{} {}", k, val));
+                            }
+                            intent_form.push(')');
+                            out.push_str(&intent_form);
+                        } else {
+                            // fallback: copy original block
+                            out.push_str(block);
+                        }
+                        // advance rest
+                        rest = &rest[start+end+1..];
+                        continue;
+                    }
+                    // not an intent map, copy as-is
+                    out.push_str(block);
+                    rest = &rest[start+end+1..];
+                } else {
+                    // unmatched brace; copy remainder and break
+                    out.push_str(rest);
+                    rest = "";
+                    break;
                 }
             }
+            out.push_str(rest);
+            out
         }
-        
-        // If no parentheses found, try to extract from code blocks
-        if let Some(start) = response.find("```rtfs") {
-            if let Some(end) = response.find("```") {
-                let content = response[start + 7..end].trim();
-                return Ok(content.to_string());
+
+        let response = normalize_map_style_intents(response);
+
+        // 1) Prefer fenced rtfs code blocks
+        if let Some(code_start) = response.find("```rtfs") {
+            if let Some(code_end) = response[code_start + 7..].find("```") {
+                let fenced = &response[code_start + 7..code_start + 7 + code_end];
+                // If a (do ...) exists inside, extract the balanced block
+                if let Some(idx) = fenced.find("(do") {
+                    if let Some(block) = Self::extract_balanced_from(fenced, idx) {
+                        return Ok(block);
+                    }
+                }
+                // Otherwise, return fenced content trimmed
+                let trimmed = fenced.trim();
+                // Guard: avoid returning a raw (intent ...) block as a plan
+                if trimmed.starts_with("(intent") {
+                    return Err(RuntimeError::Generic("LLM response contains an intent block, but no plan (do ...) block".to_string()));
+                }
+                return Ok(trimmed.to_string());
             }
         }
-        
-        // Fallback: return the entire response
-        Ok(response.trim().to_string())
+
+        // 2) Search raw text for a (do ...) block
+        if let Some(idx) = response.find("(do") {
+            if let Some(block) = Self::extract_balanced_from(&response, idx) {
+                return Ok(block);
+            }
+        }
+
+        // 3) As a last resort, handle top-level blocks. If the response contains only (intent ...) blocks,
+        // wrap them into a (do ...) block so they become an executable RTFS plan. If other top-level blocks
+        // exist, return the first non-(intent) balanced block.
+        if let Some(mut idx) = response.find('(') {
+            let mut collected_intents = Vec::new();
+            let mut remaining = &response[idx..];
+
+            // Collect consecutive top-level balanced blocks
+            while let Some(block) = Self::extract_balanced_from(remaining, 0) {
+                if block.trim_start().starts_with("(intent") {
+                    collected_intents.push(block.clone());
+                } else {
+                    // Found a non-intent top-level block: prefer returning it
+                    return Ok(block);
+                }
+
+                // Advance remaining slice
+                let consumed = block.len();
+                if consumed >= remaining.len() { remaining = ""; break; }
+                remaining = &remaining[consumed..];
+                // Skip whitespace/newlines
+                let skip = remaining.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+                remaining = &remaining[skip..];
+            }
+
+            if !collected_intents.is_empty() {
+                // Wrap collected intent blocks in a (do ...) wrapper
+                let mut do_block = String::from("(do\n");
+                for ib in collected_intents.iter() {
+                    do_block.push_str("    ");
+                    do_block.push_str(ib.trim());
+                    do_block.push_str("\n");
+                }
+                do_block.push_str(")");
+                return Ok(do_block);
+            }
+        }
+
+        Err(RuntimeError::Generic("Could not extract an RTFS plan from LLM response".to_string()))
+    }
+
+    /// Helper: extract a balanced s-expression starting at `start_idx` in `text`
+    fn extract_balanced_from(text: &str, start_idx: usize) -> Option<String> {
+        let bytes = text.as_bytes();
+        if bytes.get(start_idx) != Some(&b'(') { return None; }
+        let mut depth = 0usize;
+        for (i, ch) in text[start_idx..].char_indices() {
+            match ch {
+                '(' => depth = depth.saturating_add(1),
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        let end = start_idx + i + 1; // inclusive
+                        return Some(text[start_idx..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Store intent in the intent graph
@@ -869,6 +1077,77 @@ impl ArbiterEngine for DelegatingArbiter {
                 meta
             },
         })
+    }
+
+    async fn natural_language_to_graph(
+        &self,
+        natural_language_goal: &str,
+    ) -> Result<String, RuntimeError> {
+                // Build a precise prompt instructing the model to output a single RTFS (do ...) graph
+              let prompt = format!(
+                        r#"You are the CCOS Arbiter. Convert the natural language goal into an RTFS intent graph.
+
+STRICT OUTPUT RULES:
+- Output EXACTLY one well-formed RTFS s-expression starting with (do ...). No prose, comments, or extra blocks.
+- Inside the (do ...), declare intents and edges only.
+ - Use only these forms:
+  - (intent "name" :goal "..." [:constraints {{...}}] [:preferences {{...}}] [:success-criteria ...])
+  - (edge {{:from "child" :to "parent" :type :IsSubgoalOf}})
+    - or positional edge form: (edge :DependsOn "from" "to")
+- Allowed edge types: :IsSubgoalOf, :DependsOn, :ConflictsWith, :Enables, :RelatedTo, :TriggeredBy, :Blocks
+- Names must be unique and referenced consistently by edges.
+- Include at least one root intent that captures the overarching goal. Subgoals should use :IsSubgoalOf edges to point to their parent.
+- Keep it compact and executable by an RTFS parser.
+
+Natural language goal:
+"{goal}"
+
+Tiny example (format to imitate, not content):
+```rtfs
+(do
+    (intent "setup-backup" :goal "Set up daily encrypted backups")
+    (intent "configure-storage" :goal "Configure S3 bucket and IAM policy")
+    (intent "schedule-job" :goal "Schedule nightly backup job")
+        (edge {{:from "configure-storage" :to "setup-backup" :type :IsSubgoalOf}})
+    (edge :Enables "configure-storage" "schedule-job"))
+```
+
+Now output ONLY the RTFS (do ...) block for the provided goal:
+"#,
+                        goal = natural_language_goal
+                );
+
+                let response = self.llm_provider.generate_text(&prompt).await?;
+
+                // Log provider, prompt and raw response
+                let _ = (|| -> Result<(), std::io::Error> {
+                    let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+                    let entry = json!({"event":"llm_graph_generation","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
+                    writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+                    Ok(())
+                })();
+
+                // Reuse the robust RTFS extraction that prefers a balanced (do ...) block
+                let do_block = self.extract_rtfs_from_response(&response)?;
+
+                // Populate IntentGraph using the interpreter and return root intent id
+        let mut graph = self.intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
+        let root_id = crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(&do_block, &mut graph)?;
+
+        // After graph built, log the parsed root id and a compact serialization of current graph (best-effort)
+        // Release the locked graph before doing any IO
+        drop(graph);
+
+        // Write a compact parsed event with the root id only (avoids cross-thread/runtime complexity)
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let entry = json!({"event":"llm_graph_parsed","root": root_id});
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
+        Ok(root_id)
     }
 }
 

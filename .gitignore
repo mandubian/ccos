@@ -41,3 +41,5 @@ models
 output/
 
 .roo
+
+logs/

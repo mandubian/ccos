@@ -21,13 +21,14 @@ Before making any changes, always provide a brief natural language explanation o
 ---
 
 ## 2. Read/Scan Order (10–15 min Boot Sequence)
-1. `.github/copilot-instructions.md` (this repo’s instructions)
-2. `rtfs_compiler/src/ccos/mod.rs` (system assembly + `process_request` pipeline)
-3. Specs indices:
+1. `.github/copilot-instructions.md` (this repo’s delta + delegation status)
+2. This file (ruleset)
+3. `rtfs_compiler/src/ccos/mod.rs` (system assembly + `process_request` pipeline)
+4. Specs indices:
    - CCOS specs: `docs/ccos/specs/` (start with any numbered overview + delegation / governance specs)
    - RTFS 2.0 language specs: `docs/rtfs-2.0/specs/` (grammar + semantic rules)
-4. `causal_chain.rs`, `governance_kernel.rs`, `delegating_arbiter.rs`, `agent_registry.rs`
-5. Capability examples: `runtime/stdlib` registration + any custom capability modules.
+5. `causal_chain.rs`, `governance_kernel.rs`, `delegating_arbiter.rs`, `agent_registry.rs`
+6. Capability examples: `runtime/stdlib` registration + any custom capability modules.
 
 ---
 ## 3. Separation of Powers (Never Break This Boundary)
@@ -54,6 +55,44 @@ Never allow Arbiter/DelegatingArbiter to execute side effects directly; all side
 - Keep plan simple & pure except for `(call ...)` forms. No direct I/O primitives exist in core language.
 
 Reference: RTFS grammar & semantics specs under `docs/rtfs-2.0/specs/` (start with grammar overview + evaluation model documents).
+
+---
+## 5. Governance Flow (Golden Path)
+1. Arbiter/DelegatingArbiter builds Intent; stores in IntentGraph.
+2. Plan proposed (or short‑circuited by delegation).
+3. `CCOS::preflight_validate_capabilities` performs naive capability token existence check.
+4. GovernanceKernel:
+   - `sanitize_intent` – injection & contradiction filters.
+   - `scaffold_plan` – ensure `(do ...)` wrap only.
+   - `validate_against_constitution` – extend for new rules (see CCOS governance specs directory).
+5. Orchestrator executes; each capability invocation logged as `ActionType::CapabilityCall` with signature.
+6. CausalChain signs & hashes action → immutable audit.
+
+If you add a governance rule: implement in `governance_kernel.rs`, add targeted test, update spec file in `docs/ccos/specs/`.
+
+---
+## 6. Delegation (M4 State)
+Implemented:
+- Agent scoring → heuristic threshold (hardcoded 0.65) in `attempt_agent_delegation`.
+- Approved delegation event: `record_delegation_event(..., "approved", meta)`.
+Metadata keys: `delegation.selected_agent`, `delegation.rationale`, `delegation.candidates`.
+Pending (when extending): `delegation.proposed`, `delegation.rejected`, `delegation.completed`; governance pre‑approval hook; configurable threshold (env `CCOS_DELEGATION_THRESHOLD`); post‑execution feedback updating success stats.
+
+---
+## 7. Capability Lifecycle (Do This Exactly)
+1. Implement struct with async `execute(&self, ...) -> ExecutionResult`.
+2. Register in `register_default_capabilities` (or dynamic path).
+3. Refer only by id in Plan via `(call :your.capability:v1.op { ... })`.
+4. Add integration test: run a request or synthetic plan; assert presence of `ActionType::CapabilityCall` with `function_name == capability id` in CausalChain.
+5. Add minimal docs/spec note if novel side effect semantics under `docs/ccos/specs/` (capability guidelines file if present).
+Never: hardcode direct network / file I/O inside planning path; route through capability.
+
+---
+## 8. Action / Ledger Integrity Rules
+- Always add `signature` metadata before append (`signing.sign_action`).
+- Do NOT reorder hashed fields in `calculate_action_hash` (see `causal_chain.rs`). Breaking changes require explicit migration plan.
+- Add new audit data via `action.metadata` namespaces instead of struct fields (backwards compatibility, hash stability).
+- Use `record_delegation_event` for delegation audit; do not manually craft unsinged delegation actions.
 
 ---
 ## 9. Error & Result Conventions
@@ -95,6 +134,12 @@ Reflect `.cursor/rules/rust-rules.mdc`:
 - Prefer explicit pattern matches; ensure exhaustiveness for enums that may expand.
 - prefer module with `mod.rs` and several files will less than 1000 lines of code over flat structure; use `pub(crate)` for internal visibility.
 
+---
+## 14. Spec Link Map (Start Points)
+(Do not inline entire specs here; navigate as needed.)
+- CCOS Specs Index: `docs/ccos/specs/` (governance, delegation, capability marketplace, causal chain design docs).
+- RTFS Language Specs: `docs/rtfs-2.0/specs/` (grammar, types, evaluation semantics, special forms, intent/plan/action object schemas).
+- Archived / Historical (for context only): `docs/rtfs-1.0/`.
 
 When adding or changing semantics: update appropriate spec file + reference commit hash in PR description.
 ---
