@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use regex::Regex;
+use serde_json;
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
@@ -37,67 +38,68 @@ impl DummyArbiter {
         let lower_nl = nl.to_lowercase();
         
         // Simple pattern matching for deterministic responses
-        if lower_nl.contains("sentiment") || lower_nl.contains("analyze") || lower_nl.contains("feeling") {
-            Intent {
-                intent_id: format!("dummy_sentiment_{}", uuid::Uuid::new_v4()),
-                name: Some("analyze_user_sentiment".to_string()),
-                goal: "Analyze sentiment from user interactions".to_string(),
-                original_request: nl.to_string(),
-                constraints: {
-                    let mut map = HashMap::new();
-                    map.insert("privacy".to_string(), Value::String("high".to_string()));
-                    map
-                },
-                preferences: {
-                    let mut map = HashMap::new();
-                    map.insert("accuracy".to_string(), Value::String("high".to_string()));
-                    map
-                },
-                success_criteria: Some(Value::String("sentiment_analyzed".to_string())),
-                status: IntentStatus::Active,
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                metadata: HashMap::new(),
+        // Check compound patterns first (more specific)
+        if (lower_nl.contains("hello") || lower_nl.contains("hi") || lower_nl.contains("greet")) && 
+           (lower_nl.contains("add") || lower_nl.contains("sum") || lower_nl.contains("plus") || lower_nl.contains("calculate") || lower_nl.contains("math")) {
+            // Compound goal: greeting + math operation
+            let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
+                .unwrap()
+                .captures_iter(nl)
+                .filter_map(|cap| cap.get(1)?.as_str().parse().ok())
+                .collect();
+            
+            let mut metadata = HashMap::new();
+            if !numbers.is_empty() {
+                metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
             }
-        } else if lower_nl.contains("optimize") || lower_nl.contains("improve") || lower_nl.contains("performance") {
+            
             Intent {
-                intent_id: format!("dummy_optimize_{}", uuid::Uuid::new_v4()),
-                name: Some("optimize_response_time".to_string()),
-                goal: "Optimize system performance".to_string(),
-                original_request: nl.to_string(),
-                constraints: {
-                    let mut map = HashMap::new();
-                    map.insert("budget".to_string(), Value::String("low".to_string()));
-                    map
-                },
-                preferences: {
-                    let mut map = HashMap::new();
-                    map.insert("speed".to_string(), Value::String("high".to_string()));
-                    map
-                },
-                success_criteria: Some(Value::String("performance_optimized".to_string())),
-                status: IntentStatus::Active,
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                metadata: HashMap::new(),
-            }
-        } else if lower_nl.contains("hello") || lower_nl.contains("hi") || lower_nl.contains("greet") {
-            Intent {
-                intent_id: format!("dummy_greeting_{}", uuid::Uuid::new_v4()),
-                name: Some("greet_user".to_string()),
-                goal: "Greet the user".to_string(),
+                intent_id: format!("dummy_compound_{}", uuid::Uuid::new_v4()),
+                name: Some("greet_and_calculate".to_string()),
+                goal: "Greet user and perform mathematical calculation".to_string(),
                 original_request: nl.to_string(),
                 constraints: HashMap::new(),
                 preferences: {
                     let mut map = HashMap::new();
                     map.insert("friendliness".to_string(), Value::String("high".to_string()));
+                    map.insert("precision".to_string(), Value::String("exact".to_string()));
                     map
                 },
-                success_criteria: Some(Value::String("user_greeted".to_string())),
+                success_criteria: Some(Value::String("greeting_and_calculation_completed".to_string())),
                 status: IntentStatus::Active,
                 created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                metadata: HashMap::new(),
+                metadata,
+            }
+        } else if lower_nl.contains("sentiment") || lower_nl.contains("analyze") || lower_nl.contains("feeling") {
+            // Extract numbers from the input using regex
+            let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
+                .unwrap()
+                .captures_iter(nl)
+                .filter_map(|cap| cap.get(1)?.as_str().parse().ok())
+                .collect();
+            
+            let mut metadata = HashMap::new();
+            if !numbers.is_empty() {
+                metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
+            }
+            
+            Intent {
+                intent_id: format!("dummy_math_{}", uuid::Uuid::new_v4()),
+                name: Some("perform_math_operation".to_string()),
+                goal: "Perform mathematical calculation".to_string(),
+                original_request: nl.to_string(),
+                constraints: HashMap::new(),
+                preferences: {
+                    let mut map = HashMap::new();
+                    map.insert("precision".to_string(), Value::String("exact".to_string()));
+                    map
+                },
+                success_criteria: Some(Value::String("calculation_completed".to_string())),
+                status: IntentStatus::Active,
+                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                metadata,
             }
         } else {
             // Default intent for unrecognized patterns
@@ -123,41 +125,105 @@ impl DummyArbiter {
 
     /// Generate a deterministic RTFS plan based on the intent.
     fn generate_dummy_plan(&self, intent: &Intent) -> Plan {
-        let plan_body = match intent.name.as_deref() {
-            Some("analyze_user_sentiment") => {
+        let (plan_body, capabilities_required) = match intent.name.as_deref() {
+            Some("analyze_user_sentiment") => (
                 r#"
 (do
     (step "Fetch Data" (call :ccos.echo "fetched user interactions"))
     (step "Analyze Sentiment" (call :ccos.echo "sentiment: positive"))
     (step "Generate Report" (call :ccos.echo "report generated"))
 )
-"#
-            }
-            Some("optimize_response_time") => {
+"#.to_string(),
+                vec!["ccos.echo".to_string()]
+            ),
+            Some("optimize_response_time") => (
                 r#"
 (do
     (step "Get Metrics" (call :ccos.echo "metrics collected"))
     (step "Identify Bottlenecks" (call :ccos.echo "bottlenecks identified"))
     (step "Apply Optimizations" (call :ccos.echo "optimizations applied"))
 )
-"#
-            }
-            Some("greet_user") => {
+"#.to_string(),
+                vec!["ccos.echo".to_string()]
+            ),
+            Some("greet_user") => (
                 r#"
 (do
     (step "Generate Greeting" (call :ccos.echo "Hello! How can I help you today?"))
 )
-"#
+"#.to_string(),
+                vec!["ccos.echo".to_string()]
+            ),
+            Some("greet_and_calculate") => {
+                // Extract numbers from metadata
+                let numbers_str = match intent.metadata.get("numbers") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => "[]".to_string(),
+                };
+                let numbers: Vec<i64> = serde_json::from_str(&numbers_str).unwrap_or_default();
+                
+                if numbers.len() >= 2 {
+                    // Generate compound plan: greet + add numbers
+                    let a = numbers[0];
+                    let b = numbers[1];
+                    (format!(r#"
+(do
+    (step "Generate Greeting" (call :ccos.echo "Hello! Let me help you with that calculation."))
+    (step "Perform Addition" (call :ccos.math.add {{:args [{:?} {:?}]}}))
+    (step "Display Result" (call :ccos.echo "The result is: "))
+)
+"#, a, b),
+                     vec!["ccos.echo".to_string(), "ccos.math.add".to_string()])
+                } else {
+                    // Fallback if not enough numbers
+                    (r#"
+(do
+    (step "Generate Greeting" (call :ccos.echo "Hello!"))
+    (step "Handle Math Request" (call :ccos.echo "Please provide numbers to add"))
+)
+"#.to_string(),
+                     vec!["ccos.echo".to_string()])
+                }
             }
-            _ => {
+            Some("perform_math_operation") => {
+                // Extract numbers from metadata
+                let numbers_str = match intent.metadata.get("numbers") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => "[]".to_string(),
+                };
+                let numbers: Vec<i64> = serde_json::from_str(&numbers_str).unwrap_or_default();
+                
+                if numbers.len() >= 2 {
+                    // Generate compound plan: add numbers and return result
+                    let a = numbers[0];
+                    let b = numbers[1];
+                    (format!(r#"
+(do
+    (let [result (call :ccos.math.add {{:args [{:?} {:?}]}})]
+      (call :ccos.echo (str "The result of adding {:?} and {:?} is: " result)))
+)
+"#, a, b, a, b),
+                     vec!["ccos.math.add".to_string(), "ccos.echo".to_string()])
+                } else {
+                    // Fallback if not enough numbers
+                    (r#"
+(do
+    (step "Handle Math Request" (call :ccos.echo "Please provide at least two numbers to add"))
+)
+"#.to_string(),
+                     vec!["ccos.echo".to_string()])
+                }
+            }
+            _ => (
                 // Default plan for general assistance
                 r#"
 (do
     (step "Process Request" (call :ccos.echo "processing your request"))
     (step "Provide Response" (call :ccos.echo "here is your response"))
 )
-"#
-            }
+"#.to_string(),
+                vec!["ccos.echo".to_string()]
+            )
         };
 
         Plan {
@@ -172,7 +238,7 @@ impl DummyArbiter {
             input_schema: None,
             output_schema: None,
             policies: HashMap::new(),
-            capabilities_required: vec!["ccos.echo".to_string()],
+            capabilities_required,
             annotations: HashMap::new(),
         }
     }

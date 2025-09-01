@@ -26,6 +26,14 @@ impl CapabilityMarketplace {
     capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>
     ) -> Self {
+        Self::with_causal_chain_and_debug_callback(capability_registry, causal_chain, None)
+    }
+
+    pub fn with_causal_chain_and_debug_callback(
+        capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
+        causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
+        debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> Self {
         let mut marketplace = Self {
             capabilities: Arc::new(RwLock::new(HashMap::new())),
             discovery_agents: Vec::new(),
@@ -36,12 +44,21 @@ impl CapabilityMarketplace {
             isolation_policy: CapabilityIsolationPolicy::default(),
             causal_chain,
             resource_monitor: None,
+            debug_callback,
         };
         marketplace.executor_registry.insert(TypeId::of::<MCPCapability>(), ExecutorVariant::MCP(MCPExecutor));
         marketplace.executor_registry.insert(TypeId::of::<A2ACapability>(), ExecutorVariant::A2A(A2AExecutor));
         marketplace.executor_registry.insert(TypeId::of::<LocalCapability>(), ExecutorVariant::Local(LocalExecutor));
         marketplace.executor_registry.insert(TypeId::of::<HttpCapability>(), ExecutorVariant::Http(HttpExecutor));
         marketplace
+    }
+
+    /// Set a debug callback function to receive debug messages instead of printing to stderr
+    pub fn set_debug_callback<F>(&mut self, callback: F)
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        self.debug_callback = Some(Arc::new(callback));
     }
 
     /// Create marketplace with resource monitoring enabled
@@ -418,8 +435,13 @@ impl CapabilityMarketplace {
             event_data.extend(additional);
         }
 
-        // Log the audit event for debugging
-        eprintln!("CAPABILITY_AUDIT: {:?}", event_data);
+        // Log the audit event using callback or fallback to stderr
+        let audit_message = format!("CAPABILITY_AUDIT: {:?}", event_data);
+        if let Some(callback) = &self.debug_callback {
+            callback(audit_message);
+        } else {
+            eprintln!("{}", audit_message);
+        }
         
         // Record in Causal Chain if available
         if let Some(causal_chain) = &self.causal_chain {

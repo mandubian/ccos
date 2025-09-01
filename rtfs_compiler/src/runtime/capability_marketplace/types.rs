@@ -608,6 +608,7 @@ pub struct CapabilityMarketplace {
     pub(crate) isolation_policy: CapabilityIsolationPolicy,
     pub(crate) causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
     pub(crate) resource_monitor: Option<super::resource_monitor::ResourceMonitor>,
+    pub(crate) debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 #[async_trait::async_trait]

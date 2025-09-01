@@ -96,15 +96,23 @@ pub struct CCOS {
 impl CCOS {
     /// Creates and initializes a new CCOS instance.
     pub async fn new() -> RuntimeResult<Self> {
+        Self::new_with_debug_callback(None).await
+    }
+
+    /// Creates and initializes a new CCOS instance with an optional debug callback.
+    pub async fn new_with_debug_callback(
+        debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> RuntimeResult<Self> {
         // 1. Initialize shared, stateful components
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
     let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
         // Initialize capability marketplace with registry
     let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
-        let capability_marketplace = CapabilityMarketplace::with_causal_chain(
+        let capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
             Arc::clone(&capability_registry),
-            Some(Arc::clone(&causal_chain))
+            Some(Arc::clone(&causal_chain)),
+            debug_callback,
         );
         
         // Bootstrap the marketplace with discovered capabilities
@@ -301,6 +309,11 @@ impl CCOS {
     }
 
     pub fn get_agent_config(&self) -> Arc<AgentConfig> { Arc::clone(&self.agent_config) }
+
+    /// Get access to the capability marketplace for advanced operations
+    pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
+        Arc::clone(&self.capability_marketplace)
+    }
 }
 
 // --- Tests ---
