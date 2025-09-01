@@ -8,11 +8,17 @@
     "chat.tools.autoApprove": true,
     "chat.todoListTool.enabled": true,
     "chat.edits2.enabled": true,
-    "chat.tools.terminal.autoApprove": {
+    "chat.tools.terminal.autoApprove": {        
         "cd": true,
         "ls": true,
         "cargo": true,
+        "git commit": false,
+        "git rm": false,
+        "git push": false,
         "git": true,
+        "grep": true,
+        "wc": true,
+        "head": true,
         "rm": false,
         "rmdir": false,
         "del": false,
@@ -24,5 +30,6 @@
         "chown": false,
         "/^Remove-Item\\b/i": false
     },
+    "chat.agent.maxRequests": 50,
     // "remote.SSH.httpsProxy": "",
 }
