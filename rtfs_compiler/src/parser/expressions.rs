@@ -7,7 +7,7 @@ use super::special_forms::{
 };
 use super::utils::unescape;
 use super::Rule;
-use crate::ast::{Expression, ForExpr, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
+use crate::ast::{Expression, ForExpr, Keyword, Literal, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -34,6 +34,12 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
     match pair.as_rule() {
         Rule::literal => Ok(Expression::Literal(build_literal(pair)?)),
         Rule::symbol => Ok(Expression::Symbol(build_symbol(pair)?)),
+        Rule::keyword => {
+            // :keyword -> Keyword("keyword")
+            let raw = pair.as_str(); // e.g. ":keyword"
+            let keyword_name = &raw[1..]; // Remove the :
+            Ok(Expression::Literal(Literal::Keyword(Keyword(keyword_name.to_string()))))
+        }
         Rule::method_call_expr => {
             // (.method target arg1 arg2 ...) -> (method target arg1 arg2 ...)
             let mut inner = pair.into_inner();
