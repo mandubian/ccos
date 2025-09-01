@@ -1017,6 +1017,11 @@ impl<'a> IrConverter<'a> {
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
             Expression::Defstruct(defstruct_expr) => self.convert_defstruct(*defstruct_expr),
+            Expression::For(for_expr) => self.convert_for(*for_expr),
+            Expression::Deref(_) => Err(IrConversionError::InvalidSpecialForm {
+                form: "deref".to_string(),
+                message: "Deref sugar @atom not yet implemented in IR converter".to_string(),
+            }),
             Expression::ResourceRef(resource_ref) => {
                 let id = self.next_id();
                 let resource_name = resource_ref.clone();
@@ -2785,5 +2790,13 @@ impl<'a> IrConverter<'a> {
                 symbols
             }
         }
+    }
+
+    fn convert_for(&mut self, for_expr: ForExpr) -> IrConversionResult<IrNode> {
+        // For now, return an error indicating for expressions are not supported in IR conversion
+        Err(IrConversionError::InvalidSpecialForm {
+            form: "for".to_string(),
+            message: "For expressions not yet implemented in IR converter".to_string(),
+        })
     }
 }

@@ -16,7 +16,7 @@ program = { SOI ~ (module_definition | expression)* ~ EOI }
 // Include anonymous and shorthand function forms before other possibilities so they capture '#(' sequences
 // and method-call style tokens ('.method'). Keep explicit order for precedence.
 // Ensure task_context_access (e.g., "@plan-id") takes precedence over generic symbols
-expression = _{ shorthand_fn | anon_fn | method_call_expr | literal | keyword | task_context_access | symbol | resource_ref | special_form | list | vector | map }
+expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | atom_deref | task_context_access | literal | symbol | resource_ref | special_form | list | vector | map }
 
 // --- Basic Values ---
 
@@ -45,8 +45,8 @@ nil     = @{ "nil" ~ !identifier_chars }
 // Allow dot-prefixed identifiers and shorthand placeholders like % and @ for context tokens
 dot_prefixed_identifier = @{ "." ~ (ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" ) ~ (ASCII_ALPHANUMERIC | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | ".")* }
 
-identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" | "@" }
-identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | "@" }
+identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
 identifier            = @{ dot_prefixed_identifier | (identifier_start_char ~ identifier_chars*) }
 
 // --- Versioned Namespacing Extension ---
@@ -67,6 +67,9 @@ keyword = @{ ":" ~ (versioned_namespace | namespaced_identifier | identifier) }
 // Add this after the existing symbol rule and before collections
 // Task context access using @ prefix
 task_context_access = { "@" ~ (identifier | keyword) }
+
+// Atom deref sugar: @atom-name desugars to (deref atom-name)
+atom_deref = { "@" ~ symbol }
 
 
 vector_match_pattern    = { "[" ~ match_pattern* ~ ("&" ~ symbol)? ~ "]" }
@@ -242,7 +245,7 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // --- Special Forms ---
 log_step_expr = { "(" ~ log_step_keyword ~ keyword? ~ expression* ~ ")" }
 
-special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defstruct_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr }
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defstruct_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr | for_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
 do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
@@ -287,6 +290,8 @@ try_catch_expr = { "(" ~ try_keyword ~ try_body_expression* ~ catch_clause* ~ fi
 // Changed + to * for catch
 catch_clause   =  { "(" ~ catch_keyword ~ symbol ~ symbol? ~ expression+ ~ ")" } // Use catch_keyword
 finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_keyword
+
+for_expr = { "(" ~ "for" ~ vector ~ expression ~ ")" } // (for [bindings...] body)
 catch_pattern  = _{ type_expr | keyword | symbol }
 // symbol implies catch-all
 

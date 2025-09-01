@@ -104,13 +104,13 @@
 ;; Expected: 8
 
 ;; Self-modifying function (if supported)
-(let [memo-fib 
-      (let [cache {}]
-        (fn [n] 
-          (if (contains? cache n)
-            (get cache n)
+(let [memo-fib
+      (let [cache (atom {})]
+        (fn [n]
+          (if (contains? (deref cache) n)
+            (get (deref cache) n)
             (let [result (if (<= n 1) n (+ (memo-fib (- n 1)) (memo-fib (- n 2))))]
-              (assoc! cache n result)
+              (reset! cache (assoc (deref cache) n result))
               result))))]
   (memo-fib 10))
 ;; Expected: 55

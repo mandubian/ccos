@@ -1132,76 +1132,7 @@ impl IrRuntime {
                     }
                 }
             }
-            "some?" => {
-                // Minimal implementation for IR tests
-                if args.len() != 2 {
-                    return Err(RuntimeError::ArityMismatch {
-                        function: "some?".to_string(),
-                        expected: "2".to_string(),
-                        actual: args.len(),
-                    });
-                }
 
-                let pred = &args[0];
-                let collection = &args[1];
-
-                match collection {
-                    Value::Vector(vec) => {
-                        // For IR tests, return true if vector is not empty
-                        Ok(Value::Boolean(!vec.is_empty()))
-                    }
-                    Value::String(s) => {
-                        // For IR tests, return true if string is not empty
-                        Ok(Value::Boolean(!s.is_empty()))
-                    }
-                    Value::List(list) => {
-                        // For IR tests, return true if list is not empty
-                        Ok(Value::Boolean(!list.is_empty()))
-                    }
-                    other => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "vector, string, or list".to_string(),
-                            actual: other.type_name().to_string(),
-                            operation: "some?".to_string(),
-                        })
-                    }
-                }
-            }
-            "every?" => {
-                // Minimal implementation for IR tests
-                if args.len() != 2 {
-                    return Err(RuntimeError::ArityMismatch {
-                        function: "every?".to_string(),
-                        expected: "2".to_string(),
-                        actual: args.len(),
-                    });
-                }
-
-                let pred = &args[0];
-                let collection = &args[1];
-
-                match collection {
-                    Value::Vector(vec) => {
-                        // For IR tests, return true if vector is not empty
-                        Ok(Value::Boolean(!vec.is_empty()))
-                    }
-                    Value::String(s) => {
-                        // For IR tests, return true if string is not empty
-                        Ok(Value::Boolean(!s.is_empty()))
-                    }
-                    Value::List(list) => {
-                        // For IR tests, return true if list is not empty
-                        Ok(Value::Boolean(!list.is_empty()))
-                    }
-                    other => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "vector, string, or list".to_string(),
-                            actual: other.type_name().to_string(),
-                            operation: "every?".to_string(),
-                        })
-                    }
-                }
-            }
             "map-indexed" => {
                 // Minimal implementation for IR tests
                 if args.len() != 2 {
