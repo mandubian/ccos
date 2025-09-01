@@ -46,7 +46,7 @@ nil     = @{ "nil" ~ !identifier_chars }
 dot_prefixed_identifier = @{ "." ~ (ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" ) ~ (ASCII_ALPHANUMERIC | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | ".")* }
 
 identifier_start_char = _{ ASCII_ALPHA | "_" | "$" | "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | "%" }
-identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" }
+identifier_chars      = _{ identifier_start_char | ASCII_DIGIT | "." | "-" | "@" }
 identifier            = @{ dot_prefixed_identifier | (identifier_start_char ~ identifier_chars*) }
 
 // --- Versioned Namespacing Extension ---

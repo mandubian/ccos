@@ -2191,6 +2191,24 @@ impl StandardLibrary {
             Value::Vector(_) => Ok(Value::Vector(result)),
             Value::String(_) => Ok(Value::Vector(result)),
             Value::List(_) => Ok(Value::List(result)),
+            Value::Map(_) => {
+                // For maps, convert the filtered vector of [key value] pairs back to a map
+                let mut filtered_map = std::collections::HashMap::new();
+                for pair in result {
+                    if let Value::Vector(key_value) = pair {
+                        if key_value.len() == 2 {
+                            let map_key = match &key_value[0] {
+                                Value::Keyword(kw) => MapKey::Keyword(kw.clone()),
+                                Value::String(s) => MapKey::String(s.clone()),
+                                Value::Integer(i) => MapKey::Integer(*i),
+                                _ => continue, // Skip invalid keys
+                            };
+                            filtered_map.insert(map_key, key_value[1].clone());
+                        }
+                    }
+                }
+                Ok(Value::Map(filtered_map))
+            }
             _ => unreachable!(),
         }
     }
