@@ -1,7 +1,7 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
 use crate::ccos::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr,
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr,
  IfExpr, Keyword, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr};
 use crate::runtime::environment::Environment;
@@ -65,16 +65,16 @@ impl Evaluator {
         special_forms.insert("step-if".to_string(), Self::eval_step_if_form);
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
-    special_forms.insert("set!".to_string(), Self::eval_set_form);
-    // Allow (get :key) as a special form that reads from the execution context
-    // with cross-plan fallback. For other usages (get collection key [default])
-    // fall back to the normal builtin function by delegating to the env lookup.
-    special_forms.insert("get".to_string(), Self::eval_get_form);
-    // Core iteration forms
-    special_forms.insert("dotimes".to_string(), Self::eval_dotimes_form);
-    special_forms.insert("for".to_string(), Self::eval_for_form);
+        special_forms.insert("set!".to_string(), Self::eval_set_form);
+        // Allow (get :key) as a special form that reads from the execution context
+        // with cross-plan fallback. For other usages (get collection key [default])
+        // fall back to the normal builtin function by delegating to the env lookup.
+        special_forms.insert("get".to_string(), Self::eval_get_form);
+        // Core iteration forms
+        special_forms.insert("dotimes".to_string(), Self::eval_dotimes_form);
+        special_forms.insert("for".to_string(), Self::eval_for_form);
         // Add other evaluator-level special forms here in the future
-        
+
         // LLM execution bridge (M1)
         special_forms.insert("llm-execute".to_string(), Self::eval_llm_execute_form);
 
@@ -490,6 +490,15 @@ impl Evaluator {
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
             Expression::Defstruct(defstruct_expr) => self.eval_defstruct(defstruct_expr, env),
+            Expression::For(for_expr) => self.eval_for(for_expr, env),
+            Expression::Deref(expr) => {
+                // @atom-name desugars to (deref atom-name)
+                let deref_call = Expression::FunctionCall {
+                    callee: Box::new(Expression::Symbol(Symbol("deref".to_string()))),
+                    arguments: vec![*expr.clone()],
+                };
+                self.eval_expr(&deref_call, env)
+            }
             Expression::DiscoverAgents(discover_expr) => {
                 self.eval_discover_agents(discover_expr, env)
             }
@@ -1493,16 +1502,37 @@ impl Evaluator {
         }
     }
     fn eval_let(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Only use recursion detection for function bindings
-        let all_bindings_are_functions = let_expr
-            .bindings
-            .iter()
-            .all(|binding| matches!(&*binding.value, Expression::Fn(_) | Expression::Defn(_)));
-        if all_bindings_are_functions && self.detect_recursion_in_let(&let_expr.bindings) {
+        // Check if we should use recursive evaluation
+        if self.should_use_recursive_evaluation(let_expr) {
             self.eval_let_with_recursion(let_expr, env)
         } else {
             self.eval_let_simple(let_expr, env)
         }
+    }
+
+    fn should_use_recursive_evaluation(&self, let_expr: &LetExpr) -> bool {
+        // First, check if all bindings are functions (original logic)
+        let all_bindings_are_functions = let_expr
+            .bindings
+            .iter()
+            .all(|binding| matches!(&*binding.value, Expression::Fn(_) | Expression::Defn(_)));
+
+        if all_bindings_are_functions {
+            return self.detect_recursion_in_let(&let_expr.bindings);
+        }
+
+        // Second, check for mixed cases where some bindings reference themselves
+        // even when there are nested non-function bindings
+        for binding in &let_expr.bindings {
+            if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
+                let binding_names = std::collections::HashSet::from([symbol.0.as_str()]);
+                if self.expr_references_symbols(&binding.value, &binding_names) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     fn detect_recursion_in_let(&self, bindings: &[crate::ast::LetBinding]) -> bool {
@@ -1632,7 +1662,9 @@ impl Evaluator {
             | Expression::Map(_)
             | Expression::List(_)
             | Expression::ResourceRef(_)
-            | Expression::Defstruct(_) => false,
+            | Expression::Defstruct(_)
+            | Expression::For(_) => false,
+            Expression::Deref(expr) => self.expr_references_symbols(expr, symbols),
         }
     }
 
@@ -2022,6 +2054,48 @@ impl Evaluator {
         // Recursive nested iteration
         let mut out: Vec<Value> = Vec::new();
         self.for_nest(&pairs, 0, env, &args[1], &mut out)?;
+        Ok(Value::Vector(out))
+    }
+
+    fn eval_for(&self, for_expr: &ForExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Evaluate the bindings vector to get the actual values
+        let mut bindings_vec = Vec::new();
+        for binding in &for_expr.bindings {
+            bindings_vec.push(self.eval_expr(binding, env)?);
+        }
+
+        // Convert to (Symbol, Vec<Value>) pairs
+        if bindings_vec.len() % 2 != 0 {
+            return Err(RuntimeError::Generic("for requires an even number of binding elements [sym coll ...]".into()));
+        }
+
+        let mut pairs: Vec<(Symbol, Vec<Value>)> = Vec::new();
+        let mut i = 0;
+        while i < bindings_vec.len() {
+            let sym = match &bindings_vec[i] {
+                Value::Symbol(s) => s.clone(),
+                other => return Err(RuntimeError::TypeError {
+                    expected: "symbol".into(),
+                    actual: other.type_name().into(),
+                    operation: "for binding symbol".into()
+                })
+            };
+            let coll_val = bindings_vec[i + 1].clone();
+            let items = match coll_val {
+                Value::Vector(v) => v,
+                other => return Err(RuntimeError::TypeError {
+                    expected: "vector".into(),
+                    actual: other.type_name().into(),
+                    operation: "for binding collection".into()
+                })
+            };
+            pairs.push((sym, items));
+            i += 2;
+        }
+
+        // Recursive nested iteration
+        let mut out: Vec<Value> = Vec::new();
+        self.for_nest(&pairs, 0, env, &for_expr.body, &mut out)?;
         Ok(Value::Vector(out))
     }
 

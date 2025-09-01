@@ -509,6 +509,8 @@ pub enum Expression {
     Parallel(#[validate] ParallelExpr),
     WithResource(#[validate] WithResourceExpr),
     Match(#[validate] MatchExpr),
+    For(#[validate] Box<ForExpr>),           // Added for for comprehension
+    Deref(#[validate] Box<Expression>),      // Added for @atom deref sugar
     ResourceRef(String),                      // Added
 
 }
@@ -548,6 +550,8 @@ impl Validate for Expression {
             Expression::Parallel(expr) => expr.validate(),
             Expression::WithResource(expr) => expr.validate(),
             Expression::Match(expr) => expr.validate(),
+            Expression::For(expr) => expr.validate(),
+            Expression::Deref(expr) => expr.validate(),
             _ => Ok(()), // Literals, Symbols, etc. do not need validation
         }
     }
@@ -837,9 +841,20 @@ pub struct ImportDefinition {
     pub only: Option<Vec<Symbol>>, // :only [sym1 sym2]
 }
 
-/// Discover Agents Expression - for (discover-agents ...) special form
+/// For Expression - for (for ...) special form
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct ForExpr {
+    /// Vector of binding expressions [sym1 coll1 sym2 coll2 ...]
+    #[validate(nested)]
+    pub bindings: Vec<Expression>,
+    /// Body expression to evaluate for each combination
+    #[validate(nested)]
+    pub body: Box<Expression>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[serde(rename_all = "camelCase")]
 pub struct DiscoverAgentsExpr {
     /// Discovery criteria map (required)
     #[validate(nested)]

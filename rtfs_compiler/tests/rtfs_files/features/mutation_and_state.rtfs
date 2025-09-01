@@ -20,3 +20,8 @@
       (swap! sum + 4)
       (deref sum)))
 ;; Expected: 10
+
+;; 4) deref sugar test
+(let [a (atom 42)]
+  @a)
+;; Expected: 42

@@ -1,43 +1,49 @@
-wt/observability-foundation — planned — SEP-003: Add Causal Chain Event Stream + Wire Working Memory Ingestor
+wt/rtfs-stability-core — RTFS: umbrella - Remaining E2E feature work and tracking
 
 Goals & references:
-- Issue #6 follow-up: Add Causal Chain Event Stream + Wire Working Memory Ingestor
-- #56, [CCOS] Observability: Metrics, logging, and dashboards
-- #34, [CCOS] Metrics and logging for critical flows
-- #37, [CCOS] Dashboards for intent graph, causal chain, and capability usage (#38)
+- Issue #115: RTFS umbrella - Remaining E2E feature work and tracking
+- #127: Stabilize function_expressions feature suite (parser + evaluator parity)
+- #128: RTFS: mutation/state primitives spec + atoms + tests
+- #125: RTFS 2.0: Add reader deref sugar (@a) and finalize mutation/state semantics
+- Group: rtfs-stability-umbrella
 
 Planned work:
-- Add event stream hooks to CausalChain append path (ActionType::CapabilityCall, delegation events).
-	- Hook must append an audit-safe event object to the existing event pipeline (use metadata namespace `observability.*`).
-- Wire a Working Memory ingestor to publish selected events to stream/metrics.
-	- Implement an adapter capability `observability.ingestor:v1.ingest` that accepts action metadata and publishes to a configurable sink.
-- Add basic metrics (counters/histograms) for capability calls, delegation approvals, failures.
-	- Expose a minimal Prometheus-compatible endpoint from a test harness or the test runner (see `rtfs_compiler/test_runner`).
-- Add logging integration points and a small dashboard spec for intent graph & capability usage.
-	- Add structured logs (JSON) for capability calls with: timestamp, capability_id, intent_id, result, latency_ms.
+- Stabilize failing RTFS e2e feature groups (function_expressions, match_expressions, do_expressions, try_catch_expressions, def_defn_expressions, parallel_expressions, with_resource_expressions, literal_values, vector_operations, map_operations, rtfs2_special_forms, type_system)
+- Align parser (shorthand lambdas, method-call sugar) and evaluator (param destructuring, keyword-as-callable, nil-safe keyword access) behavior across AST/IR
+- Implement RTFS mutation/state semantics: immutability-by-default, `set!`, `atom`, `deref`, `reset!`, `swap!`
+- Add reader deref sugar `@a` for Atoms with proper grammar conflict resolution
+- Add comprehensive feature tests and stabilize test suite
 
 Notes:
-- Base branch: origin/main
-- Keep changes minimal and well-tested; add integration tests for event emission.
+- Base branch: wt/rtfs-stability-core (branched from main)
+- Priority: Fix parser/runtime parity first, then add mutation/state features
+- Keep changes focused and well-tested; add e2e feature tests for each implemented feature
 
 Assumptions
-- This work will touch `rtfs_compiler` and may add a small capability adapter under `runtime/` or `runtime/stdlib` as per repo conventions.
-- Local verification will be done by building `rtfs_compiler` and running its test runner; top-level workspace has no `Cargo.toml` so run crate-level commands.
+- This work will primarily touch `rtfs_compiler/src/rtfs/` (parser, evaluator, IR runtime)
+- Local verification will be done by running RTFS e2e feature tests
+- Tests are located in `rtfs_compiler/tests/rtfs_files/features/`
 
 Acceptance criteria
-- CausalChain append path emits events for ActionType::CapabilityCall and delegation events into the observability pipeline.
-- An ingestor capability exists and can be invoked from an integration test to assert event delivery (mock sink allowed).
-- Metrics counters/histograms are incremented for capability calls and delegation approvals; a small smoke test verifies metric values.
-- No breaking changes to the public API; all new behavior is behind feature flags or opt-in configuration where appropriate.
+- `test_function_expressions_feature` passes locally in both AST and IR modes
+- All RTFS e2e feature groups pass consistently (function_expressions, match_expressions, etc.)
+- RTFS mutation/state primitives are implemented and tested (`atom`, `deref`, `reset!`, `swap!`)
+- Reader deref sugar `@a` works correctly without grammar conflicts
+- No regressions in existing RTFS functionality
+- Test coverage includes edge cases and error modes
 
 Implementation checklist
-- [ ] Add event emission points in `causal_chain.rs` where actions are appended.
-- [ ] Implement `observability.ingestor:v1.ingest` capability (adapter) and register it in capability marketplace.
-- [ ] Add metrics collection primitives and lightweight Prometheus exposition in `rtfs_compiler/test_runner` or a test-only endpoint.
-- [ ] Add structured logging for capability calls.
-- [ ] Add unit tests covering event creation and metadata shape.
-- [ ] Add an integration test that runs a synthetic plan and asserts that the ingestor received expected events and metrics were updated.
-- [ ] Update docs: `docs/ccos/specs/023-observability-foundation.md` with event schema and dashboard notes.
+- [ ] Triage failing cases in `tests/rtfs_files/features/function_expressions.rtfs`
+- [ ] Align parser and evaluator behavior for shorthand lambdas and method-call sugar
+- [ ] Fix param destructuring and keyword-as-callable handling in both AST and IR
+- [ ] Add spec doc `docs/rtfs-2.0/specs/16-mutation-and-state.md`
+- [ ] Implement Value::Atom and stdlib functions (atom/deref/reset!/swap!)
+- [ ] Add feature test `tests/rtfs_files/features/mutation_and_state.rtfs`
+- [ ] Add reader deref sugar `@a` to pest grammar and parser
+- [ ] Resolve grammar conflicts between `@a` (deref) and `@resource-id` (resource refs)
+- [ ] Add comprehensive tests for deref sugar and mutation/state primitives
+- [ ] Wire new feature tests into test runner for both AST and IR modes
+- [ ] Update language features index and cross-link mutation/state docs
 
 Local quick verification
 - Build the compiler crate (from repo root):
@@ -45,25 +51,36 @@ Local quick verification
 cd rtfs_compiler
 cargo build
 ```
-- Compile tests (no-run) and run the integration test runner locally:
+- Run RTFS e2e feature tests:
 ```bash
 cd rtfs_compiler
-cargo test --test integration_tests -- --nocapture
+cargo test test_function_expressions_feature -- --nocapture
+cargo test --features rtfs2_special_forms -- --nocapture
 ```
-Note: tests and integration runner names may vary; list available tests with `cargo test -- --list`.
+- List available tests:
+```bash
+cd rtfs_compiler
+cargo test -- --list | grep feature
+```
 
 Files likely to change
-- `rtfs_compiler/src/causal_chain.rs` (emit hooks)
-- `rtfs_compiler/src/...` or `runtime/` (ingestor capability)
-- `rtfs_compiler/test_runner/*` (integration test harness)
-- `docs/ccos/specs/023-observability-foundation.md`
+- `rtfs_compiler/src/rtfs/parser.rs` (shorthand lambdas, method-call sugar, deref sugar)
+- `rtfs_compiler/src/rtfs/evaluator.rs` (param destructuring, keyword handling)
+- `rtfs_compiler/src/rtfs/ir_runtime.rs` (IR-level param binding, assign lowering)
+- `rtfs_compiler/src/rtfs/value.rs` (Value::Atom implementation)
+- `rtfs_compiler/src/rtfs/stdlib/` (atom, deref, reset!, swap! functions)
+- `rtfs_compiler/tests/rtfs_files/features/` (new feature test files)
+- `docs/rtfs-2.0/specs/16-mutation-and-state.md` (new spec)
+- `docs/rtfs-2.0/specs/01-language-features.md` (update index)
 
 CI and follow-ups
-- Add a CI job (or extend existing) that builds `rtfs_compiler` and runs integration tests that assert event emission.
-- If adding a networked Prometheus endpoint, gate it behind a test-only config to avoid exposing during normal runs.
+- Ensure all RTFS e2e feature tests pass in CI
+- Add CI job that runs feature-specific tests and reports coverage
+- Monitor for regressions in existing RTFS functionality
 
 Estimated effort
-- Small change set (2-4 PRs): core hook + ingestor + tests + docs. Each PR should be small and independently reviewable.
+- Medium change set (3-5 PRs): parser fixes + evaluator alignment + mutation/state primitives + deref sugar + comprehensive tests
+- Each PR should be focused on a specific feature group for easier review
 
-Done initial bootstrap; start with small PR that adds hooks and a mock ingestor + tests.
+Done initial bootstrap; start with function_expressions triage and parser/evaluator alignment.
 

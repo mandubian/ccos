@@ -465,6 +465,14 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for defstruct expressions
                 Value::String("#<defstruct>".to_string())
             }
+            Expression::For(_for_expr) => {
+                // For now, return a placeholder for for expressions
+                Value::String("#<for>".to_string())
+            }
+            Expression::Deref(_expr) => {
+                // For now, return a placeholder for deref expressions
+                Value::String("#<deref>".to_string())
+            }
         }
     }
 }
