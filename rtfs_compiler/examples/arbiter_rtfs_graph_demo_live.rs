@@ -278,12 +278,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                     let all = graph_lock.storage.get_all_intents_sync();
                                                     app.intent_graph.clear();
                                                     for st in all {
+                                                        // Query authoritative children for this intent from the graph API
+                                                        let child_sts = graph_lock.get_child_intents(&st.intent_id);
+                                                        let child_ids: Vec<IntentId> = child_sts.into_iter().map(|c| c.intent_id).collect();
                                                         let node = IntentNode {
                                                             intent_id: st.intent_id.clone(),
                                                             name: st.name.clone().unwrap_or_else(|| "<unnamed>".to_string()),
                                                             goal: st.goal.clone(),
                                                             status: st.status.clone(),
-                                                            children: st.child_intents.clone(),
+                                                            children: child_ids,
                                                             parent: st.parent_intent.clone(),
                                                             created_at: st.created_at,
                                                             metadata: st.metadata.clone(),
