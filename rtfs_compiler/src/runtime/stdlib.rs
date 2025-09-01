@@ -2148,9 +2148,22 @@ impl StandardLibrary {
                 s.chars().map(|c| Value::String(c.to_string())).collect()
             }
             Value::List(list) => list.clone(),
+            Value::Map(map) => {
+                // For maps, convert to vector of [key value] pairs
+                map.iter()
+                    .map(|(k, v)| {
+                        let key_val = match k {
+                            MapKey::Keyword(kw) => Value::Keyword(kw.clone()),
+                            MapKey::String(s) => Value::String(s.clone()),
+                            MapKey::Integer(i) => Value::Integer(*i),
+                        };
+                        Value::Vector(vec![key_val, v.clone()])
+                    })
+                    .collect()
+            }
             other => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector, string, or list".to_string(),
+                    expected: "vector, string, list, or map".to_string(),
                     actual: other.type_name().to_string(),
                     operation: "filter".to_string(),
                 })
@@ -2438,6 +2451,8 @@ impl StandardLibrary {
             _ => unreachable!(),
         }
     }
+
+
 
     /// `(contains? collection item)` - Returns true if collection contains item
     fn contains(args: Vec<Value>) -> RuntimeResult<Value> {

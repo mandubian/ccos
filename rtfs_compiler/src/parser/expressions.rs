@@ -7,7 +7,7 @@ use super::special_forms::{
 };
 use super::utils::unescape;
 use super::Rule;
-use crate::ast::{Expression, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
+use crate::ast::{Expression, ForExpr, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -64,6 +64,13 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                 Ok(Expression::ResourceRef(without_at.to_string()))
             }
         }
+        Rule::atom_deref => {
+            // @atom-name desugars to (deref atom-name)
+            let raw = pair.as_str(); // e.g. "@atom-name"
+            let atom_name = &raw[1..]; // Remove the @
+            let atom_symbol = Expression::Symbol(Symbol(atom_name.to_string()));
+            Ok(Expression::Deref(Box::new(atom_symbol)))
+        }
 
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
@@ -98,6 +105,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::match_expr => Ok(Expression::Match(build_match_expr(pair)?)),
         Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(pair)?))),
         Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(pair)?)),
+        Rule::for_expr => Ok(Expression::For(Box::new(build_for_expr(pair)?))),
         // Plan is not a core special form; handled as FunctionCall/Map at CCOS layer
         Rule::list => {
             let _list_pair_span = pair_to_source_span(&pair);
@@ -356,6 +364,49 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
         Expression::WithResource(mut w) => { w.resource_init = Box::new(rewrite_placeholders(*w.resource_init, uses_plain_percent)); w.body = w.body.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::WithResource(w) }
         Expression::Match(mut me) => { me.expression = Box::new(rewrite_placeholders(*me.expression, uses_plain_percent)); for c in &mut me.clauses { c.body = Box::new(rewrite_placeholders(*c.body.clone(), uses_plain_percent)); if let Some(g)=c.guard.clone() { c.guard = Some(Box::new(rewrite_placeholders(*g, uses_plain_percent))); } } Expression::Match(me) }
         Expression::LogStep(mut lg) => { lg.values = lg.values.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); Expression::LogStep(lg) }
+        Expression::For(mut fe) => { fe.bindings = fe.bindings.into_iter().map(|e| rewrite_placeholders(e, uses_plain_percent)).collect(); fe.body = Box::new(rewrite_placeholders(*fe.body, uses_plain_percent)); Expression::For(fe) }
+        Expression::Deref(expr) => Expression::Deref(Box::new(rewrite_placeholders(*expr, uses_plain_percent))),
         other => other,
     }
+}
+
+pub(super) fn build_for_expr(pair: Pair<Rule>) -> Result<ForExpr, PestParseError> {
+    let parent_span = pair_to_source_span(&pair);
+    let mut pairs = pair.into_inner();
+
+    // Skip the 'for' keyword
+    let _for_keyword = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "for expression missing keyword".to_string(),
+        span: Some(parent_span.clone())
+    })?;
+
+    // Parse the bindings vector
+    let bindings_vec_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "for expression missing bindings vector".to_string(),
+        span: Some(parent_span.clone())
+    })?;
+
+    if bindings_vec_pair.as_rule() != Rule::vector {
+        return Err(PestParseError::InvalidInput {
+            message: format!("Expected vector for for bindings, found {:?}", bindings_vec_pair.as_rule()),
+            span: Some(pair_to_source_span(&bindings_vec_pair))
+        });
+    }
+
+    let bindings = bindings_vec_pair.into_inner()
+        .map(build_expression)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Parse the body expression
+    let body_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "for expression missing body".to_string(),
+        span: Some(parent_span)
+    })?;
+
+    let body = Box::new(build_expression(body_pair)?);
+
+    Ok(ForExpr {
+        bindings,
+        body,
+    })
 }

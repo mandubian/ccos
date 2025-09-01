@@ -532,6 +532,26 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // Assoc! mutation function
+        env.define(
+            &Symbol("assoc!".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "assoc!".to_string(),
+                arity: Arity::Variadic(3),
+                func: Arc::new(Self::assoc_bang),
+            })),
+        );
+
+        // Reset! mutation function
+        env.define(
+            &Symbol("reset!".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "reset!".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::reset_bang),
+            })),
+        );
+
         // Dissoc function
         env.define(
             &Symbol("dissoc".to_string()),
@@ -1900,6 +1920,70 @@ impl SecureStandardLibrary {
         Ok(Value::Vector(result))
     }
 
+    fn reset_bang(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "reset!".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Atom(atom_ref) => {
+                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                *atom_guard = args[1].clone();
+                Ok(Value::Nil)
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "atom".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "reset!".to_string(),
+            })
+        }
+    }
+
+    fn assoc_bang(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() < 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "assoc!".to_string(),
+                expected: "at least 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Atom(atom_ref) => {
+                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                match &*atom_guard {
+                    Value::Map(map) => {
+                        let mut new_map = map.clone();
+                        // Process key-value pairs
+                        for chunk in args[1..].chunks(2) {
+                            if chunk.len() == 2 {
+                                let key = Self::value_to_map_key(&chunk[0])?;
+                                let value = chunk[1].clone();
+                                new_map.insert(key, value);
+                            }
+                        }
+                        *atom_guard = Value::Map(new_map);
+                        Ok(Value::Nil)
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "atom containing map".to_string(),
+                        actual: atom_guard.type_name().to_string(),
+                        operation: "assoc!".to_string(),
+                    })
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "atom".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "assoc!".to_string(),
+            })
+        }
+    }
+
     fn assoc(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 3 {
@@ -2161,8 +2245,9 @@ impl SecureStandardLibrary {
         match value {
             Value::String(s) => Ok(MapKey::String(s.clone())),
             Value::Keyword(k) => Ok(MapKey::Keyword(k.clone())),
+            Value::Integer(i) => Ok(MapKey::Integer(*i)),
             _ => Err(RuntimeError::TypeError {
-                expected: "string or keyword".to_string(),
+                expected: "string, keyword, or integer".to_string(),
                 actual: value.type_name().to_string(),
                 operation: "map key".to_string(),
             }),
