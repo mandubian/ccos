@@ -143,14 +143,32 @@ impl CCOS {
         // Initialize AgentRegistry (M4) from agent configuration
     let agent_registry = Arc::new(std::sync::RwLock::new(crate::ccos::agent::InMemoryAgentRegistry::new()));
 
-        // Initialize delegating arbiter if delegation is enabled in agent config
-        let delegating_arbiter = if agent_config.delegation.enabled.unwrap_or(false) {
+        // Allow enabling delegation via environment variable for examples / dev runs
+        // If the AgentConfig doesn't explicitly enable delegation, allow an env override.
+        let enable_delegation = if let Some(v) = agent_config.delegation.enabled { v } else {
+            std::env::var("CCOS_ENABLE_DELEGATION").ok().or_else(|| std::env::var("CCOS_DELEGATION_ENABLED").ok()).map(|s| {
+                matches!(s.as_str(), "1" | "true" | "yes" | "on")
+            }).unwrap_or(false)
+        };
+
+        // Initialize delegating arbiter if delegation is enabled in agent config (or via env)
+        let delegating_arbiter = if enable_delegation {
+            // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to OpenAI if OPENAI_API_KEY exists.
+            let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
+                (Some(key), Some("https://openrouter.ai/api/v1".to_string()), model)
+            } else {
+                let key = std::env::var("OPENAI_API_KEY").ok();
+                let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+                (key, None, model)
+            };
+
             // Create LLM config for delegating arbiter
             let llm_config = crate::ccos::arbiter::arbiter_config::LlmConfig {
-                provider_type: crate::ccos::arbiter::arbiter_config::LlmProviderType::Stub,
-                model: "stub-model".to_string(),
-                api_key: None,
-                base_url: None,
+                provider_type: crate::ccos::arbiter::arbiter_config::LlmProviderType::OpenAI,
+                model,
+                api_key,
+                base_url,
                 max_tokens: Some(1000),
                 temperature: Some(0.7),
                 timeout_seconds: Some(30),
@@ -240,6 +258,7 @@ impl CCOS {
             let intent = da
                 .natural_language_to_intent(natural_language_request, None)
                 .await?;
+
             da.intent_to_plan(&intent).await?
         } else {
             self.arbiter
@@ -313,6 +332,20 @@ impl CCOS {
     /// Get access to the capability marketplace for advanced operations
     pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
         Arc::clone(&self.capability_marketplace)
+    }
+
+    /// Validate and execute a pre-built Plan via the Governance Kernel.
+    /// This is a convenience wrapper for examples and integration tests that
+    /// already have a Plan object and want to run it through governance.
+    pub async fn validate_and_execute_plan(
+        &self,
+        plan: self::types::Plan,
+        context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        // Preflight capability validation
+        self.preflight_validate_capabilities(&plan).await?;
+        // Delegate to governance kernel for sanitization, scaffolding and orchestration
+        self.governance_kernel.validate_and_execute(plan, context).await
     }
 }
 

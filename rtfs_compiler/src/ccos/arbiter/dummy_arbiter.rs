@@ -37,10 +37,10 @@ impl DummyArbiter {
     fn generate_dummy_intent(&self, nl: &str) -> Intent {
         let lower_nl = nl.to_lowercase();
         
-        // Simple pattern matching for deterministic responses
-        // Check compound patterns first (more specific)
-        if (lower_nl.contains("hello") || lower_nl.contains("hi") || lower_nl.contains("greet")) && 
-           (lower_nl.contains("add") || lower_nl.contains("sum") || lower_nl.contains("plus") || lower_nl.contains("calculate") || lower_nl.contains("math")) {
+    // Simple pattern matching for deterministic responses
+    // Check compound patterns first (more specific)
+    if (lower_nl.contains("hello") || lower_nl.contains("hi") || lower_nl.contains("greet")) && 
+       (lower_nl.contains("add") || lower_nl.contains("sum") || lower_nl.contains("plus") || lower_nl.contains("calculate") || lower_nl.contains("math")) {
             // Compound goal: greeting + math operation
             let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
                 .unwrap()
@@ -72,53 +72,104 @@ impl DummyArbiter {
                 metadata,
             }
         } else if lower_nl.contains("sentiment") || lower_nl.contains("analyze") || lower_nl.contains("feeling") {
-            // Extract numbers from the input using regex
+            // Sentiment / analysis intent
             let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
                 .unwrap()
                 .captures_iter(nl)
                 .filter_map(|cap| cap.get(1)?.as_str().parse().ok())
                 .collect();
-            
+
             let mut metadata = HashMap::new();
             if !numbers.is_empty() {
                 metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
             }
-            
+
             Intent {
-                intent_id: format!("dummy_math_{}", uuid::Uuid::new_v4()),
-                name: Some("perform_math_operation".to_string()),
-                goal: "Perform mathematical calculation".to_string(),
+                intent_id: format!("dummy_sentiment_{}", uuid::Uuid::new_v4()),
+                name: Some("analyze_user_sentiment".to_string()),
+                goal: "Analyze user sentiment".to_string(),
                 original_request: nl.to_string(),
                 constraints: HashMap::new(),
                 preferences: {
                     let mut map = HashMap::new();
-                    map.insert("precision".to_string(), Value::String("exact".to_string()));
+                    map.insert("sensitivity".to_string(), Value::String("medium".to_string()));
                     map
                 },
-                success_criteria: Some(Value::String("calculation_completed".to_string())),
+                success_criteria: Some(Value::String("sentiment_analysis_completed".to_string())),
                 status: IntentStatus::Active,
                 created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 metadata,
             }
         } else {
-            // Default intent for unrecognized patterns
-            Intent {
-                intent_id: format!("dummy_general_{}", uuid::Uuid::new_v4()),
-                name: Some("general_assistance".to_string()),
-                goal: "Provide general assistance".to_string(),
-                original_request: nl.to_string(),
-                constraints: HashMap::new(),
-                preferences: {
-                    let mut map = HashMap::new();
-                    map.insert("helpfulness".to_string(), Value::String("high".to_string()));
-                    map
-                },
-                success_criteria: Some(Value::String("assistance_provided".to_string())),
-                status: IntentStatus::Active,
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                metadata: HashMap::new(),
+            // Other patterns: check for optimization keywords
+            if lower_nl.contains("optimiz") || lower_nl.contains("performance") || lower_nl.contains("latency") {
+                Intent {
+                    intent_id: format!("dummy_optimize_{}", uuid::Uuid::new_v4()),
+                    name: Some("optimize_response_time".to_string()),
+                    goal: "Optimize system performance".to_string(),
+                    original_request: nl.to_string(),
+                    constraints: HashMap::new(),
+                    preferences: {
+                        let mut map = HashMap::new();
+                        map.insert("priority".to_string(), Value::String("performance".to_string()));
+                        map
+                    },
+                    success_criteria: Some(Value::String("optimization_applied".to_string())),
+                    status: IntentStatus::Active,
+                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    metadata: HashMap::new(),
+                }
+            } else if lower_nl.contains("add") || lower_nl.contains("sum") || lower_nl.contains("plus") || lower_nl.contains("calculate") || lower_nl.contains("math") {
+                // Math-only requests
+                let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
+                    .unwrap()
+                    .captures_iter(nl)
+                    .filter_map(|cap| cap.get(1)?.as_str().parse().ok())
+                    .collect();
+
+                let mut metadata = HashMap::new();
+                if !numbers.is_empty() {
+                    metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
+                }
+
+                Intent {
+                    intent_id: format!("dummy_math_{}", uuid::Uuid::new_v4()),
+                    name: Some("perform_math_operation".to_string()),
+                    goal: "Perform mathematical calculation".to_string(),
+                    original_request: nl.to_string(),
+                    constraints: HashMap::new(),
+                    preferences: {
+                        let mut map = HashMap::new();
+                        map.insert("precision".to_string(), Value::String("exact".to_string()));
+                        map
+                    },
+                    success_criteria: Some(Value::String("calculation_completed".to_string())),
+                    status: IntentStatus::Active,
+                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    metadata,
+                }
+            } else {
+                // Default intent for unrecognized patterns
+                Intent {
+                    intent_id: format!("dummy_general_{}", uuid::Uuid::new_v4()),
+                    name: Some("general_assistance".to_string()),
+                    goal: "Provide general assistance".to_string(),
+                    original_request: nl.to_string(),
+                    constraints: HashMap::new(),
+                    preferences: {
+                        let mut map = HashMap::new();
+                        map.insert("helpfulness".to_string(), Value::String("high".to_string()));
+                        map
+                    },
+                    success_criteria: Some(Value::String("assistance_provided".to_string())),
+                    status: IntentStatus::Active,
+                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    metadata: HashMap::new(),
+                }
             }
         }
     }
