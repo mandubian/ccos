@@ -982,6 +982,18 @@ Plan:"#,
             }
         }
 
+        // Before returning the error, log a compact record with the raw response to help debugging
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let entry = json!({
+                "event": "llm_plan_extract_failed",
+                "error": "Could not extract an RTFS plan from LLM response",
+                "response_sample": response.chars().take(200).collect::<String>()
+            });
+            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            Ok(())
+        })();
+
         Err(RuntimeError::Generic("Could not extract an RTFS plan from LLM response".to_string()))
     }
 
