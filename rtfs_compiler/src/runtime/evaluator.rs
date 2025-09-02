@@ -2005,21 +2005,31 @@ impl Evaluator {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch { function: "dotimes".into(), expected: "2".into(), actual: args.len() });
         }
-        // Evaluate binding vector
-        let binding_val = self.eval_expr(&args[0], env)?;
-        let (sym, count) = match binding_val {
-            Value::Vector(v) if v.len() == 2 => {
-                let sym = match &v[0] { Value::Symbol(s) => s.clone(), other => return Err(RuntimeError::TypeError{ expected: "symbol".into(), actual: other.type_name().into(), operation: "dotimes".into() }) };
-                let n = match &v[1] { Value::Integer(i) => *i, other => return Err(RuntimeError::TypeError{ expected: "integer".into(), actual: other.type_name().into(), operation: "dotimes".into() }) };
+        // Extract binding vector directly from AST (don't evaluate it)
+        let (sym, count) = match &args[0] {
+            Expression::Vector(v) if v.len() == 2 => {
+                let sym = match &v[0] { 
+                    Expression::Symbol(s) => s.clone(), 
+                    _ => return Err(RuntimeError::TypeError{ expected: "symbol".into(), actual: "non-symbol".into(), operation: "dotimes".into() }) 
+                };
+                // Evaluate the count expression
+                let count_val = self.eval_expr(&v[1], env)?;
+                let n = match count_val { 
+                    Value::Integer(i) => i, 
+                    other => return Err(RuntimeError::TypeError{ expected: "integer".into(), actual: other.type_name().into(), operation: "dotimes".into() }) 
+                };
                 (sym, n)
             }
-            other => return Err(RuntimeError::TypeError{ expected: "[symbol integer]".into(), actual: other.type_name().into(), operation: "dotimes".into() })
+            _ => return Err(RuntimeError::TypeError{ expected: "[symbol integer]".into(), actual: "non-vector".into(), operation: "dotimes".into() })
         };
         if count <= 0 { return Ok(Value::Nil); }
         let mut last = Value::Nil;
         for i in 0..count {
+            // Create a child environment that can access parent variables
             let mut loop_env = Environment::with_parent(Arc::new(env.clone()));
+            // Define the loop variable in the child environment
             loop_env.define(&sym, Value::Integer(i));
+            // Evaluate the loop body in the child environment
             last = self.eval_expr(&args[1], &mut loop_env)?;
         }
         Ok(last)
