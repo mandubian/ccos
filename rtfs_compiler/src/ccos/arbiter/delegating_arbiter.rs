@@ -590,7 +590,7 @@ Generate a plan using RTFS syntax with step special forms:
   ...
 )
 
-Available capabilities: :ccos.echo, :ccos.analyze, :ccos.backup, :ccos.optimize
+Available capabilities: :ccos.echo, :ccos.math.add
 
 Plan:"#,
             intent,

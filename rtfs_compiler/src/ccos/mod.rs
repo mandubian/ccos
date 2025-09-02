@@ -82,6 +82,7 @@ use self::orchestrator::Orchestrator;
 pub struct CCOS {
     arbiter: Arc<Arbiter>,
     governance_kernel: Arc<GovernanceKernel>,
+    orchestrator: Arc<Orchestrator>,
     // The following components are shared across the system
     intent_graph: Arc<Mutex<IntentGraph>>, 
     causal_chain: Arc<Mutex<CausalChain>>, 
@@ -197,6 +198,7 @@ impl CCOS {
         Ok(Self {
             arbiter,
             governance_kernel,
+            orchestrator,
             intent_graph,
             causal_chain,
             capability_marketplace,
@@ -325,6 +327,10 @@ impl CCOS {
 
     pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
         self.delegating_arbiter.as_ref().map(Arc::clone)
+    }
+    
+    pub fn get_orchestrator(&self) -> Arc<Orchestrator> {
+        Arc::clone(&self.orchestrator)
     }
 
     pub fn get_agent_config(&self) -> Arc<AgentConfig> { Arc::clone(&self.agent_config) }
