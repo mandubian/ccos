@@ -742,20 +742,15 @@ impl Orchestrator {
             }
         }
         
-        // Create a meaningful result value
-        let result_value = if result_summary.is_empty() {
-            RtfsValue::String("No plans executed".to_string())
+        // Create a meaningful result value. If nothing was executed, mark as failure
+        // so callers can detect that no plans ran rather than treating it as success.
+        if result_summary.is_empty() {
+            let result_value = RtfsValue::String("No plans executed".to_string());
+            Ok(ExecutionResult { success: false, value: result_value, metadata: Default::default() })
         } else {
-            RtfsValue::String(format!("Orchestrated {} plans: {}", 
-                child_results.len(), 
-                result_summary.join(", ")))
-        };
-        
-        Ok(ExecutionResult { 
-            success: true, 
-            value: result_value, 
-            metadata: Default::default() 
-        })
+            let result_value = RtfsValue::String(format!("Orchestrated {} plans: {}", child_results.len(), result_summary.join(", ")));
+            Ok(ExecutionResult { success: true, value: result_value, metadata: Default::default() })
+        }
     }
     
     /// Simple method to get children order

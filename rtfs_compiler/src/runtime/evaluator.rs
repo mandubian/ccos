@@ -1684,9 +1684,11 @@ impl Evaluator {
             });
         }
 
-        // First arg must be a symbol
+        // First arg may be a symbol or a keyword literal (keywords are used in examples like (set! :key v)).
+        // Coerce Keyword -> Symbol to be permissive with generated plans and docs.
         let sym = match &args[0] {
             Expression::Symbol(s) => s.clone(),
+            Expression::Literal(crate::ast::Literal::Keyword(k)) => crate::ast::Symbol(k.0.clone()),
             _ => {
                 return Err(RuntimeError::TypeError {
                     expected: "symbol".to_string(),

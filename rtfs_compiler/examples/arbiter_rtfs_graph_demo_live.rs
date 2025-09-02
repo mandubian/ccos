@@ -55,7 +55,7 @@ struct AppState {
     expanded_nodes: HashSet<IntentId>,
     // Visible display order for the graph list (top-to-bottom)
     display_order: Vec<IntentId>,
-    view_mode: ViewMode,
+    _view_mode: ViewMode,
     selected_intent_index: usize,
     // LLM operation tracking - current operations and history
     llm_operations: HashMap<String, u64>, // operation_type -> start_timestamp
@@ -91,7 +91,7 @@ struct IntentNode {
     children: Vec<IntentId>,
     parent: Option<IntentId>,
     created_at: u64,
-    metadata: HashMap<String, String>,
+    _metadata: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -106,7 +106,7 @@ struct PlanInfo {
 
 #[derive(Clone)]
 struct CapabilityCall {
-    timestamp: u64,
+    _timestamp: u64,
     capability_id: String,
     args: String,
     result: Option<String>,
@@ -218,14 +218,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                         if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                             let all = graph_lock.storage.get_all_intents_sync();
                             if let Some(st) = all.get(0) {
-                                match arb.generate_plan_for_intent(st).await {
+                                // Clone the storable intent so we don't hold a borrow into `all`
+                                let st_owned = st.clone();
+                                match arb.generate_plan_for_intent(&st_owned).await {
                                     Ok(res) => {
                                         let body = match res.plan.body {
                                             rtfs_compiler::ccos::types::PlanBody::Rtfs(ref s) => s.clone(),
                                             _ => "".to_string(),
                                         };
-                                        let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st.intent_id, "plan_id": res.plan.plan_id, "body": body});
+                                        let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id, "plan_id": res.plan.plan_id, "body": body});
                                         println!("{}", msg.to_string());
+
+                                        // Auto-execute the generated plan in headless mode to produce an EXEC_RESULT
+                                        // Build a minimal RuntimeContext using runtime_service helper
+                                        let plan_clone = res.plan.clone();
+                                        let dbg = debug_callback.clone();
+                                        let ccos_clone = Arc::clone(&ccos);
+                                        tokio::task::spawn_local(async move {
+                                            let ctx = runtime_service::default_controlled_context();
+                                            match ccos_clone.validate_and_execute_plan(plan_clone, &ctx).await {
+                                                Ok(exec) => {
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id, "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                    println!("{}", msg.to_string());
+                                                    let _ = (dbg)(msg.to_string());
+                                                }
+                                                Err(e) => {
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id, "success": false, "value": format!("error: {}", e)});
+                                                    println!("{}", msg.to_string());
+                                                    let _ = (dbg)(msg.to_string());
+                                                }
+                                            }
+                                        });
                                     }
                                     Err(e) => {
                                         // Fallback: try intent_to_plan which returns a Plan (if implemented)
@@ -307,7 +330,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                             children: child_ids,
                                                             parent: st.parent_intent.clone(),
                                                             created_at: st.created_at,
-                                                            metadata: st.metadata.clone(),
+                                                            _metadata: st.metadata.clone(),
                                                         };
                                                         app.intent_graph.insert(st.intent_id.clone(), node);
                                                     }
@@ -324,9 +347,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                     // whether edges exist even when storable.child_intents is empty.
                                                     // Use the existing `graph_lock` to avoid attempting to lock the
                                                     // same mutex twice which can deadlock in the current-thread runtime.
-                                                    let mut root_children_via_api: Vec<IntentId> = Vec::new();
+                                                    let mut _root_children_via_api: Vec<IntentId> = Vec::new();
                                                     let children = graph_lock.get_child_intents(&root_id);
-                                                    root_children_via_api = children.into_iter().map(|c| c.intent_id).collect();
+                                                    _root_children_via_api = children.into_iter().map(|c| c.intent_id).collect();
                                                     // Set root and selection for display
                                                     app.root_intent_id = Some(root_id.clone());
                                                     app.selected_intent = app.root_intent_id.clone();
@@ -342,7 +365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                             "node_count": node_count,
                                                             "keys_sample": node_keys,
                                                             "root_children": root_children_sample,
-                                                            "root_children_via_api": root_children_via_api
+                                                            "root_children_via_api": _root_children_via_api
                                                         });
                                                         let _ = (dbg_cb)(dbg_msg.to_string());
                                                     }
@@ -427,7 +450,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                         if !reported_capability_calls.contains(&call_key) {
                             reported_capability_calls.insert(call_key);
                             let args_str = if let Some(args) = &action.arguments { format!("{:?}", args) } else { "no args".to_string() };
-                            let call = CapabilityCall { timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), capability_id: action.function_name.clone().unwrap_or_else(|| "unknown".to_string()), args: args_str.clone(), result: action.result.as_ref().map(|r| format!("{:?}", r.value)), success: action.result.as_ref().map(|r| r.success).unwrap_or(false), };
+                            let call = CapabilityCall { _timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), capability_id: action.function_name.clone().unwrap_or_else(|| "unknown".to_string()), args: args_str.clone(), result: action.result.as_ref().map(|r| format!("{:?}", r.value)), success: action.result.as_ref().map(|r| r.success).unwrap_or(false), };
                             app.capability_calls.push(call);
                             app.log_lines.push(format!("⚙️ Capability call: {}({})", action.function_name.as_deref().unwrap_or("unknown"), args_str));
                             if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
@@ -492,7 +515,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                         // spawn_local to call async non-Send method
                                         let dbg = debug_callback.clone();
                                         let arb_clone = _arb.clone();
-                                        let selected_id = selected.clone();
+                                        let _selected_id = selected.clone();
                                         tokio::task::spawn_local(async move {
                                                             match arb_clone.generate_plan_for_intent(&storable).await {
                                                     Ok(result) => {
@@ -718,7 +741,7 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
             app.current_intent = Some(intent_id.clone());
             app.running = true;
             app.log_lines.push(format!("🎯 Started: {}", goal));
-            let root_node = IntentNode { intent_id: intent_id.clone(), name: "Root Goal".to_string(), goal, status: IntentStatus::Active, children: vec![], parent: None, created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), metadata: HashMap::new(), };
+            let root_node = IntentNode { intent_id: intent_id.clone(), name: "Root Goal".to_string(), goal, status: IntentStatus::Active, children: vec![], parent: None, created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), _metadata: HashMap::new(), };
             app.intent_graph.insert(intent_id.clone(), root_node);
             app.root_intent_id = Some(intent_id);
         }
@@ -1098,7 +1121,7 @@ fn build_graph_display_with_selection(
         let plan_status = if plans.contains_key(current_id) { "📋" } else { "❌" };
         
         // Add execution status indicator (we need to pass execution info to this function)
-        let execution_status = "▶️"; // Placeholder - we'll enhance this later
+    let _execution_status = "▶️"; // Placeholder - we'll enhance this later
         
         let expand_indicator = if !node.children.is_empty() { if is_expanded { "▼" } else { "▶" } } else { "  " };
         let display_name = if node.name.is_empty() { "<unnamed>".to_string() } else { node.name.clone() };
