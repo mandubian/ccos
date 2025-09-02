@@ -171,18 +171,18 @@ impl Orchestrator {
 ## 5. Guidance for Plan Generation (LLM)
 
 - Generate one plan per leaf intent; the root intent has no plan.
-- Use existing `set!` to publish values you want siblings/parent to see.
-- Use existing `get` to read values; it falls back to cross-plan params when not set locally.
+- Use existing `set!` to publish values. The orchestrator automatically promotes these values to a shared context for other plans to access.
+- Use existing `get` to read values; it falls back to the cross-plan shared context when a binding is not found in the local scope.
 - Do not invent new capabilities; only use registered ones (e.g., `:ccos.echo`, `:ccos.math.add`).
 - Avoid deprecated patterns (no `:step_1.result`, no custom context calls).
 
 Examples:
 ```lisp
 ; Producer
-(do (step "compute-sum" (set! "sum" (+ 2 3))))
+(do (step "compute-sum" (set! :sum (+ 2 3))))
 
 ; Consumer
-(do (step "say" (let [s (get "sum")] (call :ccos.echo (str "Hi!" (if s (str " The sum is " s) ""))))))
+(do (step "say" (let [s (get :sum)] (call :ccos.echo (str "Hi!" (if s (str " The sum is " s) ""))))))
 ```
 
 ## 6. Removed: Context Capabilities Section
