@@ -56,10 +56,10 @@
 
 ;; Do with loop constructs (if available)
 (do
-  (def sum 0)
+  (def sum (atom 0))
   (dotimes [i 5]
-    (set! sum (+ sum i)))
-  sum)
+    (reset! sum (+ (deref sum) i)))
+  (deref sum))
 ;; Expected: 10 (if mutable variables and dotimes are supported)
 
 ;; Do with error handling
