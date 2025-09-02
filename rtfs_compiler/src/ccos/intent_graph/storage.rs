@@ -80,6 +80,12 @@ impl IntentGraphStorage {
         self.store_edge(edge).await
     }
 
+    /// Delete an edge between two intents
+    pub async fn delete_edge(&mut self, edge: &Edge) -> Result<(), RuntimeError> {
+        self.storage.delete_edge(edge).await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))
+    }
+
     pub async fn get_edges(&self) -> Result<Vec<Edge>, RuntimeError> {
         self.storage.get_edges().await
             .map_err(|e| RuntimeError::StorageError(e.to_string()))
