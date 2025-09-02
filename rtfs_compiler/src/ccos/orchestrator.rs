@@ -705,20 +705,57 @@ impl Orchestrator {
         enhanced_context.cross_plan_params.clear();
         
         // 2. Execute children and merge exported vars
+        let mut child_results = Vec::new();
         for child_id in self.get_children_order(root_intent_id)? {
             if let Some(child_plan) = self.get_plan_for_intent(&child_id)? {
                 let child_result = self.execute_plan(&child_plan, &enhanced_context).await?;
                 let exported = self.extract_exported_variables(&child_result);
                 enhanced_context.cross_plan_params.extend(exported);
+                child_results.push((child_id.clone(), child_result));
             }
         }
         
         // 3. Optionally execute root plan (if any)
+        let mut root_result = None;
         if let Some(root_plan) = self.get_plan_for_intent(root_intent_id)? {
-            self.execute_plan(&root_plan, &enhanced_context).await?;
+            root_result = Some(self.execute_plan(&root_plan, &enhanced_context).await?);
         }
         
-        Ok(ExecutionResult { success: true, value: RtfsValue::Nil, metadata: Default::default() })
+        // 4. Build a meaningful result that summarizes the execution
+        let mut result_summary = Vec::new();
+        
+        // Add child results
+        for (child_id, result) in &child_results {
+            if result.success {
+                result_summary.push(format!("{}: {:?}", child_id, result.value));
+            } else {
+                result_summary.push(format!("{}: failed", child_id));
+            }
+        }
+        
+        // Add root result if any
+        if let Some(ref root) = root_result {
+            if root.success {
+                result_summary.push(format!("root: {:?}", root.value));
+            } else {
+                result_summary.push("root: failed".to_string());
+            }
+        }
+        
+        // Create a meaningful result value
+        let result_value = if result_summary.is_empty() {
+            RtfsValue::String("No plans executed".to_string())
+        } else {
+            RtfsValue::String(format!("Orchestrated {} plans: {}", 
+                child_results.len(), 
+                result_summary.join(", ")))
+        };
+        
+        Ok(ExecutionResult { 
+            success: true, 
+            value: result_value, 
+            metadata: Default::default() 
+        })
     }
     
     /// Simple method to get children order

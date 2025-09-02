@@ -28,6 +28,9 @@ required-features = ["repl"]
 name = "github_issue_manager"
 path = "src/bin/github_issue_manager.rs"
 
+[[bin]]
+name = "arbiter_rtfs_graph_demo_live"
+path = "examples/arbiter_rtfs_graph_demo_live.rs"
 
 
 [dependencies]
