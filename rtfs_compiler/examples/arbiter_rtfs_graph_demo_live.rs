@@ -850,10 +850,26 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
     // Bottom section: Logs and LLM Status side by side
     let bottom_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(70), Constraint::Percentage(30)]).split(chunks[1]);
     
-    // Application logs (smaller height)
-    let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(8).map(|s| ListItem::new(s.clone())).collect();
+    // Left side: Execution results and logs
+    let left_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(6), Constraint::Min(0)]).split(bottom_chunks[0]);
+    
+    // Execution results display (prominent)
+    let execution_results_text = if let Some(last_result) = app.last_result.as_ref() {
+        format!("🏁 Last Execution Result:\n{}", last_result)
+    } else {
+        "🏁 No executions yet\n\nPress 'e' to execute a plan or orchestrate intent graph".to_string()
+    };
+    
+    let execution_results = Paragraph::new(execution_results_text)
+        .style(Style::default().fg(Color::Green))
+        .block(Block::default().title("🏁 Execution Results").borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+    f.render_widget(execution_results, left_chunks[0]);
+    
+    // Application logs (below execution results)
+    let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(6).map(|s| ListItem::new(s.clone())).collect();
     let logs = List::new(log_items).block(Block::default().title("📝 Recent Logs").borders(Borders::ALL));
-    f.render_widget(logs, bottom_chunks[0]);
+    f.render_widget(logs, left_chunks[1]);
     
     // Combined LLM operations and executions status
     let mut combined_status_items = Vec::new();
