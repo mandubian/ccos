@@ -1169,6 +1169,9 @@ impl<'a> IrConverter<'a> {
                 "set!" => {
                     return self.convert_set_special_form(arguments);
                 }
+                "dotimes" => {
+                    return self.convert_dotimes_special_form(arguments);
+                }
                 _ => {}
             }
         }
@@ -1540,6 +1543,71 @@ impl<'a> IrConverter<'a> {
             context_keys_override: context_keys_override.map(Box::new),
             params: params_node.map(Box::new),
             body: body_exprs,
+            ir_type: IrType::Any,
+            source_location: None,
+        })
+    }
+
+    /// Convert dotimes special form: (dotimes [i n] body)
+    fn convert_dotimes_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+        if arguments.len() != 2 {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "dotimes".to_string(),
+                message: "dotimes requires exactly 2 arguments: [symbol count] and body".to_string(),
+            });
+        }
+
+        // First argument must be a vector with [symbol count]
+        let binding_vector = if let Expression::Vector(v) = &arguments[0] {
+            if v.len() != 2 {
+                return Err(IrConversionError::InvalidSpecialForm {
+                    form: "dotimes".to_string(),
+                    message: "dotimes binding vector must have exactly 2 elements: [symbol count]".to_string(),
+                });
+            }
+            v.clone()
+        } else {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "dotimes".to_string(),
+                message: "dotimes first argument must be a vector [symbol count]".to_string(),
+            });
+        };
+
+        // Extract symbol and count
+        let loop_var = if let Expression::Symbol(s) = &binding_vector[0] {
+            s.clone()
+        } else {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "dotimes".to_string(),
+                message: "dotimes binding vector first element must be a symbol".to_string(),
+            });
+        };
+
+        let count_expr = Box::new(self.convert_expression(binding_vector[1].clone())?);
+        let body_expr = Box::new(self.convert_expression(arguments[1].clone())?);
+
+        // For now, create a simple loop structure
+        // In a full implementation, this would create a proper loop IR node
+        let id = self.next_id();
+        Ok(IrNode::Apply {
+            id,
+            function: Box::new(IrNode::VariableBinding {
+                id: 0,
+                name: "dotimes".to_string(),
+                ir_type: IrType::Any,
+                source_location: None,
+            }),
+            arguments: vec![
+                IrNode::VariableRef {
+                    id: self.next_id(),
+                    name: loop_var.0,
+                    binding_id: 0,
+                    ir_type: IrType::Any,
+                    source_location: None,
+                },
+                *count_expr,
+                *body_expr,
+            ],
             ir_type: IrType::Any,
             source_location: None,
         })
