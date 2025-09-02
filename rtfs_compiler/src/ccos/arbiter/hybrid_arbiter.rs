@@ -402,7 +402,7 @@ impl HybridArbiter {
         let mut vars = std::collections::HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());
         vars.insert("context".to_string(), format!("{:?}", context));
-        vars.insert("available_capabilities".to_string(), ":ccos.echo, :ccos.analyze, :ccos.backup, :ccos.optimize".to_string());
+        vars.insert("available_capabilities".to_string(), ":ccos.echo, :ccos.math.add".to_string());
         manager
             .render(&prompt_cfg.intent_prompt_id, &prompt_cfg.intent_prompt_version, &vars)
             .unwrap_or_else(|_| "".to_string())
@@ -423,7 +423,7 @@ Generate a plan using RTFS syntax with step special forms:
   ...
 )
 
-Available capabilities: :ccos.echo, :ccos.analyze, :ccos.backup, :ccos.optimize
+Available capabilities: :ccos.echo, :ccos.math.add
 
 Plan:"#,
             intent,

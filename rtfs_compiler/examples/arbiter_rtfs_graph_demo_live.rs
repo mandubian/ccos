@@ -6,6 +6,7 @@
 //! execute them (e). For now this first iteration implements Generate Graph.
 
 use std::collections::{HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -56,6 +57,13 @@ struct AppState {
     display_order: Vec<IntentId>,
     view_mode: ViewMode,
     selected_intent_index: usize,
+    // LLM operation tracking - current operations and history
+    llm_operations: HashMap<String, u64>, // operation_type -> start_timestamp
+    llm_operation_history: Vec<LLMOperationRecord>, // history of all operations
+    
+    // Plan execution tracking - current executions and history
+    current_executions: HashMap<String, u64>, // intent_id -> start_timestamp
+    execution_history: Vec<ExecutionRecord>, // history of all executions
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -103,6 +111,26 @@ struct CapabilityCall {
     args: String,
     result: Option<String>,
     success: bool,
+}
+
+#[derive(Clone)]
+struct LLMOperationRecord {
+    operation_type: String,
+    start_time: u64,
+    end_time: Option<u64>,
+    status: String, // "running", "completed", "failed"
+    details: Option<String>,
+}
+
+#[derive(Clone)]
+struct ExecutionRecord {
+    intent_id: String,
+    plan_id: String,
+    start_time: u64,
+    end_time: Option<u64>,
+    success: bool,
+    result: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -171,7 +199,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
         let cmd_tx = handle.commands();
 
         let mut app = AppState::default();
-        let auto_start = args.goal.is_some();
         if let Some(goal) = args.goal { app.goal_input = goal; } else { app.goal_input = "Create a financial budget for a small business including expense categories, revenue projections, and a monthly cash flow forecast".to_string(); }
 
         // If headless flag is set, run a short non-interactive demo and exit
@@ -235,21 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
             return Ok(());
         }
 
-        // Auto-start if goal was provided via command line
-        if auto_start {
-            let ctx = runtime_service::default_controlled_context();
-            let goal = app.goal_input.clone();
-            if cmd_tx.try_send(runtime_service::RuntimeCommand::Start { goal: goal.clone(), context: ctx }).is_ok() {
-                app.running = true;
-                app.status_lines.push(format!("🚀 Auto-starting: {}", goal));
-                app.intent_graph.clear();
-                app.plans_by_intent.clear();
-                app.root_intent_id = None;
-                app.selected_intent = None;
-            } else {
-                app.log_lines.push("❌ Queue full: cannot start".into());
-            }
-        }
+        // No auto-start - user must manually start with 's' key
 
         let mut reported_capability_calls = std::collections::HashSet::new();
         let frame_sleep = std::time::Duration::from_millis(16);
@@ -273,6 +286,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                         "GRAPH_ROOT" => {
                                             if let Some(root_id) = v.get("intent_id").and_then(|x| x.as_str()) {
                                                 let root_id = root_id.to_string();
+                                                
+                                                // Stop tracking LLM operation
+                                                app.stop_llm_operation("Graph Generation", "completed", Some("Graph generated successfully".to_string()));
+                                                app.log_lines.push("✅ Graph generation completed successfully".into());
+                                                
                                 // Populate intent_graph from CCOS's stored intents
                                                 if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                                                     let all = graph_lock.storage.get_all_intents_sync();
@@ -331,6 +349,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 }
                                             }
                                         }
+                                        "GRAPH_ROOT_ERR" => {
+                                            if let Some(err) = v.get("error").and_then(|x| x.as_str()) {
+                                                // Stop tracking LLM operation
+                                                app.stop_llm_operation("Graph Generation", "failed", Some(err.to_string()));
+                                                app.log_lines.push(format!("❌ Graph generation failed: {}", err));
+                                            }
+                                        }
                                         "PLAN_GEN" => {
                                             if let Some(intent_id) = v.get("intent_id").and_then(|x| x.as_str()) {
                                                 let plan_id = v.get("plan_id").and_then(|x| x.as_str()).unwrap_or("<unknown>").to_string();
@@ -346,7 +371,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                     execution_steps: vec![],
                                                 };
                                                 app.plans_by_intent.insert(intent_id.to_string(), plan_info);
-                                                app.log_lines.push(format!("📋 Plan generated for {}: {}", intent_id, plan_id));
+                                                
+                                                // Stop tracking LLM operation
+                                                app.stop_llm_operation("Plan Generation", "completed", Some(format!("Plan {} generated successfully", plan_id)));
+                                                app.log_lines.push(format!("✅ Plan generated successfully for {}: {}", intent_id, plan_id));
                                             }
                                         }
                                         "PLAN_GEN_ERR" => {
@@ -359,8 +387,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                             if let Some(intent_id) = v.get("intent_id").and_then(|x| x.as_str()) {
                                                 let success = v.get("success").and_then(|x| x.as_bool()).unwrap_or(false);
                                                 let value = v.get("value").map(|x| x.to_string()).unwrap_or_else(|| "null".to_string());
+                                                
+                                                // Stop tracking execution and record result
+                                                app.stop_execution(intent_id, success, Some(value.clone()), None);
+                                                
+                                                // Update last result for display
                                                 app.last_result = Some(format!("success={} value={}", success, value));
-                                                app.log_lines.push(format!("🏁 Exec result for {}: success={}", intent_id, success));
+                                                app.log_lines.push(format!("🏁 Exec result for {}: success={} value={}", intent_id, success, value));
+                                            }
+                                        }
+                                        "AUTO_PLAN_GEN_COMPLETE" => {
+                                            if let (Some(success_count), Some(error_count)) = (
+                                                v.get("success_count").and_then(|x| x.as_u64()),
+                                                v.get("error_count").and_then(|x| x.as_u64())
+                                            ) {
+                                                // Stop tracking LLM operation
+                                                app.stop_llm_operation("Auto Plan Generation", "completed", Some(format!("Generated {} plans, {} errors", success_count, error_count)));
+                                                app.log_lines.push(format!("✅ Auto plan generation completed: {} plans generated, {} errors", success_count, error_count));
                                             }
                                         }
                                         _ => {}
@@ -405,12 +448,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                             // Generate graph via DelegatingArbiter (LLM)
                             if let Some(_arb) = ccos.get_delegating_arbiter() {
                                 let goal = app.goal_input.clone();
+                                // Start tracking LLM operation
+                                app.start_llm_operation("Graph Generation");
+                                app.log_lines.push("🧭 Starting LLM graph generation...".into());
+                                
                                 // spawn_local to avoid blocking; clone debug callback for the closure
                                 let dbg = debug_callback.clone();
                                 let ccos_clone = Arc::clone(&ccos);
+                                let app_goal = goal.clone();
                                 tokio::task::spawn_local(async move {
                                     if let Some(arb) = ccos_clone.get_delegating_arbiter() {
-                                        match arb.natural_language_to_graph(&goal).await {
+                                        match arb.natural_language_to_graph(&app_goal).await {
                                         Ok(root_id) => {
                                             let msg = serde_json::json!({"type":"GRAPH_ROOT","intent_id": root_id});
                                             let _ = (dbg)(msg.to_string());
@@ -422,7 +470,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                         }
                                     }
                                 });
-                                app.log_lines.push("🧭 Graph generation requested (LLM)".into());
                             } else {
                                 app.log_lines.push("⚠️  No delegating arbiter available (LLM not enabled in config)".into());
                             }
@@ -438,9 +485,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                         } else { None }
                                     };
                                     if let Some(storable) = maybe_intent {
+                                        // Start tracking LLM operation
+                                        app.start_llm_operation("Plan Generation");
+                                        app.log_lines.push(format!("📡 Starting LLM plan generation for {}", selected));
+                                        
                                         // spawn_local to call async non-Send method
                                         let dbg = debug_callback.clone();
                                         let arb_clone = _arb.clone();
+                                        let selected_id = selected.clone();
                                         tokio::task::spawn_local(async move {
                                                             match arb_clone.generate_plan_for_intent(&storable).await {
                                                     Ok(result) => {
@@ -481,31 +533,146 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                             }
                         }
                         (KeyCode::Char('e'), _) => {
-                            // Execute selected plan (if any) via delegating arbiter execute_plan
+                            // Execute selected intent - use intent graph orchestration if it has children
                             if let Some(_arb) = ccos.get_delegating_arbiter() {
                                 if let Some(selected) = app.selected_intent.clone() {
+                                    // Check if this intent has children (needs orchestration)
+                                    let has_children = app.intent_graph.get(&selected)
+                                        .map(|node| !node.children.is_empty())
+                                        .unwrap_or(false);
+                                    
+                                    if has_children {
+                                        // Execute entire intent graph with orchestration
+                                        let selected_id = selected.clone();
+                                        app.start_execution(&selected_id, "intent-graph");
+                                        app.log_lines.push(format!("🚀 Starting intent graph orchestration for {}", selected_id));
+                                        
+                                        let dbg = debug_callback.clone();
+                                        let ccos_clone = Arc::clone(&ccos);
+                                        let selected_id_for_closure = selected_id.clone();
+                                        
+                                        tokio::task::spawn_local(async move {
+                                            // Build a controlled runtime context for execution
+                                            let ctx = runtime_service::default_controlled_context();
+                                            match ccos_clone.get_orchestrator().execute_intent_graph(&selected_id_for_closure, &ctx).await {
+                                                Ok(exec) => {
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                    let _ = (dbg)(msg.to_string());
+                                                }
+                                                Err(e) => {
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": false, "error": format!("{}", e)});
+                                                    let _ = (dbg)(msg.to_string());
+                                                }
+                                            }
+                                        });
+                                        app.log_lines.push("🚀 Intent graph orchestration requested".into());
+                                    } else {
+                                        // Execute leaf intent plan directly
                                         if let Some(plan_info) = app.plans_by_intent.get(&selected) {
+                                            let selected_id = selected.clone();
+                                            let plan_body = plan_info.body.clone();
+                                            let plan_id = plan_info.plan_id.clone();
+                                            
+                                            // Start tracking execution (not LLM operation)
+                                            app.start_execution(&selected_id, &plan_id);
+                                            app.log_lines.push(format!("▶️ Starting plan execution for {}", selected_id));
+                                            
                                             // Reconstruct a Plan object minimally for execution
-                                            let plan = Plan::new_rtfs(plan_info.body.clone(), vec![selected.clone()]);
+                                            let plan = Plan::new_rtfs(plan_body, vec![selected_id.clone()]);
                                             let dbg = debug_callback.clone();
                                             let ccos_clone = Arc::clone(&ccos);
+                                            let selected_id_for_closure = selected_id.clone();
                                             tokio::task::spawn_local(async move {
                                                 // Build a controlled runtime context for execution
                                                 let ctx = runtime_service::default_controlled_context();
                                                 match ccos_clone.validate_and_execute_plan(plan, &ctx).await {
                                                     Ok(exec) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected, "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec.success, "value": format!("{:?}", exec.value)});
                                                         let _ = (dbg)(msg.to_string());
                                                     }
                                                     Err(e) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected, "success": false, "error": format!("{}", e)});
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": false, "error": format!("{}", e)});
                                                         let _ = (dbg)(msg.to_string());
                                                     }
                                                 }
                                             });
-                                            app.log_lines.push(format!("▶️ Execution requested for plan {}", plan_info.plan_id));
+                                            app.log_lines.push(format!("▶️ Execution requested for plan {}", plan_id));
                                         } else { app.log_lines.push("ℹ️  No plan available for selected intent".into()); }
+                                    }
                                 } else { app.log_lines.push("ℹ️  No intent selected".into()); }
+                            } else {
+                                app.log_lines.push("⚠️  No delegating arbiter available (LLM not enabled in config)".into());
+                            }
+                        }
+                        (KeyCode::Char('a'), _) => {
+                            // Auto-generate plans for all intents in the graph
+                            if let Some(_arb) = ccos.get_delegating_arbiter() {
+                                if app.intent_graph.is_empty() {
+                                    app.log_lines.push("⚠️  No intent graph available. Generate a graph first with 'g' key.".into());
+                                } else {
+                                    app.log_lines.push("🚀 Starting auto-generation of plans for all intents...".into());
+                                    
+                                    // Get all intents from the graph
+                                    let intent_ids: Vec<String> = app.intent_graph.keys().cloned().collect();
+                                    let arb_clone = _arb.clone();
+                                    let dbg = debug_callback.clone();
+                                    let ccos_clone = Arc::clone(&ccos);
+                                    
+                                    // Start tracking LLM operation
+                                    app.start_llm_operation("Auto Plan Generation");
+                                    
+                                    tokio::task::spawn_local(async move {
+                                        let mut success_count = 0;
+                                        let mut error_count = 0;
+                                        
+                                        for intent_id in intent_ids {
+                                            // Get the stored intent
+                                            if let Ok(graph_lock) = ccos_clone.get_intent_graph().lock() {
+                                                if let Some(storable) = graph_lock.get_intent(&intent_id) {
+                                                    match arb_clone.generate_plan_for_intent(&storable).await {
+                                                        Ok(result) => {
+                                                            let body = match &result.plan.body {
+                                                                PlanBody::Rtfs(txt) => txt.clone(),
+                                                                _ => "<non-RTFS plan>".to_string(),
+                                                            };
+                                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": storable.intent_id, "plan_id": result.plan.plan_id, "body": body.replace('\n', "\\n")});
+                                                            let _ = (dbg)(msg.to_string());
+                                                            success_count += 1;
+                                                        }
+                                                        Err(e) => {
+                                                            // Fallback to intent_to_plan
+                                                            let intent_obj = rtfs_compiler::ccos::types::Intent::new(storable.goal.clone());
+                                                            match arb_clone.intent_to_plan(&intent_obj).await {
+                                                                Ok(plan) => {
+                                                                    let body = match plan.body {
+                                                                        rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s,
+                                                                        _ => "".to_string(),
+                                                                    };
+                                                                    let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": storable.intent_id, "plan_id": plan.plan_id, "body": body.replace('\n', "\\n")});
+                                                                    let _ = (dbg)(msg.to_string());
+                                                                    success_count += 1;
+                                                                }
+                                                                Err(e2) => {
+                                                                    let msg = serde_json::json!({"type":"PLAN_GEN_ERR","intent_id": storable.intent_id, "error": format!("{} / fallback: {}", e, e2)});
+                                                                    let _ = (dbg)(msg.to_string());
+                                                                    error_count += 1;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Log completion summary
+                                        let summary_msg = serde_json::json!({
+                                            "type": "AUTO_PLAN_GEN_COMPLETE",
+                                            "success_count": success_count,
+                                            "error_count": error_count
+                                        });
+                                        let _ = (dbg)(summary_msg.to_string());
+                                    });
+                                }
                             } else {
                                 app.log_lines.push("⚠️  No delegating arbiter available (LLM not enabled in config)".into());
                             }
@@ -585,7 +752,7 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let tabs = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Length(3), Constraint::Min(5), Constraint::Length(1)]).split(size);
     let tab_titles = vec!["1:Graph", "2:Status", "3:Logs", "4:Debug", "5:Plans", "6:Capabilities"]; let tab_block = Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).title("Tabs • Ctrl+D:Toggle Debug • ?:Help"); let tab_items: Vec<ListItem> = tab_titles.iter().enumerate().map(|(i, &title)| { let style = match (app.current_tab, i) { (Tab::Graph, 0) | (Tab::Status, 1) | (Tab::Logs, 2) | (Tab::Debug, 3) | (Tab::Plans, 4) | (Tab::Capabilities, 5) => { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } _ => Style::default().fg(Color::White), }; ListItem::new(title).style(style) }).collect(); let tab_list = List::new(tab_items).block(tab_block); f.render_widget(tab_list, tabs[0]);
 
-    let input_title = match app.current_tab { Tab::Graph => "🎯 Goal Input (type) • s=Start c=Cancel r=Reset q=Quit • g=GenerateGraph", Tab::Status => "📊 Status View", Tab::Logs => "📝 Application Logs", Tab::Debug => "🔧 Debug Logs", Tab::Plans => "📋 Plan Details", Tab::Capabilities => "⚙️ Capability Calls", };
+    let input_title = match app.current_tab { Tab::Graph => "🎯 Goal Input (type) • s=Start c=Cancel r=Reset q=Quit • g=GenerateGraph • a=AutoPlans", Tab::Status => "📊 Status View", Tab::Logs => "📝 Application Logs", Tab::Debug => "🔧 Debug Logs", Tab::Plans => "📋 Plan Details", Tab::Capabilities => "⚙️ Capability Calls", };
     let input = Paragraph::new(if matches!(app.current_tab, Tab::Graph) { app.goal_input.as_str() } else { "" }).block(Block::default().title(input_title).borders(Borders::ALL)).wrap(Wrap { trim: true }); f.render_widget(input, tabs[1]);
 
     match app.current_tab { Tab::Graph => render_graph_tab(f, app, tabs[2]), Tab::Status => render_status_tab(f, app, tabs[2]), Tab::Logs => render_logs_tab(f, app, tabs[2]), Tab::Debug => render_debug_tab(f, app, tabs[2]), Tab::Plans => render_plans_tab(f, app, tabs[2]), Tab::Capabilities => render_capabilities_tab(f, app, tabs[2]), }
@@ -594,22 +761,126 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &mut AppState) {
 }
 
 fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
-    let chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
+    // Vertical split: Graph+Details (80%) and Logs+LLM Status (20%)
+    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(80), Constraint::Percentage(20)]).split(area);
+    
+    // Top section: Graph and Details side by side
+    let top_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(60), Constraint::Percentage(40)]).split(chunks[0]);
+    
     // Rebuild visible display order each render
     app.display_order.clear();
     let mut graph_items: Vec<ListItem> = Vec::new(); let mut item_index = 0;
     if let Some(root_id) = &app.root_intent_id {
         if let Some(_root) = app.intent_graph.get(root_id) {
-            build_graph_display_with_selection(&app.intent_graph, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes, &mut app.display_order, app.selected_intent_index);
+            build_graph_display_with_selection(&app.intent_graph, &app.plans_by_intent, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes, &mut app.display_order, app.selected_intent_index);
         } else { graph_items.push(ListItem::new("No graph data available".to_string())); }
     } else { graph_items.push(ListItem::new("No root intent yet".to_string())); }
+    
     // Clamp cursor index to visible list bounds
     if !app.display_order.is_empty() && app.selected_intent_index >= app.display_order.len() {
         app.selected_intent_index = app.display_order.len() - 1;
     }
-    let graph = List::new(graph_items).block(Block::default().title("🗺️  Intent Graph • ↑↓:Navigate • Enter:Select • Space:Expand • g:GenerateGraph").borders(Borders::ALL)).highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)); f.render_widget(graph, chunks[0]);
-    let detail_text = if let Some(selected_id) = &app.selected_intent { if let Some(node) = app.intent_graph.get(selected_id) { let plan_info = app.plans_by_intent.get(selected_id); format!("🎯 Intent Details:\nID: {}\nName: {}\nGoal: {}\nStatus: {:?}\nCreated: {}\n\n📋 Plan Info:\n{}", node.intent_id, node.name, node.goal, node.status, node.created_at, plan_info.map(|p| format!("Capabilities: {}\nStatus: {}\nSteps: {}", p.capabilities_required.join(", "), p.status, p.execution_steps.len())).unwrap_or("No plan information".to_string()) ) } else { "Selected intent not found".to_string() } } else { "Select an intent to view details\n\nUse ↑↓ to navigate\nEnter to select\nSpace to expand/collapse".to_string() };
-    let details = Paragraph::new(detail_text).style(Style::default().fg(Color::White)).block(Block::default().title("📋 Intent Details").borders(Borders::ALL)).wrap(Wrap { trim: true }); f.render_widget(details, chunks[1]);
+    
+    // Add LLM operation status, plan count, and execution status to graph title
+    let plan_count = app.plans_by_intent.len();
+    let intent_count = app.intent_graph.len();
+    let execution_count = app.current_executions.len();
+    let mut graph_title = format!("🗺️  Intent Graph ({} intents, {} plans, {} executing) • ↑↓:Navigate • Enter:Select • Space:Expand • g:GenerateGraph", intent_count, plan_count, execution_count);
+    if app.is_llm_operation_running() {
+        graph_title.push_str(" • 🤖 LLM Running...");
+    }
+    if app.is_execution_running() {
+        graph_title.push_str(" • ▶️ Executing...");
+    }
+    
+    let graph = List::new(graph_items).block(Block::default().title(graph_title).borders(Borders::ALL)).highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)); 
+    f.render_widget(graph, top_chunks[0]);
+    
+    let detail_text = if let Some(selected_id) = &app.selected_intent { 
+        if let Some(node) = app.intent_graph.get(selected_id) { 
+            let plan_info = app.plans_by_intent.get(selected_id); 
+            let plan_display = if let Some(plan) = plan_info {
+                format!("✅ Plan Available:\nID: {}\nStatus: {}\nBody Preview: {}\nExecution Steps: {}\nCapabilities: {}", 
+                    plan.plan_id,
+                    plan.status,
+                    if plan.body.len() > 100 { format!("{}...", &plan.body[..100]) } else { plan.body.clone() },
+                    plan.execution_steps.len(),
+                    if plan.capabilities_required.is_empty() { "None specified".to_string() } else { plan.capabilities_required.join(", ") }
+                )
+            } else {
+                "❌ No plan available\n\nPress 'p' to generate a plan for this intent".to_string()
+            };
+            
+            // Get execution history for this intent
+            let execution_display = app.execution_history.iter()
+                .rev()
+                .filter(|r| r.intent_id == *selected_id)
+                .take(3) // Show last 3 executions
+                .map(|r| {
+                    let status_emoji = if r.success { "✅" } else { "❌" };
+                    let result_info = if let Some(result) = &r.result {
+                        format!("Result: {}", result)
+                    } else if let Some(error) = &r.error {
+                        format!("Error: {}", error)
+                    } else {
+                        "No result".to_string()
+                    };
+                    format!("{} {} - {}", status_emoji, r.plan_id, result_info)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            
+            let execution_section = if execution_display.is_empty() {
+                "❌ No executions yet\n\nPress 'e' to execute this plan".to_string()
+            } else {
+                format!("🚀 Recent Executions:\n{}", execution_display)
+            };
+            
+            format!("🎯 Intent Details:\nID: {}\nName: {}\nGoal: {}\nStatus: {:?}\nCreated: {}\n\n📋 Plan Info:\n{}\n\n{}", 
+                node.intent_id, node.name, node.goal, node.status, node.created_at, plan_display, execution_section)
+        } else { 
+            "Selected intent not found".to_string() 
+        } 
+    } else { 
+        "Select an intent to view details\n\nUse ↑↓ to navigate\nEnter to select\nSpace to expand/collapse".to_string() 
+    };
+    let details = Paragraph::new(detail_text).style(Style::default().fg(Color::White)).block(Block::default().title("📋 Intent Details").borders(Borders::ALL)).wrap(Wrap { trim: true }); 
+    f.render_widget(details, top_chunks[1]);
+    
+    // Bottom section: Logs and LLM Status side by side
+    let bottom_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(70), Constraint::Percentage(30)]).split(chunks[1]);
+    
+    // Application logs (smaller height)
+    let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(8).map(|s| ListItem::new(s.clone())).collect();
+    let logs = List::new(log_items).block(Block::default().title("📝 Recent Logs").borders(Borders::ALL));
+    f.render_widget(logs, bottom_chunks[0]);
+    
+    // Combined LLM operations and executions status
+    let mut combined_status_items = Vec::new();
+    
+    // Add LLM operations
+    if app.is_llm_operation_running() {
+        combined_status_items.push(ListItem::new("🤖 LLM Operations:".to_string()));
+        combined_status_items.extend(app.get_llm_operation_status().into_iter().map(|s| ListItem::new(s)));
+        combined_status_items.extend(app.get_recent_llm_history(3).into_iter().map(|s| ListItem::new(s)));
+    } else {
+        combined_status_items.extend(app.get_recent_llm_history(4).into_iter().map(|s| ListItem::new(s)));
+    }
+    
+    // Add execution status
+    if app.is_execution_running() {
+        if !combined_status_items.is_empty() {
+            combined_status_items.push(ListItem::new("---".to_string()));
+        }
+        combined_status_items.push(ListItem::new("▶️ Executions:".to_string()));
+        combined_status_items.extend(app.get_execution_status().into_iter().map(|s| ListItem::new(s)));
+        combined_status_items.extend(app.get_recent_execution_history(3).into_iter().map(|s| ListItem::new(s)));
+    } else {
+        combined_status_items.extend(app.get_recent_execution_history(4).into_iter().map(|s| ListItem::new(s)));
+    }
+    
+    let combined_status = List::new(combined_status_items).block(Block::default().title("🤖 LLM + ▶️ Executions").borders(Borders::ALL));
+    f.render_widget(combined_status, bottom_chunks[1]);
 }
 
 fn render_status_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let status_items: Vec<ListItem> = app.status_lines.iter().rev().take(100).map(|s| ListItem::new(s.clone())).collect(); let status = List::new(status_items).block(Block::default().title("📊 Status Updates").borders(Borders::ALL)); f.render_widget(status, area); }
@@ -619,14 +890,177 @@ fn render_plans_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { le
 fn render_capabilities_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let cap_items: Vec<ListItem> = if app.capability_calls.is_empty() { vec![ListItem::new("No capability calls recorded yet".to_string())] } else { app.capability_calls.iter().rev().take(50).map(|call| { let status = if call.success { "✅" } else { "❌" }; let result = call.result.as_deref().unwrap_or("pending"); ListItem::new(format!("{} {}({}) → {}", status, call.capability_id, call.args, result)) }).collect() }; let capabilities = List::new(cap_items).block(Block::default().title("⚙️ Capability Calls").borders(Borders::ALL)); f.render_widget(capabilities, area); }
 
 fn render_help_overlay(f: &mut ratatui::Frame<'_>, size: Rect) {
-    let help_text = "\n🚀 Arbiter TUI Demo - Help\n\nNavigation:\n  1-4     Switch between tabs (Graph/Status/Logs/Debug)\n  Tab     Cycle through tabs\n  Ctrl+D  Toggle debug log visibility\n  ?/F1    Show/hide this help\n\nActions:\n  s       Start execution with current goal\n  c       Cancel current execution\n  r       Reset everything\n  q       Quit application\n  g       Generate Graph (LLM)\n  p       Generate Plan for selected intent (LLM)\n  e       Execute selected plan (LLM/runtime)\n\nInput:\n  Type    Edit goal text\n  Backspace Delete character\n\nTabs:\n  Graph   Intent graph visualization and results\n  Status  Real-time execution status updates\n  Logs    Application logs (non-debug)\n  Debug   Debug logs and detailed traces\n\nPress ? or F1 to close this help.\n";
+    let help_text = "\n🚀 Arbiter TUI Demo - Help\n\nNavigation:\n  1-6     Switch between tabs (Graph/Status/Logs/Debug/Plans/Capabilities)\n  Tab     Cycle through tabs\n  Ctrl+D  Toggle debug log visibility\n  ?/F1    Show/hide this help\n\nActions:\n  s       Start execution with current goal\n  c       Cancel current execution\n  r       Reset everything\n  q       Quit application\n  g       Generate Graph (LLM)\n  p       Generate Plan for selected intent (LLM)\n  a       Auto-generate plans for all intents in graph (LLM)\n  e       Execute selected plan or orchestrate intent graph\n\nIntent Graph Orchestration:\n  • Leaf intents execute individual plans\n  • Parent intents orchestrate children\n  • Use 'set!' to share data between plans\n  • Use 'get' to access shared data\n  • Press 'e' on parent to orchestrate entire graph\n\nInput:\n  Type    Edit goal text\n  Backspace Delete character\n\nTabs:\n  Graph   Intent graph visualization and results\n  Status  Real-time execution status updates\n  Logs    Application logs (non-debug)\n  Debug   Debug logs and detailed traces\n  Plans   Plan details and execution steps\n  Capabilities Capability call history\n\nPress ? or F1 to close this help.\n";
     let help = Paragraph::new(help_text).style(Style::default().fg(Color::White).bg(Color::Black)).block(Block::default().title("❓ Help").borders(Borders::ALL)).wrap(Wrap { trim: true }); let help_area = centered_rect(60, 80, size); f.render_widget(Clear, help_area); f.render_widget(help, help_area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect { let popup_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage((100 - percent_y) / 2), Constraint::Percentage(percent_y), Constraint::Percentage((100 - percent_y) / 2), ]).split(r); Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage((100 - percent_x) / 2), Constraint::Percentage(percent_x), Constraint::Percentage((100 - percent_x) / 2), ]).split(popup_layout[1])[1] }
 
+impl AppState {
+    /// Start tracking an LLM operation
+    fn start_llm_operation(&mut self, operation_type: &str) {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.llm_operations.insert(operation_type.to_string(), timestamp);
+        
+        // Add to history
+        let record = LLMOperationRecord {
+            operation_type: operation_type.to_string(),
+            start_time: timestamp,
+            end_time: None,
+            status: "running".to_string(),
+            details: None,
+        };
+        self.llm_operation_history.push(record);
+    }
+    
+    /// Stop tracking an LLM operation
+    fn stop_llm_operation(&mut self, operation_type: &str, status: &str, details: Option<String>) {
+        self.llm_operations.remove(operation_type);
+        
+        // Update history record
+        if let Some(record) = self.llm_operation_history.iter_mut().rev().find(|r| r.operation_type == operation_type && r.status == "running") {
+            record.end_time = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+            record.status = status.to_string();
+            record.details = details;
+        }
+    }
+    
+    /// Check if any LLM operation is currently running
+    fn is_llm_operation_running(&self) -> bool {
+        !self.llm_operations.is_empty()
+    }
+    
+    /// Get the status of current LLM operations
+    fn get_llm_operation_status(&self) -> Vec<String> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        self.llm_operations.iter()
+            .map(|(op_type, start_time)| {
+                let duration = now - start_time;
+                format!("🤖 {} (running for {}s)", op_type, duration)
+            })
+            .collect()
+    }
+    
+    /// Get recent LLM operation history
+    fn get_recent_llm_history(&self, limit: usize) -> Vec<String> {
+        self.llm_operation_history.iter()
+            .rev()
+            .take(limit)
+            .map(|record| {
+                let duration = if let Some(end_time) = record.end_time {
+                    end_time - record.start_time
+                } else {
+                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - record.start_time
+                };
+                
+                let status_emoji = match record.status.as_str() {
+                    "running" => "🔄",
+                    "completed" => "✅",
+                    "failed" => "❌",
+                    _ => "❓",
+                };
+                
+                let details = record.details.as_deref().unwrap_or("");
+                if details.is_empty() {
+                    format!("{} {} ({}s) - {}", status_emoji, record.operation_type, duration, record.status)
+                } else {
+                    format!("{} {} ({}s) - {}: {}", status_emoji, record.operation_type, duration, record.status, details)
+                }
+            })
+            .collect()
+    }
+    
+    /// Start tracking a plan execution
+    fn start_execution(&mut self, intent_id: &str, plan_id: &str) {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.current_executions.insert(intent_id.to_string(), timestamp);
+        
+        // Add to history
+        let record = ExecutionRecord {
+            intent_id: intent_id.to_string(),
+            plan_id: plan_id.to_string(),
+            start_time: timestamp,
+            end_time: None,
+            success: false,
+            result: None,
+            error: None,
+        };
+        self.execution_history.push(record);
+    }
+    
+    /// Stop tracking a plan execution
+    fn stop_execution(&mut self, intent_id: &str, success: bool, result: Option<String>, error: Option<String>) {
+        self.current_executions.remove(intent_id);
+        
+        // Update history record
+        if let Some(record) = self.execution_history.iter_mut().rev().find(|r| r.intent_id == intent_id && r.end_time.is_none()) {
+            record.end_time = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+            record.success = success;
+            record.result = result;
+            record.error = error;
+        }
+    }
+    
+    /// Check if any execution is currently running
+    fn is_execution_running(&self) -> bool {
+        !self.current_executions.is_empty()
+    }
+    
+    /// Get the status of current executions
+    fn get_execution_status(&self) -> Vec<String> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        self.current_executions.iter()
+            .map(|(intent_id, start_time)| {
+                let duration = now - start_time;
+                format!("▶️ {} (running for {}s)", intent_id, duration)
+            })
+            .collect()
+    }
+    
+    /// Get recent execution history
+    fn get_recent_execution_history(&self, limit: usize) -> Vec<String> {
+        self.execution_history.iter()
+            .rev()
+            .take(limit)
+            .map(|record| {
+                let duration = if let Some(end_time) = record.end_time {
+                    end_time - record.start_time
+                } else {
+                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - record.start_time
+                };
+                
+                let status_emoji = if record.success { "✅" } else { "❌" };
+                let result_info = if let Some(result) = &record.result {
+                    format!("Result: {}", result)
+                } else if let Some(error) = &record.error {
+                    format!("Error: {}", error)
+                } else {
+                    "No result".to_string()
+                };
+                
+                format!("{} {} ({}s) - {}", status_emoji, record.intent_id, duration, result_info)
+            })
+            .collect()
+    }
+}
+
 fn build_graph_display_with_selection(
     graph: &HashMap<IntentId, IntentNode>, 
+    plans: &HashMap<IntentId, PlanInfo>,
     current_id: &IntentId, 
     items: &mut Vec<ListItem>, 
     item_index: &mut usize,
@@ -643,6 +1077,13 @@ fn build_graph_display_with_selection(
         let is_selected = selected_id.as_ref() == Some(current_id);
     let is_expanded = expanded_nodes.contains(current_id);
         let status_emoji = match node.status { IntentStatus::Active => "🟡", IntentStatus::Executing => "🔵", IntentStatus::Completed => "✅", IntentStatus::Failed => "❌", IntentStatus::Archived => "📦", IntentStatus::Suspended => "⏸️", };
+        
+        // Add plan status indicator
+        let plan_status = if plans.contains_key(current_id) { "📋" } else { "❌" };
+        
+        // Add execution status indicator (we need to pass execution info to this function)
+        let execution_status = "▶️"; // Placeholder - we'll enhance this later
+        
         let expand_indicator = if !node.children.is_empty() { if is_expanded { "▼" } else { "▶" } } else { "  " };
         let display_name = if node.name.is_empty() { "<unnamed>".to_string() } else { node.name.clone() };
         let goal_preview = if node.goal.len() > 30 { format!("{}...", &node.goal[..27]) } else { node.goal.clone() };
@@ -653,10 +1094,10 @@ fn build_graph_display_with_selection(
             // Keep a subtle hint for the last explicitly selected intent
             style = style.fg(Color::LightBlue);
         }
-    items.push(ListItem::new(format!("{}{}{}[{:?}] {} — {}", indent, expand_indicator, status_emoji, node.status, display_name, goal_preview)).style(style));
+    items.push(ListItem::new(format!("{}{}{}{}[{:?}] {} — {}", indent, expand_indicator, status_emoji, plan_status, node.status, display_name, goal_preview)).style(style));
     // Record display order (this index maps to the list shown to the user)
     display_order.push(current_id.clone());
     *item_index += 1;
-    if is_expanded { for child_id in &node.children { build_graph_display_with_selection(graph, child_id, items, item_index, depth + 1, selected_id, expanded_nodes, display_order, selected_row_index); } }
+    if is_expanded { for child_id in &node.children { build_graph_display_with_selection(graph, plans, child_id, items, item_index, depth + 1, selected_id, expanded_nodes, display_order, selected_row_index); } }
     }
 }

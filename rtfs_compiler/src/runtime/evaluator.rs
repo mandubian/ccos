@@ -165,6 +165,18 @@ impl Evaluator {
         };
         evaluator
     }
+    
+    /// Get a value with cross-plan context fallback
+    /// First tries the current step context, then falls back to cross-plan parameters
+    pub fn get_with_cross_plan_fallback(&self, key: &str) -> Option<Value> {
+        // First try the current step context
+        if let Some(value) = self.context_manager.borrow().get(key) {
+            return Some(value);
+        }
+        
+        // Fall back to cross-plan parameters from RuntimeContext
+        self.security_context.get_cross_plan_param(key).cloned()
+    }
 
     /// Create verification context for local expression evaluation
     fn create_local_verification_context(&self, compile_time_verified: bool) -> VerificationContext {
@@ -2735,9 +2747,9 @@ impl Evaluator {
         &self.security_context
     }
 
-    /// Gets a value from the current execution context
+    /// Gets a value from the current execution context with cross-plan fallback
     pub fn get_context_value(&self, key: &str) -> Option<Value> {
-        self.context_manager.borrow().get(key)
+        self.get_with_cross_plan_fallback(key)
     }
 
     /// Sets a value in the current execution context

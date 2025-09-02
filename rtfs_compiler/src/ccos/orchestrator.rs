@@ -693,6 +693,66 @@ impl Orchestrator {
     if let Some(err) = error_opt { Err(err) } else { Ok(execution_result) }
     }
 
+    /// Execute an entire intent graph with cross-plan parameter merging
+    /// This method orchestrates the execution of child intents and manages shared context
+    pub async fn execute_intent_graph(
+        &self,
+        root_intent_id: &str,
+        initial_context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        // 1. Start with an empty cross-plan param bag
+        let mut enhanced_context = initial_context.clone();
+        enhanced_context.cross_plan_params.clear();
+        
+        // 2. Execute children and merge exported vars
+        for child_id in self.get_children_order(root_intent_id)? {
+            if let Some(child_plan) = self.get_plan_for_intent(&child_id)? {
+                let child_result = self.execute_plan(&child_plan, &enhanced_context).await?;
+                let exported = self.extract_exported_variables(&child_result);
+                enhanced_context.cross_plan_params.extend(exported);
+            }
+        }
+        
+        // 3. Optionally execute root plan (if any)
+        if let Some(root_plan) = self.get_plan_for_intent(root_intent_id)? {
+            self.execute_plan(&root_plan, &enhanced_context).await?;
+        }
+        
+        Ok(ExecutionResult { success: true, value: RtfsValue::Nil, metadata: Default::default() })
+    }
+    
+    /// Simple method to get children order
+    fn get_children_order(&self, root_id: &str) -> RuntimeResult<Vec<String>> {
+        let graph = self.intent_graph.lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+        Ok(match graph.get_intent(&root_id.to_string()) { 
+            Some(i) => i.child_intents.clone(), 
+            None => Vec::new() 
+        })
+    }
+    
+    /// Get plan for a specific intent
+    fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
+        // This is a placeholder - in a real implementation, you'd query the plan archive
+        // For now, we'll return None to indicate no root plan
+        Ok(None)
+    }
+    
+    /// Extract exported variables from execution result
+    /// This is a simplified version - in practice, you'd analyze the result more carefully
+    fn extract_exported_variables(&self, result: &ExecutionResult) -> HashMap<String, RtfsValue> {
+        let mut exported = HashMap::new();
+        
+        // For now, we'll just extract the result value as a simple export
+        // In practice, you'd want to analyze the execution context for variables
+        // that were set during execution
+        if result.success {
+            exported.insert("result".to_string(), result.value.clone());
+        }
+        
+        exported
+    }
+
     /// Serialize the current execution context from an evaluator (checkpoint helper)
     pub fn serialize_context(&self, evaluator: &Evaluator) -> RuntimeResult<String> {
         evaluator

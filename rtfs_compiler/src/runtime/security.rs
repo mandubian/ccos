@@ -2,10 +2,11 @@
 //!
 //! This module defines security policies and execution contexts for RTFS programs.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use crate::ccos::execution_context::IsolationLevel;
 use crate::runtime::microvm::config::MicroVMConfig;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::values::Value;
 
 /// Central security authorizer for capability execution
 pub struct SecurityAuthorizer;
@@ -177,6 +178,8 @@ pub struct RuntimeContext {
     pub exposed_context_tags: HashSet<String>,
     /// Optional override for per-step MicroVM configuration
     pub microvm_config_override: Option<MicroVMConfig>,
+    /// Cross-plan parameters (merged by orchestrator across plans)
+    pub cross_plan_params: HashMap<String, Value>,
 }
 
 impl RuntimeContext {
@@ -197,6 +200,7 @@ impl RuntimeContext {
             exposed_context_prefixes: Vec::new(),
             exposed_context_tags: HashSet::new(),
             microvm_config_override: None,
+            cross_plan_params: HashMap::new(),
         }
     }
     
@@ -217,6 +221,7 @@ impl RuntimeContext {
             exposed_context_prefixes: Vec::new(),
             exposed_context_tags: HashSet::new(),
             microvm_config_override: None,
+            cross_plan_params: HashMap::new(),
         }
     }
     
@@ -237,6 +242,7 @@ impl RuntimeContext {
             exposed_context_prefixes: Vec::new(),
             exposed_context_tags: HashSet::new(),
             microvm_config_override: None,
+            cross_plan_params: HashMap::new(),
         }
     }
     
@@ -247,6 +253,22 @@ impl RuntimeContext {
             SecurityLevel::Controlled => self.allowed_capabilities.contains(capability_id),
             SecurityLevel::Full => true, // All capabilities allowed
         }
+    }
+    
+    /// Create a new RuntimeContext with cross-plan parameters enabled
+    pub fn with_cross_plan_context(mut self) -> Self {
+        self.cross_plan_params.clear();
+        self
+    }
+    
+    /// Add a cross-plan parameter
+    pub fn add_cross_plan_param(&mut self, key: String, value: Value) {
+        self.cross_plan_params.insert(key, value);
+    }
+    
+    /// Get a cross-plan parameter
+    pub fn get_cross_plan_param(&self, key: &str) -> Option<&Value> {
+        self.cross_plan_params.get(key)
     }
     
     /// Check if dangerous operations should run in microVM
