@@ -591,21 +591,21 @@ Generate a plan using RTFS syntax with step special forms:
 )
 
 IMPORTANT: For data sharing between plans in intent graphs:
-- Use (set! "key" value) to publish values that other plans can access
-- Use (get "key") to retrieve values published by other plans
+- Use (set! :key value) to publish values that other plans can access
+- Use (get :key) to retrieve values published by other plans
 - Values set with set! are automatically shared across the intent graph
-- Use meaningful key names like "result", "sum", "greeting", etc.
+- Use meaningful key names like :result, :sum, :greeting, etc.
 
 Examples:
 ; Producer plan - publishes a value
 (do
   (step "compute-sum" 
-    (set! "sum" (+ 2 3))))
+    (set! :sum (+ 2 3))))
 
 ; Consumer plan - retrieves the value
 (do
   (step "display-result"
-    (let [s (get "sum")]
+    (let [s (get :sum)]
       (call :ccos.echo (str "The sum is: " s)))))
 
 Rejection Checklist - DO NOT use:
@@ -613,6 +613,7 @@ Rejection Checklist - DO NOT use:
 ❌ Custom context capabilities (not needed)
 ❌ Complex data structures in set! (keep it simple)
 ❌ Unregistered capabilities (only use :ccos.echo, :ccos.math.add)
+❌ String keys in set! - use symbols like :key not "key"
 
 Available capabilities: :ccos.echo, :ccos.math.add
 
