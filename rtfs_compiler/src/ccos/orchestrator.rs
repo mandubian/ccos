@@ -704,25 +704,38 @@ impl Orchestrator {
         root_intent_id: &str,
         initial_context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
+        // Debug logging
+        eprintln!("DEBUG: execute_intent_graph called for root_intent_id: {}", root_intent_id);
+        
         // 1. Start with an empty cross-plan param bag
         let mut enhanced_context = initial_context.clone();
         enhanced_context.cross_plan_params.clear();
         
         // 2. Execute children and merge exported vars
         let mut child_results = Vec::new();
-        for child_id in self.get_children_order(root_intent_id)? {
+        let children = self.get_children_order(root_intent_id)?;
+        eprintln!("DEBUG: Found {} children: {:?}", children.len(), children);
+        
+        for child_id in children {
+            eprintln!("DEBUG: Looking for plan for child_id: {}", child_id);
             if let Some(child_plan) = self.get_plan_for_intent(&child_id)? {
+                eprintln!("DEBUG: Found plan for child_id {}: {:?}", child_id, child_plan.plan_id);
                 let child_result = self.execute_plan(&child_plan, &enhanced_context).await?;
                 let exported = self.extract_exported_variables(&child_result);
                 enhanced_context.cross_plan_params.extend(exported);
                 child_results.push((child_id.clone(), child_result));
+            } else {
+                eprintln!("DEBUG: No plan found for child_id: {}", child_id);
             }
         }
         
         // 3. Optionally execute root plan (if any)
         let mut root_result = None;
         if let Some(root_plan) = self.get_plan_for_intent(root_intent_id)? {
+            eprintln!("DEBUG: Found root plan: {:?}", root_plan.plan_id);
             root_result = Some(self.execute_plan(&root_plan, &enhanced_context).await?);
+        } else {
+            eprintln!("DEBUG: No root plan found");
         }
         
         // 4. Build a meaningful result that summarizes the execution
@@ -750,9 +763,11 @@ impl Orchestrator {
         // so callers can detect that no plans ran rather than treating it as success.
         if result_summary.is_empty() {
             let result_value = RtfsValue::String("No plans executed".to_string());
+            eprintln!("DEBUG: No plans executed, returning failure");
             Ok(ExecutionResult { success: false, value: result_value, metadata: Default::default() })
         } else {
             let result_value = RtfsValue::String(format!("Orchestrated {} plans: {}", child_results.len(), result_summary.join(", ")));
+            eprintln!("DEBUG: Returning success with {} plans: {}", child_results.len(), result_summary.join(", "));
             Ok(ExecutionResult { success: true, value: result_value, metadata: Default::default() })
         }
     }
