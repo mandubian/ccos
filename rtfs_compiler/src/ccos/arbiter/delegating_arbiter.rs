@@ -617,6 +617,15 @@ Rejection Checklist - DO NOT use:
 
 Available capabilities: :ccos.echo, :ccos.math.add
 
+IMPORTANT: Use correct calling conventions:
+- :ccos.echo - for printing/logging, e.g., (call :ccos.echo "message")
+- :ccos.math.add - for adding numbers, e.g., (call :ccos.math.add {{:args [5 7]}})
+
+Examples of correct usage:
+(call :ccos.echo "Hello world")
+(call :ccos.math.add {{:args [5 7]}})
+(set! :result (call :ccos.math.add {{:args [10 20]}}))
+
 Plan:"#,
             intent,
             context.unwrap_or_default()
