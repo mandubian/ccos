@@ -2622,7 +2622,7 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
         "Adds numeric values".to_string(),
         Arc::new(|input| {
             match input {
-                // New calling convention: map with :args and optional :context
+                // Map format: {:args [2 3]}
                 Value::Map(map) => {
                     let args_val = map.get(&MapKey::Keyword(Keyword("args".to_string()))).cloned().unwrap_or(Value::List(vec![]));
                     match args_val {
@@ -2649,8 +2649,27 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
                         })
                     }
                 }
+                // Direct arguments format: [2, 3] (when called as (call :ccos.math.add 2 3))
+                Value::List(args) => {
+                    let mut sum = 0i64;
+                    for arg in args {
+                        match arg {
+                            Value::Integer(n) => sum += n,
+                            other => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "integer".to_string(),
+                                    actual: other.type_name().to_string(),
+                                    operation: "ccos.math.add".to_string(),
+                                })
+                            }
+                        }
+                    }
+                    Ok(Value::Integer(sum))
+                }
+                // Single integer (fallback)
+                Value::Integer(n) => Ok(Value::Integer(n)),
                 other => Err(RuntimeError::TypeError {
-                    expected: "map".to_string(),
+                    expected: "map, list, or integer".to_string(),
                     actual: other.type_name().to_string(),
                     operation: "ccos.math.add".to_string(),
                 })
