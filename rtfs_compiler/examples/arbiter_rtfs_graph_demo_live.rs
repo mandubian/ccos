@@ -587,78 +587,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                         let selected_id_for_closure = selected_id.clone();
                                         
                                         tokio::task::spawn_local(async move {
-                                            // Build a controlled runtime context for execution
+                                            // Use the orchestrator's execute_intent_graph method instead of custom logic
                                             let ctx = runtime_service::default_controlled_context();
-                                            
-                                            // Custom intent graph execution for demo since orchestrator.get_plan_for_intent is placeholder
-                                            // We'll execute children sequentially and then provide a summary
-                                            let mut child_results = Vec::new();
-                                            let mut success_count = 0;
-                                            let mut error_count = 0;
-                                            
-                                            // Get children from the intent graph
-                                            let children = if let Ok(graph_lock) = ccos_clone.get_intent_graph().lock() {
-                                                if let Some(intent) = graph_lock.get_intent(&selected_id_for_closure) {
-                                                    intent.child_intents.clone()
-                                                } else {
-                                                    Vec::new()
+                                            match ccos_clone.get_orchestrator().execute_intent_graph(&selected_id_for_closure, &ctx).await {
+                                                Ok(exec_result) => {
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec_result.success, "value": format!("{:?}", exec_result.value)});
+                                                    let _ = (dbg)(msg.to_string());
                                                 }
-                                            } else {
-                                                Vec::new()
-                                            };
-                                            
-                                            // Execute each child plan if available
-                                            for child_id in children {
-                                                // For demo purposes, we'll try to reconstruct a plan from stored plan info
-                                                // In a real implementation, this would come from the PlanArchive
-                                                if let Ok(graph_lock) = ccos_clone.get_intent_graph().lock() {
-                                                    if let Some(storable) = graph_lock.get_intent(&child_id) {
-                                                        // Try to get plan from the demo's stored plans (we need to pass this data)
-                                                        // For now, we'll create a minimal plan and execute it
-                                                        let minimal_plan = rtfs_compiler::ccos::types::Plan::new_rtfs(
-                                                            "(call :ccos.echo \"Child intent executed\")".to_string(),
-                                                            vec![child_id.clone()]
-                                                        );
-                                                        
-                                                        match ccos_clone.validate_and_execute_plan(minimal_plan, &ctx).await {
-                                                            Ok(exec) => {
-                                                                child_results.push((child_id.clone(), exec));
-                                                                success_count += 1;
-                                                            }
-                                                            Err(e) => {
-                                                                child_results.push((child_id.clone(), 
-                                                                    rtfs_compiler::ccos::types::ExecutionResult {
-                                                                        success: false,
-                                                                        value: rtfs_compiler::runtime::values::Value::String(format!("Error: {}", e)),
-                                                                        metadata: Default::default()
-                                                                    }
-                                                                ));
-                                                                error_count += 1;
-                                                            }
-                                                        }
-                                                    }
+                                                Err(e) => {
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": false, "value": format!("Orchestration failed: {}", e)});
+                                                    let _ = (dbg)(msg.to_string());
                                                 }
-                                            }
-                                            
-                                            // Build result summary
-                                            let result_summary: Vec<String> = child_results.iter()
-                                                .map(|(child_id, result)| {
-                                                    if result.success {
-                                                        format!("{}: {:?}", child_id, result.value)
-                                                    } else {
-                                                        format!("{}: failed", child_id)
-                                                    }
-                                                })
-                                                .collect();
-                                            
-                                            if result_summary.is_empty() {
-                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": false, "value": "No child intents found to execute"});
-                                                let _ = (dbg)(msg.to_string());
-                                            } else {
-                                                let success = error_count == 0;
-                                                let value = format!("Orchestrated {} plans: {}", child_results.len(), result_summary.join(", "));
-                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": success, "value": value});
-                                                let _ = (dbg)(msg.to_string());
                                             }
                                         });
                                         app.log_lines.push("🚀 Intent graph orchestration requested".into());
