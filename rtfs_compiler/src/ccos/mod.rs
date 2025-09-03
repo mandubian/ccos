@@ -128,10 +128,12 @@ impl CCOS {
         crate::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
 
         // 2. Initialize architectural components, injecting dependencies
+        let plan_archive = Arc::new(plan_archive::PlanArchive::new());
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
             Arc::clone(&capability_marketplace),
+            Arc::clone(&plan_archive),
         ));
 
         let governance_kernel = Arc::new(GovernanceKernel::new(Arc::clone(&orchestrator), Arc::clone(&intent_graph)));

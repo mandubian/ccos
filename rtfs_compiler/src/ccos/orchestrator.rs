@@ -38,6 +38,7 @@ use crate::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
 use sha2::{Digest, Sha256};
 use super::checkpoint_archive::{CheckpointArchive, CheckpointRecord};
+use super::plan_archive::PlanArchive;
 use crate::runtime::values::Value as RtfsValue;
 use chrono;
 
@@ -534,6 +535,7 @@ pub struct Orchestrator {
     intent_graph: Arc<Mutex<IntentGraph>>,
     capability_marketplace: Arc<CapabilityMarketplace>,
     checkpoint_archive: Arc<CheckpointArchive>,
+    plan_archive: Arc<PlanArchive>,
     /// Current step profile being executed (for step-level security enforcement)
     current_step_profile: Option<StepProfile>,
 }
@@ -544,12 +546,14 @@ impl Orchestrator {
         causal_chain: Arc<Mutex<CausalChain>>,
         intent_graph: Arc<Mutex<IntentGraph>>,
         capability_marketplace: Arc<CapabilityMarketplace>,
+        plan_archive: Arc<PlanArchive>,
     ) -> Self {
         Self {
             causal_chain,
             intent_graph,
             capability_marketplace,
             checkpoint_archive: Arc::new(CheckpointArchive::new()),
+            plan_archive,
             current_step_profile: None,
         }
     }
@@ -757,17 +761,49 @@ impl Orchestrator {
     fn get_children_order(&self, root_id: &str) -> RuntimeResult<Vec<String>> {
         let graph = self.intent_graph.lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
-        Ok(match graph.get_intent(&root_id.to_string()) { 
-            Some(i) => i.child_intents.clone(), 
-            None => Vec::new() 
-        })
+        
+        // Use the authoritative get_child_intents method instead of the denormalized field
+        let children = graph.get_child_intents(&root_id.to_string());
+        Ok(children.into_iter().map(|child| child.intent_id).collect())
     }
     
     /// Get plan for a specific intent
     fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
-        // This is a placeholder - in a real implementation, you'd query the plan archive
-        // For now, we'll return None to indicate no root plan
-        Ok(None)
+        // Query the plan archive for plans associated with this intent
+        let archivable_plans = self.plan_archive.get_plans_for_intent(&intent_id.to_string());
+        
+        // Convert the first available plan back to a Plan object
+        if let Some(archivable_plan) = archivable_plans.first() {
+            // Convert ArchivablePlan back to Plan
+            let plan = Plan {
+                plan_id: archivable_plan.plan_id.clone(),
+                name: archivable_plan.name.clone(),
+                intent_ids: archivable_plan.intent_ids.clone(),
+                language: super::types::PlanLanguage::Rtfs20, // Default to RTFS 2.0
+                body: super::types::PlanBody::Rtfs(
+                    archivable_plan.body.steps.first()
+                        .cloned()
+                        .unwrap_or_else(|| "()".to_string())
+                ),
+                status: archivable_plan.status.clone(),
+                created_at: archivable_plan.created_at,
+                metadata: HashMap::new(), // Convert metadata back if needed
+                input_schema: None,
+                output_schema: None,
+                policies: HashMap::new(),
+                capabilities_required: Vec::new(),
+                annotations: HashMap::new(),
+            };
+            Ok(Some(plan))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Store a plan in the plan archive
+    pub fn store_plan(&self, plan: &Plan) -> RuntimeResult<String> {
+        self.plan_archive.archive_plan(plan)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to archive plan: {}", e)))
     }
     
     /// Extract exported variables from execution result
