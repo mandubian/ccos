@@ -617,17 +617,16 @@ Rejection Checklist - DO NOT use:
 
 Available capabilities: :ccos.echo, :ccos.math.add
 
-IMPORTANT: Use correct calling conventions:
+IMPORTANT: Use correct RTFS syntax:
 - :ccos.echo - for printing/logging, e.g., (call :ccos.echo "message")
-- :ccos.math.add - for adding numbers, accepts both formats:
-  * (call :ccos.math.add 2 3) - direct arguments
-  * (call :ccos.math.add {{:args [2 3]}}) - map format
+- :ccos.math.add - for adding numbers, use direct arguments: (call :ccos.math.add 2 3)
 
 Examples of correct usage:
 (call :ccos.echo "Hello world")
 (call :ccos.math.add 2 3)
-(call :ccos.math.add {{:args [5 7]}})
 (set! :result (call :ccos.math.add 10 20))
+
+CRITICAL: Use proper RTFS syntax. ccos.math.add accepts direct arguments like (call :ccos.math.add 2 3).
 
 Plan:"#,
             intent,
