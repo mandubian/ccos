@@ -767,6 +767,12 @@ impl Orchestrator {
         
         Ok(children.into_iter().map(|child| child.intent_id).collect())
     }
+
+    #[cfg(test)]
+    fn test_get_children_order(&self, root_id: &str) -> Result<Vec<String>, String> {
+        self.get_children_order(root_id)
+            .map_err(|e| format!("get_children_order failed: {:?}", e))
+    }
     
     /// Get plan for a specific intent
     fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
