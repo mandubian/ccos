@@ -765,12 +765,6 @@ impl Orchestrator {
         // Use the authoritative get_child_intents method instead of the denormalized field
         let children = graph.get_child_intents(&root_id.to_string());
         
-        // Debug logging to see what's happening
-        let edges = graph.get_edges_for_intent(&root_id.to_string());
-        eprintln!("DEBUG: get_children_order for root_id '{}'", root_id);
-        eprintln!("DEBUG: Found {} edges: {:?}", edges.len(), edges);
-        eprintln!("DEBUG: Found {} children: {:?}", children.len(), children.iter().map(|c| &c.intent_id).collect::<Vec<_>>());
-        
         Ok(children.into_iter().map(|child| child.intent_id).collect())
     }
     
