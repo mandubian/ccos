@@ -619,12 +619,15 @@ Available capabilities: :ccos.echo, :ccos.math.add
 
 IMPORTANT: Use correct calling conventions:
 - :ccos.echo - for printing/logging, e.g., (call :ccos.echo "message")
-- :ccos.math.add - for adding numbers, e.g., (call :ccos.math.add {{:args [5 7]}})
+- :ccos.math.add - for adding numbers, accepts both formats:
+  * (call :ccos.math.add 2 3) - direct arguments
+  * (call :ccos.math.add {{:args [2 3]}}) - map format
 
 Examples of correct usage:
 (call :ccos.echo "Hello world")
+(call :ccos.math.add 2 3)
 (call :ccos.math.add {{:args [5 7]}})
-(set! :result (call :ccos.math.add {{:args [10 20]}}))
+(set! :result (call :ccos.math.add 10 20))
 
 Plan:"#,
             intent,
