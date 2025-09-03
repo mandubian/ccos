@@ -2622,34 +2622,7 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
         "Adds numeric values".to_string(),
         Arc::new(|input| {
             match input {
-                // Map format: {:args [2 3]}
-                Value::Map(map) => {
-                    let args_val = map.get(&MapKey::Keyword(Keyword("args".to_string()))).cloned().unwrap_or(Value::List(vec![]));
-                    match args_val {
-                        Value::List(args) => {
-                            let mut sum = 0i64;
-                            for arg in args {
-                                match arg {
-                                    Value::Integer(n) => sum += n,
-                                    other => {
-                                        return Err(RuntimeError::TypeError {
-                                            expected: "integer".to_string(),
-                                            actual: other.type_name().to_string(),
-                                            operation: "ccos.math.add".to_string(),
-                                        })
-                                    }
-                                }
-                            }
-                            Ok(Value::Integer(sum))
-                        }
-                        other => Err(RuntimeError::TypeError {
-                            expected: "list".to_string(),
-                            actual: other.type_name().to_string(),
-                            operation: "ccos.math.add".to_string(),
-                        })
-                    }
-                }
-                // Direct arguments format: [2, 3] (when called as (call :ccos.math.add 2 3))
+                // Direct arguments: (call :ccos.math.add 2 3)
                 Value::List(args) => {
                     let mut sum = 0i64;
                     for arg in args {
@@ -2666,10 +2639,25 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
                     }
                     Ok(Value::Integer(sum))
                 }
-                // Single integer (fallback)
-                Value::Integer(n) => Ok(Value::Integer(n)),
+                // Keyword arguments: (call :ccos.math.add {:a 2 :b 3})
+                Value::Map(map) => {
+                    let mut sum = 0i64;
+                    for (key, value) in map {
+                        match value {
+                            Value::Integer(n) => sum += n,
+                            other => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "integer".to_string(),
+                                    actual: other.type_name().to_string(),
+                                    operation: "ccos.math.add".to_string(),
+                                })
+                            }
+                        }
+                    }
+                    Ok(Value::Integer(sum))
+                }
                 other => Err(RuntimeError::TypeError {
-                    expected: "map, list, or integer".to_string(),
+                    expected: "list or map".to_string(),
                     actual: other.type_name().to_string(),
                     operation: "ccos.math.add".to_string(),
                 })
