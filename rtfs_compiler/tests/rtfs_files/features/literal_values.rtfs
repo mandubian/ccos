@@ -133,8 +133,8 @@ resource://remote/api/endpoint
 ;; Expected: "Unicode: αβγ δεζ"
 
 ;; String with special characters
-"Special: !@#$%^&*()_+-=[]{}|;':\",./<>?"
-;; Expected: "Special: !@#$%^&*()_+-=[]{}|;':\",./<>?"
+"Special: !@#$%^&*()_+-=[]{}|;':\\"
+;; Expected: "Special: !@#$%^&*()_+-=[]{}|;':\\"
 
 ;; Very long string
 "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."

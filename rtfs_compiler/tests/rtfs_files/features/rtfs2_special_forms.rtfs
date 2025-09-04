@@ -134,9 +134,9 @@
 ;; Performance monitoring
 (let [start-time (current-time-millis)]
   (step :info "Starting performance test")
-  (let [result (expensive-computation)]
+  (let [result (map (fn [x] (* x x)) (range 1 11))]  ;; Simulate computation
     (let [duration (- (current-time-millis) start-time)]
-      (step :info "Performance test completed" 
+      (step :info "Performance test completed"
             {:duration-ms duration :result-size (count result)})
       result)))
 ;; Expected: Result with performance logging

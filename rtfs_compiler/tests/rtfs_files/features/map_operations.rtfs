@@ -95,15 +95,15 @@
 ;; Expected: nil
 
 ;; Map filtering
-(filter (fn [[k v]] (> v 5)) {:a 3 :b 7 :c 10 :d 2})
+(filter (fn [[k v]] (> v 5)) (seq {:a 3 :b 7 :c 10 :d 2}))
 ;; Expected: [[:b 7] [:c 10]]
 
 ;; Map mapping over keys/values
-(map (fn [[k v]] [k (* v 2)]) {:a 1 :b 2 :c 3})
+(map (fn [[k v]] [k (* v 2)]) (seq {:a 1 :b 2 :c 3}))
 ;; Expected: [[:a 2] [:b 4] [:c 6]]
 
 ;; Map reduction
-(reduce (fn [acc [k v]] (+ acc v)) 0 {:a 1 :b 2 :c 3})
+(reduce (fn [acc [k v]] (+ acc v)) 0 (seq {:a 1 :b 2 :c 3}))
 ;; Expected: 6
 
 ;; Map destructuring in let
