@@ -13,8 +13,13 @@ fn test_checkpoint_and_resume_helpers() {
     let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
         Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
     );
-    let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace));
-
+    let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
+    let orchestrator = Orchestrator::new(
+        causal_chain.clone(),
+        intent_graph.clone(),
+        Arc::new(capability_marketplace),
+        plan_archive,
+    );
     // Minimal plan and evaluator
     let plan = Plan::new_rtfs("(+ 1 1)".to_string(), vec!["intent-1".to_string()]);
     let runtime_context = RuntimeContext::pure();

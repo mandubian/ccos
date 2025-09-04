@@ -4,7 +4,7 @@ use rtfs_compiler::ccos::arbiter::plan_generation::{PlanGenerationProvider, Stub
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::types::IntentStatus;
-use rtfs_compiler::ccos::orchestrator::Orchestrator;
+use rtfs_compiler::ccos::orchestrator::{self, Orchestrator};
 use rtfs_compiler::ccos::types::{Intent, StorableIntent};
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::security::RuntimeContext;
@@ -65,7 +65,14 @@ async fn stub_plan_generation_and_execution_works() {
         "ccos.echo".to_string(),
         "ccos.math.add".to_string(),
     ]);
-    let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), marketplace.clone());
+    
+    // let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), marketplace.clone());
+    let orchestrator = orchestrator::Orchestrator::new(
+        causal_chain.clone(),
+        intent_graph.clone(),
+        marketplace.clone(),
+        Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new()),
+    );
     let exec = orchestrator.execute_plan(&plan, &runtime_ctx).await.unwrap();
 
     // Assert intent transitioned to Completed
