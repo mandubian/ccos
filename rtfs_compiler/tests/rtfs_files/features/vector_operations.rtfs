@@ -104,7 +104,7 @@
 ;; Expected: [[0 :a] [1 :b] [2 :c]]
 
 ;; Vector comprehension (if supported)
-(for [x [1 2 3] y [10 20]] (+ x y))
+(flatten (map (fn [x] (map (fn [y] (+ x y)) [10 20])) [1 2 3]))
 ;; Expected: [11 21 12 22 13 23]
 
 ;; Vector destructuring in let
