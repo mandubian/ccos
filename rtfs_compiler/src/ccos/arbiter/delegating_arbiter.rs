@@ -5,15 +5,17 @@
 //! understand requests and then delegates to specialized agents when appropriate.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use regex;
-use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent, ExecutionResult};
+use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent, ExecutionResult, IntentStatus};
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition};
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
+use crate::ccos::arbiter::plan_generation::{PlanGenerationResult, LlmRtfsPlanGenerationProvider, PlanGenerationProvider};
 use crate::ccos::delegation_keys::{generation, agent};
 
 use crate::ast::TopLevel;
@@ -1196,6 +1198,35 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
             Ok(())
         })();
         Ok(root_id)
+    }
+
+    async fn generate_plan_for_intent(
+        &self,
+        intent: &StorableIntent,
+    ) -> Result<PlanGenerationResult, RuntimeError> {
+        // Use LLM provider-based plan generator
+        let provider_cfg = self.llm_config.to_provider_config();
+        let provider = crate::ccos::arbiter::llm_provider::LlmProviderFactory::create_provider(provider_cfg.clone()).await?;
+        let plan_gen_provider = LlmRtfsPlanGenerationProvider::new(provider_cfg);
+
+        // Convert storable intent back to runtime Intent (minimal fields)
+        let rt_intent = Intent {
+            intent_id: intent.intent_id.clone(),
+            name: intent.name.clone(),
+            original_request: intent.original_request.clone(),
+            goal: intent.goal.clone(),
+            constraints: HashMap::new(),
+            preferences: HashMap::new(),
+            success_criteria: None,
+            status: IntentStatus::Active,
+            created_at: intent.created_at,
+            updated_at: intent.updated_at,
+            metadata: HashMap::new(),
+        };
+
+        // For now, we don't pass a real marketplace; provider currently doesn't use it.
+        let marketplace = Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()))));
+        plan_gen_provider.generate_plan(&rt_intent, marketplace).await
     }
 }
 

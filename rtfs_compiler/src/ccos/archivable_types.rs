@@ -8,6 +8,7 @@
 /// already serves as the official archivable version with full context.
 
 use serde::{Deserialize, Serialize};
+use serde_json;
 use super::types::{Plan, PlanLanguage, PlanStatus, PlanBody, Action, StorableIntent};
 use super::storage::Archivable;
 use std::collections::HashMap;
@@ -24,6 +25,13 @@ pub struct ArchivablePlan {
     pub status: PlanStatus,
     pub created_at: u64,
     pub metadata: HashMap<String, String>, // Simplified metadata as strings
+    
+    // New first-class Plan attributes
+    pub input_schema: Option<String>,      // Schema for plan inputs (serialized as JSON string)
+    pub output_schema: Option<String>,     // Schema for plan outputs (serialized as JSON string)
+    pub policies: HashMap<String, String>, // Execution policies (serialized as JSON strings)
+    pub capabilities_required: Vec<String>, // Capabilities this plan depends on
+    pub annotations: HashMap<String, String>, // Provenance and metadata (serialized as JSON strings)
 }
 
 impl Archivable for ArchivablePlan {
@@ -75,6 +83,13 @@ impl From<&Plan> for ArchivablePlan {
             status: plan.status.clone(),
             created_at: plan.created_at,
             metadata: plan.metadata.iter().map(|(k, v)| (k.clone(), format!("{:?}", v))).collect(),
+            
+            // Serialize new fields as JSON strings
+            input_schema: plan.input_schema.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()),
+            output_schema: plan.output_schema.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()),
+            policies: plan.policies.iter().map(|(k, v)| (k.clone(), serde_json::to_string(v).unwrap_or_default())).collect(),
+            capabilities_required: plan.capabilities_required.clone(),
+            annotations: plan.annotations.iter().map(|(k, v)| (k.clone(), serde_json::to_string(v).unwrap_or_default())).collect(),
         }
     }
 }
@@ -147,6 +162,11 @@ mod tests {
             status: PlanStatus::Draft,
             created_at: 0,
             metadata: HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            policies: HashMap::new(),
+            capabilities_required: vec![],
+            annotations: HashMap::new(),
         };
         
         assert_eq!(plan.entity_id(), "test-plan");

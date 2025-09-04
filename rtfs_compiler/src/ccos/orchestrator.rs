@@ -18,7 +18,10 @@
 //! - Resource limits and isolation levels
 
 use std::sync::{Arc, Mutex};
+use serde_json::{self, Value as JsonValue};
 use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::values::Value;
+use crate::ast::MapKey;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::host::RuntimeHost;
@@ -789,6 +792,40 @@ impl Orchestrator {
             .map_err(|e| format!("get_children_order failed: {:?}", e))
     }
     
+    /// Convert serde_json::Value to runtime::values::Value
+    fn json_value_to_runtime_value(json_val: JsonValue) -> Value {
+        match json_val {
+            JsonValue::Null => Value::Nil,
+            JsonValue::Bool(b) => Value::Boolean(b),
+            JsonValue::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Integer(i)
+                } else if let Some(f) = n.as_f64() {
+                    Value::Float(f)
+                } else {
+                    Value::String(n.to_string())
+                }
+            },
+            JsonValue::String(s) => Value::String(s),
+            JsonValue::Array(arr) => {
+                let runtime_vec: Vec<Value> = arr.into_iter()
+                    .map(Self::json_value_to_runtime_value)
+                    .collect();
+                Value::Vector(runtime_vec)
+            },
+            JsonValue::Object(obj) => {
+                let mut runtime_map = std::collections::HashMap::new();
+                for (k, v) in obj {
+                    runtime_map.insert(
+                        MapKey::String(k),
+                        Self::json_value_to_runtime_value(v)
+                    );
+                }
+                Value::Map(runtime_map)
+            }
+        }
+    }
+    
     /// Get plan for a specific intent
     fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
         // Query the plan archive for plans associated with this intent
@@ -796,6 +833,12 @@ impl Orchestrator {
         
         // Convert the first available plan back to a Plan object
         if let Some(archivable_plan) = archivable_plans.first() {
+            // Helper function to safely deserialize JSON strings
+            let deserialize_json = |json_str: &Option<String>| -> Option<Value> {
+                json_str.as_ref().and_then(|s| serde_json::from_str(s).ok())
+                    .map(Self::json_value_to_runtime_value)
+            };
+            
             // Convert ArchivablePlan back to Plan
             let plan = Plan {
                 plan_id: archivable_plan.plan_id.clone(),
@@ -809,12 +852,30 @@ impl Orchestrator {
                 ),
                 status: archivable_plan.status.clone(),
                 created_at: archivable_plan.created_at,
-                metadata: HashMap::new(), // Convert metadata back if needed
-                input_schema: None,
-                output_schema: None,
-                policies: HashMap::new(),
-                capabilities_required: Vec::new(),
-                annotations: HashMap::new(),
+                metadata: archivable_plan.metadata.iter()
+                    .filter_map(|(k, v)| {
+                        serde_json::from_str(v).ok()
+                            .map(Self::json_value_to_runtime_value)
+                            .map(|val| (k.clone(), val))
+                    })
+                    .collect(),
+                input_schema: deserialize_json(&archivable_plan.input_schema),
+                output_schema: deserialize_json(&archivable_plan.output_schema),
+                policies: archivable_plan.policies.iter()
+                    .filter_map(|(k, v)| {
+                        serde_json::from_str(v).ok()
+                            .map(Self::json_value_to_runtime_value)
+                            .map(|val| (k.clone(), val))
+                    })
+                    .collect(),
+                capabilities_required: archivable_plan.capabilities_required.clone(),
+                annotations: archivable_plan.annotations.iter()
+                    .filter_map(|(k, v)| {
+                        serde_json::from_str(v).ok()
+                            .map(Self::json_value_to_runtime_value)
+                            .map(|val| (k.clone(), val))
+                    })
+                    .collect(),
             };
             Ok(Some(plan))
         } else {
