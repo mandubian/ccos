@@ -111,27 +111,33 @@ fn extract_test_cases(content: &str) -> Vec<(String, String)> {
 
     for line in content.lines() {
         let trimmed = line.trim();
-        
+
         if trimmed.starts_with(";; Expected:") {
             if !current_code.trim().is_empty() {
                 current_expected = trimmed.trim_start_matches(";; Expected:").trim().to_string();
                 in_expected = true;
             }
-        } else if trimmed.starts_with(";;") || trimmed.is_empty() {
+        } else if trimmed.starts_with(";;") && !trimmed.starts_with(";; Expected:") {
+            // This is a regular comment line (not an Expected line)
+            // If we have a complete test case, push it before starting a new one
             if in_expected && !current_code.trim().is_empty() {
                 test_cases.push((current_code.trim().to_string(), current_expected.clone()));
                 current_code.clear();
                 current_expected.clear();
                 in_expected = false;
             }
-            // Skip comment lines
+            // Regular comment lines don't start new test cases
+        } else if trimmed.is_empty() {
+            // Empty line - if we have a complete test case, push it
+            if in_expected && !current_code.trim().is_empty() {
+                test_cases.push((current_code.trim().to_string(), current_expected.clone()));
+                current_code.clear();
+                current_expected.clear();
+                in_expected = false;
+            }
+            // Empty lines between test cases are fine
         } else {
-            if in_expected && !current_code.trim().is_empty() {
-                test_cases.push((current_code.trim().to_string(), current_expected.clone()));
-                current_code.clear();
-                current_expected.clear();
-                in_expected = false;
-            }
+            // Non-comment, non-empty line - this is code
             current_code.push_str(line);
             current_code.push('\n');
         }

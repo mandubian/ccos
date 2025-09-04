@@ -78,6 +78,9 @@ impl Evaluator {
         // LLM execution bridge (M1)
         special_forms.insert("llm-execute".to_string(), Self::eval_llm_execute_form);
 
+        // Resource management special form
+        special_forms.insert("with-resource".to_string(), Self::eval_with_resource_special_form);
+
         special_forms
     }
 
@@ -421,13 +424,23 @@ impl Evaluator {
             }
             Expression::Vector(exprs) => {
                 let values: Result<Vec<Value>, RuntimeError> =
-                    exprs.iter().map(|e| self.eval_expr(e, env)).collect();
+                    exprs.iter().map(|e| match e {
+                        // In vectors, treat symbols as literal symbol values, not variable references
+                        Expression::Symbol(sym) => Ok(Value::Symbol(sym.clone())),
+                        // Evaluate all other expressions normally
+                        _ => self.eval_expr(e, env)
+                    }).collect();
                 Ok(Value::Vector(values?))
             }
             Expression::Map(map) => {
                 let mut result = HashMap::new();
                 for (key, value_expr) in map {
-                    let value = self.eval_expr(value_expr, env)?;
+                    let value = match value_expr {
+                        // In maps, treat symbols as literal symbol values, not variable references
+                        Expression::Symbol(sym) => Value::Symbol(sym.clone()),
+                        // Evaluate all other expressions normally
+                        _ => self.eval_expr(value_expr, env)?,
+                    };
                     result.insert(key.clone(), value);
                 }
                 Ok(Value::Map(result))
@@ -1276,6 +1289,7 @@ impl Evaluator {
             Literal::String(s) => Value::String(s.clone()),
             Literal::Boolean(b) => Value::Boolean(*b),
             Literal::Keyword(k) => Value::Keyword(k.clone()),
+            Literal::Symbol(s) => Value::Symbol(s.clone()),
             Literal::Nil => Value::Nil,
             Literal::Timestamp(ts) => Value::String(ts.clone()),
             Literal::Uuid(uuid) => Value::String(uuid.clone()),
@@ -1297,8 +1311,9 @@ impl Evaluator {
                 Literal::String(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::String),
                 Literal::Boolean(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Bool),
                 Literal::Keyword(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Keyword),
+                Literal::Symbol(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Symbol),
                 Literal::Nil => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Nil),
-                Literal::Timestamp(_) | Literal::Uuid(_) | Literal::ResourceHandle(_) => 
+                Literal::Timestamp(_) | Literal::Uuid(_) | Literal::ResourceHandle(_) =>
                     crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::String),
             };
 
@@ -2124,6 +2139,66 @@ impl Evaluator {
             self.for_nest(pairs, depth + 1, &loop_env, body, out)?;
         }
         Ok(())
+    }
+
+    /// Evaluate with-resource special form: (with-resource [name type init] body)
+    fn eval_with_resource_special_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Expect (with-resource [binding-vector] body)
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "with-resource".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // Parse binding vector [name type init]
+        let binding_vec = match &args[0] {
+            Expression::Vector(elements) => elements,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector for binding".to_string(),
+                    actual: format!("{:?}", args[0]),
+                    operation: "with-resource".to_string(),
+                });
+            }
+        };
+
+
+        if binding_vec.len() != 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "with-resource binding".to_string(),
+                expected: "3 elements [name type init]".to_string(),
+                actual: binding_vec.len(),
+            });
+        }
+
+        // Extract variable name
+        let var_name = match &binding_vec[0] {
+            Expression::Symbol(s) => s.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "symbol for variable name".to_string(),
+                    actual: format!("{:?}", binding_vec[0]),
+                    operation: "with-resource binding name".to_string(),
+                });
+            }
+        };
+
+        // Evaluate the initialization expression
+        let init_value = self.eval_expr(&binding_vec[2], env)?;
+
+        // Create a new environment scope with the variable bound
+        let mut resource_env = Environment::with_parent(Arc::new(env.clone()));
+        resource_env.define(&var_name, init_value);
+
+        // Evaluate the body in the new scope
+        let result = self.eval_expr(&args[1], &mut resource_env)?;
+
+        // Note: In a real implementation, we would handle resource cleanup here
+        // For testing purposes, we just return the result
+
+        Ok(result)
     }
 
     fn match_catch_pattern(

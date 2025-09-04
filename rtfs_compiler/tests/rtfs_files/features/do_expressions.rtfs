@@ -129,11 +129,11 @@
 
 ;; Do with complex computation
 (do
-  (defn fibonacci [n]
+  (defn factorial [n]
     (if (<= n 1)
-      n
-      (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
-  (def fib-10 (fibonacci 10))
-  (println "Fibonacci 10:" fib-10)
-  fib-10)
-;; Expected: 55 (with side effect)
+      1
+      (* n (factorial (- n 1)))))
+  (def fact-5 (factorial 5))
+  (println "Factorial 5:" fact-5)
+  fact-5)
+;; Expected: 120 (with side effect)

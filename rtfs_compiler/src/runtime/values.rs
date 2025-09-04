@@ -485,6 +485,7 @@ impl From<Literal> for Value {
             Literal::String(s) => Value::String(s),
             Literal::Boolean(b) => Value::Boolean(b),
             Literal::Keyword(k) => Value::Keyword(k),
+            Literal::Symbol(s) => Value::Symbol(s),
             Literal::Nil => Value::Nil,
             Literal::Timestamp(ts) => Value::Timestamp(ts),
             Literal::Uuid(uuid) => Value::Uuid(uuid),
