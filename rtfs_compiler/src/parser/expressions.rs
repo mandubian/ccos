@@ -155,6 +155,40 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                 }
             }
         }
+        Rule::metadata => {
+            // Parse metadata like ^{:doc "..."} or ^{:key value}
+            let mut inner = pair.into_inner();
+            let map_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "metadata requires a map".to_string(),
+                span: Some(pair_to_source_span(&current_pair_for_span))
+            })?;
+
+            // The map_pair should be a general_meta rule containing a map
+            let map_inner = map_pair.into_inner();
+            let mut metadata_map = std::collections::HashMap::new();
+
+            // Parse the map entries
+            for entry_pair in map_inner {
+                if entry_pair.as_rule() == Rule::map_entry {
+                    let entry_span = pair_to_source_span(&entry_pair);
+                    let mut entry_inner = entry_pair.into_inner();
+                    let key_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                        message: "map_entry requires key".to_string(),
+                        span: Some(entry_span.clone())
+                    })?;
+                    let value_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                        message: "map_entry requires value".to_string(),
+                        span: Some(entry_span)
+                    })?;
+
+                    let key = build_map_key(key_pair)?;
+                    let value = build_expression(value_pair)?;
+                    metadata_map.insert(key, value);
+                }
+            }
+
+            Ok(Expression::Metadata(metadata_map))
+        }
         Rule::WHEN => Err(PestParseError::InvalidInput {
             message: "'when' keyword found in unexpected context - should only appear in match expressions".to_string(),
             span: Some(pair_to_source_span(&current_pair_for_span))
