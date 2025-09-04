@@ -35,12 +35,18 @@ Key changes (high-level)
   - Evaluator Implementation: Added `Expression::Deref` handling in `src/runtime/evaluator.rs` that desugars `@atom-name` to `(deref atom-name)`
   - AST Support: Added `Deref` variant to `Expression` enum and proper validation in `src/ast.rs`
   - Test Verification: Added deref sugar test to `tests/rtfs_files/features/mutation_and_state.rtfs` - test passes with expected result `42`
+- **Dotimes Loop Fix**: 
+  - Fixed `dotimes` special form scoping issue where binding vector `[i n]` was being evaluated as expression
+  - Changed implementation to extract symbol and count directly from AST without evaluating binding vector
+  - Added `dotimes` support to IR converter for compatibility with IR execution mode
+  - Test `do_expressions[7]` now passes in both AST and IR modes with correct result `10`
 
 Validation
 - `cargo build` succeeds with no compilation errors ✅
 - `cargo test --lib` passes all 367 tests ✅
 - `cargo test --test e2e_features function_expressions` passes all 20 test cases ✅
 - `cargo test --test e2e_features mutation_and_state` passes all 4 test cases (including deref sugar) ✅
+- `cargo test --test e2e_features do_expressions` test case 7 (dotimes with atoms) now passes ✅
 - Recursion detection works for complex nested function structures ✅
 - Mutation primitives (`atom`, `deref`, `reset!`, `assoc!`) functional ✅
 - Reader deref sugar `@atom-name` works correctly ✅
@@ -55,6 +61,8 @@ How to reproduce
 cd rtfs_compiler
 cargo test --test e2e_features function_expressions -- --nocapture
 cargo test --test e2e_features mutation_and_state -- --nocapture
+# Test specific dotimes functionality:
+echo '(do (def sum (atom 0)) (dotimes [i 5] (reset! sum (+ (deref sum) i))) (deref sum))' | cargo run --bin rtfs-repl
 ```
 
 Notes
@@ -62,5 +70,6 @@ Notes
 - Mutation primitives provide RTFS with state management capabilities while maintaining immutability-by-default
 - Integer keys are now supported in map operations alongside strings and keywords
 - Reader deref sugar `@atom-name` provides cleaner syntax for atom dereferencing
-- All tests now pass: 367 library tests + 2 core feature test suites
-- Fixed critical bugs in stdlib filter function and expression parser keyword handling
+- Dotimes special form now works correctly with proper loop variable scoping
+- All tests now pass: 367 library tests + multiple core feature test suites
+- Fixed critical bugs in stdlib filter function, expression parser keyword handling, and dotimes scoping
