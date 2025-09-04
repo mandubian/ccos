@@ -18,7 +18,7 @@ Thumbs.db
 
 # VS Code settings
 .vscode/
-
+.vscode/*
 # JetBrains IDEs
 .idea/
 
