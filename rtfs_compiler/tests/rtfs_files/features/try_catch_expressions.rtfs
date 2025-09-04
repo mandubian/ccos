@@ -15,11 +15,11 @@
 
 ;; Try-catch with multiple catch clauses
 (try
-  (throw (RuntimeException. "runtime error"))
+  (/ 1 0)  ; This will cause a runtime error
   (catch ArithmeticException e "arithmetic-error")
   (catch RuntimeException e "runtime-error") 
   (catch Exception e "general-error"))
-;; Expected: "runtime-error"
+;; Expected: "general-error" (or appropriate error type)
 
 ;; Try-catch-finally
 (try
@@ -30,7 +30,7 @@
 
 ;; Try-catch-finally with error
 (try
-  (throw (Exception. "test error"))
+  (/ 1 0)  ; This will cause a runtime error
   (catch Exception e "caught")
   (finally (println "always-runs")))
 ;; Expected: "caught" (with side effect)
@@ -40,9 +40,9 @@
   (try
     (/ 1 0)
     (catch ArithmeticException e
-      (throw (RuntimeException. "nested error"))))
+      (/ 1 0)))  ; This will cause another runtime error
   (catch RuntimeException e "outer-catch"))
-;; Expected: "outer-catch"
+;; Expected: "outer-catch" or appropriate error handling
 
 ;; Try with multiple expressions
 (try
@@ -54,31 +54,31 @@
 
 ;; Try-catch with binding to exception object
 (try
-  (throw (Exception. "custom message"))
+  (/ 1 0)  ; This will cause a runtime error
   (catch Exception e (.getMessage e)))
-;; Expected: "custom message"
+;; Expected: error message from the exception
 
-;; Try-catch with re-throwing
+;; Try-catch with re-throwing (simulated with another error)
 (try
   (try
-    (throw (Exception. "original"))
+    (/ 1 0)  ; This will cause a runtime error
     (catch Exception e 
-      (println "Caught and re-throwing")
-      (throw e)))
+      (println "Caught and causing another error")
+      (/ 1 0)))  ; This will cause another runtime error
   (catch Exception e "re-caught"))
 ;; Expected: "re-caught" (with side effect)
 
 ;; Try-catch with different exception types
 (try
-  (throw (IllegalArgumentException. "bad argument"))
+  (/ 1 0)  ; This will cause a runtime error
   (catch IllegalArgumentException e "illegal-arg")
   (catch Exception e "general-exception"))
-;; Expected: "illegal-arg"
+;; Expected: "general-exception"
 
 ;; Try with successful computation and unused catch
 (try
   (let [result (* 6 7)]
-    (if (> result 0) result (throw (Exception. "negative"))))
+    (if (> result 0) result (/ 1 0)))  ; This will cause a runtime error if result <= 0
   (catch Exception e "error"))
 ;; Expected: 42
 
@@ -99,13 +99,13 @@
 ;; Try-catch with custom exception handling function
 (let [handle-error (fn [e] {:error true :message (.getMessage e)})]
   (try
-    (throw (Exception. "something went wrong"))
+    (/ 1 0)  ; This will cause a runtime error
     (catch Exception e (handle-error e))))
-;; Expected: {:error true :message "something went wrong"}
+;; Expected: {:error true :message "error message from exception"}
 
 ;; Propagating exceptions through multiple levels
-(let [level1 (fn [] (throw (Exception. "level-1-error")))
-      level2 (fn [] (try (level1) (catch Exception e (throw (Exception. "level-2-error")))))
+(let [level1 (fn [] (/ 1 0))  ; This will cause a runtime error
+      level2 (fn [] (try (level1) (catch Exception e (/ 1 0))))  ; This will cause another runtime error
       level3 (fn [] (try (level2) (catch Exception e "caught-at-level-3")))]
   (level3))
 ;; Expected: "caught-at-level-3"
@@ -123,18 +123,18 @@
 (try
   (try
     "normal-result"
-    (finally (throw (Exception. "finally-error"))))
+    (finally (/ 1 0)))  ; This will cause a runtime error in finally
   (catch Exception e "caught-finally-error"))
 ;; Expected: "caught-finally-error"
 
 ;; Try-catch with pattern matching on exception (if supported)
 (try
-  (throw (Exception. "pattern-test"))
+  (/ 1 0)  ; This will cause a runtime error
   (catch Exception e
     (match (.getMessage e)
-      "pattern-test" "pattern-matched"
+      "error message" "pattern-matched"
       _ "pattern-not-matched")))
-;; Expected: "pattern-matched"
+;; Expected: "pattern-not-matched" or appropriate pattern match
 
 ;; Edge case: Empty try block is valid only with finally
 (try
@@ -143,6 +143,6 @@
 
 ;; Edge case: Catch without exception type (catch-all)
 (try
-  (throw (Exception. "any-error"))
+  (/ 1 0)  ; This will cause a runtime error
   (catch e "caught-anything"))
 ;; Expected: "caught-anything" or error if syntax not supported

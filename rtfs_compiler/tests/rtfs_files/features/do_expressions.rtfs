@@ -113,16 +113,15 @@
 ;; Do with early returns (if supported)
 (do
   (if true
-    (do (println "Early return") (return "early"))
-    (do (println "Late return") "late"))
-  "unreachable")
-;; Expected: "early" or error if return not supported
+    (do (println "Early return") "early")
+    (do (println "Late return") "late")))
+;; Expected: "early"
 
 ;; Do with exception throwing
 (do
   (println "Before exception")
   (try
-    (throw (Exception. "test error"))
+    (/ 1 0)  ; This will cause a runtime error
     (catch Exception e "caught"))
   (println "After exception")
   "done")

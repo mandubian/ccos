@@ -56,6 +56,17 @@ pub enum MapKey {
     Integer(i64),
 }
 
+impl MapKey {
+    /// Convert MapKey to a string representation
+    pub fn to_string(&self) -> String {
+        match self {
+            MapKey::Keyword(k) => format!(":{}", k.0),
+            MapKey::String(s) => s.clone(),
+            MapKey::Integer(i) => i.to_string(),
+        }
+    }
+}
+
 // --- Patterns for Destructuring (let, fn params) ---
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
