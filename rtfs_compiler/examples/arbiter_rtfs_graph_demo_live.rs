@@ -167,23 +167,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
     let local = tokio::task::LocalSet::new();
 
-    local.block_on(&rt, async move {
-
-        // Terminal setup
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+    let _ = local.block_on(&rt, async move {
 
         // Create logs directory if it doesn't exist
         std::fs::create_dir_all("logs").unwrap_or_else(|e| { eprintln!("Warning: Failed to create logs directory: {}", e); });
 
-    // Create a channel for debug messages (we now send compact JSON strings)
-    let (debug_tx, mut debug_rx) = mpsc::channel::<String>(100);
+        // Create a channel for debug messages (we now send compact JSON strings)
+        let (debug_tx, mut debug_rx) = mpsc::channel::<String>(100);
 
         // Initialize CCOS + runtime service
-    let debug_callback = Arc::new(move |msg: String| {
+        let debug_callback = Arc::new(move |msg: String| {
             // log with timestamp and forward the raw JSON message into channel
             let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
             let log_msg = format!("[{}] {}", timestamp, msg);
@@ -192,8 +185,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
             }
             let _ = debug_tx.try_send(msg);
         });
-    let debug_callback_for_ccos = debug_callback.clone();
-    let ccos = Arc::new(CCOS::new_with_debug_callback(Some(debug_callback_for_ccos)).await.expect("init CCOS"));
+        let debug_callback_for_ccos = debug_callback.clone();
+        let ccos = Arc::new(CCOS::new_with_debug_callback(Some(debug_callback_for_ccos)).await.expect("init CCOS"));
         let handle = runtime_service::start_service(Arc::clone(&ccos)).await;
         let mut evt_rx = handle.subscribe();
         let cmd_tx = handle.commands();
@@ -202,72 +195,282 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
         if let Some(goal) = args.goal { app.goal_input = goal; } else { app.goal_input = "Create a financial budget for a small business including expense categories, revenue projections, and a monthly cash flow forecast".to_string(); }
 
         // If headless flag is set, run a short non-interactive demo and exit
-    if args.headless {
+        if args.headless {
             let goal = app.goal_input.clone();
             app.log_lines.push(format!("🔬 Headless run: {}", goal));
+
             // Try to get a delegating arbiter
             if let Some(arb) = ccos.get_delegating_arbiter() {
-                // Request graph
                 match arb.natural_language_to_graph(&goal).await {
                     Ok(root_id) => {
+                        // Wait briefly for the generated intent to be persisted/visible to the intent graph
+                        for _ in 0..10 {
+                            if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                                if graph_lock.get_intent(&root_id).is_some() { break; }
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+
                         // Emit GRAPH_ROOT JSON to stdout
                         let msg = serde_json::json!({"type":"GRAPH_ROOT","intent_id": root_id});
                         println!("{}", msg.to_string());
 
-                        // Read stored intents and pick one to generate a plan for
-                        if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                        // Select a stored intent (clone it while holding the lock, then drop the lock)
+                        let chosen_storable = if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                             let all = graph_lock.storage.get_all_intents_sync();
-                            if let Some(st) = all.get(0) {
-                                // Clone the storable intent so we don't hold a borrow into `all`
-                                let st_owned = st.clone();
-                                match arb.generate_plan_for_intent(&st_owned).await {
-                                    Ok(res) => {
-                                        let body = match res.plan.body {
-                                            rtfs_compiler::ccos::types::PlanBody::Rtfs(ref s) => s.clone(),
-                                            _ => "".to_string(),
-                                        };
-                                        let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id, "plan_id": res.plan.plan_id, "body": body});
-                                        println!("{}", msg.to_string());
+                            all.get(0).cloned()
+                        } else { None };
 
-                                        // Auto-execute the generated plan in headless mode to produce an EXEC_RESULT
-                                        // Build a minimal RuntimeContext using runtime_service helper
-                                        let plan_clone = res.plan.clone();
-                                        let dbg = debug_callback.clone();
-                                        let ccos_clone = Arc::clone(&ccos);
-                                        tokio::task::spawn_local(async move {
-                                            let ctx = runtime_service::default_controlled_context();
-                                            match ccos_clone.validate_and_execute_plan(plan_clone, &ctx).await {
-                                                Ok(exec) => {
-                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id, "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                    println!("{}", msg.to_string());
-                                                    let _ = (dbg)(msg.to_string());
+                        // Determine if the chosen intent has children (query while holding the lock)
+                        let chosen_has_children = if let Some(ref st) = chosen_storable {
+                            if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                                let children = graph_lock.get_child_intents(&st.intent_id);
+                                !children.is_empty()
+                            } else {
+                                false
+                            }
+                        } else { false };
+
+                        // Emit a headless-specific debug JSON so we can trace control flow in logs
+                        if let Some(s) = &chosen_storable {
+                            let dbg = serde_json::json!({"type":"HEADLESS_CHOSEN_INTENT","intent_id": s.intent_id.clone()});
+                            println!("{}", dbg.to_string());
+                        } else {
+                            let dbg = serde_json::json!({"type":"HEADLESS_CHOSEN_INTENT","intent_id": null});
+                            println!("{}", dbg.to_string());
+                        }
+
+                        if let Some(st_owned) = chosen_storable {
+                            match arb.generate_plan_for_intent(&st_owned).await {
+                                Ok(res) => {
+                                    let body = match res.plan.body {
+                                        rtfs_compiler::ccos::types::PlanBody::Rtfs(ref s) => s.clone(),
+                                        _ => "".to_string(),
+                                    };
+                                    let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": res.plan.plan_id, "body": body});
+                                    println!("{}", msg.to_string());
+
+                                    // Emit a headless marker just before execution
+                                    let pre_exec = serde_json::json!({"type":"HEADLESS_BEFORE_EXEC","intent_id": st_owned.intent_id.clone(), "plan_id": res.plan.plan_id});
+                                    println!("{}", pre_exec.to_string());
+
+                                    // Auto-execute the generated plan in headless mode.
+                                    // If the chosen intent has children, use the orchestrator to execute
+                                    // the intent graph (orchestration). If it's a leaf intent, call
+                                    // validate_and_execute_plan directly on the generated plan.
+                                    let ctx = runtime_service::default_controlled_context();
+                                    if chosen_has_children {
+                                        let orchestrator = ccos.get_orchestrator();
+                                        if let Err(e) = orchestrator.store_plan(&res.plan) {
+                                            eprintln!("Warning: failed to store plan in orchestrator: {}", e);
+                                        }
+
+                                        // Attempt to auto-generate plans for immediate child intents so
+                                        // orchestration has per-child plans available (mirrors interactive flow).
+                                        let mut child_storables: Vec<_> = Vec::new();
+                                        if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                                            let children = graph_lock.get_child_intents(&st_owned.intent_id);
+                                            child_storables = children;
+                                        }
+                                        // Generate and store plans for each child (don't hold lock across awaits)
+                                        for child in child_storables.into_iter() {
+                                            // try generate_plan_for_intent, then intent_to_plan, then synthesize fallback
+                                            match arb.generate_plan_for_intent(&child).await {
+                                                Ok(child_res) => {
+                                                    if let Err(e) = orchestrator.store_plan(&child_res.plan) {
+                                                        eprintln!("Warning: failed to store child plan in orchestrator: {}", e);
+                                                    } else {
+                                                        let body = match &child_res.plan.body {
+                                                            rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
+                                                            _ => "".to_string(),
+                                                        };
+                                                        let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": child_res.plan.plan_id, "body": body});
+                                                        println!("{}", msg.to_string());
+                                                    }
                                                 }
-                                                Err(e) => {
-                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id, "success": false, "value": format!("error: {}", e)});
-                                                    println!("{}", msg.to_string());
-                                                    let _ = (dbg)(msg.to_string());
+                                                Err(_) => {
+                                                    // try intent_to_plan
+                                                    let intent_obj = rtfs_compiler::ccos::types::Intent::new(child.goal.clone());
+                                                    if let Ok(p) = arb.intent_to_plan(&intent_obj).await {
+                                                        if let Err(e) = orchestrator.store_plan(&p) {
+                                                            eprintln!("Warning: failed to store child fallback plan in orchestrator: {}", e);
+                                                        } else {
+                                                            let body = match &p.body {
+                                                                rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
+                                                                _ => "".to_string(),
+                                                            };
+                                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": p.plan_id, "body": body});
+                                                            println!("{}", msg.to_string());
+                                                        }
+                                                    } else {
+                                                        // synthesize a minimal fallback for child
+                                                        let fallback_body = format!("(do (step \"headless-child-fallback\" (call :ccos.echo \"{}\")))", child.goal.replace('"', "\\\""));
+                                                        let fallback_plan = Plan::new_rtfs(fallback_body.clone(), vec![child.intent_id.clone()]);
+                                                        if let Err(e) = orchestrator.store_plan(&fallback_plan) {
+                                                            eprintln!("Warning: failed to store synthesized child plan: {}", e);
+                                                        } else {
+                                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": fallback_plan.plan_id, "body": fallback_body});
+                                                            println!("{}", msg.to_string());
+                                                        }
+                                                    }
                                                 }
                                             }
-                                        });
+                                        }
+                                        println!("[DEBUG] About to call orchestrator.execute_intent_graph");
+                                        let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
+                                        println!("[DEBUG] Returned from orchestrator.execute_intent_graph");
+                                        // If orchestration ran but reported no plans executed (or failed), fall back
+                                        // to executing the generated plan directly so headless mirrors interactive behavior.
+                                        match exec_result {
+                                            Ok(exec) if exec.success => {
+                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                println!("{}", msg.to_string());
+                                            }
+                                            _ => {
+                                                // Either orchestration failed or executed nothing; try direct execution
+                                                println!("[DEBUG] Orchestration did not execute plans or failed; falling back to direct execution");
+                                                match ccos.validate_and_execute_plan(res.plan, &ctx).await {
+                                                    Ok(exec) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                    Err(e) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Allow background callbacks / logs to flush before exiting headless run
+                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    } else {
+                                        // Leaf intent - execute generated plan directly
+                                        println!("[DEBUG] About to call validate_and_execute_plan for leaf intent");
+                                        let exec_result = ccos.validate_and_execute_plan(res.plan, &ctx).await;
+                                        println!("[DEBUG] Returned from validate_and_execute_plan for leaf intent");
+                                        match exec_result {
+                                            Ok(exec) => {
+                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                println!("{}", msg.to_string());
+                                            }
+                                            Err(e) => {
+                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
+                                                println!("{}", msg.to_string());
+                                            }
+                                        }
+                                        // Allow background callbacks / logs to flush before exiting headless run
+                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                     }
-                                    Err(e) => {
-                                        // Fallback: try intent_to_plan which returns a Plan (if implemented)
-                                        // Fallback: construct a minimal Intent from the stored intent and call intent_to_plan
-                                        let intent_obj = rtfs_compiler::ccos::types::Intent::new(st.goal.clone());
-                                        match arb.intent_to_plan(&intent_obj).await {
-                                            Ok(plan) => {
-                                                let body = match plan.body {
-                                                    rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s,
-                                                    _ => "".to_string(),
-                                                };
-                                                let plan_id = plan.plan_id.clone();
-                                                let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st.intent_id, "plan_id": plan_id, "body": body});
-                                                println!("{}", msg.to_string());
+                                }
+                                Err(e) => {
+                                    // Fallback: try intent_to_plan
+                                    let intent_obj = rtfs_compiler::ccos::types::Intent::new(st_owned.goal.clone());
+                                    match arb.intent_to_plan(&intent_obj).await {
+                                        Ok(plan) => {
+                                            let body = match &plan.body {
+                                                rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
+                                                _ => "".to_string(),
+                                            };
+                                            let plan_id = plan.plan_id.clone();
+                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": plan_id, "body": body});
+                                            println!("{}", msg.to_string());
+                                            // Execute the fallback plan using the same execution branch as above
+                                            let ctx = runtime_service::default_controlled_context();
+                                            let orchestrator = ccos.get_orchestrator();
+                                            if chosen_has_children {
+                                                if let Err(e) = orchestrator.store_plan(&plan) {
+                                                    eprintln!("Warning: failed to store fallback plan in orchestrator: {}", e);
+                                                }
+                                                let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
+                                                match exec_result {
+                                                    Ok(exec) if exec.success => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                    _ => {
+                                                        println!("[DEBUG] Orchestration fallback plan did not execute; falling back to direct execution of fallback plan");
+                                                        match ccos.validate_and_execute_plan(plan, &ctx).await {
+                                                            Ok(exec) => {
+                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                                println!("{}", msg.to_string());
+                                                            }
+                                                            Err(e) => {
+                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
+                                                                println!("{}", msg.to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                let exec_result = ccos.validate_and_execute_plan(plan, &ctx).await;
+                                                match exec_result {
+                                                    Ok(exec) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                    Err(e) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                }
                                             }
-                                            Err(e2) => {
-                                                let msg = serde_json::json!({"type":"PLAN_GEN_ERR","intent_id": st.intent_id, "error": format!("{} / fallback: {}", e, e2)});
-                                                println!("{}", msg.to_string());
+                                            // allow logs to flush
+                                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                        }
+                                        Err(e2) => {
+                                            let msg = serde_json::json!({"type":"PLAN_GEN_ERR","intent_id": st_owned.intent_id.clone(), "error": format!("{} / fallback: {}", e, e2)});
+                                            println!("{}", msg.to_string());
+
+                                            // As a last-resort fallback, synthesize a minimal RTFS plan that
+                                            // echoes the original goal so headless can still run something and
+                                            // emit an EXEC_RESULT for observability.
+                                            let fallback_body = format!("(do (step \"headless-fallback\" (call :ccos.echo \"{}\")))", st_owned.goal.replace('"', "\\\""));
+                                            let fallback_plan = Plan::new_rtfs(fallback_body.clone(), vec![st_owned.intent_id.clone()]);
+                                            let plan_id = fallback_plan.plan_id.clone();
+                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": plan_id, "body": fallback_body});
+                                            println!("{}", msg.to_string());
+
+                                            // Execute synthesized fallback plan
+                                            let ctx = runtime_service::default_controlled_context();
+                                            if chosen_has_children {
+                                                let orchestrator = ccos.get_orchestrator();
+                                                if let Err(e3) = orchestrator.store_plan(&fallback_plan) {
+                                                    eprintln!("Warning: failed to store synthesized plan: {}", e3);
+                                                }
+                                                let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
+                                                match exec_result {
+                                                    Ok(exec) if exec.success => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                    _ => {
+                                                        println!("[DEBUG] Orchestration synthesized fallback did not execute; falling back to direct execution of synthesized plan");
+                                                        match ccos.validate_and_execute_plan(fallback_plan, &ctx).await {
+                                                            Ok(exec) => {
+                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                                println!("{}", msg.to_string());
+                                                            }
+                                                            Err(e) => {
+                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
+                                                                println!("{}", msg.to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                let exec_result = ccos.validate_and_execute_plan(fallback_plan, &ctx).await;
+                                                match exec_result {
+                                                    Ok(exec) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                    Err(e) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
+                                                        println!("{}", msg.to_string());
+                                                    }
+                                                }
                                             }
+                                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                         }
                                     }
                                 }
@@ -282,8 +485,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
             } else {
                 eprintln!("No delegating arbiter available (LLM not enabled in config)");
             }
+
             return Ok(());
         }
+
+        // Interactive TUI setup (only for non-headless mode)
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
 
         // No auto-start - user must manually start with 's' key
 
