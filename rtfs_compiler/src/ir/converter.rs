@@ -1060,6 +1060,7 @@ impl<'a> IrConverter<'a> {
             Literal::String(_) => IrType::String,
             Literal::Boolean(_) => IrType::Bool,
             Literal::Keyword(_) => IrType::Keyword,
+            Literal::Symbol(_) => IrType::Symbol,
             Literal::Nil => IrType::Nil,
             Literal::Timestamp(_) => IrType::Any, // TODO: Add specific timestamp type
             Literal::Uuid(_) => IrType::Any,      // TODO: Add specific UUID type
@@ -1983,7 +1984,20 @@ impl<'a> IrConverter<'a> {
         let id = self.next_id();
         let mut elements = Vec::new();
         for expr in exprs {
-            elements.push(self.convert_expression(expr)?);
+            // In vectors, treat symbols as literal symbol values, not variable references
+            let element = match expr {
+                Expression::Symbol(sym) => {
+                    let sym_id = self.next_id();
+                    Ok(IrNode::Literal {
+                        id: sym_id,
+                        value: crate::ast::Literal::Symbol(sym),
+                        ir_type: IrType::Symbol,
+                        source_location: None,
+                    })
+                }
+                _ => self.convert_expression(expr),
+            };
+            elements.push(element?);
         }
         Ok(IrNode::Vector {
             id,
@@ -2000,7 +2014,19 @@ impl<'a> IrConverter<'a> {
 
         for (key, value) in map {
             let ir_key = self.convert_map_key(key.clone())?;
-            let ir_value = self.convert_expression(value)?;
+            // In maps, treat symbols as literal symbol values, not variable references
+            let ir_value = match value {
+                Expression::Symbol(sym) => {
+                    let sym_id = self.next_id();
+                    Ok(IrNode::Literal {
+                        id: sym_id,
+                        value: crate::ast::Literal::Symbol(sym),
+                        ir_type: IrType::Symbol,
+                        source_location: None,
+                    })
+                }
+                _ => self.convert_expression(value),
+            }?;
 
             if let (Some(_key_type), Some(value_type)) = (ir_key.ir_type(), ir_value.ir_type()) {
                 if let IrNode::Literal {
