@@ -523,6 +523,16 @@ impl Evaluator {
                 // Fallback: echo as symbolic reference string (keeps prior behavior for resource:ref)
                 Ok(Value::String(format!("@{}", s)))
             }
+            Expression::Metadata(metadata_map) => {
+                // Metadata is typically attached to definitions, not evaluated as standalone expressions
+                // For now, we'll evaluate it to a map value
+                let mut result_map = std::collections::HashMap::new();
+                for (key, value_expr) in metadata_map {
+                    let value = self.eval_expr(value_expr, env)?;
+                    result_map.insert(key.clone(), value);
+                }
+                Ok(Value::Map(result_map))
+            }
         }
     }
 
@@ -1680,6 +1690,10 @@ impl Evaluator {
             | Expression::Defstruct(_)
             | Expression::For(_) => false,
             Expression::Deref(expr) => self.expr_references_symbols(expr, symbols),
+            Expression::Metadata(metadata_map) => {
+                // Check if any metadata values reference the symbols
+                metadata_map.values().any(|expr| self.expr_references_symbols(expr, symbols))
+            }
         }
     }
 

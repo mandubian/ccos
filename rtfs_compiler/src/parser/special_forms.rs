@@ -1,8 +1,9 @@
 use super::errors::{pair_to_source_span, PestParseError};
 use super::Rule;
-use crate::ast::Expression;
+use crate::ast::{Expression, MapKey};
 use pest::iterators::{Pair, Pairs};
 use super::expressions::build_expression;
+use std::collections::HashMap;
 
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
@@ -442,15 +443,31 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
     if let Some(p) = pairs.peek() {
         if p.as_rule() == Rule::defn_keyword {
             pairs.next();
-            while let Some(sp) = pairs.peek() {
-                if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
-                    pairs.next();
-                } else {
-                    break;
-                }
-            }
         }
     }
+
+    // Parse optional metadata before symbol name
+    let mut delegation_hint: Option<DelegationHint> = None;
+    let mut metadata: Option<HashMap<MapKey, Expression>> = None;
+    while let Some(peek_pair) = pairs.peek() {
+        match peek_pair.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+            }
+            Rule::metadata => {
+                let meta_pair = pairs.next().unwrap();
+                // Determine if this is delegation metadata or general metadata
+                let inner_pairs: Vec<_> = meta_pair.clone().into_inner().collect();
+                if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::delegation_meta {
+                    delegation_hint = Some(parse_delegation_meta(meta_pair)?);
+                } else if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::general_meta {
+                    metadata = Some(parse_general_meta(meta_pair)?);
+                }
+            }
+            _ => break,
+        }
+    }
+
     let symbol_pair = pairs.next().ok_or_else(|| {
         PestParseError::InvalidInput { message: "defn requires a symbol (function name)".to_string(), span: Some(defn_span.clone()) }
     })?;
@@ -462,41 +479,12 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
     }
     let name = build_symbol(symbol_pair.clone())?;
 
-    // ---------------------------------------------------------
-    // Parse optional metadata before parameter list (defn)
-    // ---------------------------------------------------------
-    let mut delegation_hint: Option<DelegationHint> = None;
-    loop {
-        // Skip whitespace/comments
-        while let Some(p) = pairs.peek() {
-            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-                pairs.next();
-            } else {
-                break;
-            }
-        }
-
-        let peek_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput { message: "defn requires parameter list".to_string(), span: Some(defn_span.clone()) })?;
-
-        match peek_pair.as_rule() {
-            Rule::metadata => {
-                let meta_pair = pairs.next().unwrap();
-                delegation_hint = Some(parse_delegation_meta(meta_pair)?);
-                continue;
-            }
-            Rule::fn_param_list => {
-                break;
-            }
-            Rule::WHITESPACE | Rule::COMMENT => {
-                pairs.next();
-                continue;
-            }
-            other => {
-                return Err(PestParseError::InvalidInput {
-                    message: format!("Unexpected token {:?} before defn param list", other),
-                    span: Some(pair_to_source_span(&peek_pair.clone())),
-                });
-            }
+    // Skip whitespace/comments before parameter list
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
         }
     }
 
@@ -638,6 +626,7 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         body,
         return_type,
         delegation_hint,
+        metadata,
     })
 }
 
@@ -1423,6 +1412,56 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
             span: Some(target_span),
         }),
     }
+}
+
+fn parse_general_meta(meta_pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>, PestParseError> {
+    // Extract span information before moving the pair
+    let meta_span = pair_to_source_span(&meta_pair);
+
+    // Parse the structured pest pairs from the grammar
+    let mut pairs = meta_pair.into_inner();
+
+    // Skip the "^" and "{" and any whitespace/comments
+    while let Some(p) = pairs.peek() {
+        match p.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+            }
+            _ => break,
+        }
+    }
+
+    // Get the general_meta rule content
+    let general_meta_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "general_meta requires map content".to_string(),
+        span: Some(meta_span),
+    })?;
+
+    // Parse the map entries
+    let mut metadata = HashMap::new();
+    let mut map_pairs = general_meta_pair.into_inner();
+
+    while let Some(entry_pair) = map_pairs.next() {
+        if entry_pair.as_rule() == Rule::map_entry {
+            let entry_span = pair_to_source_span(&entry_pair);
+            let mut entry_inner = entry_pair.into_inner();
+            let key_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "map_entry requires key".to_string(),
+                span: Some(entry_span.clone()),
+            })?;
+            let value_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "map_entry requires value".to_string(),
+                span: Some(entry_span),
+            })?;
+
+            let key = super::common::build_map_key(key_pair)?;
+            let value = build_expression(value_pair)?;
+
+            metadata.insert(key, value);
+        }
+    }
+
+    Ok(metadata)
 }
 
 /// Build a plan expression from parsed pairs
