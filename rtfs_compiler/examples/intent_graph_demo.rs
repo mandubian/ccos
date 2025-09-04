@@ -24,6 +24,7 @@ use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ccos::types::StorableIntent;
+use rtfs_compiler::ccos::plan_archive::PlanArchive;
 
 #[derive(Parser, Debug)]
 #[command(name = "intent_graph_demo")] 
@@ -75,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&causal_chain),
         Arc::clone(&intent_graph),
         Arc::clone(&marketplace),
+        Arc::new(PlanArchive::new()),
     ));
 
     // --- Build a graph ---

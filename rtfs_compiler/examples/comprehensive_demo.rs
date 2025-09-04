@@ -38,6 +38,7 @@ use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
 use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::types::PlanBody;
+use rtfs_compiler::ccos::plan_archive::PlanArchive;
 
 use shared::CustomOpenRouterModel;
 
@@ -119,6 +120,7 @@ impl DemoContext {
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
             Arc::clone(&capability_marketplace),
+            Arc::new(PlanArchive::new()),
         ));
 
         println!("✅ Demo context initialized");

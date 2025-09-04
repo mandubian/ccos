@@ -49,7 +49,14 @@ fn test_dependency_order_and_root_completion() {
     let capability_marketplace = CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
         CapabilityRegistry::new(),
     )));
-    let orchestrator = Orchestrator::new(Arc::clone(&causal_chain), Arc::clone(&intent_graph), Arc::new(capability_marketplace));
+    // Pass an in-memory PlanArchive for tests to satisfy the constructor signature
+    let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
+    let orchestrator = Orchestrator::new(
+        Arc::clone(&causal_chain),
+        Arc::clone(&intent_graph),
+        Arc::new(capability_marketplace),
+        plan_archive,
+    );
 
     // Build intents: root <-sub- fetch, analyze, announce
     let mut root = StorableIntent::new("Root goal".to_string());

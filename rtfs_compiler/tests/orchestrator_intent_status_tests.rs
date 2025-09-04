@@ -15,7 +15,9 @@ fn ensure_test_env() {
 fn test_status_transition_success() {
     ensure_test_env();
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-    let mut intent_graph = IntentGraph::new().unwrap();
+    // Create an IntentGraph that writes status-change events into our CausalChain
+    let sink = rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink::new(Arc::clone(&causal_chain));
+    let mut intent_graph = rtfs_compiler::ccos::intent_graph::IntentGraph::with_event_sink(Arc::new(sink)).unwrap();
     let mut intent = StorableIntent::new("Simple addition goal".to_string());
     let intent_id = intent.intent_id.clone();
     intent.status = IntentStatus::Active; // initial
@@ -24,7 +26,8 @@ fn test_status_transition_success() {
     let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
         Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
     );
-    let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace));
+    let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
+    let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace), plan_archive);
 
     let plan = Plan::new_rtfs("(+ 1 2)".to_string(), vec![intent_id.clone()]);
     let ctx = RuntimeContext::pure();
@@ -53,7 +56,9 @@ fn test_status_transition_success() {
 fn test_status_transition_failure() {
     ensure_test_env();
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-    let mut intent_graph = IntentGraph::new().unwrap();
+    // Create an IntentGraph that writes status-change events into our CausalChain
+    let sink = rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink::new(Arc::clone(&causal_chain));
+    let mut intent_graph = rtfs_compiler::ccos::intent_graph::IntentGraph::with_event_sink(Arc::new(sink)).unwrap();
     let mut intent = StorableIntent::new("Failing goal".to_string());
     let intent_id = intent.intent_id.clone();
     intent.status = IntentStatus::Active;
@@ -62,10 +67,10 @@ fn test_status_transition_failure() {
     let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
         Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
     );
-    let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace));
-
-    // Plan references an undefined symbol to force runtime error
-    let plan = Plan::new_rtfs("(+ unknown-symbol 2)".to_string(), vec![intent_id.clone()]);
+    let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
+    let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace), plan_archive);
+    // Minimal plan and evaluator; use invalid RTFS to force a parse/runtime error
+    let plan = Plan::new_rtfs("(this is not valid".to_string(), vec![intent_id.clone()]);
     let ctx = RuntimeContext::pure();
     let result = futures::executor::block_on(async { orchestrator.execute_plan(&plan, &ctx).await });
     assert!(result.is_err(), "Plan should fail");
