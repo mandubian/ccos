@@ -21,6 +21,7 @@ pub enum Literal {
     String(String),
     Boolean(bool),
     Keyword(Keyword),
+    Symbol(Symbol),
     Timestamp(String),      // Added
     Uuid(String),           // Added
     ResourceHandle(String), // Added

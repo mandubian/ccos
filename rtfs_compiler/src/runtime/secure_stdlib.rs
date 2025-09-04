@@ -498,7 +498,17 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::conj),
             })),
         );
-        
+
+        // Conj! function - destructive conjoin (same as conj for immutable collections)
+        env.define(
+            &Symbol("conj!".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "conj!".to_string(),
+                arity: Arity::Variadic(1),
+                func: Arc::new(Self::conj_bang),
+            })),
+        );
+
         env.define(
             &Symbol("get".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -599,6 +609,16 @@ impl SecureStandardLibrary {
                 name: "reset!".to_string(),
                 arity: Arity::Fixed(2),
                 func: Arc::new(Self::reset_bang),
+            })),
+        );
+
+        // Update function - update collection with function result
+        env.define(
+            &Symbol("update".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "update".to_string(),
+                arity: Arity::Variadic(3), // collection, key, function, optional args
+                func: Arc::new(Self::update_with_context),
             })),
         );
 
@@ -738,35 +758,8 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Fibonacci function for testing
-        env.define(
-            &Symbol("fibonacci".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "fibonacci".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::fibonacci),
-            })),
-        );
 
-        // Query function for testing
-        env.define(
-            &Symbol("query".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "query".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::query),
-            })),
-        );
 
-        // Expensive computation function for testing
-        env.define(
-            &Symbol("expensive-computation".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "expensive-computation".to_string(),
-                arity: Arity::Fixed(0),
-                func: Arc::new(Self::expensive_computation),
-            })),
-        );
 
         // Type function for testing
         env.define(
@@ -788,55 +781,7 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Discover agents function for testing
-        env.define(
-            &Symbol("discover-agents".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "discover-agents".to_string(),
-                arity: Arity::Variadic(0),
-                func: Arc::new(Self::discover_agents),
-            })),
-        );
 
-        // Copy file function for testing
-        env.define(
-            &Symbol("copy-file".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "copy-file".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::copy_file),
-            })),
-        );
-
-        // Create resource function for testing
-        env.define(
-            &Symbol("create-resource".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "create-resource".to_string(),
-                arity: Arity::Fixed(0),
-                func: Arc::new(Self::create_resource),
-            })),
-        );
-
-        // Log error function for testing
-        env.define(
-            &Symbol("log-error".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "log-error".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::log_error),
-            })),
-        );
-
-        // Allocate buffer function for testing
-        env.define(
-            &Symbol("allocate-buffer".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "allocate-buffer".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::allocate_buffer),
-            })),
-        );
 
         // Keys function - get keys from a map
         env.define(
@@ -848,115 +793,18 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Write to buffer function for testing
+        // Vals function - get values from a map
         env.define(
-            &Symbol("write-to-buffer".to_string()),
+            &Symbol("vals".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
-                name: "write-to-buffer".to_string(),
-                arity: Arity::Variadic(2),
-                func: Arc::new(Self::write_to_buffer),
-            })),
-        );
-
-        // Buffer to string function for testing
-        env.define(
-            &Symbol("buffer-to-string".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "buffer-to-string".to_string(),
+                name: "vals".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(Self::buffer_to_string),
+                func: Arc::new(Self::vals),
             })),
         );
 
-        // Open file function for testing
-        env.define(
-            &Symbol("open-file".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "open-file".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::open_file),
-            })),
-        );
 
-        // Available? function for testing
-        env.define(
-            &Symbol("available?".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "available?".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::available_p),
-            })),
-        );
 
-        // Read bytes function for testing
-        env.define(
-            &Symbol("read-bytes".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "read-bytes".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::read_bytes),
-            })),
-        );
-
-        // Create outer function for testing
-        env.define(
-            &Symbol("create-outer".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "create-outer".to_string(),
-                arity: Arity::Fixed(0),
-                func: Arc::new(Self::create_outer),
-            })),
-        );
-
-        // Get data function for testing
-        env.define(
-            &Symbol("get-data".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "get-data".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::get_data),
-            })),
-        );
-
-        // Create inner function for testing
-        env.define(
-            &Symbol("create-inner".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "create-inner".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::create_inner),
-            })),
-        );
-
-        // Process function for testing
-        env.define(
-            &Symbol("process".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "process".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::process),
-            })),
-        );
-
-        // Create pool function for testing
-        env.define(
-            &Symbol("create-pool".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "create-pool".to_string(),
-                arity: Arity::Variadic(0),
-                func: Arc::new(Self::create_pool),
-            })),
-        );
-
-        // Submit task function for testing
-        env.define(
-            &Symbol("submit-task".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "submit-task".to_string(),
-                arity: Arity::Variadic(2),
-                func: Arc::new(Self::submit_task),
-            })),
-        );
     }
     
     pub(crate) fn load_type_predicate_functions(env: &mut Environment) {
@@ -2000,6 +1848,125 @@ impl SecureStandardLibrary {
         Ok(accumulator)
     }
 
+    fn update_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "update".to_string(),
+                expected: "at least 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let collection = &args[0];
+        let key = &args[1];
+        let function = &args[2];
+        let additional_args = &args[3..];
+
+        match collection {
+            Value::Map(map) => {
+                let map_key = Self::value_to_map_key(key)?;
+                if let Some(existing_value) = map.get(&map_key) {
+                    // Apply function to existing value
+                    let mut func_args = vec![existing_value.clone()];
+                    func_args.extend(additional_args.iter().cloned());
+
+                    let new_value = match function {
+                        Value::Function(Function::Builtin(builtin_func)) => (builtin_func.func)(func_args)?,
+                        Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                            (builtin_func.func)(func_args, evaluator, env)?
+                        }
+                        Value::Function(Function::Closure(closure)) => {
+                            let mut func_env = Environment::with_parent(closure.env.clone());
+                            func_env.define(&closure.params[0], existing_value.clone());
+                            if !additional_args.is_empty() {
+                                for (i, arg) in additional_args.iter().enumerate() {
+                                    if i < closure.params.len() - 1 {
+                                        func_env.define(&closure.params[i + 1], arg.clone());
+                                    }
+                                }
+                            }
+                            evaluator.eval_expr(&closure.body, &mut func_env)?
+                        }
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: function.type_name().to_string(),
+                                operation: "update".to_string(),
+                            });
+                        }
+                    };
+
+                    let mut new_map = map.clone();
+                    new_map.insert(map_key, new_value);
+                    Ok(Value::Map(new_map))
+                } else {
+                    Err(RuntimeError::new("Key not found in map"))
+                }
+            }
+            Value::Vector(vec) => {
+                if let Value::Integer(index) = key {
+                    let idx = *index as usize;
+                    if idx < vec.len() {
+                        let existing_value = &vec[idx];
+                        // Apply function to existing value
+                        let mut func_args = vec![existing_value.clone()];
+                        func_args.extend(additional_args.iter().cloned());
+
+                        let new_value = match function {
+                            Value::Function(Function::Builtin(builtin_func)) => (builtin_func.func)(func_args)?,
+                            Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                                (builtin_func.func)(func_args, evaluator, env)?
+                            }
+                            Value::Function(Function::Closure(closure)) => {
+                                let mut func_env = Environment::with_parent(closure.env.clone());
+                                func_env.define(&closure.params[0], existing_value.clone());
+                                if !additional_args.is_empty() {
+                                    for (i, arg) in additional_args.iter().enumerate() {
+                                        if i < closure.params.len() - 1 {
+                                            func_env.define(&closure.params[i + 1], arg.clone());
+                                        }
+                                    }
+                                }
+                                evaluator.eval_expr(&closure.body, &mut func_env)?
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "function".to_string(),
+                                    actual: function.type_name().to_string(),
+                                    operation: "update".to_string(),
+                                });
+                            }
+                        };
+
+                        let mut new_vec = vec.clone();
+                        new_vec[idx] = new_value;
+                        Ok(Value::Vector(new_vec))
+                    } else {
+                        Err(RuntimeError::IndexOutOfBounds {
+                            index: *index,
+                            length: vec.len(),
+                        })
+                    }
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "integer index".to_string(),
+                        actual: key.type_name().to_string(),
+                        operation: "update vector".to_string(),
+                    })
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "map or vector".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "update".to_string(),
+            }),
+        }
+    }
+
     fn max_value(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -2077,6 +2044,11 @@ impl SecureStandardLibrary {
                 operation: "conj".to_string(),
             }),
         }
+    }
+
+    fn conj_bang(args: Vec<Value>) -> RuntimeResult<Value> {
+        // For now, conj! works the same as conj (immutable collections)
+        Self::conj(args)
     }
 
     fn empty_p(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -3351,68 +3323,6 @@ impl SecureStandardLibrary {
     }
 
     // Additional utility functions for testing
-    fn fibonacci(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch { 
-                function: "fibonacci".to_string(), 
-                expected: "1".to_string(), 
-                actual: args.len() 
-            });
-        }
-        let n = match &args[0] {
-            Value::Integer(i) => *i,
-            _ => return Err(RuntimeError::TypeError { 
-                expected: "integer".to_string(), 
-                actual: args[0].type_name().to_string(), 
-                operation: "fibonacci".to_string() 
-            }),
-        };
-        if n < 0 {
-            return Err(RuntimeError::InvalidArgument("Fibonacci is not defined for negative numbers".to_string()));
-        }
-        if n <= 1 {
-            return Ok(Value::Integer(n));
-        }
-        let mut a = 0i64;
-        let mut b = 1i64;
-        for _ in 2..=n {
-            let temp = a + b;
-            a = b;
-            b = temp;
-        }
-        Ok(Value::Integer(b))
-    }
-
-    fn query(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "query".to_string(),
-                expected: "at least 1".to_string(),
-                actual: args.len()
-            });
-        }
-        // For testing, just return the first argument as the result
-        // This handles both (query "sql") and (query conn "sql") patterns
-        let query_str = match &args[args.len() - 1] {
-            Value::String(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string (last argument)".to_string(),
-                actual: args[args.len() - 1].type_name().to_string(),
-                operation: "query".to_string()
-            }),
-        };
-        // Return a mock result
-        let mut map: HashMap<MapKey, Value> = HashMap::new();
-        map.insert(MapKey::Keyword(Keyword("result".into())), Value::String(query_str));
-        map.insert(MapKey::Keyword(Keyword("status".into())), Value::String("success".into()));
-        Ok(Value::Map(map))
-    }
-
-    fn expensive_computation(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Simulate expensive computation
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        Ok(Value::Integer(42))
-    }
 
     fn type_func(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -3447,75 +3357,7 @@ impl SecureStandardLibrary {
         }
     }
 
-    fn discover_agents(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Return empty vector to simulate no agents found
-        Ok(Value::Vector(vec![]))
-    }
 
-    fn copy_file(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "copy-file".to_string(),
-                expected: "2".to_string(),
-                actual: args.len()
-            });
-        }
-        let src = match &args[0] {
-            Value::String(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "copy-file source".to_string()
-            }),
-        };
-        let dst = match &args[1] {
-            Value::String(s) => s.clone(),
-            _ => return Err(RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "copy-file destination".to_string()
-            }),
-        };
-        // Return success result for testing
-        let mut map: HashMap<MapKey, Value> = HashMap::new();
-        map.insert(MapKey::Keyword(Keyword("success".into())), Value::Boolean(true));
-        map.insert(MapKey::Keyword(Keyword("source".into())), Value::String(src));
-        map.insert(MapKey::Keyword(Keyword("destination".into())), Value::String(dst));
-        Ok(Value::Map(map))
-    }
-
-    fn create_resource(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Return a mock resource object for testing
-        let mut map: HashMap<MapKey, Value> = HashMap::new();
-        map.insert(MapKey::Keyword(Keyword("type".into())), Value::String("Resource".into()));
-        map.insert(MapKey::Keyword(Keyword("id".into())), Value::String("test-resource-123".into()));
-        map.insert(MapKey::Keyword(Keyword("created".into())), Value::Boolean(true));
-        Ok(Value::Map(map))
-    }
-
-    fn log_error(args: Vec<Value>) -> RuntimeResult<Value> {
-        // For testing, just return nil after "logging" the error
-        // In a real implementation, this would log to a logging system
-        Ok(Value::Nil)
-    }
-
-    fn allocate_buffer(args: Vec<Value>) -> RuntimeResult<Value> {
-        // For testing, return a mock buffer object
-        let size = if args.is_empty() {
-            1024 // default size
-        } else {
-            match &args[0] {
-                Value::Integer(s) => *s as usize,
-                _ => 1024, // fallback to default
-            }
-        };
-
-        let mut map: HashMap<MapKey, Value> = HashMap::new();
-        map.insert(MapKey::Keyword(Keyword("type".into())), Value::String("Buffer".into()));
-        map.insert(MapKey::Keyword(Keyword("size".into())), Value::Integer(size as i64));
-        map.insert(MapKey::Keyword(Keyword("allocated".into())), Value::Boolean(true));
-        Ok(Value::Map(map))
-    }
 
     fn keys(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -3543,158 +3385,26 @@ impl SecureStandardLibrary {
         }
     }
 
-    fn write_to_buffer(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() < 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "write-to-buffer".to_string(),
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Return success for testing
-        let mut result: HashMap<MapKey, Value> = HashMap::new();
-        result.insert(MapKey::Keyword(Keyword("success".into())), Value::Boolean(true));
-        result.insert(MapKey::Keyword(Keyword("bytes_written".into())), Value::Integer(args.len() as i64 - 1));
-        Ok(Value::Map(result))
-    }
-
-    fn buffer_to_string(args: Vec<Value>) -> RuntimeResult<Value> {
+    fn vals(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
             return Err(RuntimeError::ArityMismatch {
-                function: "buffer-to-string".to_string(),
+                function: "vals".to_string(),
                 expected: "1".to_string(),
                 actual: args.len(),
             });
         }
 
-        // Return a mock string for testing
-        Ok(Value::String("buffer content".to_string()))
-    }
-
-    fn open_file(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "open-file".to_string(),
-                expected: "at least 1".to_string(),
-                actual: args.len(),
-            });
+        match &args[0] {
+            Value::Map(m) => {
+                let vals: Vec<Value> = m.values().cloned().collect();
+                Ok(Value::Vector(vals))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "vals".to_string(),
+            }),
         }
-
-        // Return a mock file handle for testing
-        let mut result: HashMap<MapKey, Value> = HashMap::new();
-        result.insert(MapKey::Keyword(Keyword("type".into())), Value::String("FileHandle".into()));
-        result.insert(MapKey::Keyword(Keyword("opened".into())), Value::Boolean(true));
-        if let Value::String(path) = &args[0] {
-            result.insert(MapKey::Keyword(Keyword("path".into())), Value::String(path.clone()));
-        }
-        Ok(Value::Map(result))
     }
 
-    fn available_p(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "available?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // For testing, return true - resource is available
-        Ok(Value::Boolean(true))
-    }
-
-    fn read_bytes(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "read-bytes".to_string(),
-                expected: "at least 1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Return mock bytes for testing
-        let bytes = vec![72, 101, 108, 108, 111]; // "Hello" in bytes
-        Ok(Value::Vector(bytes.into_iter().map(Value::Integer).collect()))
-    }
-
-    fn create_outer(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Return a mock outer object for testing
-        let mut result: HashMap<MapKey, Value> = HashMap::new();
-        result.insert(MapKey::Keyword(Keyword("type".into())), Value::String("Outer".into()));
-        result.insert(MapKey::Keyword(Keyword("created".into())), Value::Boolean(true));
-        result.insert(MapKey::Keyword(Keyword("name".into())), Value::String("outer-instance".into()));
-        Ok(Value::Map(result))
-    }
-
-    fn get_data(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "get-data".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Return mock data for testing
-        let data = vec![1, 2, 3, 4, 5];
-        Ok(Value::Vector(data.into_iter().map(Value::Integer).collect()))
-    }
-
-    fn create_inner(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "create-inner".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Return a mock inner object for testing
-        let mut result: HashMap<MapKey, Value> = HashMap::new();
-        result.insert(MapKey::Keyword(Keyword("type".into())), Value::String("Inner".into()));
-        result.insert(MapKey::Keyword(Keyword("created".into())), Value::Boolean(true));
-        result.insert(MapKey::Keyword(Keyword("name".into())), Value::String("inner-instance".into()));
-        result.insert(MapKey::Keyword(Keyword("data".into())), args[0].clone());
-        Ok(Value::Map(result))
-    }
-
-    fn process(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "process".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Return processed result for testing
-        Ok(Value::String("processed".to_string()))
-    }
-
-    fn create_pool(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // Return a mock pool object for testing
-        let mut result: HashMap<MapKey, Value> = HashMap::new();
-        result.insert(MapKey::Keyword(Keyword("type".into())), Value::String("Pool".into()));
-        result.insert(MapKey::Keyword(Keyword("created".into())), Value::Boolean(true));
-        result.insert(MapKey::Keyword(Keyword("size".into())), Value::Integer(10));
-        Ok(Value::Map(result))
-    }
-
-    fn submit_task(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() < 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "submit-task".to_string(),
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Return a mock task result for testing
-        let mut result: HashMap<MapKey, Value> = HashMap::new();
-        result.insert(MapKey::Keyword(Keyword("task_id".into())), Value::String("task-123".into()));
-        result.insert(MapKey::Keyword(Keyword("submitted".into())), Value::Boolean(true));
-        result.insert(MapKey::Keyword(Keyword("status".into())), Value::String("pending".into()));
-        Ok(Value::Map(result))
-    }
 }
