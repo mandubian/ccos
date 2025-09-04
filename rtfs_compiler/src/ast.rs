@@ -524,6 +524,7 @@ pub enum Expression {
     For(#[validate] Box<ForExpr>),           // Added for for comprehension
     Deref(#[validate] Box<Expression>),      // Added for @atom deref sugar
     ResourceRef(String),                      // Added
+    Metadata(HashMap<MapKey, Expression>),   // Added for ^{:doc "..."} syntax
 
 }
 
@@ -655,6 +656,7 @@ pub struct DefnExpr {
     #[validate(nested)]
     pub body: Vec<Expression>,
     pub delegation_hint: Option<DelegationHint>,
+    pub metadata: Option<HashMap<MapKey, Expression>>, // General metadata like ^{:doc "..."}
 }
 
 // Defstruct is syntactic sugar for (def name refined-map-type)

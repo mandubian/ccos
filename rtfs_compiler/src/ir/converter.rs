@@ -4,6 +4,7 @@
 use crate::ast::*;
 use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
+use crate::runtime::values::Value;
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1041,6 +1042,18 @@ impl<'a> IrConverter<'a> {
                         location: None, // TODO: Add source location
                     })
                 }
+            }
+            Expression::Metadata(metadata_map) => {
+                // Metadata is typically attached to definitions, not evaluated as standalone expressions
+                // For now, we'll convert it to a simple string representation
+                let metadata_str = format!("{{{:?}}}", metadata_map.keys().collect::<Vec<_>>());
+                let id = self.next_id();
+                Ok(IrNode::Literal {
+                    id,
+                    value: crate::ast::Literal::String(metadata_str),
+                    ir_type: IrType::String,
+                    source_location: None,
+                })
             }
             // Plan is not a core RTFS expression; handled in CCOS layer
         }

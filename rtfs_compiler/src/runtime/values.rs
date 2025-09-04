@@ -473,6 +473,16 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for deref expressions
                 Value::String("#<deref>".to_string())
             }
+            Expression::Metadata(metadata_map) => {
+                // Convert metadata map to a runtime value
+                let mut result_map = std::collections::HashMap::new();
+                for (key, value_expr) in metadata_map {
+                    // For now, just convert to string representation
+                    let value_str = format!("{:?}", value_expr);
+                    result_map.insert(key, Value::String(value_str));
+                }
+                Value::Map(result_map)
+            }
         }
     }
 }
