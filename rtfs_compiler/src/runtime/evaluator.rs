@@ -66,6 +66,10 @@ impl Evaluator {
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
     special_forms.insert("set!".to_string(), Self::eval_set_form);
+    // Allow (get :key) as a special form that reads from the execution context
+    // with cross-plan fallback. For other usages (get collection key [default])
+    // fall back to the normal builtin function by delegating to the env lookup.
+    special_forms.insert("get".to_string(), Self::eval_get_form);
     // Core iteration forms
     special_forms.insert("dotimes".to_string(), Self::eval_dotimes_form);
     special_forms.insert("for".to_string(), Self::eval_for_form);
@@ -1061,6 +1065,65 @@ impl Evaluator {
         self.host.notify_step_completed(&step_action_id, &exec_result)?;
 
         Ok(final_result)
+    }
+
+    fn eval_get_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Support shorthand (get :key) to read from current step context or
+        // cross-plan params via get_with_cross_plan_fallback. For other
+        // arities defer to the existing builtin 'get' implementation by
+        // evaluating arguments and calling the builtin function.
+        if args.len() == 1 {
+            match &args[0] {
+                Expression::Literal(crate::ast::Literal::Keyword(k)) => {
+                    // First try local evaluator environment (set! stores symbols into env)
+                    let sym = crate::ast::Symbol(k.0.clone());
+                    if let Some(v) = env.lookup(&sym) {
+                        return Ok(v);
+                    }
+                    // Then try step context / cross-plan fallback
+                    if let Some(v) = self.get_with_cross_plan_fallback(&k.0) {
+                        return Ok(v);
+                    }
+                    return Ok(Value::Nil);
+                }
+                Expression::Symbol(s) => {
+                    // First try local evaluator environment
+                    let sym = crate::ast::Symbol(s.0.clone());
+                    if let Some(v) = env.lookup(&sym) {
+                        return Ok(v);
+                    }
+                    // Then try step context / cross-plan fallback
+                    if let Some(v) = self.get_with_cross_plan_fallback(&s.0) {
+                        return Ok(v);
+                    }
+                    return Ok(Value::Nil);
+                }
+                _ => {
+                    return Err(RuntimeError::InvalidArguments {
+                        expected: "a keyword or symbol when using (get :key) shorthand".to_string(),
+                        actual: format!("{:?}", args[0]),
+                    })
+                }
+            }
+        }
+
+        // For other arities, evaluate args and call builtin 'get'
+        let evaluated_args: Result<Vec<Value>, RuntimeError> = args.iter().map(|e| self.eval_expr(e, env)).collect();
+        let evaluated_args = evaluated_args?;
+
+        // Lookup builtin 'get' in the environment and call it
+        if let Some(val) = env.lookup(&crate::ast::Symbol("get".to_string())) {
+            match val {
+                Value::Function(Function::Builtin(bf)) => return (bf.func)(evaluated_args),
+                Value::Function(Function::BuiltinWithContext(bfctx)) => return (bfctx.func)(evaluated_args, self, env),
+                other => {
+                    // Fallback to generic call path
+                    return self.call_function(other, &evaluated_args, env);
+                }
+            }
+        }
+
+        Err(RuntimeError::UndefinedSymbol(crate::ast::Symbol("get".to_string())))
     }
 
     /// LLM execution bridge special form
