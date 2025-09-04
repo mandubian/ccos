@@ -16,7 +16,7 @@ program = { SOI ~ (module_definition | expression)* ~ EOI }
 // Include anonymous and shorthand function forms before other possibilities so they capture '#(' sequences
 // and method-call style tokens ('.method'). Keep explicit order for precedence.
 // Ensure task_context_access (e.g., "@plan-id") takes precedence over generic symbols
-expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | atom_deref | task_context_access | literal | symbol | resource_ref | special_form | list | vector | map }
+expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | task_context_access | atom_deref | literal | symbol | resource_ref | special_form | list | vector | map }
 
 // --- Basic Values ---
 

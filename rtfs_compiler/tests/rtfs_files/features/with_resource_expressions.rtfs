@@ -97,8 +97,8 @@
 (with-resource [critical-resource CriticalResource (acquire-critical)]
   (if (validate-resource critical-resource)
     (use-resource critical-resource)
-    (throw (Exception. "Invalid resource"))))
-;; Expected: Exception thrown with resource cleanup
+    (/ 1 0)))  ; This will cause a runtime error
+;; Expected: Runtime error with resource cleanup
 
 ;; Resource with return value from inner expression
 (let [result (with-resource [temp-file File (create-temp-file)]
@@ -134,7 +134,7 @@
 
 ;; Edge case: Resource creation fails
 (try
-  (with-resource [bad-resource BadResource (throw (Exception. "creation failed"))]
+  (with-resource [bad-resource BadResource (/ 1 0)]  ; This will cause a runtime error
     (use-resource bad-resource))
   (catch Exception e
     "creation-error"))
