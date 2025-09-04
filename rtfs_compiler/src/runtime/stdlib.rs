@@ -173,11 +173,31 @@ impl StandardLibrary {
             })),
         );
 
+        // Backwards-compatible alias used in some tests/examples: `tool.log` (dot)
+        env.define(
+            &Symbol("tool.log".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool.log".to_string(),
+                arity: Arity::Variadic(1),
+                func: Arc::new(|args: Vec<Value>| Self::tool_log(args)),
+            })),
+        );
+
         // System time
         env.define(
             &Symbol("tool/time-ms".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/time-ms".to_string(),
+                arity: Arity::Fixed(0),
+                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
+            })),
+        );
+
+        // Backwards-compatible dotted alias
+        env.define(
+            &Symbol("tool.time-ms".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool.time-ms".to_string(),
                 arity: Arity::Fixed(0),
                 func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
             })),
@@ -1550,7 +1570,13 @@ impl StandardLibrary {
         let mut result = String::new();
         for arg in args {
             match arg {
-                Value::String(s) => result.push_str(&s),
+                Value::String(s) => {
+                    // Include surrounding quotes for string values to match `str`'s
+                    // expected output in tests (e.g. "hello" -> "\"hello\"").
+                    // Escape backslashes and quotes inside the string.
+                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                    result.push_str(&format!("\"{}\"", escaped));
+                }
                 Value::Integer(n) => result.push_str(&n.to_string()),
                 Value::Float(f) => result.push_str(&f.to_string()),
                 Value::Boolean(b) => result.push_str(&b.to_string()),
@@ -2622,7 +2648,51 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
         "Adds numeric values".to_string(),
         Arc::new(|input| {
             match input {
-                // Direct arguments: (call :ccos.math.add 2 3)
+                // New calling convention: map with :args containing the argument list
+                Value::Map(map) => {
+                    if let Some(args_val) = map.get(&MapKey::Keyword(Keyword("args".to_string()))) {
+                        match args_val {
+                            Value::List(args) => {
+                                let mut sum = 0i64;
+                                for arg in args {
+                                    match arg {
+                                        Value::Integer(n) => sum += n,
+                                        other => {
+                                            return Err(RuntimeError::TypeError {
+                                                expected: "integer".to_string(),
+                                                actual: other.type_name().to_string(),
+                                                operation: "ccos.math.add".to_string(),
+                                            })
+                                        }
+                                    }
+                                }
+                                Ok(Value::Integer(sum))
+                            }
+                            other => Err(RuntimeError::TypeError {
+                                expected: "list".to_string(),
+                                actual: other.type_name().to_string(),
+                                operation: "ccos.math.add".to_string(),
+                            })
+                        }
+                    } else {
+                        // Fallback: treat map values as integers (backward compatibility)
+                        let mut sum = 0i64;
+                        for (key, value) in map {
+                            match value {
+                                Value::Integer(n) => sum += n,
+                                other => {
+                                    return Err(RuntimeError::TypeError {
+                                        expected: "integer".to_string(),
+                                        actual: other.type_name().to_string(),
+                                        operation: "ccos.math.add".to_string(),
+                                    })
+                                }
+                            }
+                        }
+                        Ok(Value::Integer(sum))
+                    }
+                }
+                // Backward compatibility: direct list of arguments
                 Value::List(args) => {
                     let mut sum = 0i64;
                     for arg in args {
@@ -2639,25 +2709,8 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
                     }
                     Ok(Value::Integer(sum))
                 }
-                // Keyword arguments: (call :ccos.math.add {:a 2 :b 3})
-                Value::Map(map) => {
-                    let mut sum = 0i64;
-                    for (key, value) in map {
-                        match value {
-                            Value::Integer(n) => sum += n,
-                            other => {
-                                return Err(RuntimeError::TypeError {
-                                    expected: "integer".to_string(),
-                                    actual: other.type_name().to_string(),
-                                    operation: "ccos.math.add".to_string(),
-                                })
-                            }
-                        }
-                    }
-                    Ok(Value::Integer(sum))
-                }
                 other => Err(RuntimeError::TypeError {
-                    expected: "list or map".to_string(),
+                    expected: "map or list".to_string(),
                     actual: other.type_name().to_string(),
                     operation: "ccos.math.add".to_string(),
                 })
