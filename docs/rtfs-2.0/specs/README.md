@@ -44,6 +44,7 @@ This directory contains the complete specification for RTFS 2.0, a major evoluti
 
 12. **[12-capability-system-implementation.md](12-capability-system-implementation.md)** - Detailed capability system implementation architecture
 13. **[13-rtfs-ccos-integration-guide.md](13-rtfs-ccos-integration-guide.md)** - RTFS 2.0 and CCOS integration reference
+14. **[17-unsupported-features.md](17-unsupported-features.md)** - Features identified but not yet implemented
 
 ## Key Features of RTFS 2.0
 
