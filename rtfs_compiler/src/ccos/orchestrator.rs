@@ -599,7 +599,7 @@ impl Orchestrator {
             context.clone(),
         ));
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), plan_action_id.clone());
-    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+        let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let host_iface: Arc<dyn HostInterface> = host.clone();
         let evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);
@@ -696,8 +696,8 @@ impl Orchestrator {
             }
         }
 
-    // Propagate original error after updating intent status
-    if let Some(err) = error_opt { Err(err) } else { Ok(execution_result) }
+        // Propagate original error after updating intent status
+        if let Some(err) = error_opt { Err(err) } else { Ok(execution_result) }
     }
 
     /// Execute an entire intent graph with cross-plan parameter merging
@@ -747,7 +747,8 @@ impl Orchestrator {
         // Add child results
         for (child_id, result) in &child_results {
             if result.success {
-                result_summary.push(format!("{}: {:?}", child_id, result.value));
+                // Use Display to render Value in RTFS syntax, not Debug/AST
+                result_summary.push(format!("{}: {}", child_id, result.value));
             } else {
                 result_summary.push(format!("{}: failed", child_id));
             }
@@ -756,7 +757,8 @@ impl Orchestrator {
         // Add root result if any
         if let Some(ref root) = root_result {
             if root.success {
-                result_summary.push(format!("root: {:?}", root.value));
+                // Use Display to render Value in RTFS syntax, not Debug/AST
+                result_summary.push(format!("root: {}", root.value));
             } else {
                 result_summary.push("root: failed".to_string());
             }
