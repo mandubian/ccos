@@ -154,8 +154,8 @@
 (contains? [1 2 3] 2)
 ;; Expected: true
 
-(some #{:b} [:a :b :c])
-;; Expected: :b
+;; (some (fn [x] (= x :b)) [:a :b :c])
+;; Expected: true
 
 ;; Vector to other collections
 (set [1 2 3 2 1])

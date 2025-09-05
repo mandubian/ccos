@@ -499,6 +499,16 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // Some function - returns true if any element satisfies predicate
+        env.define(
+            &Symbol("some".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "some".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::some_with_context),
+            })),
+        );
+
         // Conj function
         env.define(
             &Symbol("conj".to_string()),
