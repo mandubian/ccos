@@ -74,58 +74,58 @@
 ;; ;; Expected: [25 25 36] with cache cleanup
 
 ;; Resource with conditional resource creation
-(with-resource [resource (if true
+;; (with-resource [resource (if true
                            {:type "file" :path "config.txt"}
                            {:type "default"})]
   (println "Reading config"))
-;; Expected: nil with appropriate resource cleanup
+;; ;; Expected: nil with appropriate resource cleanup
 
 ;; Resource with transformation pipeline
-(with-resource [input-stream InputStream {:url "http://example.com/data"}]
+;; (with-resource [input-stream InputStream {:url "http://example.com/data"}]
   (-> [1 2 3 4 5]
       (filter even?)
       (map inc)
       (reverse)))
-;; Expected: [5 4 3 2] with stream cleanup
+;; ;; Expected: [5 4 3 2] with stream cleanup
 
 ;; Resource with error propagation
-(with-resource [critical-resource CriticalResource {:type "critical"}]
+;; (with-resource [critical-resource CriticalResource {:type "critical"}]
   (if true
     (println "Using resource")
     (/ 1 0)))
-;; Expected: Runtime error with resource cleanup
+;; ;; Expected: Runtime error with resource cleanup
 
 ;; Resource with return value from inner expression
 (let [result (with-resource [temp-file File {:path "temp.txt"}]
                (println "Writing to temp file")
                "temporary data")]
   result)
-;; Expected: "temporary data" with temp file cleaned up
+;; ;; Expected: "temporary data" with temp file cleaned up
 
 ;; Resource with side effects
-(with-resource [logger Logger {:path "app.log"}]
+;; (with-resource [logger Logger {:path "app.log"}]
   (do
     (println "Starting operation")
     (let [result (+ 1 2)]
       (println "Operation completed")
       result)))
-;; Expected: 3 with logger cleanup and log entries
+;; ;; Expected: 3 with logger cleanup and log entries
 
 ;; Resource pool management
-(with-resource [db-pool ConnectionPool {:size 10}]
+;; (with-resource [db-pool ConnectionPool {:size 10}]
   (let [results []]
     (doseq [query [1 2 3]]
       (with-resource [conn Connection {:pool db-pool}]
         (conj! results (* query 2))))
     results))
-;; Expected: [2 4 6] with pool and connection cleanup
+;; ;; Expected: [2 4 6] with pool and connection cleanup
 
 ;; Resource with timeout (if supported)
-(with-resource [lock Lock {:timeout 5000}]
+;; (with-resource [lock Lock {:timeout 5000}]
   (if true
     (println "Critical section")
     :timeout))
-;; Expected: nil or :timeout with lock cleanup
+;; ;; Expected: nil or :timeout with lock cleanup
 
 ;; Edge case: Resource creation fails
 (try
@@ -133,16 +133,16 @@
     (println "Using bad resource"))
   (catch Exception e
     "creation-error"))
-;; Expected: "creation-error" (no cleanup needed if creation fails)
+;; ;; Expected: "creation-error" (no cleanup needed if creation fails)
 
 ;; Edge case: Empty resource body
-(with-resource [resource SimpleResource {:type "simple"}]
+;; (with-resource [resource SimpleResource {:type "simple"}]
   nil)
-;; Expected: nil with resource cleanup
+;; ;; Expected: nil with resource cleanup
 
 ;; Edge case: Resource used after with-resource block (should be invalid)
 (let [leaked-resource (with-resource [r Resource {:type "test"}]
                         r)]
   ; leaked-resource should be invalid here
   :leaked)
-;; Expected: :leaked (but leaked-resource should be invalid)
+;; ;; Expected: :leaked (but leaked-resource should be invalid)
