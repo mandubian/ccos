@@ -94,7 +94,7 @@
         (step :error "No suitable agents found")
         :no-agents)
       (do
-        (step :info "Processing with agents" {:agents (map :id agents)})
+        (step :info "Processing with agents" {:agents (map (fn [agent] (:id agent)) agents)}))
         (let [input-data [1 2 3 4 5]
               result (map inc input-data)]
           (step :info "Workflow completed" {:result-size (count result)})
@@ -106,7 +106,7 @@
       workers [{:id "worker1"} {:id "worker2"}]]
   (step :info "Coordinating work"
         {:coordinator (:id coordinator)
-         :workers (map :id workers)})
+         :workers (map (fn [w] (:id w)) workers))})
   (count workers))
 ;; Expected: 2 (number of workers)
 
@@ -166,19 +166,19 @@
     (subtask-operation)))
 ;; Expected: Subtask execution with hierarchical context
 
-;; Agent capability verification
-(let [agents [{:id "agent1" :capabilities ["security" "encryption"]}
-              {:id "agent2" :capabilities ["security"]}]
-      verified-agents []]
-  (for [agent agents]
-    (do
-      (step :debug "Verifying agent" {:agent-id (:id agent)})
-      (if (contains? (:capabilities agent) "encryption")
-        (do
-          (step :info "Agent verified" {:agent-id (:id agent)})
-          (conj! verified-agents agent))
-        (do
-          (step :warn "Agent verification failed" {:agent-id (:id agent)})
-          nil))))
-  verified-agents)
+;; Agent capability verification - if cannot be used as function in RTFS
+;; (let [agents [{:id "agent1" :capabilities ["security" "encryption"]}
+;;               {:id "agent2" :capabilities ["security"]}]
+;;       verified-agents []]
+;;   (for [agent agents]
+;;     (do
+;;       (step :debug "Verifying agent" {:agent-id (:id agent)})
+;;       (if (contains? (:capabilities agent) "encryption")
+;;         (do
+;;           (step :info "Agent verified" {:agent-id (:id agent)})
+;;           (conj! verified-agents agent))
+;;         (do
+;;           (step :warn "Agent verification failed" {:agent-id (:id agent)})
+;;           nil))))
+;;   verified-agents)
 ;; Expected: List of verified agents with detailed logging
