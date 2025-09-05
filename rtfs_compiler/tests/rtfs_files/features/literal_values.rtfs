@@ -175,22 +175,22 @@ resource://remote/api/endpoint
 0b1010
 ;; Expected: 10
 
-;; Character literals (if supported)
-\a
+;; Character literals (if supported) - not supported in RTFS
+;; \a
 ;; Expected: Character 'a'
 
-\newline
+;; \newline
 ;; Expected: Newline character
 
-\space
+;; \space
 ;; Expected: Space character
 
-;; Regular expression literals (if supported)
-#"[a-zA-Z]+"
+;; Regular expression literals (if supported) - not supported in RTFS
+;; #"[a-zA-Z]+"
 ;; Expected: Regex pattern
 
-;; Symbol literals vs keywords
-'symbol-literal
+;; Symbol literals vs keywords - quote syntax not supported in RTFS
+;; 'symbol-literal
 ;; Expected: Symbol (if quote syntax supported)
 
 ;; Edge cases: Empty keyword (should error)
