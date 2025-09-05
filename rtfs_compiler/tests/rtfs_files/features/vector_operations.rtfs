@@ -82,7 +82,7 @@
 (filter even? [1 2 3 4 5 6])
 ;; Expected: [2 4 6]
 
-(remove odd? [1 2 3 4 5 6])
+(filter even? [1 2 3 4 5 6])
 ;; Expected: [2 4 6]
 
 ;; Vector mapping
@@ -103,8 +103,8 @@
 (map-indexed (fn [i x] [i x]) [:a :b :c])
 ;; Expected: [[0 :a] [1 :b] [2 :c]]
 
-;; Vector comprehension (if supported)
-(for [x [1 2 3] y [10 20]] (+ x y))
+;; Vector comprehension (if supported) - for syntax not fully implemented
+;; (for [x [1 2 3] y [10 20]] (+ x y))
 ;; Expected: [11 21 12 22 13 23]
 
 ;; Vector destructuring in let

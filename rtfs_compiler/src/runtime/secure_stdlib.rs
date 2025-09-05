@@ -489,6 +489,16 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // Map-indexed function
+        env.define(
+            &Symbol("map-indexed".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "map-indexed".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::map_indexed_with_context),
+            })),
+        );
+
         // Conj function
         env.define(
             &Symbol("conj".to_string()),
@@ -1697,6 +1707,65 @@ impl SecureStandardLibrary {
                         expected: "function".to_string(),
                         actual: function.type_name().to_string(),
                         operation: "map".to_string(),
+                    });
+                }
+            }
+        }
+        Ok(Value::Vector(result))
+    }
+
+    fn map_indexed_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map-indexed".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let function = &args[0];
+        let collection = &args[1];
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map-indexed".to_string(),
+                })
+            }
+        };
+        let mut result = Vec::new();
+        for (index, item) in collection_vec.into_iter().enumerate() {
+            match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    // Fast path for builtin functions
+                    let func_args = vec![Value::Float(index as f64), item];
+                    let mapped_value = (builtin_func.func)(func_args)?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    // Handle builtin functions with context
+                    let func_args = vec![Value::Float(index as f64), item];
+                    let mapped_value = (builtin_func.func)(func_args, evaluator, env)?;
+                    result.push(mapped_value);
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    // Handle user-defined functions with full evaluator access
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], Value::Float(index as f64));
+                    func_env.define(&closure.params[1], item);
+                    let mapped_value = evaluator.eval_expr(&closure.body, &mut func_env)?;
+                    result.push(mapped_value);
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "map-indexed".to_string(),
                     });
                 }
             }
