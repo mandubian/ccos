@@ -81,6 +81,9 @@ impl Evaluator {
         // Resource management special form
         special_forms.insert("with-resource".to_string(), Self::eval_with_resource_special_form);
 
+        // Match special form
+        special_forms.insert("match".to_string(), Self::eval_match_form);
+
         special_forms
     }
 
@@ -2156,6 +2159,60 @@ impl Evaluator {
     }
 
     /// Evaluate with-resource special form: (with-resource [name type init] body)
+    fn eval_match_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        if args.len() < 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "match".into(),
+                expected: "at least 3".into(),
+                actual: args.len(),
+            });
+        }
+
+        // First argument is the value to match against
+        let value_to_match = self.eval_expr(&args[0], env)?;
+
+        // Remaining arguments are pattern-body pairs
+        let mut i = 1;
+        while i < args.len() {
+            if i + 1 >= args.len() {
+                return Err(RuntimeError::Generic("match: incomplete pattern-body pair".into()));
+            }
+
+            let pattern_expr = &args[i];
+            let body_expr = &args[i + 1];
+
+            // For now, we'll implement a simple pattern matching
+            // This is a simplified version - full pattern matching would be much more complex
+            match pattern_expr {
+                Expression::Symbol(sym) if sym.0 == "_" => {
+                    // Wildcard pattern - always matches
+                    return self.eval_expr(body_expr, env);
+                }
+                Expression::Literal(lit) => {
+                    // Literal pattern matching
+                    let pattern_value = self.eval_literal(lit)?;
+                    if value_to_match == pattern_value {
+                        return self.eval_expr(body_expr, env);
+                    }
+                }
+                Expression::Symbol(sym) => {
+                    // Variable binding pattern
+                    let mut clause_env = Environment::with_parent(Arc::new(env.clone()));
+                    clause_env.define(sym, value_to_match.clone());
+                    return self.eval_expr(body_expr, &mut clause_env);
+                }
+                _ => {
+                    // For now, treat complex patterns as non-matching
+                    // This would need to be expanded for full pattern matching support
+                }
+            }
+
+            i += 2;
+        }
+
+        Err(RuntimeError::MatchError("No matching clause".to_string()))
+    }
+
     fn eval_with_resource_special_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
         // Expect (with-resource [binding-vector] body)
         if args.len() != 2 {
