@@ -66,7 +66,7 @@ impl fmt::Display for Value {
                 write!(f, "({})", items.join(" "))
             }
             Value::Map(m) => {
-                let items: Vec<String> = m.iter().map(|(k, v)| format!("{:?} {}", k, v)).collect();
+                let items: Vec<String> = m.iter().map(|(k, v)| format!("{} {}", k, v)).collect();
                 write!(f, "{{{}}}", items.join(", "))
             }
             Value::Function(_) => write!(f, "#<function>"),

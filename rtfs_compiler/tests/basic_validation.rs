@@ -37,7 +37,7 @@ mod basic_tests {
         let code = "(+ 1 2)";
         match parse_and_evaluate(code) {
             Ok(result) => {
-                println!("Test result: {:?}", result);
+                println!("Test result: {}", result);
                 // Basic validation that something was computed
                 assert!(matches!(result, Value::Integer(3)), "Expected 3, got {:?}", result);
             }
@@ -53,7 +53,7 @@ mod basic_tests {
         let code = "42";
         match parse_and_evaluate(code) {
             Ok(result) => {
-                println!("Literal result: {:?}", result);
+                println!("Literal result: {}", result);
                 assert!(matches!(result, Value::Integer(42)), "Expected 42, got {:?}", result);
             }
             Err(e) => {

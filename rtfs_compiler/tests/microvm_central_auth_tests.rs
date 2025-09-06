@@ -130,7 +130,7 @@ fn test_central_authorization_system() {
     match result {
         Ok(value) => {
             println!("  ✅ Authorized capability execution succeeded");
-            println!("  📋 Result: {:?}", value);
+            println!("  📋 Result: {}", value);
         },
         Err(e) => panic!("❌ Authorized capability should succeed: {}", e),
     }

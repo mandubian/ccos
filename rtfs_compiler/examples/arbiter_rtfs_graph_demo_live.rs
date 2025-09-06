@@ -64,6 +64,8 @@ struct AppState {
     // Plan execution tracking - current executions and history
     current_executions: HashMap<String, u64>, // intent_id -> start_timestamp
     execution_history: Vec<ExecutionRecord>, // history of all executions
+    // Spinner state for background activity indicator
+    spinner_index: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -170,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
     let _ = local.block_on(&rt, async move {
 
         // Create logs directory if it doesn't exist
-        std::fs::create_dir_all("logs").unwrap_or_else(|e| { eprintln!("Warning: Failed to create logs directory: {}", e); });
+        std::fs::create_dir_all("logs").unwrap_or_else(|_e| { /* eprintln!("Warning: Failed to create logs directory: {}", _e); */ });
 
         // Create a channel for debug messages (we now send compact JSON strings)
         let (debug_tx, mut debug_rx) = mpsc::channel::<String>(100);
@@ -191,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
         let mut evt_rx = handle.subscribe();
         let cmd_tx = handle.commands();
 
-        let mut app = AppState::default();
+    let mut app = AppState { spinner_index: 0, ..Default::default() };
         if let Some(goal) = args.goal { app.goal_input = goal; } else { app.goal_input = "Create a financial budget for a small business including expense categories, revenue projections, and a monthly cash flow forecast".to_string(); }
 
         // If headless flag is set, run a short non-interactive demo and exit
@@ -212,8 +214,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                         }
 
                         // Emit GRAPH_ROOT JSON to stdout
-                        let msg = serde_json::json!({"type":"GRAPH_ROOT","intent_id": root_id});
-                        println!("{}", msg.to_string());
+                        // let msg = serde_json::json!({"type":"GRAPH_ROOT","intent_id": root_id});
+                        // println!("{}", msg.to_string());
 
                         // Select a stored intent (clone it while holding the lock, then drop the lock)
                         let chosen_storable = if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
@@ -232,27 +234,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                         } else { false };
 
                         // Emit a headless-specific debug JSON so we can trace control flow in logs
-                        if let Some(s) = &chosen_storable {
-                            let dbg = serde_json::json!({"type":"HEADLESS_CHOSEN_INTENT","intent_id": s.intent_id.clone()});
-                            println!("{}", dbg.to_string());
+                        if let Some(_s) = &chosen_storable {
+                            // let dbg = serde_json::json!({"type":"HEADLESS_CHOSEN_INTENT","intent_id": _s.intent_id.clone()});
+                            // println!("{}", dbg.to_string());
                         } else {
-                            let dbg = serde_json::json!({"type":"HEADLESS_CHOSEN_INTENT","intent_id": null});
-                            println!("{}", dbg.to_string());
+                            // let dbg = serde_json::json!({"type":"HEADLESS_CHOSEN_INTENT","intent_id": null});
+                            // println!("{}", dbg.to_string());
                         }
 
                         if let Some(st_owned) = chosen_storable {
                             match arb.generate_plan_for_intent(&st_owned).await {
                                 Ok(res) => {
-                                    let body = match res.plan.body {
-                                        rtfs_compiler::ccos::types::PlanBody::Rtfs(ref s) => s.clone(),
-                                        _ => "".to_string(),
-                                    };
-                                    let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": res.plan.plan_id, "body": body});
-                                    println!("{}", msg.to_string());
+                                    // let body = match res.plan.body {
+                                    //     rtfs_compiler::ccos::types::PlanBody::Rtfs(ref s) => s.clone(),
+                                    //     _ => "".to_string(),
+                                    // };
+                                    // let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": res.plan.plan_id, "body": body});
+                                    // println!("{}", msg.to_string());
 
                                     // Emit a headless marker just before execution
-                                    let pre_exec = serde_json::json!({"type":"HEADLESS_BEFORE_EXEC","intent_id": st_owned.intent_id.clone(), "plan_id": res.plan.plan_id});
-                                    println!("{}", pre_exec.to_string());
+                                    // let pre_exec = serde_json::json!({"type":"HEADLESS_BEFORE_EXEC","intent_id": st_owned.intent_id.clone(), "plan_id": res.plan.plan_id});
+                                    // println!("{}", pre_exec.to_string());
 
                                     // Auto-execute the generated plan in headless mode.
                                     // If the chosen intent has children, use the orchestrator to execute
@@ -261,8 +263,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                     let ctx = runtime_service::default_controlled_context();
                                     if chosen_has_children {
                                         let orchestrator = ccos.get_orchestrator();
-                                        if let Err(e) = orchestrator.store_plan(&res.plan) {
-                                            eprintln!("Warning: failed to store plan in orchestrator: {}", e);
+                                        if let Err(_e) = orchestrator.store_plan(&res.plan) {
+                                            // eprintln!("Warning: failed to store plan in orchestrator: {}", _e);
                                         }
 
                                         // Attempt to auto-generate plans for immediate child intents so
@@ -277,66 +279,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                             // try generate_plan_for_intent, then intent_to_plan, then synthesize fallback
                                             match arb.generate_plan_for_intent(&child).await {
                                                 Ok(child_res) => {
-                                                    if let Err(e) = orchestrator.store_plan(&child_res.plan) {
-                                                        eprintln!("Warning: failed to store child plan in orchestrator: {}", e);
+                                                    if let Err(_e) = orchestrator.store_plan(&child_res.plan) {
+                                                        // eprintln!("Warning: failed to store child plan in orchestrator: {}", _e);
                                                     } else {
-                                                        let body = match &child_res.plan.body {
-                                                            rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
-                                                            _ => "".to_string(),
-                                                        };
-                                                        let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": child_res.plan.plan_id, "body": body});
-                                                        println!("{}", msg.to_string());
+                                                        // let body = match &child_res.plan.body {
+                                                        //     rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
+                                                        //     _ => "".to_string(),
+                                                        // };
+                                                        // let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": child_res.plan.plan_id, "body": body});
+                                                        // println!("{}", msg.to_string());
                                                     }
                                                 }
                                                 Err(_) => {
                                                     // try intent_to_plan
                                                     let intent_obj = rtfs_compiler::ccos::types::Intent::new(child.goal.clone());
                                                     if let Ok(p) = arb.intent_to_plan(&intent_obj).await {
-                                                        if let Err(e) = orchestrator.store_plan(&p) {
-                                                            eprintln!("Warning: failed to store child fallback plan in orchestrator: {}", e);
+                                                        if let Err(_e) = orchestrator.store_plan(&p) {
+                                                            // eprintln!("Warning: failed to store child fallback plan in orchestrator: {}", _e);
                                                         } else {
-                                                            let body = match &p.body {
-                                                                rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
-                                                                _ => "".to_string(),
-                                                            };
-                                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": p.plan_id, "body": body});
-                                                            println!("{}", msg.to_string());
+                                                            // let body = match &p.body {
+                                                            //     rtfs_compiler::ccos::types::PlanBody::Rtfs(s) => s.clone(),
+                                                            //     _ => "".to_string(),
+                                                            // };
+                                                            // let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": p.plan_id, "body": body});
+                                                            // println!("{}", msg.to_string());
                                                         }
                                                     } else {
                                                         // synthesize a minimal fallback for child
                                                         let fallback_body = format!("(do (step \"headless-child-fallback\" (call :ccos.echo \"{}\")))", child.goal.replace('"', "\\\""));
                                                         let fallback_plan = Plan::new_rtfs(fallback_body.clone(), vec![child.intent_id.clone()]);
-                                                        if let Err(e) = orchestrator.store_plan(&fallback_plan) {
-                                                            eprintln!("Warning: failed to store synthesized child plan: {}", e);
+                                                        if let Err(_e) = orchestrator.store_plan(&fallback_plan) {
+                                                            // eprintln!("Warning: failed to store synthesized child plan: {}", _e);
                                                         } else {
-                                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": fallback_plan.plan_id, "body": fallback_body});
-                                                            println!("{}", msg.to_string());
+                                                            // let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": child.intent_id.clone(), "plan_id": fallback_plan.plan_id, "body": fallback_body});
+                                                            // println!("{}", msg.to_string());
                                                         }
                                                     }
                                                 }
                                             }
                                         }
-                                        println!("[DEBUG] About to call orchestrator.execute_intent_graph");
+                                        // println!("[DEBUG] About to call orchestrator.execute_intent_graph");
                                         let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
-                                        println!("[DEBUG] Returned from orchestrator.execute_intent_graph");
+                                        // println!("[DEBUG] Returned from orchestrator.execute_intent_graph");
                                         // If orchestration ran but reported no plans executed (or failed), fall back
                                         // to executing the generated plan directly so headless mirrors interactive behavior.
                                         match exec_result {
-                                            Ok(exec) if exec.success => {
-                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                println!("{}", msg.to_string());
+                                            Ok(_exec) if _exec.success => {
+                                                // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": _exec.success, "value": format!("{}", _exec.value)});
+                                                // println!("{}", msg.to_string());
                                             }
                                             _ => {
                                                 // Either orchestration failed or executed nothing; try direct execution
-                                                println!("[DEBUG] Orchestration did not execute plans or failed; falling back to direct execution");
+                                                // println!("[DEBUG] Orchestration did not execute plans or failed; falling back to direct execution");
                                                 match ccos.validate_and_execute_plan(res.plan, &ctx).await {
-                                                    Ok(exec) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                        println!("{}", msg.to_string());
+                                                    Ok(_exec) => {
+                                                        // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": _exec.success, "value": format!("{}", _exec.value)});
+                                                        // println!("{}", msg.to_string());
                                                     }
-                                                    Err(e) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
-                                                        println!("{}", msg.to_string());
+                                                    Err(_e) => {
+                                                        // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", _e)});
+                                                        // println!("{}", msg.to_string());
                                                     }
                                                 }
                                             }
@@ -345,13 +347,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                     } else {
                                         // Leaf intent - execute generated plan directly
-                                        println!("[DEBUG] About to call validate_and_execute_plan for leaf intent");
+                                        // println!("[DEBUG] About to call validate_and_execute_plan for leaf intent");
                                         let exec_result = ccos.validate_and_execute_plan(res.plan, &ctx).await;
-                                        println!("[DEBUG] Returned from validate_and_execute_plan for leaf intent");
+                                        // println!("[DEBUG] Returned from validate_and_execute_plan for leaf intent");
                                         match exec_result {
-                                            Ok(exec) => {
-                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                println!("{}", msg.to_string());
+                                            Ok(_exec) => {
+                                                // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": _exec.success, "value": format!("{}", _exec.value)});
+                                                // println!("{}", msg.to_string());
                                             }
                                             Err(e) => {
                                                 let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
@@ -372,8 +374,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 _ => "".to_string(),
                                             };
                                             let plan_id = plan.plan_id.clone();
-                                            let msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": plan_id, "body": body});
-                                            println!("{}", msg.to_string());
+                                            let _msg = serde_json::json!({"type":"PLAN_GEN","intent_id": st_owned.intent_id.clone(), "plan_id": plan_id, "body": body});
+                                            // println!("{}", _msg.to_string());
                                             // Execute the fallback plan using the same execution branch as above
                                             let ctx = runtime_service::default_controlled_context();
                                             let orchestrator = ccos.get_orchestrator();
@@ -384,19 +386,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
                                                 match exec_result {
                                                     Ok(exec) if exec.success => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                        println!("{}", msg.to_string());
+                                                        let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
+                                                        // println!("{}", _msg.to_string());
                                                     }
                                                     _ => {
-                                                        println!("[DEBUG] Orchestration fallback plan did not execute; falling back to direct execution of fallback plan");
+                                                        // println!("[DEBUG] Orchestration fallback plan did not execute; falling back to direct execution of fallback plan");
                                                         match ccos.validate_and_execute_plan(plan, &ctx).await {
                                                             Ok(exec) => {
-                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                                println!("{}", msg.to_string());
+                                                                let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
+                                                                // println!("{}", _msg.to_string());
                                                             }
                                                             Err(e) => {
-                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
-                                                                println!("{}", msg.to_string());
+                                                                let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
+                                                                // println!("{}", _msg.to_string());
                                                             }
                                                         }
                                                     }
@@ -405,12 +407,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 let exec_result = ccos.validate_and_execute_plan(plan, &ctx).await;
                                                 match exec_result {
                                                     Ok(exec) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
-                                                        println!("{}", msg.to_string());
+                                                        let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
+                                                        // println!("{}", _msg.to_string());
                                                     }
                                                     Err(e) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
-                                                        println!("{}", msg.to_string());
+                                                        let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
+                                                        // println!("{}", _msg.to_string());
                                                     }
                                                 }
                                             }
@@ -440,14 +442,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
                                                 match exec_result {
                                                     Ok(exec) if exec.success => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
                                                         println!("{}", msg.to_string());
                                                     }
                                                     _ => {
                                                         println!("[DEBUG] Orchestration synthesized fallback did not execute; falling back to direct execution of synthesized plan");
                                                         match ccos.validate_and_execute_plan(fallback_plan, &ctx).await {
                                                             Ok(exec) => {
-                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
                                                                 println!("{}", msg.to_string());
                                                             }
                                                             Err(e) => {
@@ -461,7 +463,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 let exec_result = ccos.validate_and_execute_plan(fallback_plan, &ctx).await;
                                                 match exec_result {
                                                     Ok(exec) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
                                                         println!("{}", msg.to_string());
                                                     }
                                                     Err(e) => {
@@ -525,7 +527,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 app.stop_llm_operation("Graph Generation", "completed", Some("Graph generated successfully".to_string()));
                                                 app.log_lines.push("✅ Graph generation completed successfully".into());
                                                 
-                                // Populate intent_graph from CCOS's stored intents
+                                                // Populate intent_graph from CCOS's stored intents
                                                 if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                                                     let all = graph_lock.storage.get_all_intents_sync();
                                                     app.intent_graph.clear();
@@ -633,13 +635,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                             if let Some(intent_id) = v.get("intent_id").and_then(|x| x.as_str()) {
                                                 let success = v.get("success").and_then(|x| x.as_bool()).unwrap_or(false);
                                                 let value = v.get("value").map(|x| x.to_string()).unwrap_or_else(|| "null".to_string());
-                                                
+
+                                                // Format result in RTFS syntax using our formatting functions
+                                                let rtfs_result = if success {
+                                                    if value == "null" {
+                                                        "(result nil)".to_string()
+                                                    } else if value.starts_with("Map(") {
+                                                        // Use our RTFS map formatting function for complex structures
+                                                        format_rtfs_map(&value)
+                                                    } else if value.starts_with('"') && value.ends_with('"') {
+                                                        format!("(result {})", value)
+                                                    } else if value == "true" || value == "false" {
+                                                        format!("(result {})", value)
+                                                    } else if value.parse::<f64>().is_ok() {
+                                                        format!("(result {})", value)
+                                                    } else {
+                                                        format!("(result \"{}\")", value.replace("\"", "\\\""))
+                                                    }
+                                                } else {
+                                                    format!("(error \"Execution failed\")")
+                                                };
+
                                                 // Stop tracking execution and record result
-                                                app.stop_execution(intent_id, success, Some(value.clone()), None);
-                                                
+                                                app.stop_execution(intent_id, success, Some(rtfs_result.clone()), None);
+
                                                 // Update last result for display
-                                                app.last_result = Some(format!("success={} value={}", success, value));
-                                                app.log_lines.push(format!("🏁 Exec result for {}: success={} value={}", intent_id, success, value));
+                                                app.last_result = Some(rtfs_result.clone());
+                                                app.log_lines.push(format!("🏁 Exec result for {}: {}", intent_id, rtfs_result));
                                             }
                                         }
                                         "AUTO_PLAN_GEN_COMPLETE" => {
@@ -672,8 +694,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                         let call_key = format!("{}-{}", action.action_id, action.function_name.as_deref().unwrap_or("unknown"));
                         if !reported_capability_calls.contains(&call_key) {
                             reported_capability_calls.insert(call_key);
-                            let args_str = if let Some(args) = &action.arguments { format!("{:?}", args) } else { "no args".to_string() };
-                            let call = CapabilityCall { _timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), capability_id: action.function_name.clone().unwrap_or_else(|| "unknown".to_string()), args: args_str.clone(), result: action.result.as_ref().map(|r| format!("{:?}", r.value)), success: action.result.as_ref().map(|r| r.success).unwrap_or(false), };
+                            let args_str = if let Some(args) = &action.arguments { 
+                                args.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(" ")
+                            } else { "no args".to_string() };
+                            let call = CapabilityCall { _timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), capability_id: action.function_name.clone().unwrap_or_else(|| "unknown".to_string()), args: args_str.clone(), result: action.result.as_ref().map(|r| format!("{}", r.value)), success: action.result.as_ref().map(|r| r.success).unwrap_or(false), };
                             app.capability_calls.push(call);
                             app.log_lines.push(format!("⚙️ Capability call: {}({})", action.function_name.as_deref().unwrap_or("unknown"), args_str));
                             if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
@@ -681,6 +705,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                     }
                 }
             }
+
+            // Advance spinner for background activity indicator
+            app.spinner_index = (app.spinner_index + 1) % 4;
 
             // Draw UI
             terminal.draw(|f| ui(f, &mut app))?;
@@ -802,7 +829,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                             let ctx = runtime_service::default_controlled_context();
                                             match ccos_clone.get_orchestrator().execute_intent_graph(&selected_id_for_closure, &ctx).await {
                                                 Ok(exec_result) => {
-                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec_result.success, "value": format!("{:?}", exec_result.value)});
+                                                    let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec_result.success, "value": format!("{}", exec_result.value)});
                                                     let _ = (dbg)(msg.to_string());
                                                 }
                                                 Err(e) => {
@@ -833,7 +860,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                                                 let ctx = runtime_service::default_controlled_context();
                                                 match ccos_clone.validate_and_execute_plan(plan, &ctx).await {
                                                     Ok(exec) => {
-                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec.success, "value": format!("{:?}", exec.value)});
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": selected_id_for_closure, "success": exec.success, "value": format!("{}", exec.value)});
                                                         let _ = (dbg)(msg.to_string());
                                                     }
                                                     Err(e) => {
@@ -998,12 +1025,19 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
         }
         E::Result { intent_id, result } => {
             app.running = false;
-            app.last_result = Some(format!("✅ success={} value={:?}", result.success, result.value));
-            app.log_lines.push("🏁 Execution completed".into());
-            if let Some(node) = app.intent_graph.get_mut(&intent_id) { node.status = if result.success { IntentStatus::Completed } else { IntentStatus::Failed }; }
-            if let Some(plan_info) = app.plans_by_intent.get_mut(&intent_id) {
-                plan_info.status = if result.success { "Completed".to_string() } else { "Failed".to_string() };
+            // Result is now a pre-formatted RTFS string
+            app.last_result = Some(result.clone());
+            app.log_lines.push(format!("🏁 Execution completed: {}", result));
+            // Try to infer success from the result string (simple heuristic)
+            let success = !result.to_lowercase().contains("error") && !result.to_lowercase().contains("failed");
+            if let Some(node) = app.intent_graph.get_mut(&intent_id) {
+                node.status = if success { IntentStatus::Completed } else { IntentStatus::Failed };
             }
+            if let Some(plan_info) = app.plans_by_intent.get_mut(&intent_id) {
+                plan_info.status = if success { "Completed".to_string() } else { "Failed".to_string() };
+            }
+            // Record execution in the AppState execution history so it shows under the intent
+            app.stop_execution(&intent_id, success, Some(result.clone()), None);
         }
         E::Error { message } => { app.running = false; app.log_lines.push(format!("❌ Error: {}", message)); }
         E::Heartbeat => {}
@@ -1019,9 +1053,70 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let input_title = match app.current_tab { Tab::Graph => "🎯 Goal Input (type) • s=Start c=Cancel r=Reset q=Quit • g=GenerateGraph • a=AutoPlans", Tab::Status => "📊 Status View", Tab::Logs => "📝 Application Logs", Tab::Debug => "🔧 Debug Logs", Tab::Plans => "📋 Plan Details", Tab::Capabilities => "⚙️ Capability Calls", };
     let input = Paragraph::new(if matches!(app.current_tab, Tab::Graph) { app.goal_input.as_str() } else { "" }).block(Block::default().title(input_title).borders(Borders::ALL)).wrap(Wrap { trim: true }); f.render_widget(input, tabs[1]);
 
+    // Render spinner inside the Goal input widget on the right for better visibility
+    if matches!(app.current_tab, Tab::Graph) && (app.is_llm_operation_running() || app.is_execution_running()) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+    // Prefer braille wheel spinner when Unicode is available, fall back to ASCII otherwise
+    let braille_frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+    let ascii_frames = ["-","\\","|","/"];
+    let lang = std::env::var("LANG").unwrap_or_default().to_lowercase();
+    let use_unicode = lang.contains("utf-8") || lang.contains("utf8");
+    let frames: &[&str] = if use_unicode { &braille_frames } else { &ascii_frames };
+    // Slower, time-based frame selection (~300ms per frame)
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let frame_idx = ((now_ms / 150) as usize) % frames.len();
+    let frame = frames.get(frame_idx).unwrap_or(&frames[0]);
+
+        // Build label and a small duration badge below the spinner
+        let (op_label, op_start) = if app.is_llm_operation_running() {
+            // Show the first running LLM operation name and its start time if available
+        if let Some((_name, ts)) = app.llm_operations.iter().next() { (format!("{} LLM", frame), *ts) } else { (format!("{} LLM", frame), 0) }
+        } else if app.is_execution_running() {
+            if let Some((_intent_id, ts)) = app.current_executions.iter().next() { (format!("{} Exec", frame), *ts) } else { (format!("{} Exec", frame), 0) }
+        } else { (format!("{} Busy", frame), 0) };
+
+        // Compute elapsed seconds for small label
+        let elapsed_s = if op_start > 0 { (now_ms as u64 / 1000).saturating_sub(op_start) } else { 0 };
+        let duration_label = if elapsed_s > 0 { format!("{}s", elapsed_s) } else { "".to_string() };
+
+        // Place the spinner anchored to the right side of the input area
+        let input_area = tabs[1];
+        let spinner_w = (op_label.len() + 2) as u16;
+        let spinner_rect = Rect::new(
+            input_area.x + input_area.width.saturating_sub(spinner_w) - 1,
+            input_area.y + 0,
+            spinner_w,
+            1,
+        );
+        let spinner_para = Paragraph::new(op_label).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        f.render_widget(spinner_para, spinner_rect);
+
+        // Render a small duration label under the spinner (if we have space)
+        if !duration_label.is_empty() {
+            let dur_w = (duration_label.len() + 2) as u16;
+            // place under the spinner, aligned right
+            let dur_rect = Rect::new(
+                input_area.x + input_area.width.saturating_sub(dur_w) - 1,
+                input_area.y + 1,
+                dur_w,
+                1,
+            );
+            let dur_para = Paragraph::new(duration_label).style(Style::default().fg(Color::LightYellow));
+            f.render_widget(dur_para, dur_rect);
+        }
+    }
+
     match app.current_tab { Tab::Graph => render_graph_tab(f, app, tabs[2]), Tab::Status => render_status_tab(f, app, tabs[2]), Tab::Logs => render_logs_tab(f, app, tabs[2]), Tab::Debug => render_debug_tab(f, app, tabs[2]), Tab::Plans => render_plans_tab(f, app, tabs[2]), Tab::Capabilities => render_capabilities_tab(f, app, tabs[2]), }
 
-    let status_text = format!("Intent: {} | Status: {} | Debug: {} | Tab: {}", app.current_intent.as_deref().unwrap_or("None"), if app.running { "Running" } else { "Idle" }, if app.show_debug { "Visible" } else { "Hidden" }, match app.current_tab { Tab::Graph => "Graph", Tab::Status => "Status", Tab::Logs => "Logs", Tab::Debug => "Debug", Tab::Plans => "Plans", Tab::Capabilities => "Capabilities", }); let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Cyan)).block(Block::default().borders(Borders::TOP)); f.render_widget(status_bar, tabs[3]); if app.help_visible { render_help_overlay(f, size); }
+    // Spinner frames for background activity
+    let spinner_frames = ["⠋","⠙","⠹","⠸"]; // simple wheel frames
+    let mut status_text = format!("Intent: {} | Status: {} | Debug: {} | Tab: {}", app.current_intent.as_deref().unwrap_or("None"), if app.running { "Running" } else { "Idle" }, if app.show_debug { "Visible" } else { "Hidden" }, match app.current_tab { Tab::Graph => "Graph", Tab::Status => "Status", Tab::Logs => "Logs", Tab::Debug => "Debug", Tab::Plans => "Plans", Tab::Capabilities => "Capabilities", });
+    // Show spinner when LLM or execution is active
+    if app.is_llm_operation_running() || app.is_execution_running() {
+        let frame = spinner_frames.get(app.spinner_index % spinner_frames.len()).unwrap_or(&"⠋");
+        status_text.push_str(&format!("  {} Working...", frame));
+    }
+    let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Cyan)).block(Block::default().borders(Borders::TOP)); f.render_widget(status_bar, tabs[3]); if app.help_visible { render_help_overlay(f, size); }
 }
 
 fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
@@ -1036,7 +1131,7 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
     let mut graph_items: Vec<ListItem> = Vec::new(); let mut item_index = 0;
     if let Some(root_id) = &app.root_intent_id {
         if let Some(_root) = app.intent_graph.get(root_id) {
-            build_graph_display_with_selection(&app.intent_graph, &app.plans_by_intent, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes, &mut app.display_order, app.selected_intent_index);
+            build_graph_display_with_selection(&app.intent_graph, &app.plans_by_intent, &app.execution_history, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes, &mut app.display_order, app.selected_intent_index);
         } else { graph_items.push(ListItem::new("No graph data available".to_string())); }
     } else { graph_items.push(ListItem::new("No root intent yet".to_string())); }
     
@@ -1059,6 +1154,8 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
     
     let graph = List::new(graph_items).block(Block::default().title(graph_title).borders(Borders::ALL)).highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)); 
     f.render_widget(graph, top_chunks[0]);
+
+    // spinner moved to the Goal input widget for better visibility
     
     let detail_text = if let Some(selected_id) = &app.selected_intent { 
         if let Some(node) = app.intent_graph.get(selected_id) { 
@@ -1083,6 +1180,7 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
                 .map(|r| {
                     let status_emoji = if r.success { "✅" } else { "❌" };
                     let result_info = if let Some(result) = &r.result {
+                        // Result is already in RTFS format from stop_execution
                         format!("Result: {}", result)
                     } else if let Some(error) = &r.error {
                         format!("Error: {}", error)
@@ -1119,6 +1217,7 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
     
     // Execution results display (prominent)
     let execution_results_text = if let Some(last_result) = app.last_result.as_ref() {
+        // last_result is already in RTFS format
         format!("🏁 Last Execution Result:\n{}", last_result)
     } else {
         "🏁 No executions yet\n\nPress 'e' to execute a plan or orchestrate intent graph".to_string()
@@ -1282,13 +1381,28 @@ impl AppState {
     fn stop_execution(&mut self, intent_id: &str, success: bool, result: Option<String>, error: Option<String>) {
         self.current_executions.remove(intent_id);
         
-        // Update history record
+        // Update history record if one exists (the normal path when start_execution was called)
         if let Some(record) = self.execution_history.iter_mut().rev().find(|r| r.intent_id == intent_id && r.end_time.is_none()) {
             record.end_time = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
             record.success = success;
             record.result = result;
             record.error = error;
+            return;
         }
+
+        // Fallback: no open record found for this intent (e.g., child intents executed without an explicit start)
+        // Create a completed record so executions are still visible in history and graph views.
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let record = ExecutionRecord {
+            intent_id: intent_id.to_string(),
+            plan_id: "<unknown>".to_string(),
+            start_time: now,
+            end_time: Some(now),
+            success,
+            result,
+            error,
+        };
+        self.execution_history.push(record);
     }
     
     /// Check if any execution is currently running
@@ -1324,23 +1438,95 @@ impl AppState {
                 };
                 
                 let status_emoji = if record.success { "✅" } else { "❌" };
-                let result_info = if let Some(result) = &record.result {
-                    format!("Result: {}", result)
-                } else if let Some(error) = &record.error {
-                    format!("Error: {}", error)
+                
+                // Format result in RTFS syntax - result is already RTFS-formatted
+                let rtfs_result = if record.success {
+                    record.result.as_ref()
+                        .map(|r| r.clone())
+                        .unwrap_or_else(|| "(result nil)".to_string())
                 } else {
-                    "No result".to_string()
+                    record.error.as_ref()
+                        .map(|e| format!("(error \"{}\")", e.replace("\"", "\\\"")))
+                        .unwrap_or_else(|| "(error \"Unknown error\")".to_string())
                 };
                 
-                format!("{} {} ({}s) - {}", status_emoji, record.intent_id, duration, result_info)
+                format!("{} {} ({}s) - {}", status_emoji, record.intent_id, duration, rtfs_result)
             })
             .collect()
     }
 }
 
+fn format_rtfs_map(map_str: &str) -> String {
+    // Parse Map({key: value}) format and convert to RTFS map syntax
+    if let Some(inner) = map_str.strip_prefix("Map(").and_then(|s| s.strip_suffix(")")) {
+        let mut result = "{".to_string();
+        let mut first = true;
+
+        // Parse key-value pairs separated by "), "
+        let pairs: Vec<&str> = inner.split("), ").collect();
+        for pair in pairs {
+            if let Some(colon_pos) = pair.find(": ") {
+                let key_part = &pair[..colon_pos];
+                let value_part = &pair[colon_pos + 2..];
+
+                if !first {
+                    result.push_str(", ");
+                }
+                first = false;
+
+                // Format key
+                if key_part.contains("Keyword(") {
+                    result.push_str(&format_rtfs_keyword(key_part));
+                } else {
+                    result.push_str(key_part);
+                }
+
+                result.push_str(" ");
+
+                // Format value
+                if value_part.contains("Keyword(") {
+                    result.push_str(&format_rtfs_keyword(value_part));
+                } else if value_part.contains("String(") {
+                    result.push_str(&format_rtfs_string(value_part));
+                } else {
+                    result.push_str(value_part);
+                }
+            }
+        }
+        result.push('}');
+        return result;
+    }
+    map_str.to_string()
+}
+
+fn format_rtfs_keyword(keyword_str: &str) -> String {
+    // Parse Keyword(Keyword("content")) format and extract the inner content
+    // The structure is: Keyword(Keyword("actual_keyword"))
+    if let Some(first_keyword) = keyword_str.strip_prefix("Keyword(") {
+        if let Some(inner_keyword) = first_keyword.strip_prefix("Keyword(") {
+            if let Some(end_pos) = inner_keyword.find("\")") {
+                let content = &inner_keyword[1..end_pos]; // Skip opening quote, take until closing quote
+                return format!(":{}", content);
+            }
+        }
+    }
+    keyword_str.to_string()
+}
+
+fn format_rtfs_string(string_str: &str) -> String {
+    // Parse String("content") format and convert to "content"
+    if let Some(inner) = string_str.strip_prefix("String(").and_then(|s| s.strip_suffix(")")) {
+        if inner.starts_with('"') && inner.ends_with('"') {
+            return inner.to_string();
+        }
+    }
+    format!("\"{}\"", string_str.replace("\"", "\\\""))
+}
+
 fn build_graph_display_with_selection(
     graph: &HashMap<IntentId, IntentNode>, 
     plans: &HashMap<IntentId, PlanInfo>,
+    execution_history: &[ExecutionRecord],
     current_id: &IntentId, 
     items: &mut Vec<ListItem>, 
     item_index: &mut usize,
@@ -1378,6 +1564,34 @@ fn build_graph_display_with_selection(
     // Record display order (this index maps to the list shown to the user)
     display_order.push(current_id.clone());
     *item_index += 1;
-    if is_expanded { for child_id in &node.children { build_graph_display_with_selection(graph, plans, child_id, items, item_index, depth + 1, selected_id, expanded_nodes, display_order, selected_row_index); } }
+    
+    // Add execution results as child nodes if this intent has been executed
+    let intent_executions: Vec<&ExecutionRecord> = execution_history.iter()
+        .filter(|record| record.intent_id == *current_id)
+        .collect();
+    
+    if !intent_executions.is_empty() {
+        for execution in intent_executions {
+            let result_indent = "  ".repeat(depth + 1);
+            let result_emoji = if execution.success { "✅" } else { "❌" };
+            
+            // Format result in RTFS syntax - result is already RTFS-formatted
+            let rtfs_result = if execution.success {
+                execution.result.as_ref()
+                    .map(|r| r.clone())
+                    .unwrap_or_else(|| "(result nil)".to_string())
+            } else {
+                execution.error.as_ref()
+                    .map(|e| format!("(error \"{}\")", e.replace("\"", "\\\"")))
+                    .unwrap_or_else(|| "(error \"Unknown error\")".to_string())
+            };
+            
+            let result_style = Style::default().fg(if execution.success { Color::Green } else { Color::Red });
+            items.push(ListItem::new(format!("{}{} {}", result_indent, result_emoji, rtfs_result)).style(result_style));
+            *item_index += 1;
+        }
+    }
+    
+    if is_expanded { for child_id in &node.children { build_graph_display_with_selection(graph, plans, execution_history, child_id, items, item_index, depth + 1, selected_id, expanded_nodes, display_order, selected_row_index); } }
     }
 }
