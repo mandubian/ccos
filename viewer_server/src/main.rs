@@ -39,12 +39,14 @@ struct AppState {
     tx: broadcast::Sender<ViewerEvent>,
     // command sender for submitting new goals to the runtime service
     cmd_tx: Mutex<Option<mpsc::Sender<RuntimeCommand>>>,
+    // track the most recent pending intent id to heuristically link sub-intents
+    last_pending: Mutex<Option<String>>,
 }
 
 #[tokio::main]
 async fn main() {
     let (tx, _) = broadcast::channel(100);
-    let state = Arc::new(AppState { tx, cmd_tx: Mutex::new(None) });
+    let state = Arc::new(AppState { tx, cmd_tx: Mutex::new(None), last_pending: Mutex::new(None) });
 
     // Initialize CCOS and runtime service within a LocalSet that persists for the server lifetime
     let local_set = tokio::task::LocalSet::new();
@@ -86,12 +88,73 @@ async fn main() {
         
         let mut evt_rx = handle.subscribe();
         let state_clone = Arc::clone(&state);
-        
+
         // Spawn task to forward CCOS events to WebSocket clients
         tokio::task::spawn_local(async move {
             while let Ok(runtime_event) = evt_rx.recv().await {
                 println!("Received runtime event: {:?}", runtime_event);
-                let viewer_event = convert_runtime_event_to_viewer(runtime_event);
+
+                // We'll build a ViewerEvent while updating `last_pending` heuristically
+                let viewer_event = match runtime_event {
+                    RuntimeEvent::Started { intent_id, goal } => {
+                        // remember top-level pending intents for later linking
+                        if intent_id.starts_with("pending-") {
+                            *state_clone.last_pending.lock().await = Some(intent_id.clone());
+                        }
+                        // create a node for the started intent
+                        let nodes = vec![serde_json::json!({"id": intent_id.clone(), "label": format!("Intent: {}", goal)})];
+                        let edges = vec![];
+                        let rtfs_code = format!("(intent \"{}\")", goal);
+                        ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
+                    }
+                    RuntimeEvent::Status { intent_id, status } => {
+                        // create a node for this status-carrying intent and link from last pending if available
+                        let node = serde_json::json!({"id": intent_id.clone(), "label": format!("{}", status)});
+                        let mut edges = vec![];
+                        if let Some(parent) = &*state_clone.last_pending.lock().await {
+                            edges.push(serde_json::json!({"from": parent.clone(), "to": intent_id.clone()}));
+                        }
+                        let nodes = vec![node];
+                        let rtfs_code = String::new();
+                        // send a FullUpdate so the client knows about the new node/edge
+                        ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
+                    }
+                    RuntimeEvent::Step { intent_id, desc } => {
+                        // treat step similar to status but include the description as label
+                        let node = serde_json::json!({"id": intent_id.clone(), "label": desc.clone()});
+                        let mut edges = vec![];
+                        if let Some(parent) = &*state_clone.last_pending.lock().await {
+                            edges.push(serde_json::json!({"from": parent.clone(), "to": intent_id.clone()}));
+                        }
+                        let nodes = vec![node];
+                        let rtfs_code = String::new();
+                        ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
+                    }
+                    RuntimeEvent::Result { intent_id, result } => {
+                        // update or create node with result label
+                        let node = serde_json::json!({"id": intent_id.clone(), "label": format!("Result: {}", result)});
+                        let mut edges = vec![];
+                        if let Some(parent) = &*state_clone.last_pending.lock().await {
+                            edges.push(serde_json::json!({"from": parent.clone(), "to": intent_id.clone()}));
+                        }
+                        let nodes = vec![node];
+                        let rtfs_code = String::new();
+                        ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
+                    }
+                    RuntimeEvent::Error { message } => {
+                        let nodes = vec![serde_json::json!({"id": "error", "label": format!("Error: {}", message)})];
+                        let edges = vec![];
+                        let rtfs_code = format!("(error \"{}\")", message);
+                        ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
+                    }
+                    RuntimeEvent::Heartbeat => {
+                        ViewerEvent::NodeStatusChange { id: "system".to_string(), status: "Alive".to_string() }
+                    }
+                    RuntimeEvent::Stopped => {
+                        ViewerEvent::NodeStatusChange { id: "system".to_string(), status: "Stopped".to_string() }
+                    }
+                };
+
                 println!("Converted to viewer event: {:?}", viewer_event);
                 let _ = state_clone.tx.send(viewer_event);
             }
@@ -255,43 +318,4 @@ async fn bind_with_port_fallback() -> std::io::Result<(TcpListener, std::net::So
 }
 
 // Convert CCOS RuntimeEvent to ViewerEvent for the web interface
-fn convert_runtime_event_to_viewer(event: RuntimeEvent) -> ViewerEvent {
-    match event {
-        RuntimeEvent::Started { intent_id, goal } => {
-            // Create a simple graph with the intent as a node
-            let nodes = vec![
-                serde_json::json!({"id": intent_id.clone(), "label": format!("Intent: {}", goal)})
-            ];
-            let edges = vec![];
-            let rtfs_code = format!("(intent \"{}\")", goal);
-            ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
-        }
-        RuntimeEvent::Status { intent_id, status } => {
-            ViewerEvent::NodeStatusChange { id: intent_id, status }
-        }
-        RuntimeEvent::Step { intent_id, desc } => {
-            // For now, just update the status with the step description
-            ViewerEvent::NodeStatusChange { id: intent_id, status: desc }
-        }
-        RuntimeEvent::Result { intent_id, result } => {
-            // Update the node with the result
-            ViewerEvent::NodeStatusChange { id: intent_id, status: format!("Result: {}", result) }
-        }
-        RuntimeEvent::Error { message } => {
-            // Create an error node
-            let nodes = vec![
-                serde_json::json!({"id": "error", "label": format!("Error: {}", message)})
-            ];
-            let edges = vec![];
-            let rtfs_code = format!("(error \"{}\")", message);
-            ViewerEvent::FullUpdate { nodes, edges, rtfs_code }
-        }
-        RuntimeEvent::Heartbeat => {
-            // For heartbeat, we could update a status node or just ignore
-            ViewerEvent::NodeStatusChange { id: "system".to_string(), status: "Alive".to_string() }
-        }
-        RuntimeEvent::Stopped => {
-            ViewerEvent::NodeStatusChange { id: "system".to_string(), status: "Stopped".to_string() }
-        }
-    }
-}
+// conversion now handled inline in the runtime event forwarding task above
