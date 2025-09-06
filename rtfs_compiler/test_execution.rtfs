@@ -1,0 +1,4 @@
+(do
+  (step "Test execution" (call :stdlib.core:println {"message" "Hello from RTFS!"}))
+  (step "Return result" "Execution completed successfully")
+)
