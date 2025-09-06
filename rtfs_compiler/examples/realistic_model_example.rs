@@ -104,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(parsed) => {
                 match evaluator.eval_toplevel(&parsed) {
                     Ok(result) => {
-                        println!("✅ Result: {:?}", result);
+                        println!("✅ Result: {}", result);
                     }
                     Err(e) => {
                         println!("❌ Error: {}", e);

@@ -48,7 +48,7 @@ fn main() {
                         if args.verbose { println!("Step: intent={} desc={}", intent_id, desc); }
                     }
                     runtime_service::RuntimeEvent::Result { intent_id, result } => {
-                        println!("Result: intent={} success={} value={:?}", intent_id, result.success, result.value);
+                        println!("Result: intent={} success={} value={}", intent_id, result.success, result.value);
                         break;
                     }
                     runtime_service::RuntimeEvent::Error { message } => {

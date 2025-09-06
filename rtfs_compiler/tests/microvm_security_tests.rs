@@ -335,7 +335,7 @@ fn test_capability_access_control_implementation() {
     if result.is_ok() {
         println!("  ✅ SUCCESS: Authorized capability execution succeeded");
         let execution_result = result.unwrap();
-        println!("  📊 Result: {:?}", execution_result.value);
+        println!("  📊 Result: {}", execution_result.value);
     } else {
         panic!("❌ FAILURE: Authorized capability execution failed: {:?}", result.unwrap_err());
     }

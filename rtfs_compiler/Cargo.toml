@@ -32,6 +32,10 @@ path = "src/bin/github_issue_manager.rs"
 name = "arbiter_rtfs_graph_demo_live"
 path = "examples/arbiter_rtfs_graph_demo_live.rs"
 
+[[bin]]
+name = "ccos-viewer"
+path = "src/viewer/main.rs"
+
 
 [dependencies]
 # Parser dependencies
@@ -60,6 +64,9 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.0", features = ["v4"] }
 url = "2.5"  # Add URL dependency for type validation
 atty = "0.2"  # For stdin detection in input handling
+# Remove explicit hyper dependency to avoid version mismatches with workspace
+# axum brings the compatible hyper version as needed. Enable axum's server
+# feature below so we can run an HTTP server from the example binary.
 
 # MCP (Model Context Protocol) dependencies - using tokio directly
 # rmcp = { version = "0.3.0", features = ["client", "server", "transport-child-process"] }
@@ -94,6 +101,13 @@ futures = "0.3"
 # TUI Visualization
 ratatui = { version = "0.26" }
 crossterm = { version = "0.27" }
+
+# Web server and websockets
+axum = { version = "0.7", features = ["ws"] }
+
+# Add hyper explicitly to control version used for Server
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+tower-http = { version = "0.5", features = ["fs"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

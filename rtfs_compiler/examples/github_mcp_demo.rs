@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             
             let result = capability.execute_capability("github.list_issues", &inputs, &context)?;
-            println!("✅ Result: {:?}", result);
+            println!("✅ Result: {}", result);
         }
         
         "create" => {
@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             
             let result = capability.execute_capability("github.create_issue", &inputs, &context)?;
-            println!("✅ Result: {:?}", result);
+            println!("✅ Result: {}", result);
         }
         
         "close" => {
@@ -164,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             
             let result = capability.execute_capability("github.close_issue", &inputs, &context)?;
-            println!("✅ Result: {:?}", result);
+            println!("✅ Result: {}", result);
         }
         
         _ => {

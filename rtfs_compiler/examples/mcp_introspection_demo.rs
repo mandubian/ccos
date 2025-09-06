@@ -234,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🚀 Executing capability '{}' with inputs: {:?}", capability_id, inputs);
     let result = marketplace.execute_capability(&capability_id, &inputs).await?;
 
-    println!("\n✅ Result: {:?}", result);
+    println!("\n✅ Result: {}", result);
     }
     Ok(())
 }

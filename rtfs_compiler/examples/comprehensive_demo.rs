@@ -27,9 +27,10 @@ use rtfs_compiler::ccos::types::{Intent, Plan, StorableIntent};
 use rtfs_compiler::ccos::delegation::ModelRegistry;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
-use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::utils::{format_rtfs_value_pretty};
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::TopLevel;
 
 // CCOS subsystems we wire directly for the demo
@@ -576,25 +577,8 @@ Focus on being specific and actionable."#,
     }
 
     fn format_value(&self, value: &Value) -> String {
-        match value {
-            Value::String(s) => format!("\"{}\"", s),
-            Value::Integer(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Map(map) => {
-                let entries: Vec<String> = map.iter()
-                    .map(|(k, v)| format!("  {:?}: {}", k, self.format_value(v)))
-                    .collect();
-                format!("{{\n{}\n}}", entries.join(",\n"))
-            }
-            Value::Vector(vec) => {
-                let entries: Vec<String> = vec.iter()
-                    .map(|v| format!("  {}", self.format_value(v)))
-                    .collect();
-                format!("[\n{}\n]", entries.join(",\n"))
-            }
-            _ => format!("{:?}", value)
-        }
+        // Use the utility function for consistent RTFS formatting with pretty printing
+        format_rtfs_value_pretty(value)
     }
 }
 

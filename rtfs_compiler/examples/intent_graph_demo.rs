@@ -310,7 +310,14 @@ fn render_value(v: &Value) -> String {
         Value::Vector(xs) => format!("[{}]", xs.iter().map(render_value).collect::<Vec<_>>().join(", ")),
         Value::List(xs) => format!("({})", xs.iter().map(render_value).collect::<Vec<_>>().join(", ")),
         Value::Map(m) => {
-            let mut items: Vec<(String, &Value)> = m.iter().map(|(k, v)| (format!("{}", match k { rtfs_compiler::ast::MapKey::Keyword(k) => format!(":{}", k.0), rtfs_compiler::ast::MapKey::String(s) => s.clone(), rtfs_compiler::ast::MapKey::Integer(i) => i.to_string() }), v)).collect();
+            let mut items: Vec<(String, &Value)> = m.iter().map(|(k, v)| {
+                let key_str = match k {
+                    rtfs_compiler::ast::MapKey::Keyword(k) => format!(":{}", k.0),
+                    rtfs_compiler::ast::MapKey::String(s) => format!("\"{}\"", s),
+                    rtfs_compiler::ast::MapKey::Integer(i) => i.to_string()
+                };
+                (key_str, v)
+            }).collect();
             items.sort_by(|a, b| a.0.cmp(&b.0));
             let body = items.into_iter().map(|(k, v)| format!("{} {}", k, render_value(v))).collect::<Vec<_>>().join(", ");
             format!("{{{}}}", body)

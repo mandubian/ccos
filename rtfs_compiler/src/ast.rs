@@ -56,6 +56,16 @@ pub enum MapKey {
     Integer(i64),
 }
 
+impl std::fmt::Display for MapKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MapKey::Keyword(k) => write!(f, ":{}", k.0),
+            MapKey::String(s) => write!(f, "\"{}\"", s),
+            MapKey::Integer(i) => write!(f, "{}", i),
+        }
+    }
+}
+
 // --- Patterns for Destructuring (let, fn params) ---
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

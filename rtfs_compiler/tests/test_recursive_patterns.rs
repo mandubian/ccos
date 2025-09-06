@@ -75,7 +75,7 @@ fn test_nested_recursion_pattern() {
         .expect("Should evaluate successfully");
 
     // Should return a countdown vector [5, 4, 3, 2, 1]
-    println!("Nested recursion result: {:?}", result);
+    println!("Nested recursion result: {}", result);
 }
 
 #[test]
@@ -104,7 +104,7 @@ fn test_higher_order_recursion_pattern() {
         .expect("Should evaluate successfully");
 
     // Should return squares: [1, 4, 9, 16, 25]
-    println!("Higher-order recursion result: {:?}", result);
+    println!("Higher-order recursion result: {}", result);
 }
 
 #[test]
@@ -133,5 +133,5 @@ fn test_three_way_recursion_pattern() {
         .expect("Should evaluate successfully");
 
     // Should return cycle results
-    println!("Three-way recursion result: {:?}", result);
+    println!("Three-way recursion result: {}", result);
 }

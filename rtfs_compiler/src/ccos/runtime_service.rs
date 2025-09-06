@@ -36,7 +36,7 @@ pub enum RuntimeEvent {
     Started { intent_id: IntentId, goal: String },
     Status { intent_id: IntentId, status: String },
     Step { intent_id: IntentId, desc: String },
-    Result { intent_id: IntentId, result: ExecutionResult },
+    Result { intent_id: IntentId, result: String }, // RTFS-formatted result string
     Error { message: String },
     Heartbeat,
     Stopped,
@@ -69,13 +69,16 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
 
     // Spawn the service loop on the local task set; caller must use a current_thread runtime
     let evt_tx_for_loop = evt_tx.clone();
+    println!("Starting runtime service task...");
     tokio::task::spawn_local(async move {
+        println!("Runtime service task started");
         let mut cmd_rx = cmd_rx;
         // Track the currently running request so we can cancel it
         let mut current_task: Option<tokio::task::JoinHandle<()>> = None;
         let mut current_intent_id: Option<IntentId> = None;
 
         while let Some(cmd) = cmd_rx.recv().await {
+            println!("Runtime service received command: {:?}", cmd);
             match cmd {
                 RuntimeCommand::Start { goal, context } => {
                     // If a task is already running, abort it to start a fresh one
@@ -89,10 +92,12 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
                     // Run the request locally (no Send bound)
                     let ccos_req = Arc::clone(&ccos);
                     let handle = tokio::task::spawn_local(async move {
+                        println!("Starting to process request for goal: {}", goal.clone());
                         let _ = tx.send(RuntimeEvent::Started { intent_id: tmp_intent_id.clone(), goal: goal.clone() });
                         // Avoid indefinite hangs: timebox orchestration
                         match timeout(Duration::from_secs(25), ccos_req.process_request(&goal, &context)).await {
                             Ok(Ok(result)) => {
+                                println!("Request processed successfully: {:?}", result);
                                 let intent_id = ccos_req.get_intent_graph().lock().ok().and_then(|g| {
                                     let intents = g.storage.get_all_intents_sync();
                                     intents.into_iter()
@@ -100,12 +105,20 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
                                         .max_by_key(|i| i.updated_at)
                                         .map(|i| i.intent_id)
                                 }).unwrap_or(tmp_intent_id.clone());
-                                let _ = tx.send(RuntimeEvent::Result { intent_id, result });
+                                // Convert ExecutionResult value to RTFS-formatted string
+                                let rtfs_result = if result.success {
+                                    format!("{}", result.value)
+                                } else {
+                                    format!("Error: {}", result.value)
+                                };
+                                let _ = tx.send(RuntimeEvent::Result { intent_id, result: rtfs_result });
                             }
                             Ok(Err(e)) => {
+                                println!("Request processing failed: {:?}", e);
                                 let _ = tx.send(RuntimeEvent::Error { message: format!("process_request error: {e}") });
                             }
                             Err(_) => {
+                                println!("Request processing timed out");
                                 let _ = tx.send(RuntimeEvent::Error { message: "process_request timed out after 25s".to_string() });
                             }
                         }
