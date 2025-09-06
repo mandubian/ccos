@@ -1,0 +1,27 @@
+[package]
+name = "viewer_server"
+version = "0.1.0"
+edition = "2021"
+authors = ["ccos viewer <dev@example.com>"]
+
+[dependencies]
+axum = { version = "0.7", features = ["ws", "http1", "http2", "tokio"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.3", features = ["fs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Keep versions conservative to avoid workspace interference
+
+futures = "0.3"
+futures-util = "0.3"
+
+# CCOS integration
+rtfs_compiler = { path = "../rtfs_compiler" }
+
+# Use axum's server runtime; avoid pulling hyper directly to prevent
+# multiple hyper versions and trait mismatches in the dependency graph.
+
+# Add hyper pinned to the version pulled in by axum so we can call
+# `hyper::Server` directly without creating a second conflicting hyper.
+
