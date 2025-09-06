@@ -110,13 +110,31 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleEvent(event) {
         switch (event.type) {
             case 'FullUpdate':
-                // Full update of the graph and RTFS code
-                nodes.clear();
-                edges.clear();
-                nodes.add(event.data.nodes);
-                edges.add(event.data.edges);
-                rtfsCodeElement.textContent = event.data.rtfs_code;
-                Prism.highlightElement(rtfsCodeElement);
+                // Merge incoming full-update into the existing graph instead of
+                // replacing it wholesale. This preserves previously-reported
+                // nodes/edges so the server can send incremental FullUpdate
+                // messages for new sub-nodes and edges.
+                if (Array.isArray(event.data.nodes)) {
+                    // upsert nodes
+                    event.data.nodes.forEach(n => {
+                        // keep label updates and other props
+                        nodes.update(n);
+                    });
+                }
+                if (Array.isArray(event.data.edges)) {
+                    // ensure edges have stable ids so updates don't duplicate
+                    event.data.edges.forEach(e => {
+                        const edge = Object.assign({}, e);
+                        if (!edge.id) {
+                            edge.id = `${edge.from}--${edge.to}`;
+                        }
+                        edges.update(edge);
+                    });
+                }
+                if (typeof event.data.rtfs_code === 'string') {
+                    rtfsCodeElement.textContent = event.data.rtfs_code;
+                    Prism.highlightElement(rtfsCodeElement);
+                }
                 break;
             case 'NodeStatusChange':
                 // Update the status of a single node
