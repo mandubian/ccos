@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCOS Live Visualization</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-lisp.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+</head>
+<body>
+    <h1>CCOS Live Execution</h1>
+    <div class="container">
+        <div id="graph-container"></div>
+        <div id="rtfs-container">
+            <h2>RTFS Plan</h2>
+            <pre><code id="rtfs-code" class="language-lisp"></code></pre>
+        </div>
+    </div>
+    <div id="log-container">
+        <h2>Event Log</h2>
+        <div id="log-entries"></div>
+    </div>
+    <div id="intent-container">
+        <h2>Submit Intent</h2>
+        <form id="intent-form">
+            <input id="intent-input" placeholder="e.g. echo hello" />
+            <button type="submit">Send</button>
+        </form>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
