@@ -463,12 +463,14 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
         }
         E::Result { intent_id, result } => {
             app.running = false;
-            app.last_result = Some(format!("✅ success={} value={:?}", result.success, result.value));
+            app.last_result = Some(format!("✅ Result: {:?}", result));
             app.log_lines.push("🏁 Execution completed".into());
 
             // Update final status
             if let Some(node) = app.intent_graph.get_mut(&intent_id) {
-                node.status = if result.success { IntentStatus::Completed } else { IntentStatus::Failed };
+                // Parse result to determine success - if it starts with "Error:", it's failed
+                let success = !result.starts_with("Error:");
+                node.status = if success { IntentStatus::Completed } else { IntentStatus::Failed };
             }
         }
         E::Error { message } => {

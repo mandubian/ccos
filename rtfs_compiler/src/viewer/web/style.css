@@ -6,37 +6,193 @@ body {
     padding: 20px;
 }
 
-h1, h2 {
+h1, h2, h3 {
     color: #00aaff;
     border-bottom: 1px solid #444;
     padding-bottom: 5px;
+    margin-top: 0;
 }
 
+/* Goal Input Section */
+#goal-section {
+    background-color: #252525;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+#goal-form {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+#goal-input {
+    flex: 1;
+    padding: 10px;
+    background-color: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #f0f0f0;
+    font-size: 16px;
+}
+
+#goal-input:focus {
+    outline: none;
+    border-color: #00aaff;
+}
+
+#generate-graph-btn {
+    padding: 10px 20px;
+    background-color: #00aaff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+#generate-graph-btn:hover {
+    background-color: #0088cc;
+}
+
+#goal-status {
+    color: #888;
+    font-size: 14px;
+}
+
+/* Action Buttons */
+#action-buttons {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+#action-buttons button {
+    padding: 8px 16px;
+    background-color: #333;
+    color: #f0f0f0;
+    border: 1px solid #555;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+#action-buttons button:hover:not(:disabled) {
+    background-color: #444;
+}
+
+#action-buttons button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#generate-plans-btn {
+    background-color: #ffaa00;
+    color: #000;
+}
+
+#generate-plans-btn:hover:not(:disabled) {
+    background-color: #cc8800;
+}
+
+#execute-btn {
+    background-color: #00aa00;
+}
+
+#execute-btn:hover:not(:disabled) {
+    background-color: #008800;
+}
+
+#clear-btn {
+    background-color: #aa0000;
+}
+
+#clear-btn:hover:not(:disabled) {
+    background-color: #880000;
+}
+
+/* Main Container */
 .container {
     display: flex;
     flex-direction: row;
     gap: 20px;
-    height: 60vh;
+    height: calc(100vh - 300px);
 }
 
-#graph-container {
-    flex: 1;
-    border: 1px solid #444;
-    border-radius: 8px;
-    background-color: #252525;
-}
-
-#rtfs-container {
-    flex: 1;
+.left-panel, .right-panel {
     display: flex;
     flex-direction: column;
+    gap: 20px;
+}
+
+.left-panel {
+    flex: 1;
+}
+
+.right-panel {
+    flex: 1;
+}
+
+/* Graph Container */
+#graph-container {
+    flex: 2;
     border: 1px solid #444;
     border-radius: 8px;
     background-color: #252525;
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 400px; /* Add minimum height for vis.js to render */
 }
 
-#rtfs-container h2 {
+#graph-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #444;
+}
+
+#graph-visualization {
+    flex: 1;
+    min-height: 300px;
+    border-top: 1px solid #444;
+}
+
+/* Intent Details */
+#intent-details {
+    flex: 1;
+    border: 1px solid #444;
+    border-radius: 8px;
+    background-color: #252525;
+    display: flex;
+    flex-direction: column;
+}
+
+#intent-details h3 {
+    margin: 10px;
+}
+
+#selected-intent-info {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+    font-family: "Fira Code", monospace;
+    font-size: 0.9em;
+}
+
+/* RTFS Container */
+#rtfs-container {
+    flex: 1;
+    border: 1px solid #444;
+    border-radius: 8px;
+    background-color: #252525;
+    display: flex;
+    flex-direction: column;
+}
+
+#rtfs-container h3 {
     margin: 10px;
 }
 
@@ -47,9 +203,9 @@ h1, h2 {
     padding: 10px;
 }
 
+/* Log Container */
 #log-container {
-    margin-top: 20px;
-    height: 25vh;
+    flex: 1;
     border: 1px solid #444;
     border-radius: 8px;
     background-color: #252525;
@@ -57,7 +213,7 @@ h1, h2 {
     flex-direction: column;
 }
 
-#log-container h2 {
+#log-container h3 {
     margin: 10px;
 }
 
@@ -71,4 +227,16 @@ h1, h2 {
 
 .log-entry {
     padding: 2px 0;
+    border-bottom: 1px solid #333;
 }
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+/* Status indicators */
+.status-pending { color: #ffff00; }
+.status-active { color: #00aaff; }
+.status-executing { color: #ffaa00; }
+.status-completed { color: #00aa00; }
+.status-failed { color: #aa0000; }
