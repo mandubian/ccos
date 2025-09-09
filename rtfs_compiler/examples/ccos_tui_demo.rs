@@ -133,7 +133,7 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
         }
         E::Result { intent_id: _, result } => {
             app.running = false;
-            app.last_result = Some(format!("success={} value={}", result.success, result.value));
+            app.last_result = Some(format!("Result: {}", result));
             app.log_lines.push("Result received".into());
         }
         E::Error { message } => {

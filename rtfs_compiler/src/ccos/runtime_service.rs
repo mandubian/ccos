@@ -40,6 +40,11 @@ pub enum RuntimeEvent {
     Error { message: String },
     Heartbeat,
     Stopped,
+    // New events for graph generation and plan execution
+    GraphGenerated { root_id: IntentId, nodes: Vec<serde_json::Value>, edges: Vec<serde_json::Value> },
+    PlanGenerated { intent_id: IntentId, plan_id: String, rtfs_code: String },
+    StepLog { step: String, status: String, message: String, details: Option<serde_json::Value> },
+    ReadyForNext { next_step: String },
 }
 
 /// Handle returned to callers for interacting with the service

@@ -12,25 +12,55 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
 </head>
 <body>
-    <h1>CCOS Live Execution</h1>
+    <h1>CCOS Intent Graph & Execution Demo</h1>
+    
+    <!-- Goal Input Section at Top -->
+    <div id="goal-section">
+        <h2>🎯 Enter Your Goal</h2>
+        <form id="goal-form">
+            <input id="goal-input" placeholder="e.g. Create a financial budget for a small business including expense categories, revenue projections, and a monthly cash flow forecast" />
+            <button type="submit" id="generate-graph-btn">Generate Graph</button>
+        </form>
+        <div id="goal-status">Ready to generate intent graph...</div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div id="action-buttons">
+        <button id="generate-plans-btn" disabled>Generate Plans</button>
+        <button id="execute-btn" disabled>Execute</button>
+        <button id="clear-btn">Clear</button>
+    </div>
+
+    <!-- Main Content Area -->
     <div class="container">
-        <div id="graph-container"></div>
-        <div id="rtfs-container">
-            <h2>RTFS Plan</h2>
-            <pre><code id="rtfs-code" class="language-lisp"></code></pre>
+        <!-- Left Panel: Graph and Details -->
+        <div class="left-panel">
+            <div id="graph-container">
+                <div id="graph-header">
+                    <h3>🗺️ Intent Graph</h3>
+                    <div id="graph-stats">No graph generated yet</div>
+                </div>
+                <div id="graph-visualization" style="flex: 1; min-height: 300px;"></div>
+            </div>
+            <div id="intent-details">
+                <h3>📋 Intent Details</h3>
+                <div id="selected-intent-info">Select an intent to view details</div>
+            </div>
+        </div>
+
+        <!-- Right Panel: RTFS Code and Logs -->
+        <div class="right-panel">
+            <div id="rtfs-container">
+                <h3>📄 RTFS Plan</h3>
+                <pre><code id="rtfs-code" class="language-lisp"></code></pre>
+            </div>
+            <div id="log-container">
+                <h3>📝 Activity Log</h3>
+                <div id="log-entries"></div>
+            </div>
         </div>
     </div>
-    <div id="log-container">
-        <h2>Event Log</h2>
-        <div id="log-entries"></div>
-    </div>
-    <div id="intent-container">
-        <h2>Submit Intent</h2>
-        <form id="intent-form">
-            <input id="intent-input" placeholder="e.g. echo hello" />
-            <button type="submit">Send</button>
-        </form>
-    </div>
+
     <script src="app.js"></script>
 </body>
 </html>
