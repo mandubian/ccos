@@ -53,10 +53,8 @@ struct AppState {
     capability_calls: Vec<CapabilityCall>,
     expanded_nodes: HashSet<IntentId>,
     view_mode: ViewMode,
-    // Cursor over the VISIBLE, flattened list of nodes in render order
-    cursor_index: usize,
-    // Flattened display order of visible nodes and their indent depth (rebuilt each frame)
-    display_tree: Vec<(IntentId, usize)>,
+    selected_intent_index: usize,
+
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -125,40 +123,44 @@ enum NavDirection {
 }
 
 fn navigate_graph(app: &mut AppState, direction: NavDirection) {
-    if app.display_tree.is_empty() {
+    if app.intent_graph.is_empty() {
         return;
     }
 
     match direction {
         NavDirection::Up => {
-            if app.cursor_index > 0 {
-                app.cursor_index -= 1;
+            if app.selected_intent_index > 0 {
+                app.selected_intent_index -= 1;
             }
         }
         NavDirection::Down => {
-            if app.cursor_index + 1 < app.display_tree.len() {
-                app.cursor_index += 1;
+            if app.selected_intent_index < app.intent_graph.len() - 1 {
+                app.selected_intent_index += 1;
             }
         }
     }
 }
 
 fn select_current_intent(app: &mut AppState) {
-    if app.cursor_index < app.display_tree.len() {
-        let (id, _) = &app.display_tree[app.cursor_index];
-        app.selected_intent = Some(id.clone());
+    if app.selected_intent_index < app.intent_graph.len() {
+        let intent_ids: Vec<&IntentId> = app.intent_graph.keys().collect();
+        if let Some(intent_id) = intent_ids.get(app.selected_intent_index) {
+            app.selected_intent = Some((*intent_id).clone());
+        }
     }
 }
 
 fn toggle_expand_current(app: &mut AppState) {
-    if app.cursor_index < app.display_tree.len() {
-        let (id, _) = &app.display_tree[app.cursor_index];
-        if app.expanded_nodes.contains(id) {
-            app.expanded_nodes.remove(id);
-        } else {
-            app.expanded_nodes.insert(id.clone());
+    if app.selected_intent_index < app.intent_graph.len() {
+        let intent_ids: Vec<&IntentId> = app.intent_graph.keys().collect();
+        if let Some(intent_id) = intent_ids.get(app.selected_intent_index) {
+            let intent_id = (*intent_id).clone();
+            if app.expanded_nodes.contains(&intent_id) {
+                app.expanded_nodes.remove(&intent_id);
+            } else {
+                app.expanded_nodes.insert(intent_id);
+            }
         }
-        // After toggling, the display tree will be rebuilt before next draw
     }
 }
 
@@ -265,7 +267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
         // Track capability calls we've already reported
         let mut reported_capability_calls = std::collections::HashSet::new();
 
-    // Frame rate control for smooth UI updates
+        // Frame rate control for smooth UI updates
         let frame_sleep = std::time::Duration::from_millis(16);
 
         println!("Entering main event loop...");
@@ -325,14 +327,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
                         }
                     }
                 }
-            }
-
-            // 1.7) Rebuild display tree according to current expansion state
-            rebuild_display_tree(&mut app);
-
-            // Clamp cursor if tree shrank
-            if !app.display_tree.is_empty() && app.cursor_index >= app.display_tree.len() {
-                app.cursor_index = app.display_tree.len() - 1;
             }
 
             // 2) Draw UI
@@ -417,14 +411,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
 }
 
 fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
-    use runtime_service::RuntimeEvent as E;
     match evt {
-        E::Started { intent_id, goal } => {
+        runtime_service::RuntimeEvent::Started { intent_id, goal } => {
             app.current_intent = Some(intent_id.clone());
             app.running = true;
             app.log_lines.push(format!("🎯 Started: {}", goal));
-
-            // Create root intent node
             let root_node = IntentNode {
                 intent_id: intent_id.clone(),
                 name: "Root Goal".to_string(),
@@ -435,19 +426,14 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 metadata: HashMap::new(),
             };
-                let root_id = intent_id.clone();
-                app.intent_graph.insert(root_id.clone(), root_node);
-                app.root_intent_id = Some(root_id.clone());
-                // Expand root initially so children are visible; user can collapse with Space
-                app.expanded_nodes.insert(root_id);
+            app.intent_graph.insert(intent_id.clone(), root_node);
+            app.root_intent_id = Some(intent_id.clone());
+            app.expanded_nodes.insert(intent_id);
         }
-        E::Status { intent_id, status } => {
+        runtime_service::RuntimeEvent::Status { intent_id, status } => {
             app.status_lines.push(status.clone());
             if app.status_lines.len() > 200 { app.status_lines.drain(0..app.status_lines.len()-200); }
-
-            // Update intent status in graph
             if let Some(node) = app.intent_graph.get_mut(&intent_id) {
-                // Parse status to update IntentStatus
                 if status.contains("Executing") {
                     node.status = IntentStatus::Executing;
                 } else if status.contains("Completed") {
@@ -457,30 +443,61 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 }
             }
         }
-        E::Step { intent_id: _, desc } => {
+        runtime_service::RuntimeEvent::Step { intent_id, desc } => {
             app.log_lines.push(format!("⚙️  {}", desc));
+            if let Some(plan_info) = app.plans_by_intent.get_mut(&intent_id) {
+                plan_info.execution_steps.push(desc.clone());
+                plan_info.status = "Executing".to_string();
+            }
             if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
         }
-        E::Result { intent_id, result } => {
+        runtime_service::RuntimeEvent::Result { intent_id, result } => {
             app.running = false;
-            app.last_result = Some(format!("✅ Result: {:?}", result));
-            app.log_lines.push("🏁 Execution completed".into());
-
-            // Update final status
+            app.last_result = Some(result.clone());
+            app.log_lines.push(format!("🏁 Execution completed: {}", result));
+            let success = !result.to_lowercase().contains("error") && !result.to_lowercase().contains("failed");
             if let Some(node) = app.intent_graph.get_mut(&intent_id) {
-                // Parse result to determine success - if it starts with "Error:", it's failed
-                let success = !result.starts_with("Error:");
                 node.status = if success { IntentStatus::Completed } else { IntentStatus::Failed };
             }
+            if let Some(plan_info) = app.plans_by_intent.get_mut(&intent_id) {
+                plan_info.status = if success { "Completed".into() } else { "Failed".into() };
+            }
         }
-        E::Error { message } => {
+        runtime_service::RuntimeEvent::Error { message } => {
             app.running = false;
             app.log_lines.push(format!("❌ Error: {}", message));
         }
-        E::Heartbeat => {}
-        E::Stopped => {
+        runtime_service::RuntimeEvent::GraphGenerated { root_id, nodes: _nodes, edges: _edges } => {
+            app.log_lines.push(format!("🧭 Runtime generated graph root: {}", root_id));
+            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+        }
+        runtime_service::RuntimeEvent::PlanGenerated { intent_id, plan_id, rtfs_code } => {
+            let plan_info = PlanInfo {
+                plan_id: plan_id.clone(),
+                name: None,
+                body: rtfs_code.clone(),
+                status: "Generated".to_string(),
+                capabilities_required: vec![],
+                execution_steps: vec![],
+            };
+            app.plans_by_intent.insert(intent_id.clone(), plan_info);
+             app.log_lines.push(format!("📋 Plan generated for {}: {}", intent_id, plan_id));
+            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+        }
+        runtime_service::RuntimeEvent::StepLog { step, status, message, details } => {
+            app.log_lines.push(format!("🪵 StepLog {} [{}]: {} ({:?})", step, status, message, details));
+            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+        }
+        runtime_service::RuntimeEvent::ReadyForNext { next_step } => {
+            app.log_lines.push(format!("➡️ Ready for next step: {}", next_step));
+            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+        }
+        runtime_service::RuntimeEvent::Stopped => {
             app.running = false;
             app.log_lines.push("⏹️  Stopped".into());
+        }
+        runtime_service::RuntimeEvent::Heartbeat => {
+            app.log_lines.push("💓 Heartbeat".into());
         }
     }
 }
@@ -539,7 +556,7 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
 
     // Main content based on current tab
     match app.current_tab {
-    Tab::Graph => render_graph_tab(f, app, tabs[2]),
+        Tab::Graph => render_graph_tab(f, app, tabs[2]),
         Tab::Status => render_status_tab(f, app, tabs[2]),
         Tab::Logs => render_logs_tab(f, app, tabs[2]),
         Tab::Debug => render_debug_tab(f, app, tabs[2]),
@@ -579,40 +596,18 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
-    // Intent graph visualization with selection (based on flattened display_tree)
+    // Intent graph visualization with selection
     let mut graph_items: Vec<ListItem> = Vec::new();
-    if app.display_tree.is_empty() {
-        graph_items.push(ListItem::new("No root intent yet".to_string()));
-    } else {
-        for (idx, (id, depth)) in app.display_tree.iter().enumerate() {
-            if let Some(node) = app.intent_graph.get(id) {
-                let indent = "  ".repeat(*depth);
-                let is_expanded = app.expanded_nodes.contains(id) || *depth == 0;
-                let status_emoji = match node.status {
-                    IntentStatus::Active => "🟡",
-                    IntentStatus::Executing => "🔵",
-                    IntentStatus::Completed => "✅",
-                    IntentStatus::Failed => "❌",
-                    IntentStatus::Archived => "📦",
-                    IntentStatus::Suspended => "⏸️",
-                };
-        
-                let expand_indicator = if !node.children.is_empty() {
-                    if is_expanded { "▼" } else { "▶" }
-                } else { "  " };
-
-                let display_name = if node.name.is_empty() { "<unnamed>".to_string() } else { node.name.clone() };
-                let goal_preview = if node.goal.len() > 30 {
-                    format!("{}...", &node.goal[..27])
-                } else {
-                    node.goal.clone()
-                };
-
-                let mut style = Style::default();
-                if idx == app.cursor_index { style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD); }
-                graph_items.push(ListItem::new(format!("{}{}{}[{:?}] {} — {}", indent, expand_indicator, status_emoji, node.status, display_name, goal_preview)).style(style));
-            }
+    let mut item_index = 0;
+    
+    if let Some(root_id) = &app.root_intent_id {
+        if let Some(_root) = app.intent_graph.get(root_id) {
+            build_graph_display_with_selection(&app.intent_graph, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes);
+        } else {
+            graph_items.push(ListItem::new("No graph data available".to_string()));
         }
+    } else {
+        graph_items.push(ListItem::new("No root intent yet".to_string()));
     }
 
     let graph = List::new(graph_items)
@@ -638,7 +633,7 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             "Selected intent not found".to_string()
         }
     } else {
-    "Select an intent to view details\n\nUse ↑↓ to navigate\nEnter to select\nSpace to expand/collapse".to_string()
+        "Select an intent to view details\n\nUse ↑↓ to navigate\nEnter to select\nSpace to expand/collapse".to_string()
     };
 
     let details = Paragraph::new(detail_text)
@@ -770,27 +765,52 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-// Rebuild the visible, flattened display tree and keep it on app
-fn rebuild_display_tree(app: &mut AppState) {
-    app.display_tree.clear();
-    if let Some(root_id) = &app.root_intent_id {
-        flatten_visible(&app.intent_graph, root_id, 0, &app.expanded_nodes, &mut app.display_tree);
-    }
-}
-
-fn flatten_visible(
-    graph: &HashMap<IntentId, IntentNode>,
-    current_id: &IntentId,
+fn build_graph_display_with_selection(
+    graph: &HashMap<IntentId, IntentNode>, 
+    current_id: &IntentId, 
+    items: &mut Vec<ListItem>, 
+    item_index: &mut usize,
     depth: usize,
-    expanded: &HashSet<IntentId>,
-    out: &mut Vec<(IntentId, usize)>,
+    selected_id: &Option<IntentId>,
+    expanded_nodes: &HashSet<IntentId>
 ) {
     if let Some(node) = graph.get(current_id) {
-        out.push((current_id.clone(), depth));
-    let is_expanded = expanded.contains(current_id);
+        let indent = "  ".repeat(depth);
+        let is_selected = selected_id.as_ref() == Some(current_id);
+        let is_expanded = expanded_nodes.contains(current_id) || depth == 0;
+        
+        let status_emoji = match node.status {
+            IntentStatus::Active => "🟡",
+            IntentStatus::Executing => "🔵",
+            IntentStatus::Completed => "✅",
+            IntentStatus::Failed => "❌",
+            IntentStatus::Archived => "📦",
+            IntentStatus::Suspended => "⏸️",
+        };
+
+        let expand_indicator = if !node.children.is_empty() {
+            if is_expanded { "▼" } else { "▶" }
+        } else { "  " };
+
+        let display_name = if node.name.is_empty() { "<unnamed>".to_string() } else { node.name.clone() };
+        let goal_preview = if node.goal.len() > 30 {
+            format!("{}...", &node.goal[..27])
+        } else {
+            node.goal.clone()
+        };
+
+        let mut style = Style::default();
+        if is_selected {
+            style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        }
+
+        items.push(ListItem::new(format!("{}{}{}[{:?}] {} — {}", indent, expand_indicator, status_emoji, node.status, display_name, goal_preview)).style(style));
+        *item_index += 1;
+
+        // Recursively display children if expanded
         if is_expanded {
-            for child in &node.children {
-                flatten_visible(graph, child, depth + 1, expanded, out);
+            for child_id in &node.children {
+                build_graph_display_with_selection(graph, child_id, items, item_index, depth + 1, selected_id, expanded_nodes);
             }
         }
     }

@@ -22,6 +22,10 @@
             <button type="submit" id="generate-graph-btn">Generate Graph</button>
         </form>
         <div id="goal-status">Ready to generate intent graph...</div>
+        <div id="connection-status" class="status-disconnected">
+            <span id="connection-indicator">●</span>
+            <span id="connection-text">Disconnected</span>
+        </div>
     </div>
 
     <!-- Action Buttons -->
@@ -29,6 +33,17 @@
         <button id="generate-plans-btn" disabled>Generate Plans</button>
         <button id="execute-btn" disabled>Execute</button>
         <button id="clear-btn">Clear</button>
+        <div id="save-load-controls">
+            <button id="save-graph-btn" title="Save Graph">💾 Save</button>
+            <button id="load-graph-btn" title="Load Graph">📁 Load</button>
+            <button id="export-graph-btn" title="Export Data">📤 Export</button>
+        </div>
+        <div id="graph-controls">
+            <button id="zoom-in-btn" title="Zoom In">🔍+</button>
+            <button id="zoom-out-btn" title="Zoom Out">🔍-</button>
+            <button id="fit-btn" title="Fit to Screen">📐</button>
+            <button id="toggle-physics-btn" title="Toggle Physics">⚡</button>
+        </div>
     </div>
 
     <!-- Main Content Area -->
@@ -38,6 +53,10 @@
             <div id="graph-container">
                 <div id="graph-header">
                     <h3>🗺️ Intent Graph</h3>
+                    <div id="graph-controls-top">
+                        <input id="node-search" type="text" placeholder="🔍 Search nodes..." />
+                        <button id="clear-search-btn" title="Clear Search">✕</button>
+                    </div>
                     <div id="graph-stats">No graph generated yet</div>
                 </div>
                 <div id="graph-visualization" style="flex: 1; min-height: 300px;"></div>
@@ -48,8 +67,21 @@
             </div>
         </div>
 
-        <!-- Right Panel: RTFS Code and Logs -->
+        <!-- Right Panel: Plan Details and RTFS Code -->
         <div class="right-panel">
+            <!-- Plan Details Panel -->
+            <div id="plan-details-panel" style="display: none;">
+                <div id="plan-header">
+                    <h3 id="plan-title">Plan Details</h3>
+                    <button id="close-plan-btn" title="Close Plan Details">✕</button>
+                </div>
+                <div id="plan-content">
+                    <div id="plan-preview"></div>
+                    <pre><code id="plan-code" class="language-clojure"></code></pre>
+                </div>
+            </div>
+
+            <!-- RTFS Code Container -->
             <div id="rtfs-container">
                 <h3>📄 RTFS Plan</h3>
                 <pre><code id="rtfs-code" class="language-lisp"></code></pre>

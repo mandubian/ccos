@@ -57,14 +57,13 @@ impl LocalLlamaModel {
                 let model = LlamaModel::load_from_file(&self.model_path, LlamaParams::default())?;
                 *model_guard = Some(model);
             }
+            Ok(())
         }
 
         #[cfg(not(feature = "cuda"))]
         {
-            return Err("CUDA feature not enabled. Enable with --features cuda".into());
+            Err("CUDA feature not enabled. Enable with --features cuda".into())
         }
-
-        Ok(())
     }
 
     /// Create a default model using a common efficient model
@@ -90,7 +89,7 @@ impl LocalLlamaModel {
     }
 
     /// Core async inference logic shared by both sync entrypoints.
-    async fn infer_async(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn infer_async(&self, _prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         #[cfg(feature = "cuda")]
         {
             // Ensure model is loaded
@@ -106,7 +105,7 @@ impl LocalLlamaModel {
             // Format the prompt for RTFS function calls
             let formatted_prompt = format!(
                 "You are an RTFS function execution assistant. Given the following function arguments, provide a concise response that would be the result of executing the function.\n\nArguments: {}\n\nResponse:",
-                prompt
+                _prompt
             );
 
             // Advance context with the prompt

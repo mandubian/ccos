@@ -59,7 +59,7 @@ pub use crate::ccos::arbiter::delegating_arbiter;
 
 use std::sync::{Arc, Mutex};
 
-use crate::ccos::arbiter::{DelegatingArbiter, ArbiterEngine, Arbiter};
+use crate::ccos::arbiter::{DelegatingArbiter, Arbiter};
 use crate::config::types::AgentConfig;
 use crate::ccos::agent::AgentRegistry; // bring trait into scope for record_feedback
 use crate::runtime::capability_marketplace::CapabilityMarketplace;

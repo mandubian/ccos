@@ -43,6 +43,16 @@ h1, h2, h3 {
     border-color: #00aaff;
 }
 
+#goal-input.valid {
+    border-color: #00aa00;
+    background-color: rgba(0, 170, 0, 0.05);
+}
+
+#goal-input.invalid {
+    border-color: #aa0000;
+    background-color: rgba(170, 0, 0, 0.05);
+}
+
 #generate-graph-btn {
     padding: 10px 20px;
     background-color: #00aaff;
@@ -86,6 +96,66 @@ h1, h2, h3 {
 #action-buttons button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Graph Controls */
+#graph-controls {
+    display: flex;
+    gap: 5px;
+    margin-left: auto;
+}
+
+#graph-controls button {
+    padding: 6px 10px;
+    font-size: 14px;
+    min-width: 35px;
+    background-color: #555;
+    border: 1px solid #777;
+    border-radius: 4px;
+    color: #f0f0f0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#graph-controls button:hover:not(:disabled) {
+    background-color: #666;
+    transform: scale(1.05);
+}
+
+#graph-controls button:active {
+    transform: scale(0.95);
+}
+
+#toggle-physics-btn.active {
+    background-color: #00aa00;
+    border-color: #00ff00;
+}
+
+/* Save/Load Controls */
+#save-load-controls {
+    display: flex;
+    gap: 5px;
+    margin-left: auto;
+}
+
+#save-load-controls button {
+    padding: 6px 10px;
+    font-size: 14px;
+    background-color: #444;
+    border: 1px solid #666;
+    border-radius: 4px;
+    color: #f0f0f0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#save-load-controls button:hover:not(:disabled) {
+    background-color: #555;
+    transform: scale(1.05);
+}
+
+#save-load-controls button:active {
+    transform: scale(0.95);
 }
 
 #generate-plans-btn {
@@ -152,6 +222,56 @@ h1, h2, h3 {
     align-items: center;
     padding: 10px;
     border-bottom: 1px solid #444;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+#graph-controls-top {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    max-width: 300px;
+}
+
+#node-search {
+    flex: 1;
+    padding: 6px 10px;
+    background-color: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #f0f0f0;
+    font-size: 13px;
+}
+
+#node-search:focus {
+    outline: none;
+    border-color: #00aaff;
+}
+
+#node-search::placeholder {
+    color: #888;
+}
+
+#clear-search-btn {
+    padding: 6px 8px;
+    background-color: #555;
+    border: 1px solid #777;
+    border-radius: 4px;
+    color: #f0f0f0;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+#clear-search-btn:hover {
+    background-color: #666;
+}
+
+#graph-stats {
+    font-size: 12px;
+    color: #888;
+    white-space: nowrap;
 }
 
 #graph-visualization {
@@ -177,9 +297,97 @@ h1, h2, h3 {
 #selected-intent-info {
     flex: 1;
     padding: 10px;
+}
+
+/* Plan Details Panel Styling */
+#plan-details-panel {
+    background: #2a2a2a;
+    border: 1px solid #00ff88;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    overflow: hidden;
+    max-height: 300px;
     overflow-y: auto;
-    font-family: "Fira Code", monospace;
-    font-size: 0.9em;
+    position: relative;
+    z-index: 10;
+}
+
+#plan-header {
+    background: linear-gradient(135deg, #00ff88, #00cc66);
+    color: #1a1a1a;
+    padding: 12px 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #00ff88;
+}
+
+#plan-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+#close-plan-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s ease;
+}
+
+#close-plan-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+}
+
+#plan-content {
+    padding: 15px;
+}
+
+#plan-preview {
+    background: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 10px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #00ff88;
+    word-wrap: break-word;
+}
+
+#plan-code {
+    background: #1a1a1a !important;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 15px !important;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace !important;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+    color: #ffffff !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Enhanced node styling for intents with plans */
+.vis-network .vis-network:focus .vis-node.has_plan {
+    border-color: #00ff88 !important;
+    box-shadow: 0 0 15px rgba(0, 255, 136, 0.3) !important;
+}
+
+.vis-network .vis-node.has_plan .vis-node-label {
+    color: #00ff88 !important;
+    font-weight: bold !important;
 }
 
 /* RTFS Container */
@@ -206,6 +414,8 @@ h1, h2, h3 {
 /* Log Container */
 #log-container {
     flex: 1;
+    max-height: 300px;
+    min-height: 150px;
     border: 1px solid #444;
     border-radius: 8px;
     background-color: #252525;
@@ -220,9 +430,12 @@ h1, h2, h3 {
 #log-entries {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 10px;
     font-family: "Fira Code", monospace;
     font-size: 0.9em;
+    max-height: calc(300px - 40px); /* Account for header */
+    min-height: calc(150px - 40px); /* Account for header */
 }
 
 .log-entry {
@@ -240,3 +453,80 @@ h1, h2, h3 {
 .status-executing { color: #ffaa00; }
 .status-completed { color: #00aa00; }
 .status-failed { color: #aa0000; }
+.status-paused { color: #ffaa00; }
+.status-error { color: #aa0000; }
+
+/* Intent status in details */
+.status-pending,
+.status-active,
+.status-executing,
+.status-completed,
+.status-failed,
+.status-paused,
+.status-error {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    font-weight: bold;
+}
+
+.status-pending { background-color: rgba(255, 255, 0, 0.1); }
+.status-active { background-color: rgba(0, 170, 255, 0.1); }
+.status-executing { background-color: rgba(255, 170, 0, 0.1); }
+.status-completed { background-color: rgba(0, 170, 0, 0.1); }
+.status-failed { background-color: rgba(170, 0, 0, 0.1); }
+.status-paused { background-color: rgba(255, 170, 0, 0.1); }
+.status-error { background-color: rgba(170, 0, 0, 0.1); }
+
+/* Connection Status */
+#connection-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    transition: all 0.3s ease;
+}
+
+#connection-indicator {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.status-connected {
+    background-color: rgba(0, 170, 0, 0.1);
+    border: 1px solid #00aa00;
+    color: #00aa00;
+}
+
+.status-connected #connection-indicator {
+    color: #00aa00;
+}
+
+.status-disconnected {
+    background-color: rgba(170, 0, 0, 0.1);
+    border: 1px solid #aa0000;
+    color: #aa0000;
+}
+
+.status-disconnected #connection-indicator {
+    color: #aa0000;
+}
+
+.status-connecting {
+    background-color: rgba(255, 170, 0, 0.1);
+    border: 1px solid #ffaa00;
+    color: #ffaa00;
+}
+
+.status-connecting #connection-indicator {
+    color: #ffaa00;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}

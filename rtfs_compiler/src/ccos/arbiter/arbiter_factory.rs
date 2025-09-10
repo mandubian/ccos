@@ -20,7 +20,7 @@ impl ArbiterFactory {
     pub async fn create_arbiter(
         config: ArbiterConfig,
         intent_graph: Arc<Mutex<IntentGraph>>,
-        capability_marketplace: Option<Arc<CapabilityMarketplace>>,
+        _capability_marketplace: Option<Arc<CapabilityMarketplace>>,
     ) -> Result<Box<dyn ArbiterEngine>, RuntimeError> {
         // Validate the configuration first
         config.validate()

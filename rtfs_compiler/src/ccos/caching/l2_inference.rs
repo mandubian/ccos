@@ -210,7 +210,7 @@ impl L2InferenceCache {
             EvictionPolicy::TTL => {
                 // Remove expired entries
                 if let Some(ttl) = self.config.ttl {
-                    let now = Instant::now();
+                    let _now = Instant::now();
                     let expired_keys: Vec<String> = cache
                         .iter()
                         .filter(|(_, entry)| entry.value.is_stale(ttl))

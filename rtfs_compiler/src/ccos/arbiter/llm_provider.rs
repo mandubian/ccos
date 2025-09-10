@@ -997,7 +997,7 @@ Only respond with valid JSON."#;
     async fn generate_plan(
         &self,
         intent: &StorableIntent,
-        context: Option<HashMap<String, String>>,
+        _context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError> {
         let system_message = r#"You are an AI assistant that generates executable plans from structured intents.
 

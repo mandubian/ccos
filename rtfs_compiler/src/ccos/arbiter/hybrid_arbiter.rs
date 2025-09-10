@@ -15,7 +15,7 @@ use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, Inten
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior, LlmConfig};
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
-use crate::ccos::delegation_keys::{generation, agent};
+use crate::ccos::delegation_keys::generation;
 use crate::ccos::arbiter::prompt::{PromptManager, FilePromptStore, PromptConfig};
 use crate::ast::TopLevel;
 
@@ -471,7 +471,7 @@ Plan:"#,
     fn parse_llm_intent_response(
         &self,
         response: &str,
-        natural_language: &str,
+        _natural_language: &str,
         _context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         // Extract the first top-level `(intent …)` s-expression from the response

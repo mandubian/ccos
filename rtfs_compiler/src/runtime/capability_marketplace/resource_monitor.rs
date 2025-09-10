@@ -374,7 +374,7 @@ async fn get_gpu_utilization() -> RuntimeResult<f64> {
     Ok(75.0) // 75% GPU utilization
 }
 
-async fn get_energy_consumption(capability_id: &str) -> RuntimeResult<f64> {
+async fn get_energy_consumption(_capability_id: &str) -> RuntimeResult<f64> {
     // Placeholder: would estimate based on CPU/GPU usage and power models
     Ok(0.1) // 0.1 kWh
 }

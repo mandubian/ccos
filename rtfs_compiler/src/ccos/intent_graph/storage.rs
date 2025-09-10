@@ -201,6 +201,17 @@ impl IntentGraphStorage {
         Ok(())
     }
 
+    pub async fn clear_all(&mut self) -> Result<(), RuntimeError> {
+        // Clear the underlying storage
+        self.storage.clear_all().await
+            .map_err(|e| RuntimeError::StorageError(e.to_string()))?;
+        
+        // Clear the metadata
+        self.metadata.clear();
+        
+        Ok(())
+    }
+
     // Sync helper methods for virtualization layer (blocking, for compatibility)
     pub fn get_intent_sync(&self, intent_id: &IntentId) -> Option<StorableIntent> {
         // Note: This is a temporary solution. In production, this should be async

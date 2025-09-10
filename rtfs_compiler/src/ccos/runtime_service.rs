@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 use tokio::sync::{mpsc, broadcast};
 
-use super::types::{IntentId, ExecutionResult};
+use super::types::IntentId;
 use super::{CCOS};
 use crate::runtime::security::{RuntimeContext, SecurityLevel};
 use crate::ccos::event_sink::IntentEventSink;
@@ -61,7 +61,7 @@ impl RuntimeHandle {
 /// Start the runtime service. Spawns an internal task and returns a handle.
 pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel::<RuntimeCommand>(64);
-    let (evt_tx, evt_rx) = broadcast::channel::<RuntimeEvent>(256);
+    let (evt_tx, _evt_rx) = broadcast::channel::<RuntimeEvent>(256);
 
     // Install composite sink in current thread
     {

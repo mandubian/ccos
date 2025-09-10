@@ -142,6 +142,18 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
         }
         E::Heartbeat => {}
         E::Stopped => { app.running = false; }
+        runtime_service::RuntimeEvent::GraphGenerated { root_id, nodes: _, edges: _ } => {
+            app.log_lines.push(format!("GraphGenerated: root_id={}", root_id));
+        }
+        runtime_service::RuntimeEvent::PlanGenerated { intent_id, plan_id, rtfs_code } => {
+            app.log_lines.push(format!("PlanGenerated: intent={} plan={}", intent_id, plan_id));
+        }
+        runtime_service::RuntimeEvent::StepLog { step, status, message, details } => {
+            app.log_lines.push(format!("StepLog: {} [{}] {} {:?}", step, status, message, details));
+        }
+        runtime_service::RuntimeEvent::ReadyForNext { next_step } => {
+            app.log_lines.push(format!("ReadyForNext: {}", next_step));
+        }
     }
 }
 

@@ -226,7 +226,7 @@ impl IntentPruningEngine {
     pub fn prune_intents(
         &self,
         relevant_intents: &[IntentId],
-        storage: &IntentGraphStorage,
+        _storage: &IntentGraphStorage,
         _config: &VirtualizationConfig,
     ) -> Result<Vec<IntentId>, RuntimeError> {
         // For now, just return the input intents (no actual pruning)
