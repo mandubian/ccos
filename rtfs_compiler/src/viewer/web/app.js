@@ -1534,6 +1534,22 @@ document.addEventListener('DOMContentLoaded', () => {
         storeCurrentGraphInHistory();
 
         // Clear current state from both local and network DataSets
+        console.log('🧹 Clearing existing graph data before restoration...');
+        console.log('📊 Before clearing - local nodes:', nodes.length, 'local edges:', edges.length);
+        console.log('📊 Before clearing - network nodes:', network.body.data.nodes.length, 'network edges:', network.body.data.edges.length);
+        
+        // Get all existing items before clearing for debugging
+        const existingNodes = nodes.get();
+        const existingEdges = edges.get();
+        const existingNetworkNodes = network.body.data.nodes.get();
+        const existingNetworkEdges = network.body.data.edges.get();
+        
+        console.log('📋 Existing local nodes:', existingNodes.map(n => n.id));
+        console.log('📋 Existing local edges:', existingEdges.map(e => e.id));
+        console.log('📋 Existing network nodes:', existingNetworkNodes.map(n => n.id));
+        console.log('📋 Existing network edges:', existingNetworkEdges.map(e => e.id));
+        
+        // Clear all DataSets
         nodes.clear();
         edges.clear();
         network.body.data.nodes.clear();
@@ -1541,6 +1557,47 @@ document.addEventListener('DOMContentLoaded', () => {
         intentNodes.clear();
         intentEdges.clear();
         generatedPlans.clear();
+        
+        console.log('📊 After clearing - local nodes:', nodes.length, 'local edges:', edges.length);
+        console.log('📊 After clearing - network nodes:', network.body.data.nodes.length, 'network edges:', network.body.data.edges.length);
+        
+        // Force clear any remaining items
+        const remainingLocalNodes = nodes.get();
+        const remainingLocalEdges = edges.get();
+        const remainingNetworkNodes = network.body.data.nodes.get();
+        const remainingNetworkEdges = network.body.data.edges.get();
+        
+        if (remainingLocalNodes.length > 0 || remainingLocalEdges.length > 0 || 
+            remainingNetworkNodes.length > 0 || remainingNetworkEdges.length > 0) {
+            console.error('❌ DATASETS NOT CLEARED PROPERLY!');
+            console.error('Remaining local nodes:', remainingLocalNodes.length, 'Remaining local edges:', remainingLocalEdges.length);
+            console.error('Remaining network nodes:', remainingNetworkNodes.length, 'Remaining network edges:', remainingNetworkEdges.length);
+            
+            // Force clear by removing all items individually
+            remainingLocalNodes.forEach(node => {
+                console.log(`🗑️ Force removing local node: ${node.id}`);
+                nodes.remove(node.id);
+            });
+            remainingLocalEdges.forEach(edge => {
+                console.log(`🗑️ Force removing local edge: ${edge.id}`);
+                edges.remove(edge.id);
+            });
+            remainingNetworkNodes.forEach(node => {
+                console.log(`🗑️ Force removing network node: ${node.id}`);
+                network.body.data.nodes.remove(node.id);
+            });
+            remainingNetworkEdges.forEach(edge => {
+                console.log(`🗑️ Force removing network edge: ${edge.id}`);
+                network.body.data.edges.remove(edge.id);
+            });
+            
+            console.log('📊 After force clear - local nodes:', nodes.length, 'local edges:', edges.length);
+            console.log('📊 After force clear - network nodes:', network.body.data.nodes.length, 'network edges:', network.body.data.edges.length);
+        }
+        
+        // Force network redraw after clearing
+        network.redraw();
+        console.log('✅ Graph clearing completed');
 
         // Restore from history
         currentGraphId = historicalGraph.rootId;
@@ -1580,8 +1637,12 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`📋 Restored graph with depth-based levels (${intentNodes.size} nodes)`);
         console.log('🌳 Node depths calculated:', Object.fromEntries(nodeDepths));
 
-        // Rebuild vis.js data
-        intentNodes.forEach((node, nodeId) => {
+        // Add a small delay to ensure clearing is complete before adding new nodes
+        setTimeout(() => {
+            console.log('🔄 Starting to add restored nodes after clearing delay...');
+            
+            // Rebuild vis.js data
+            intentNodes.forEach((node, nodeId) => {
             const isRoot = node.is_root === true;
             const baseTitle = `${node.label || nodeId}\nStatus: ${node.status || 'pending'}\nType: ${node.type || 'unknown'}`;
 
@@ -1614,12 +1675,42 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             }
 
-            // Add to both local and network DataSets
-            nodes.add(nodeData);
-            network.body.data.nodes.add(nodeData);
-        });
+            // Check if node already exists before adding
+            const existingLocalNode = nodes.get(nodeId);
+            const existingNetworkNode = network.body.data.nodes.get(nodeId);
 
-        intentEdges.forEach((edge, edgeId) => {
+            if (existingLocalNode || existingNetworkNode) {
+                console.warn(`⚠️ NODE ALREADY EXISTS! ID: ${nodeId} - updating instead`);
+                console.warn('Existing local node:', existingLocalNode);
+                console.warn('Existing network node:', existingNetworkNode);
+                console.warn('Attempting to add:', nodeData);
+
+                // Update existing node instead of adding
+                try {
+                    nodes.update(nodeData);
+                    network.body.data.nodes.update(nodeData);
+                    console.log(`🔄 Updated existing node: ${node.label || nodeId} (ID: ${nodeId})`);
+                } catch (updateError) {
+                    console.error(`❌ Failed to update node ${nodeId}:`, updateError);
+                    console.error('Node data:', nodeData);
+                    return; // Skip this node
+                }
+            } else {
+                // Add new node to both local and network DataSets
+                try {
+                    nodes.add(nodeData);
+                    network.body.data.nodes.add(nodeData);
+                    console.log(`✅ Added node: ${node.label || nodeId} (ID: ${nodeId})`);
+                } catch (error) {
+                    console.error(`❌ Failed to add node ${nodeId}:`, error);
+                    console.error('Node data:', nodeData);
+                }
+            }
+            });
+
+            // Add edges after nodes are added
+            console.log('🔄 Adding restored edges...');
+            intentEdges.forEach((edge, edgeId) => {
             const edgeData = {
                 id: edgeId,
                 from: edge.source,
@@ -1628,26 +1719,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 arrows: 'to',
                 color: '#00aaff'
             };
-            // Add to both local and network DataSets
-            edges.add(edgeData);
-            network.body.data.edges.add(edgeData);
-        });
+            // Check if edge already exists before adding
+            const existingLocalEdge = edges.get(edgeId);
+            const existingNetworkEdge = network.body.data.edges.get(edgeId);
 
-        // Reset selection and update UI
-        selectedIntentId = null;
-        updateGraphStats();
-        updateGoalStatus(`Restored graph: ${currentGraphId}`);
-        addLogEntry(`📚 Restored graph from history: ${currentGraphId} (${intentNodes.size} nodes, ${intentEdges.size} edges)`);
+            if (existingLocalEdge || existingNetworkEdge) {
+                console.warn(`⚠️ EDGE ALREADY EXISTS! ID: ${edgeId} - skipping`);
+                console.warn('Existing local edge:', existingLocalEdge);
+                console.warn('Existing network edge:', existingNetworkEdge);
+                console.warn('Attempting to add:', edgeData);
+                return; // Skip this edge
+            }
 
-        // Update button states
-        if (generatePlansBtn) generatePlansBtn.disabled = false;
-        if (executeBtn) executeBtn.disabled = generatedPlans.size === 0;
+            // Add new edge to both local and network DataSets
+            try {
+                edges.add(edgeData);
+                network.body.data.edges.add(edgeData);
+                console.log(`✅ Added edge: ${edgeId}`);
+            } catch (error) {
+                console.error(`❌ Failed to add edge ${edgeId}:`, error);
+                console.error('Edge data:', edgeData);
+            }
+            });
 
-        // Fit and redraw
-        setTimeout(() => {
+            // Reset selection and update UI
+            selectedIntentId = null;
+            updateGraphStats();
+            updateGoalStatus(`Restored graph: ${currentGraphId}`);
+            addLogEntry(`📚 Restored graph from history: ${currentGraphId} (${intentNodes.size} nodes, ${intentEdges.size} edges)`);
+
+            // Update button states
+            if (generatePlansBtn) generatePlansBtn.disabled = false;
+            if (executeBtn) executeBtn.disabled = generatedPlans.size === 0;
+
+            // Fit and redraw
             network.redraw();
             network.fit();
-        }, 100);
+            
+            console.log('✅ Graph restoration completed');
+        }, 100); // 100ms delay to ensure clearing is complete
 
         return true;
     }
@@ -1742,9 +1852,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentGraphId = data.graph_id;
         console.log('📊 Current graph ID set to:', currentGraphId);
 
-        // Store current graph in history before replacing it
-        console.log('💾 Storing current graph in history before replacement...');
-        storeCurrentGraphInHistory();
+        // Note: We'll store the new graph in history after it's fully processed
 
         // Each new graph generation replaces the current view (Option 1: Simple Graph Replacement)
         // Since each graph has a unique graph ID, we can safely clear and replace
@@ -2040,6 +2148,10 @@ document.addEventListener('DOMContentLoaded', () => {
             addLogEntry(`📚 ${graphHistory.size - 1} previous graphs available in history`);
         }
         console.log(`✅ Graph replacement completed successfully: ${nodesAdded} nodes, ${data.edges ? data.edges.length : 0} edges`);
+
+        // Store the new graph in history after it's fully processed
+        console.log('💾 Storing new graph in history...');
+        storeCurrentGraphInHistory();
     }
 
     function handlePlanGenerated(data) {
