@@ -69,10 +69,11 @@ use crate::runtime::security::RuntimeContext;
 
 use self::types::ExecutionResult;
 
-use self::intent_graph::IntentGraph;
+use self::intent_graph::{IntentGraph, config::IntentGraphConfig};
 use self::event_sink::CausalChainIntentEventSink;
 use self::causal_chain::CausalChain;
 use self::governance_kernel::GovernanceKernel;
+use crate::runtime::error::RuntimeError;
 
 
 use self::orchestrator::Orchestrator;
@@ -104,10 +105,27 @@ impl CCOS {
     pub async fn new_with_debug_callback(
         debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> RuntimeResult<Self> {
+        Self::new_with_config_and_debug_callback(IntentGraphConfig::default(), debug_callback).await
+    }
+
+    /// Creates and initializes a new CCOS instance with custom config and optional debug callback.
+    pub async fn new_with_config_and_debug_callback(
+        intent_graph_config: IntentGraphConfig,
+        debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> RuntimeResult<Self> {
+        Self::new_with_configs_and_debug_callback(intent_graph_config, None, debug_callback).await
+    }
+
+    /// Creates and initializes a new CCOS instance with custom configs and optional debug callback.
+    pub async fn new_with_configs_and_debug_callback(
+        intent_graph_config: IntentGraphConfig,
+        plan_archive_path: Option<std::path::PathBuf>,
+        debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> RuntimeResult<Self> {
         // 1. Initialize shared, stateful components
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
-    let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
+    let intent_graph = Arc::new(Mutex::new(IntentGraph::with_config_and_event_sink(intent_graph_config, sink)?));
         // Initialize capability marketplace with registry
     let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
@@ -128,7 +146,11 @@ impl CCOS {
         crate::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
 
         // 2. Initialize architectural components, injecting dependencies
-        let plan_archive = Arc::new(plan_archive::PlanArchive::new());
+        let plan_archive = Arc::new(match plan_archive_path {
+            Some(path) => plan_archive::PlanArchive::with_file_storage(path)
+                .map_err(|e| RuntimeError::StorageError(format!("Failed to create plan archive: {}", e)))?,
+            None => plan_archive::PlanArchive::new(),
+        });
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
