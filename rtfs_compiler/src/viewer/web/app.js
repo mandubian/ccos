@@ -114,7 +114,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectedIntentInfoElement = document.getElementById('selected-intent-info');
 
     // State management
-    let currentGraphId = null;
     let selectedIntentId = null;
     let intentNodes = new Map(); // id -> node data
     let intentEdges = new Map(); // id -> edge data
