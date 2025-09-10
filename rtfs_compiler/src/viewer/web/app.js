@@ -1503,6 +1503,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const name = graphName || generateGraphName();
 
             // Store current graph state in history
+            console.log('💾 Storing graph in history:');
+            console.log('  - Graph ID:', currentGraphId);
+            console.log('  - Nodes to save:', intentNodes.size);
+            console.log('  - Edges to save:', intentEdges.size);
+            console.log('  - Plans to save:', generatedPlans.size);
+            console.log('  - Edge details:', Array.from(intentEdges.entries()));
+            
             graphHistory.set(currentGraphId, {
                 nodes: new Map(intentNodes),
                 edges: new Map(intentEdges),
@@ -1604,6 +1611,13 @@ document.addEventListener('DOMContentLoaded', () => {
         intentNodes = new Map(historicalGraph.nodes);
         intentEdges = new Map(historicalGraph.edges);
         generatedPlans = new Map(historicalGraph.plans);
+        
+        console.log('📊 Restoring graph data:');
+        console.log('  - Nodes:', intentNodes.size);
+        console.log('  - Edges:', intentEdges.size);
+        console.log('  - Plans:', generatedPlans.size);
+        console.log('  - Root ID:', currentGraphId);
+        console.log('  - Historical edges:', Array.from(intentEdges.entries()));
 
         // Calculate depth-based levels for proper tree visualization
         const nodeDepths = new Map();
@@ -1675,9 +1689,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             }
 
-            // Check if node already exists before adding
+            // Check if node already exists before adding - check both DataSets
             const existingLocalNode = nodes.get(nodeId);
             const existingNetworkNode = network.body.data.nodes.get(nodeId);
+            
+            console.log(`🔍 Checking node ${nodeId} for duplicates...`);
+            console.log(`📊 Local node exists:`, !!existingLocalNode);
+            console.log(`📊 Network node exists:`, !!existingNetworkNode);
+            console.log(`📊 Current nodes count - local: ${nodes.length}, network: ${network.body.data.nodes.length}`);
 
             if (existingLocalNode || existingNetworkNode) {
                 console.warn(`⚠️ NODE ALREADY EXISTS! ID: ${nodeId} - updating instead`);
@@ -1685,10 +1704,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn('Existing network node:', existingNetworkNode);
                 console.warn('Attempting to add:', nodeData);
 
-                // Update existing node instead of adding
+                // Update existing node instead of adding (nodes and network.body.data.nodes are the same object)
                 try {
                     nodes.update(nodeData);
-                    network.body.data.nodes.update(nodeData);
                     console.log(`🔄 Updated existing node: ${node.label || nodeId} (ID: ${nodeId})`);
                 } catch (updateError) {
                     console.error(`❌ Failed to update node ${nodeId}:`, updateError);
@@ -1696,21 +1714,35 @@ document.addEventListener('DOMContentLoaded', () => {
                     return; // Skip this node
                 }
             } else {
-                // Add new node to both local and network DataSets
+                // Double-check by trying to get the node again right before adding
+                const finalCheckLocal = nodes.get(nodeId);
+                const finalCheckNetwork = network.body.data.nodes.get(nodeId);
+                
+                if (finalCheckLocal || finalCheckNetwork) {
+                    console.warn(`⚠️ NODE FOUND IN FINAL CHECK! ID: ${nodeId} - skipping addition`);
+                    console.warn('Final check local:', finalCheckLocal);
+                    console.warn('Final check network:', finalCheckNetwork);
+                    return; // Skip this node
+                }
+                
+                // Add new node (nodes and network.body.data.nodes are the same object)
                 try {
+                    console.log(`➕ Attempting to add node: ${nodeId}`);
                     nodes.add(nodeData);
-                    network.body.data.nodes.add(nodeData);
                     console.log(`✅ Added node: ${node.label || nodeId} (ID: ${nodeId})`);
                 } catch (error) {
                     console.error(`❌ Failed to add node ${nodeId}:`, error);
                     console.error('Node data:', nodeData);
+                    console.error('Current nodes in DataSet:', nodes.get().map(n => n.id));
                 }
             }
             });
 
             // Add edges after nodes are added
             console.log('🔄 Adding restored edges...');
+            console.log('📊 Total edges to add:', intentEdges.size);
             intentEdges.forEach((edge, edgeId) => {
+                console.log(`🔗 Processing edge ${edgeId}:`, edge);
             const edgeData = {
                 id: edgeId,
                 from: edge.source,
@@ -1731,16 +1763,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 return; // Skip this edge
             }
 
-            // Add new edge to both local and network DataSets
+            // Add new edge (edges and network.body.data.edges are the same object)
             try {
                 edges.add(edgeData);
-                network.body.data.edges.add(edgeData);
                 console.log(`✅ Added edge: ${edgeId}`);
             } catch (error) {
                 console.error(`❌ Failed to add edge ${edgeId}:`, error);
                 console.error('Edge data:', edgeData);
             }
             });
+
+            // Force network redraw to ensure edges are visible
+            network.redraw();
 
             // Reset selection and update UI
             selectedIntentId = null;
