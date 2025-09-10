@@ -194,7 +194,7 @@ impl L1DelegationCache {
             EvictionPolicy::TTL => {
                 // Remove expired entries
                 if let Some(ttl) = self.config.ttl {
-                    let now = Instant::now();
+                    let _now = Instant::now();
                     let expired_keys: Vec<String> = cache
                         .iter()
                         .filter(|(_, entry)| entry.value.is_stale(ttl))
@@ -315,7 +315,7 @@ impl CacheLayer<String, DelegationPlan> for L1DelegationCache {
 
 /// Cache layer for string-based keys (compatibility with CacheManager)
 impl CacheLayer<String, String> for L1DelegationCache {
-    fn get(&self, key: &String) -> Option<String> {
+    fn get(&self, _key: &String) -> Option<String> {
         // This is a compatibility layer - we don't actually use string values
         // in the delegation cache, but we need this for the CacheManager
         None

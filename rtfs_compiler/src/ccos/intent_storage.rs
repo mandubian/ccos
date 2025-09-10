@@ -99,6 +99,9 @@ pub trait IntentStorage {
     
     /// Check if storage backend is healthy and accessible
     async fn health_check(&self) -> Result<(), StorageError>;
+    
+    /// Clear all intents and edges from storage
+    async fn clear_all(&mut self) -> Result<(), StorageError>;
 }
 
 /// Filter criteria for listing intents
@@ -308,6 +311,15 @@ impl IntentStorage for InMemoryStorage {
         let _edges = self.edges.read().await;
         Ok(())
     }
+
+    async fn clear_all(&mut self) -> Result<(), StorageError> {
+        // Clear all intents and edges
+        let mut intents = self.intents.write().await;
+        let mut edges = self.edges.write().await;
+        intents.clear();
+        edges.clear();
+        Ok(())
+    }
 }
 
 /// File-based storage implementation
@@ -439,6 +451,16 @@ impl IntentStorage for FileStorage {
         }
         // Also check underlying in-memory storage
         self.in_memory.health_check().await
+    }
+
+    async fn clear_all(&mut self) -> Result<(), StorageError> {
+        // Clear the in-memory storage
+        self.in_memory.clear_all().await?;
+        // Also remove the file if it exists
+        if self.file_path.exists() {
+            fs::remove_file(&self.file_path)?;
+        }
+        Ok(())
     }
 }
 

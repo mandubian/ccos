@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::ccos::caching::CacheStats;
 use crate::ccos::caching::l1_delegation::{L1DelegationCache, DelegationPlan};
-use crate::ccos::delegation_keys::{intent, generation, agent};
+use crate::ccos::delegation_keys::intent;
 
 /// Where the evaluator should send the execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -241,22 +241,14 @@ impl DelegationEngine for StaticDelegationEngine {
 
         // 3. Use metadata if available, otherwise default fallback
         let decision = ExecTarget::LocalPure;
-        let confidence: f64;
-        let reasoning: String;
         
         if let Some(ref metadata) = ctx.metadata {
-            // Use confidence and reasoning from CCOS components
-            confidence = metadata.confidence.unwrap_or(0.8);
-            reasoning = metadata.reasoning.clone().unwrap_or_else(|| {
-                format!("Decision from {}", metadata.source.as_deref().unwrap_or("unknown-component"))
-            });
-            
             // Cache with metadata
             self.cache_decision_with_metadata(agent, &task, decision.clone(), metadata);
         } else {
             // Default fallback
-            confidence = 0.8;
-            reasoning = "Default fallback to local pure execution".to_string();
+            let confidence = 0.8;
+            let reasoning = "Default fallback to local pure execution".to_string();
             
             // Cache the decision as a delegation plan
             let plan = DelegationPlan::new(

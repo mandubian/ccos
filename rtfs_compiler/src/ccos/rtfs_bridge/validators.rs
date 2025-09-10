@@ -17,7 +17,7 @@ pub fn validate_intent(intent: &Intent) -> Result<(), RtfsBridgeError> {
     }
     
     // Validate constraints format
-    for (key, value) in &intent.constraints {
+    for (key, _value) in &intent.constraints {
         if key.trim().is_empty() {
             return Err(RtfsBridgeError::ValidationFailed {
                 message: "Constraint key cannot be empty".to_string()
@@ -26,7 +26,7 @@ pub fn validate_intent(intent: &Intent) -> Result<(), RtfsBridgeError> {
     }
     
     // Validate preferences format
-    for (key, value) in &intent.preferences {
+    for (key, _value) in &intent.preferences {
         if key.trim().is_empty() {
             return Err(RtfsBridgeError::ValidationFailed {
                 message: "Preference key cannot be empty".to_string()
@@ -80,7 +80,7 @@ pub fn validate_plan(plan: &Plan) -> Result<(), RtfsBridgeError> {
     }
     
     // Validate policies format
-    for (key, value) in &plan.policies {
+    for (key, _value) in &plan.policies {
         if key.trim().is_empty() {
             return Err(RtfsBridgeError::ValidationFailed {
                 message: "Policy key cannot be empty".to_string()
@@ -89,7 +89,7 @@ pub fn validate_plan(plan: &Plan) -> Result<(), RtfsBridgeError> {
     }
     
     // Validate annotations format
-    for (key, value) in &plan.annotations {
+    for (key, _value) in &plan.annotations {
         if key.trim().is_empty() {
             return Err(RtfsBridgeError::ValidationFailed {
                 message: "Annotation key cannot be empty".to_string()

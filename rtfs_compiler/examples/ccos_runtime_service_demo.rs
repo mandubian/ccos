@@ -62,6 +62,18 @@ fn main() {
                         println!("Stopped");
                         break;
                     }
+                    runtime_service::RuntimeEvent::GraphGenerated { root_id, nodes: _, edges: _ } => {
+                        if args.verbose { println!("GraphGenerated: root_id={}", root_id); }
+                    }
+                    runtime_service::RuntimeEvent::PlanGenerated { intent_id, plan_id, rtfs_code } => {
+                        if args.verbose { println!("PlanGenerated: intent={} plan={}", intent_id, plan_id); }
+                    }
+                    runtime_service::RuntimeEvent::StepLog { step, status, message, details } => {
+                        if args.verbose { println!("StepLog: {} [{}] {} {:?}", step, status, message, details); }
+                    }
+                    runtime_service::RuntimeEvent::ReadyForNext { next_step } => {
+                        if args.verbose { println!("ReadyForNext: {}", next_step); }
+                    }
                 }
             }
             Ok(Err(_)) => { println!("event channel closed"); break; }

@@ -1235,6 +1235,23 @@ impl IntentGraph {
     self.block_on_runtime(async { self.lifecycle.get_intents_ready_for_archival(&self.storage, days_threshold).await.unwrap_or_default() })
     }
 
+    /// Clear all intents and edges from the graph
+    pub fn clear_all(&mut self) -> Result<(), RuntimeError> {
+        let in_rt = tokio::runtime::Handle::try_current().is_ok();
+        let handle = self.rt.clone();
+        if in_rt {
+            futures::executor::block_on(async {
+                self.storage.clear_all().await
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to clear intent graph: {}", e)))
+            })
+        } else {
+            handle.block_on(async {
+                self.storage.clear_all().await
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to clear intent graph: {}", e)))
+            })
+        }
+    }
+
     /// Bulk transition intents by status
     pub fn bulk_transition_intents(
         &mut self,

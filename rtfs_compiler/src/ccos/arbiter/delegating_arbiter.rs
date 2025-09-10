@@ -960,7 +960,7 @@ Plan:"#,
         // 3) As a last resort, handle top-level blocks. If the response contains only (intent ...) blocks,
         // wrap them into a (do ...) block so they become an executable RTFS plan. If other top-level blocks
         // exist, return the first non-(intent) balanced block.
-        if let Some(mut idx) = response.find('(') {
+        if let Some(idx) = response.find('(') {
             let mut collected_intents = Vec::new();
             let mut remaining = &response[idx..];
 
@@ -975,7 +975,7 @@ Plan:"#,
 
                 // Advance remaining slice
                 let consumed = block.len();
-                if consumed >= remaining.len() { remaining = ""; break; }
+                if consumed >= remaining.len() { break; }
                 remaining = &remaining[consumed..];
                 // Skip whitespace/newlines
                 let skip = remaining.find(|c: char| !c.is_whitespace()).unwrap_or(0);
@@ -1206,7 +1206,7 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
     ) -> Result<PlanGenerationResult, RuntimeError> {
         // Use LLM provider-based plan generator
         let provider_cfg = self.llm_config.to_provider_config();
-        let provider = crate::ccos::arbiter::llm_provider::LlmProviderFactory::create_provider(provider_cfg.clone()).await?;
+        let _provider = crate::ccos::arbiter::llm_provider::LlmProviderFactory::create_provider(provider_cfg.clone()).await?;
         let plan_gen_provider = LlmRtfsPlanGenerationProvider::new(provider_cfg);
 
         // Convert storable intent back to runtime Intent (minimal fields)

@@ -2677,7 +2677,7 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
                     } else {
                         // Fallback: treat map values as integers (backward compatibility)
                         let mut sum = 0i64;
-                        for (key, value) in map {
+                        for (_key, value) in map {
                             match value {
                                 Value::Integer(n) => sum += n,
                                 other => {
