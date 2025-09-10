@@ -8,6 +8,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('graph-visualization');
     console.log('Graph visualization container:', container);
     console.log('Container dimensions:', container ? { width: container.offsetWidth, height: container.offsetHeight } : 'Container not found');
+
+    // Graph History DOM elements - declare early to avoid reference errors
+    const graphHistorySelector = document.getElementById('graph-history-selector');
+    const loadHistoryGraphBtn = document.getElementById('load-history-graph-btn');
+    const deleteHistoryGraphBtn = document.getElementById('delete-history-graph-btn');
     
     const data = { nodes, edges };
     const options = {
@@ -497,10 +502,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadGraphBtn = document.getElementById('load-graph-btn');
     const exportGraphBtn = document.getElementById('export-graph-btn');
 
-    // Graph History functionality - declare early to avoid reference errors
-    const graphHistorySelector = document.getElementById('graph-history-selector');
-    const loadHistoryGraphBtn = document.getElementById('load-history-graph-btn');
-    const deleteHistoryGraphBtn = document.getElementById('delete-history-graph-btn');
 
     // Graph History Selector Functions - define early to avoid reference errors
     function populateGraphHistorySelector() {
