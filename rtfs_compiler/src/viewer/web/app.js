@@ -1427,7 +1427,37 @@ document.addEventListener('DOMContentLoaded', () => {
         intentEdges = new Map(historicalGraph.edges);
         generatedPlans = new Map(historicalGraph.plans);
 
-        console.log(`📋 Restored graph with execution order preserved (${intentNodes.size} nodes)`);
+        // Calculate depth-based levels for proper tree visualization
+        const nodeDepths = new Map();
+        const rootNode = Array.from(intentNodes.values()).find(node => node.is_root);
+        
+        if (rootNode) {
+            // BFS to calculate depths from root
+            const queue = [{ nodeId: rootNode.id, depth: 0 }];
+            const visited = new Set();
+            
+            while (queue.length > 0) {
+                const { nodeId, depth } = queue.shift();
+                if (visited.has(nodeId)) continue;
+                
+                visited.add(nodeId);
+                nodeDepths.set(nodeId, depth);
+                
+                // Find children of this node
+                const children = Array.from(intentEdges.values())
+                    .filter(edge => edge.source === nodeId)
+                    .map(edge => edge.target);
+                
+                children.forEach(childId => {
+                    if (!visited.has(childId)) {
+                        queue.push({ nodeId: childId, depth: depth + 1 });
+                    }
+                });
+            }
+        }
+
+        console.log(`📋 Restored graph with depth-based levels (${intentNodes.size} nodes)`);
+        console.log('🌳 Node depths calculated:', Object.fromEntries(nodeDepths));
 
         // Rebuild vis.js data
         intentNodes.forEach((node, nodeId) => {
@@ -1452,13 +1482,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     font: { size: 16, color: '#FFD700', face: 'arial' }
                 };
             } else {
-                // Child nodes: standard styling with execution order
+                // Child nodes: depth-based level with execution order in label
+                const depth = nodeDepths.get(nodeId) || 1;
                 nodeData = {
                     id: nodeId,
                     label: node.label || nodeId,
-                    level: node.execution_order || 1, // Use execution order as level (1-based)
+                    level: depth, // Use depth-based level for proper tree visualization
                     color: getNodeColor(node.status || 'pending'),
-                    title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\n\n💡 Top to bottom = execution sequence`
+                    title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence`
                 };
             }
 
@@ -1648,11 +1679,41 @@ document.addEventListener('DOMContentLoaded', () => {
         // Track changes for better user feedback
         let nodesAdded = 0;
 
+        // Calculate depth-based levels for proper tree visualization
+        const nodeDepths = new Map();
+        const rootNode = data.nodes.find(node => node.is_root);
+        
+        if (rootNode) {
+            // BFS to calculate depths from root
+            const queue = [{ nodeId: rootNode.id, depth: 0 }];
+            const visited = new Set();
+            
+            while (queue.length > 0) {
+                const { nodeId, depth } = queue.shift();
+                if (visited.has(nodeId)) continue;
+                
+                visited.add(nodeId);
+                nodeDepths.set(nodeId, depth);
+                
+                // Find children of this node
+                const children = data.edges
+                    .filter(edge => edge.source === nodeId)
+                    .map(edge => edge.target);
+                
+                children.forEach(childId => {
+                    if (!visited.has(childId)) {
+                        queue.push({ nodeId: childId, depth: depth + 1 });
+                    }
+                });
+            }
+        }
+
         // Add nodes to the graph (they come pre-sorted from server with execution order)
         if (Array.isArray(data.nodes)) {
-            console.log('📊 Processing nodes in execution order:', data.nodes.length, 'nodes');
+            console.log('📊 Processing nodes with depth-based levels:', data.nodes.length, 'nodes');
             console.log('🔧 Adding nodes to both local and network DataSets...');
             console.log('📋 Node data received:', data.nodes);
+            console.log('🌳 Node depths calculated:', Object.fromEntries(nodeDepths));
 
             // Check for duplicate IDs before processing
             const nodeIds = data.nodes.map(n => n.id);
@@ -1676,8 +1737,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (isRoot) {
                     // Root node: special styling, positioned at top level
                     nodeData = {
-                        id: node.id,
-                        label: node.label || node.id,
+                    id: node.id,
+                    label: node.label || node.id,
                         level: 0, // Force root node to be at the top level
                         color: {
                             border: '#FFD700', // Gold border for root
@@ -1690,13 +1751,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         font: { size: 16, color: '#FFD700', face: 'arial' }
                     };
                 } else {
-                    // Child nodes: execution order with standard styling
+                    // Child nodes: depth-based level with execution order in label
+                    const depth = nodeDepths.get(node.id) || 1;
                     nodeData = {
                         id: node.id,
                         label: node.label || node.id,
-                        level: node.execution_order || 1, // Use execution order as level (1-based)
-                        color: getNodeColor(node.status || 'pending'),
-                        title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\n\n💡 Top to bottom = execution sequence`
+                        level: depth, // Use depth-based level for proper tree visualization
+                    color: getNodeColor(node.status || 'pending'),
+                        title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence`
                     };
 
                     // Add visual emphasis for execution order
@@ -1791,7 +1853,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.error('Full edge data:', data.edges);
                 }
 
-                data.edges.forEach(edge => {
+            data.edges.forEach(edge => {
                 const edgeId = `${edge.source}--${edge.target}`;
 
                 // Check if edge already exists in the shared DataSet
@@ -1834,8 +1896,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Smooth network update with additional delay for edge processing
         setTimeout(() => {
             console.log('🔄 Final network update...');
-            network.redraw();
-            network.fit();
+        network.redraw();
+        network.fit();
         }, 150); // Increased delay to account for edge processing delay
 
         updateGraphStats();
