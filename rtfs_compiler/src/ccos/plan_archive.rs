@@ -1,12 +1,20 @@
 use super::storage::{ContentAddressableArchive, InMemoryArchive};
+use super::storage_backends::file_archive::FileArchive;
 use super::archivable_types::ArchivablePlan;
 use super::types::{Plan, PlanId, IntentId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+
+/// Storage backend for PlanArchive
+pub enum PlanArchiveStorage {
+    InMemory(InMemoryArchive<ArchivablePlan>),
+    File(FileArchive),
+}
 
 /// Domain-specific Plan archive with indexing and retrieval capabilities
 pub struct PlanArchive {
-    storage: InMemoryArchive<ArchivablePlan>,
+    storage: PlanArchiveStorage,
     plan_id_index: Arc<Mutex<HashMap<PlanId, String>>>,
     intent_id_index: Arc<Mutex<HashMap<IntentId, Vec<String>>>>,
 }
@@ -14,16 +22,41 @@ pub struct PlanArchive {
 impl PlanArchive {
     pub fn new() -> Self {
         Self {
-            storage: InMemoryArchive::new(),
+            storage: PlanArchiveStorage::InMemory(InMemoryArchive::new()),
             plan_id_index: Arc::new(Mutex::new(HashMap::new())),
             intent_id_index: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn with_file_storage(path: PathBuf) -> Result<Self, String> {
+        let file_archive = FileArchive::new(path).map_err(|e| e.to_string())?;
+        Ok(Self {
+            storage: PlanArchiveStorage::File(file_archive),
+            plan_id_index: Arc::new(Mutex::new(HashMap::new())),
+            intent_id_index: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    /// Store a plan using the appropriate storage backend
+    fn store_plan(&self, plan: &ArchivablePlan) -> Result<String, String> {
+        match &self.storage {
+            PlanArchiveStorage::InMemory(archive) => archive.store(plan.clone()),
+            PlanArchiveStorage::File(archive) => archive.store(plan.clone()),
+        }
+    }
+
+    /// Retrieve a plan using the appropriate storage backend
+    fn retrieve_plan(&self, hash: &str) -> Result<Option<ArchivablePlan>, String> {
+        match &self.storage {
+            PlanArchiveStorage::InMemory(archive) => archive.retrieve(hash),
+            PlanArchiveStorage::File(archive) => archive.retrieve(hash),
         }
     }
 
     /// Archive a plan and update indices
     pub fn archive_plan(&self, plan: &Plan) -> Result<String, String> {
         let archivable_plan = ArchivablePlan::from(plan);
-        let hash = self.storage.store(archivable_plan.clone())?;
+        let hash = self.store_plan(&archivable_plan)?;
 
         // Update plan_id index
         {
@@ -48,7 +81,7 @@ impl PlanArchive {
     pub fn get_plan_by_id(&self, plan_id: &PlanId) -> Option<ArchivablePlan> {
         let plan_index = self.plan_id_index.lock().unwrap();
         if let Some(hash) = plan_index.get(plan_id) {
-            self.storage.retrieve(hash).ok().flatten()
+            self.retrieve_plan(hash).ok().flatten()
         } else {
             None
         }
@@ -59,7 +92,7 @@ impl PlanArchive {
         let intent_index = self.intent_id_index.lock().unwrap();
         if let Some(hashes) = intent_index.get(intent_id) {
             hashes.iter()
-                .filter_map(|hash| self.storage.retrieve(hash).ok().flatten())
+                .filter_map(|hash| self.retrieve_plan(hash).ok().flatten())
                 .collect()
         } else {
             Vec::new()
@@ -78,10 +111,15 @@ impl PlanArchive {
             intent_index.len()
         };
 
+        let storage_size_bytes = match &self.storage {
+            PlanArchiveStorage::InMemory(archive) => archive.size_bytes(),
+            PlanArchiveStorage::File(archive) => <FileArchive as ContentAddressableArchive<ArchivablePlan>>::stats(archive).total_size_bytes,
+        };
+
         PlanArchiveStatistics {
             total_plans: plan_count,
             total_intents_with_plans: intent_count,
-            storage_size_bytes: self.storage.size_bytes(),
+            storage_size_bytes,
         }
     }
 

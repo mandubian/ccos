@@ -44,3 +44,6 @@ output/
 
 logs/
 viewer_server/target
+
+# Demo storage (persistent intents and plans)
+demo_storage/

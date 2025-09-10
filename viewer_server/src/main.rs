@@ -72,6 +72,11 @@ struct LoadGraphRequestInternal {
     resp: oneshot::Sender<Result<String, String>>,
 }
 
+struct GetPlansRequestInternal {
+    graph_id: String,
+    resp: oneshot::Sender<Result<Vec<serde_json::Value>, String>>,
+}
+
 struct AppState {
     tx: broadcast::Sender<ViewerEvent>,
     // Channel to send graph generation requests to the CCOS-local worker
@@ -79,6 +84,7 @@ struct AppState {
     plan_req_tx: mpsc::Sender<PlanRequest>,
     execute_req_tx: mpsc::Sender<ExecuteRequestInternal>,
     load_graph_req_tx: mpsc::Sender<LoadGraphRequestInternal>,
+    get_plans_req_tx: mpsc::Sender<GetPlansRequestInternal>,
 }
 
 #[derive(serde::Deserialize)]
@@ -103,10 +109,22 @@ struct LoadGraphRequest {
     root_id: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct GetPlansRequest {
+    graph_id: String,
+}
+
 #[derive(serde::Serialize)]
 struct GenerateGraphResponse {
     success: bool,
     graph: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct GetPlansResponse {
+    success: bool,
+    plans: Option<Vec<serde_json::Value>>,
     error: Option<String>,
 }
 
@@ -317,7 +335,7 @@ async fn generate_plans_handler(
                     "error": e.clone()
                 })),
             });
-            Json(GeneratePlansResponse {
+    Json(GeneratePlansResponse {
                 success: false,
                 plans: vec![],
                 error: Some(e),
@@ -396,7 +414,7 @@ async fn execute_handler(
                     "error": e.clone()
                 })),
             });
-            Json(ExecuteResponse {
+    Json(ExecuteResponse {
                 success: false,
                 result: None,
                 error: Some(e),
@@ -473,6 +491,55 @@ async fn load_graph_handler(
     }
 }
 
+async fn get_plans_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<GetPlansRequest>,
+) -> Json<GetPlansResponse> {
+    println!("📨 Received get-plans request for graph: {}", payload.graph_id);
+
+    // Send request to background CCOS worker
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let req = GetPlansRequestInternal {
+        graph_id: payload.graph_id.clone(),
+        resp: resp_tx,
+    };
+
+    if let Err(_e) = state.get_plans_req_tx.clone().try_send(req) {
+        return Json(GetPlansResponse {
+            success: false,
+            plans: None,
+            error: Some("Get plans service unavailable".to_string()),
+        });
+    }
+
+    // Await response with timeout
+    match tokio::time::timeout(std::time::Duration::from_secs(10), resp_rx).await {
+        Ok(Ok(Ok(plans))) => {
+            println!("✅ Successfully retrieved {} plans for graph: {}", plans.len(), payload.graph_id);
+            Json(GetPlansResponse {
+                success: true,
+                plans: Some(plans),
+                error: None,
+            })
+        }
+        Ok(Ok(Err(e))) => {
+            println!("❌ Failed to get plans: {}", e);
+            Json(GetPlansResponse {
+                success: false,
+                plans: None,
+                error: Some(e),
+            })
+        }
+        _ => {
+            Json(GetPlansResponse {
+                success: false,
+                plans: None,
+                error: Some("Get plans timed out".to_string()),
+            })
+        }
+    }
+}
+
 async fn websocket(ws: WebSocket, state: Arc<AppState>) {
     println!("🔌 WebSocket connection established!");
     let (mut sender, mut receiver) = ws.split();
@@ -533,10 +600,16 @@ async fn main() {
         println!("🔍 CCOS Debug: {}", msg);
     });
 
-    println!("📦 Creating CCOS instance...");
-    let ccos = Arc::new(match CCOS::new_with_debug_callback(Some(debug_callback)).await {
+    println!("📦 Creating CCOS instance with file storage...");
+    
+    // Create file storage config for demo persistence
+    let storage_path = std::path::PathBuf::from("demo_storage");
+    let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(storage_path.clone());
+    let plan_archive_path = storage_path.join("plans");
+    
+    let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_callback)).await {
         Ok(c) => {
-            println!("✅ CCOS initialized successfully");
+            println!("✅ CCOS initialized successfully with file storage");
             c
         }
         Err(e) => {
@@ -574,6 +647,7 @@ async fn main() {
     let (plan_req_tx, plan_req_rx) = mpsc::channel::<PlanRequest>(16);
     let (execute_req_tx, execute_req_rx) = mpsc::channel::<ExecuteRequestInternal>(16);
     let (load_graph_req_tx, load_graph_req_rx) = mpsc::channel::<LoadGraphRequestInternal>(16);
+    let (get_plans_req_tx, mut get_plans_req_rx) = mpsc::channel::<GetPlansRequestInternal>(16);
 
     // Spawn a dedicated thread that runs a current-thread Tokio runtime + LocalSet
     // This mirrors the example's pattern so we can call non-Send LLM-backed arbiter methods.
@@ -582,10 +656,16 @@ async fn main() {
         let local = tokio::task::LocalSet::new();
 
         local.block_on(&rt, async move {
-            // Initialize CCOS inside the worker thread
+            // Initialize CCOS inside the worker thread with file storage
             // Use a minimal debug callback that does nothing to avoid printing noise
             let debug_cb = Arc::new(move |_s: String| {});
-            let ccos = Arc::new(match CCOS::new_with_debug_callback(Some(debug_cb)).await {
+            
+            // Create file storage config for demo persistence (same as main thread)
+            let storage_path = std::path::PathBuf::from("demo_storage");
+            let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(storage_path.clone());
+            let plan_archive_path = storage_path.join("plans");
+            
+            let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_cb)).await {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Failed to init CCOS in worker: {}", e);
@@ -636,7 +716,7 @@ async fn main() {
                             let mut nodes: Vec<serde_json::Value> = Vec::new();
                             let mut edges: Vec<serde_json::Value> = Vec::new();
 
-                            if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                            if let Ok(mut graph_lock) = ccos.get_intent_graph().lock() {
                                         // Collect connected component using BFS from root_id
                                         use std::collections::{HashMap, VecDeque, HashSet};
                                         let mut visited: HashSet<String> = HashSet::new();
@@ -671,6 +751,21 @@ async fn main() {
                                         }
                                         
                                         println!("📋 Found {} intents in connected component", connected_intents.len());
+
+                                        // Add graph_id metadata to all intents in the connected component
+                                        println!("🏷️ Adding graph_id metadata to all intents in connected component");
+                                        for intent in &connected_intents {
+                                            let mut updated_intent = intent.clone();
+                                            updated_intent.metadata.insert("graph_id".to_string(), root_id.clone());
+                                            // Mark root intent specially
+                                            if intent.intent_id == root_id {
+                                                updated_intent.name = Some("Root".to_string());
+                                            }
+                                            match graph_lock.storage.update_intent(&updated_intent).await {
+                                                Ok(_) => println!("✅ Added graph_id to intent: {}", intent.intent_id),
+                                                Err(e) => println!("⚠️ Failed to update intent {} with graph_id: {}", intent.intent_id, e),
+                                            }
+                                        }
 
                                         // Build dependency graph for topological sorting
                                         let mut dependency_graph: HashMap<String, Vec<String>> = HashMap::new();
@@ -888,15 +983,15 @@ async fn main() {
                                         }
 
                                         println!("📤 Sending successful response with {} nodes in execution order and {} edges", nodes.len(), edges.len());
-                                        let _ = req.resp.send(Ok((root_id, nodes, edges)));
+                            let _ = req.resp.send(Ok((root_id, nodes, edges)));
                                     } else {
                                         // Handle the case where we couldn't get the graph lock
                                         let _ = req.resp.send(Err("Failed to access intent graph".to_string()));
                                     }
-                                }
-                                Err(e) => {
+                        }
+                        Err(e) => {
                                     println!("❌ Arbiter error during graph generation: {}", e);
-                                    let _ = req.resp.send(Err(format!("arbiter error: {}", e)));
+                            let _ = req.resp.send(Err(format!("arbiter error: {}", e)));
                                 }
                             }
                         } else {
@@ -918,6 +1013,7 @@ async fn main() {
 
                             if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                                 let all = graph_lock.storage.get_all_intents_sync();
+                                
                                 // Filter intents with matching graph_id
                                 let intents_in_graph: Vec<_> = all.into_iter()
                                     .filter(|st| st.metadata.get("graph_id").map(|v| v == &graph_id).unwrap_or(false))
@@ -940,8 +1036,9 @@ async fn main() {
                                         // Exclude root intents (they don't need plans)
                                         let is_root = i.name.as_ref().map(|n| n == "Root").unwrap_or(false) || 
                                                      i.intent_id == graph_id;
+                                        let is_leaf = !non_leaves.contains(&i.intent_id);
                                         // Only include leaf intents that are not root
-                                        !non_leaves.contains(&i.intent_id) && !is_root
+                                        is_leaf && !is_root
                                     })
                                     .collect();
 
@@ -963,6 +1060,16 @@ async fn main() {
                                                 },
                                             };
 
+                                            // Store the plan in CCOS plan archive
+                                            match ccos.get_orchestrator().store_plan(&result.plan) {
+                                                Ok(archive_hash) => {
+                                                    println!("💾 Stored plan {} in archive with hash: {}", result.plan.plan_id, archive_hash);
+                                                },
+                                                Err(e) => {
+                                                    println!("⚠️ Failed to store plan {} in archive: {}", result.plan.plan_id, e);
+                                                }
+                                            }
+
                                             plans.push(serde_json::json!({
                                                 "intent_id": st.intent_id,
                                                 "plan_id": result.plan.plan_id,
@@ -981,7 +1088,7 @@ async fn main() {
                             let _ = req.resp.send(Ok(plans));
                         } else {
                             println!("❌ No delegating arbiter available for plan generation");
-                            let _ = req.resp.send(Err("no delegating arbiter available".to_string()));
+                let _ = req.resp.send(Err("no delegating arbiter available".to_string()));
                         }
                     }
 
@@ -1060,6 +1167,55 @@ async fn main() {
                         let _ = req.resp.send(Ok(graph_id));
                     }
 
+                    Some(req) = get_plans_req_rx.recv() => {
+                        println!("🔄 Processing get plans request for graph: {}", req.graph_id);
+                        
+                        // Get all intents for this graph
+                        if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                            let all = graph_lock.storage.get_all_intents_sync();
+                            
+                            // Filter intents with matching graph_id
+                            let intents_in_graph: Vec<_> = all.into_iter()
+                                .filter(|st| st.metadata.get("graph_id").map(|v| v == &req.graph_id).unwrap_or(false))
+                                .collect();
+
+                            println!("🔍 Found {} intents in graph {}", intents_in_graph.len(), req.graph_id);
+
+                            // Get plans for each intent from the plan archive
+                            let mut plans = Vec::new();
+                            for intent in &intents_in_graph {
+                                // Skip root intents (they don't have plans)
+                                if intent.name.as_ref().map(|n| n == "Root").unwrap_or(false) || 
+                                   intent.intent_id == req.graph_id {
+                                    continue;
+                                }
+
+                                // Get plans for this intent from the archive
+                                let archivable_plans = ccos.get_orchestrator().get_plan_for_intent(&intent.intent_id).ok().flatten();
+                                if let Some(plan) = archivable_plans {
+                                    let body = match &plan.body {
+                                        rtfs_compiler::ccos::types::PlanBody::Rtfs(txt) => txt.clone(),
+                                        _ => "<non-RTFS plan>".to_string(),
+                                    };
+
+                                    plans.push(serde_json::json!({
+                                        "intent_id": intent.intent_id,
+                                        "plan_id": plan.plan_id,
+                                        "body": body,
+                                        "status": "retrieved"
+                                    }));
+                                    
+                                    println!("📋 Retrieved plan for intent: {}", intent.intent_id);
+                                }
+                            }
+
+                            println!("📋 Retrieved {} plans for graph {}", plans.len(), req.graph_id);
+                            let _ = req.resp.send(Ok(plans));
+                        } else {
+                            let _ = req.resp.send(Err("Failed to lock intent graph".to_string()));
+                        }
+                    }
+
                     else => break,
                 }
             }
@@ -1072,6 +1228,7 @@ async fn main() {
         plan_req_tx,
         execute_req_tx,
         load_graph_req_tx,
+        get_plans_req_tx,
     });
 
     // Serve the frontend directory via a small static handler and add phased POST endpoints
@@ -1084,6 +1241,7 @@ async fn main() {
         .route("/generate-plans", post(generate_plans_handler))
         .route("/execute", post(execute_handler))
         .route("/load-graph", post(load_graph_handler))
+        .route("/get-plans", post(get_plans_handler))
         .route("/", get(|| async { serve_file_path(frontend_base().join("index.html"), "text/html; charset=utf-8").await }))
         .route("/*file", get(static_handler))
         .with_state(state);

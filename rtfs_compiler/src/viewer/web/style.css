@@ -149,6 +149,66 @@ h1, h2, h3 {
     transition: all 0.2s ease;
 }
 
+/* Graph History Controls */
+#graph-history-controls {
+    display: flex;
+    gap: 5px;
+    margin-left: auto;
+    align-items: center;
+}
+
+#graph-history-selector {
+    padding: 6px 10px;
+    font-size: 14px;
+    background-color: #333;
+    border: 1px solid #666;
+    border-radius: 4px;
+    color: #f0f0f0;
+    min-width: 200px;
+    cursor: pointer;
+}
+
+#graph-history-selector:focus {
+    outline: none;
+    border-color: #00aaff;
+    box-shadow: 0 0 5px rgba(0, 170, 255, 0.3);
+}
+
+#graph-history-selector option {
+    background-color: #333;
+    color: #f0f0f0;
+}
+
+#load-history-graph-btn,
+#delete-history-graph-btn {
+    padding: 6px 10px;
+    font-size: 14px;
+    background-color: #444;
+    border: 1px solid #666;
+    border-radius: 4px;
+    color: #f0f0f0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#load-history-graph-btn:hover:not(:disabled) {
+    background-color: #00aa00;
+    border-color: #00ff00;
+}
+
+#delete-history-graph-btn:hover:not(:disabled) {
+    background-color: #aa0000;
+    border-color: #ff0000;
+}
+
+#load-history-graph-btn:disabled,
+#delete-history-graph-btn:disabled {
+    background-color: #222;
+    border-color: #444;
+    color: #666;
+    cursor: not-allowed;
+}
+
 #save-load-controls button:hover:not(:disabled) {
     background-color: #555;
     transform: scale(1.05);

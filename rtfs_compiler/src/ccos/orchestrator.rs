@@ -829,7 +829,7 @@ impl Orchestrator {
     }
     
     /// Get plan for a specific intent
-    fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
+    pub fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
         // Query the plan archive for plans associated with this intent
         let archivable_plans = self.plan_archive.get_plans_for_intent(&intent_id.to_string());
         
