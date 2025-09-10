@@ -192,6 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log(`📖 Loaded ${loadedCount} graphs from local storage`);
             addLogEntry(`📖 Restored ${loadedCount} graphs from previous sessions`);
+            
             return loadedCount;
         } catch (error) {
             console.error('❌ Failed to load graph history from local storage:', error);
@@ -205,6 +206,10 @@ document.addEventListener('DOMContentLoaded', () => {
             localStorage.removeItem(STORAGE_KEY);
             console.log('🗑️ Cleared all stored graphs from local storage');
             addLogEntry('🗑️ Cleared all stored graphs from local storage');
+            
+            // Update the graph history selector
+            populateGraphHistorySelector();
+            
             return true;
         } catch (error) {
             console.error('❌ Failed to clear stored graphs:', error);
@@ -348,6 +353,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     updateGoalStatus('Ready to generate intent graph...');
 
+    // Initialize graph history selector after DOM elements are available
+    populateGraphHistorySelector();
+
     // Real-time input validation
     const goalInput = document.getElementById('goal-input');
     if (goalInput) {
@@ -488,6 +496,101 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveGraphBtn = document.getElementById('save-graph-btn');
     const loadGraphBtn = document.getElementById('load-graph-btn');
     const exportGraphBtn = document.getElementById('export-graph-btn');
+
+    // Graph History functionality - declare early to avoid reference errors
+    const graphHistorySelector = document.getElementById('graph-history-selector');
+    const loadHistoryGraphBtn = document.getElementById('load-history-graph-btn');
+    const deleteHistoryGraphBtn = document.getElementById('delete-history-graph-btn');
+
+    // Graph History Selector Functions - define early to avoid reference errors
+    function populateGraphHistorySelector() {
+        if (!graphHistorySelector) return;
+        
+        // Clear existing options except the first one
+        graphHistorySelector.innerHTML = '<option value="">📚 Select Graph History...</option>';
+        
+        if (graphHistory.size === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No graphs in history';
+            option.disabled = true;
+            graphHistorySelector.appendChild(option);
+            return;
+        }
+        
+        // Sort graphs by timestamp (newest first)
+        const sortedGraphs = Array.from(graphHistory.entries())
+            .sort(([,a], [,b]) => b.timestamp - a.timestamp);
+        
+        sortedGraphs.forEach(([graphId, graph]) => {
+            const option = document.createElement('option');
+            option.value = graphId;
+            const timeStr = graph.timestamp.toLocaleString();
+            const planCount = graph.plans.size;
+            option.textContent = `${graph.name} (${timeStr}) - ${planCount} plans`;
+            graphHistorySelector.appendChild(option);
+        });
+        
+        console.log(`📚 Populated graph history selector with ${graphHistory.size} graphs`);
+    }
+    
+    function updateGraphHistoryButtons() {
+        const selectedGraphId = graphHistorySelector.value;
+        const hasSelection = selectedGraphId && selectedGraphId !== '';
+        
+        if (loadHistoryGraphBtn) {
+            loadHistoryGraphBtn.disabled = !hasSelection;
+        }
+        if (deleteHistoryGraphBtn) {
+            deleteHistoryGraphBtn.disabled = !hasSelection;
+        }
+    }
+    
+    function loadSelectedGraphFromHistory() {
+        const selectedGraphId = graphHistorySelector.value;
+        if (!selectedGraphId || selectedGraphId === '') {
+            addLogEntry('❌ No graph selected from history');
+            return;
+        }
+        
+        const success = restoreGraphFromHistory(selectedGraphId);
+        if (success) {
+            addLogEntry(`✅ Loaded graph "${graphHistory.get(selectedGraphId).name}" from history`);
+            updateGoalStatus('Graph loaded from history. Ready to generate plans or execute.');
+            
+            // Update UI state
+            if (generatePlansBtn) generatePlansBtn.disabled = false;
+            if (executeBtn) executeBtn.disabled = generatedPlans.size === 0;
+            
+            // Clear selection
+            graphHistorySelector.value = '';
+            updateGraphHistoryButtons();
+        } else {
+            addLogEntry(`❌ Failed to load graph from history`);
+        }
+    }
+    
+    function deleteSelectedGraphFromHistory() {
+        const selectedGraphId = graphHistorySelector.value;
+        if (!selectedGraphId || selectedGraphId === '') {
+            addLogEntry('❌ No graph selected from history');
+            return;
+        }
+        
+        const graph = graphHistory.get(selectedGraphId);
+        if (!graph) {
+            addLogEntry('❌ Graph not found in history');
+            return;
+        }
+        
+        if (confirm(`Are you sure you want to delete "${graph.name}" from history? This cannot be undone.`)) {
+            graphHistory.delete(selectedGraphId);
+            saveGraphHistoryToStorage();
+            populateGraphHistorySelector();
+            updateGraphHistoryButtons();
+            addLogEntry(`🗑️ Deleted graph "${graph.name}" from history`);
+        }
+    }
 
     if (generatePlansBtn) {
         generatePlansBtn.addEventListener('click', async () => {
@@ -1091,6 +1194,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Graph History Controls Event Listeners
+    if (graphHistorySelector) {
+        graphHistorySelector.addEventListener('change', updateGraphHistoryButtons);
+    }
+
+    if (loadHistoryGraphBtn) {
+        loadHistoryGraphBtn.addEventListener('click', loadSelectedGraphFromHistory);
+    }
+
+    if (deleteHistoryGraphBtn) {
+        deleteHistoryGraphBtn.addEventListener('click', deleteSelectedGraphFromHistory);
+    }
+
+
     // Network click handler for intent selection with error handling
     network.on('selectNode', (params) => {
         try {
@@ -1398,6 +1515,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Auto-save to local storage
             saveGraphHistoryToStorage();
+            
+            // Update the graph history selector
+            populateGraphHistorySelector();
         }
     }
 
@@ -1583,6 +1703,7 @@ document.addEventListener('DOMContentLoaded', () => {
             addLogEntry('🗑️ All stored graphs cleared from memory and local storage');
         }
     }
+
 
     // Expose functions globally for debugging/console access
     window.restoreGraphFromHistory = restoreGraphFromHistory;
