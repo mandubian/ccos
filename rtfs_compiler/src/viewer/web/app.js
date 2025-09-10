@@ -1843,6 +1843,51 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                         }
                         
+                        // Update UI to show plan indicators on nodes
+                        console.log('🔄 Updating node UI to show plan indicators...');
+                        for (const plan of plansResult.plans) {
+                            const nodeId = plan.intent_id;
+                            const node = nodes.get(nodeId);
+                            
+                            if (node) {
+                                console.log(`📋 Updating node ${nodeId} to show plan indicator`);
+                                
+                                // Update the node to show it has a plan
+                                const nodeUpdate = {
+                                    id: nodeId,
+                                    has_plan: true,
+                                    plan_id: plan.plan_id
+                                };
+                                
+                                // Add plan indicator to label if not already present
+                                let newLabel = node.original_label || node.label;
+                                if (newLabel && !newLabel.includes('📋')) {
+                                    newLabel = newLabel + ' 📋';
+                                    nodeUpdate.label = newLabel;
+                                    nodeUpdate.original_label = node.original_label || node.label;
+                                }
+                                
+                                // Change border color to indicate plan availability
+                                nodeUpdate.color = {
+                                    border: '#00ff88',
+                                    background: node.color?.background || '#2a2a2a',
+                                    highlight: { border: '#88ffaa', background: '#3a3a3a' }
+                                };
+                                
+                                nodeUpdate.title = `${node.original_label || node.label}\n📋 Has Plan Available\nClick to view plan details`;
+                                
+                                // Update the node in the network
+                                try {
+                                    nodes.update(nodeUpdate);
+                                    console.log(`✅ Updated node ${nodeId} with plan indicator`);
+                                } catch (error) {
+                                    console.error(`❌ Failed to update node ${nodeId}:`, error);
+                                }
+                            } else {
+                                console.warn(`⚠️ Node ${nodeId} not found in network for plan update`);
+                            }
+                        }
+                        
                         // Update button states
                         if (executeBtn) executeBtn.disabled = generatedPlans.size === 0;
                         
