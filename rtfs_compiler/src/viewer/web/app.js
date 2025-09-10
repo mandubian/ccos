@@ -547,14 +547,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    function loadSelectedGraphFromHistory() {
+    async function loadSelectedGraphFromHistory() {
         const selectedGraphId = graphHistorySelector.value;
         if (!selectedGraphId || selectedGraphId === '') {
             addLogEntry('❌ No graph selected from history');
             return;
         }
         
-        const success = restoreGraphFromHistory(selectedGraphId);
+        const success = await restoreGraphFromHistory(selectedGraphId);
         if (success) {
             addLogEntry(`✅ Loaded graph "${graphHistory.get(selectedGraphId).name}" from history`);
             updateGoalStatus('Graph loaded from history. Ready to generate plans or execute.');
@@ -1619,6 +1619,33 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  - Root ID:', currentGraphId);
         console.log('  - Historical edges:', Array.from(intentEdges.entries()));
 
+        // Inform server to rehydrate this graph into CCOS so that plan generation works
+        (async () => {
+            try {
+                const rehydrateResp = await fetch('/load-graph', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        nodes: Array.from(intentNodes.values()),
+                        edges: Array.from(intentEdges.values()),
+                        root_id: currentGraphId
+                    })
+                });
+                if (rehydrateResp.ok) {
+                    const r = await rehydrateResp.json();
+                    if (r.success) {
+                        console.log(`✅ Server rehydrated graph ${r.graph_id} into CCOS`);
+                    } else {
+                        console.warn('⚠️ Server failed to rehydrate graph:', r.error);
+                    }
+                } else {
+                    console.warn('⚠️ /load-graph returned non-OK');
+                }
+            } catch (e) {
+                console.warn('⚠️ Error rehydrating graph on server:', e);
+            }
+        })();
+
         // Calculate depth-based levels for proper tree visualization
         const nodeDepths = new Map();
         const rootNode = Array.from(intentNodes.values()).find(node => node.is_root);
@@ -1652,7 +1679,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('🌳 Node depths calculated:', Object.fromEntries(nodeDepths));
 
         // Add a small delay to ensure clearing is complete before adding new nodes
-        setTimeout(() => {
+        setTimeout(async () => {
             console.log('🔄 Starting to add restored nodes after clearing delay...');
             
             // Rebuild vis.js data
@@ -1791,6 +1818,47 @@ document.addEventListener('DOMContentLoaded', () => {
             network.fit();
             
             console.log('✅ Graph restoration completed');
+            
+            // Try to retrieve plans from server for this graph
+            try {
+                console.log('🔍 Checking for existing plans on server...');
+                const plansResponse = await fetch('/get-plans', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ graph_id: currentGraphId })
+                });
+                
+                if (plansResponse.ok) {
+                    const plansResult = await plansResponse.json();
+                    if (plansResult.success && plansResult.plans && plansResult.plans.length > 0) {
+                        console.log(`📋 Retrieved ${plansResult.plans.length} plans from server`);
+                        
+                        // Store the retrieved plans
+                        for (const plan of plansResult.plans) {
+                            generatedPlans.set(plan.intent_id, {
+                                plan_id: plan.plan_id,
+                                rtfs_code: plan.body,
+                                intent_id: plan.intent_id,
+                                status: plan.status
+                            });
+                        }
+                        
+                        // Update button states
+                        if (executeBtn) executeBtn.disabled = generatedPlans.size === 0;
+                        
+                        addLogEntry(`📋 Retrieved ${plansResult.plans.length} plans from server`);
+                    } else {
+                        console.log('📋 No plans found on server for this graph');
+                        addLogEntry('📋 No plans found on server. Use "Generate Plans" button to create them.');
+                    }
+                } else {
+                    console.log('⚠️ Failed to retrieve plans from server');
+                    addLogEntry('⚠️ Could not retrieve plans from server');
+                }
+            } catch (error) {
+                console.error('Error retrieving plans from server:', error);
+                addLogEntry(`⚠️ Error retrieving plans: ${error.message}`);
+            }
         }, 100); // 100ms delay to ensure clearing is complete
 
         return true;
@@ -1836,8 +1904,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Function to restore a stored graph from localStorage
-    function restoreStoredGraph(graphId) {
-        return restoreGraphFromHistory(graphId);
+    async function restoreStoredGraph(graphId) {
+        return await restoreGraphFromHistory(graphId);
     }
 
     // Enhanced clear function to optionally clear stored graphs

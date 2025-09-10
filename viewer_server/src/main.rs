@@ -138,7 +138,7 @@ async fn generate_graph_handler(
     println!("📨 Received generate-graph request");
     let goal = payload.goal.trim().to_string();
     println!("🎯 Goal: \"{}\"", goal);
-
+    
     if goal.is_empty() {
         println!("❌ Goal is empty, rejecting request");
         return Json(GenerateGraphResponse {
@@ -247,7 +247,10 @@ async fn generate_plans_handler(
 
     // Send request to background CCOS worker
     let (resp_tx, resp_rx) = oneshot::channel();
-    let req = PlanRequest { graph_id: graph_id.clone(), resp: resp_tx };
+    let req = PlanRequest { 
+        graph_id: graph_id.clone(), 
+        resp: resp_tx 
+    };
 
     if let Err(_e) = state.plan_req_tx.clone().try_send(req) {
         return Json(GeneratePlansResponse {
@@ -330,7 +333,7 @@ async fn generate_plans_handler(
                     "error": "timeout"
                 })),
             });
-            Json(GeneratePlansResponse {
+    Json(GeneratePlansResponse {
                 success: false,
                 plans: vec![],
                 error: Some("Plan generation timed out".to_string()),
@@ -409,7 +412,7 @@ async fn execute_handler(
                     "error": "timeout"
                 })),
             });
-            Json(ExecuteResponse {
+    Json(ExecuteResponse {
                 success: false,
                 result: None,
                 error: Some("Execution timed out".to_string()),
@@ -447,10 +450,10 @@ async fn load_graph_handler(
         Ok(Ok(Ok(graph_id))) => {
             println!("✅ Successfully loaded graph with ID: {}", graph_id);
             Json(LoadGraphResponse {
-                success: true,
+        success: true,
                 graph_id: Some(graph_id),
-                error: None,
-            })
+        error: None,
+    })
         }
         Ok(Ok(Err(e))) => {
             println!("❌ Failed to load graph: {}", e);
@@ -603,20 +606,20 @@ async fn main() {
                 tokio::select! {
                     Some(req) = graph_rx.recv() => {
                         println!("🔄 Processing graph generation request in worker thread");
-                        let goal = req.goal.clone();
+                let goal = req.goal.clone();
                         println!("📝 Processing goal: \"{}\"", goal);
 
                         // Try to get delegating arbiter for graph generation
                         println!("🔍 Checking for delegating arbiter...");
-                        if let Some(arb) = ccos.get_delegating_arbiter() {
+                if let Some(arb) = ccos.get_delegating_arbiter() {
                             println!("✅ Delegating arbiter found, calling natural_language_to_graph...");
-                            match arb.natural_language_to_graph(&goal).await {
-                                Ok(root_id) => {
+                    match arb.natural_language_to_graph(&goal).await {
+                        Ok(root_id) => {
                                     println!("🎉 Graph generation successful, root_id: {}", root_id);
-                                    // Wait briefly for persistence
+                            // Wait briefly for persistence
                                     println!("⏳ Waiting for graph persistence...");
                                     for i in 0..10 {
-                                        if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                                if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                                             if graph_lock.get_intent(&root_id).is_some() {
                                                 println!("✅ Graph persisted after {} attempts", i + 1);
                                                 break;
@@ -624,16 +627,16 @@ async fn main() {
                                         }
                                         if i == 9 {
                                             println!("⚠️ Graph persistence timeout - proceeding anyway");
-                                        }
-                                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                                    }
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            }
 
                                     // Collect only the connected component starting from root_id
                                     println!("📊 Collecting connected component from root_id: {}", root_id);
-                                    let mut nodes: Vec<serde_json::Value> = Vec::new();
-                                    let mut edges: Vec<serde_json::Value> = Vec::new();
+                            let mut nodes: Vec<serde_json::Value> = Vec::new();
+                            let mut edges: Vec<serde_json::Value> = Vec::new();
 
-                                    if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                            if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                                         // Collect connected component using BFS from root_id
                                         use std::collections::{HashMap, VecDeque, HashSet};
                                         let mut visited: HashSet<String> = HashSet::new();
@@ -905,7 +908,7 @@ async fn main() {
 
                     Some(req) = plan_rx.recv() => {
                         println!("🔄 Processing plan generation request in worker thread");
-                        let _graph_id = req.graph_id.clone();
+                        let graph_id = req.graph_id.clone();
 
                         // Generate plans for leaf intents in the graph
                         println!("🔍 Checking for delegating arbiter for plan generation...");
@@ -913,47 +916,62 @@ async fn main() {
                             println!("✅ Delegating arbiter found for plan generation");
                             let mut plans = Vec::new();
 
-                            // Get leaf intents (those without children)
                             if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
                                 let all = graph_lock.storage.get_all_intents_sync();
-                                let leaf_intents: Vec<_> = all.into_iter()
-                                    .filter(|st| {
-                                        let children = graph_lock.get_child_intents(&st.intent_id);
-                                        children.is_empty()
+                                // Filter intents with matching graph_id
+                                let intents_in_graph: Vec<_> = all.into_iter()
+                                    .filter(|st| st.metadata.get("graph_id").map(|v| v == &graph_id).unwrap_or(false))
+                                    .collect();
+
+                                let intent_ids_in_graph: std::collections::HashSet<String> = intents_in_graph.iter().map(|i| i.intent_id.clone()).collect();
+                                let mut non_leaves: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                                for intent in &intents_in_graph {
+                                    let children = graph_lock.get_child_intents(&intent.intent_id);
+                                    for child in children {
+                                        if intent_ids_in_graph.contains(&child.intent_id) {
+                                            non_leaves.insert(intent.intent_id.clone());
+                                        }
+                                    }
+                                }
+
+                                let leaf_intents: Vec<_> = intents_in_graph.into_iter()
+                                    .filter(|i| {
+                                        // Exclude root intents (they don't need plans)
+                                        let is_root = i.name.as_ref().map(|n| n == "Root").unwrap_or(false) || 
+                                                     i.intent_id == graph_id;
+                                        // Only include leaf intents that are not root
+                                        !non_leaves.contains(&i.intent_id) && !is_root
                                     })
                                     .collect();
 
-                                println!("📋 Found {} leaf intents to generate plans for", leaf_intents.len());
+                                println!("📋 Found {} leaf intents to generate plans for (graph {})", leaf_intents.len(), graph_id);
 
-                                // Generate plans for each leaf intent
-                                for intent_storable in leaf_intents {
-                                    println!("🎯 Generating plan for intent: {} - \"{}\"", intent_storable.intent_id, intent_storable.goal);
-                                    match arb.generate_plan_for_intent(&intent_storable).await {
+                                for st in leaf_intents {
+                                    println!("🎯 Generating plan for intent: {} - \"{}\"", st.intent_id, st.goal);
+                                    match arb.generate_plan_for_intent(&st).await {
                                         Ok(result) => {
-                                            println!("✅ Successfully generated plan for intent: {}", intent_storable.intent_id);
+                                            println!("✅ Successfully generated plan for intent: {}", st.intent_id);
                                             let body = match &result.plan.body {
                                                 rtfs_compiler::ccos::types::PlanBody::Rtfs(txt) => {
                                                     println!("📝 Plan body (first 200 chars): {}", txt.chars().take(200).collect::<String>());
                                                     txt.clone()
                                                 },
                                                 _ => {
-                                                    println!("⚠️ Non-RTFS plan body: {:?}", result.plan.body);
+                                                    println!("⚠️ Non-RTFS plan body type");
                                                     "<non-RTFS plan>".to_string()
                                                 },
                                             };
 
                                             plans.push(serde_json::json!({
-                                                "intent_id": intent_storable.intent_id,
+                                                "intent_id": st.intent_id,
                                                 "plan_id": result.plan.plan_id,
                                                 "body": body,
                                                 "status": "generated"
                                             }));
-
-                                            // Mark that this intent has a plan (will be broadcasted by main handler)
                                         }
                                         Err(e) => {
-                                            // Log error but continue with other intents
-                                            println!("❌ Failed to generate plan for {}: {}", intent_storable.intent_id, e);
+                                            println!("❌ Failed to generate plan for {}: {}", st.intent_id, e);
                                         }
                                     }
                                 }
@@ -978,8 +996,8 @@ async fn main() {
                                 Ok(result) => {
                                     let result_str = format!("Execution result: {}", result.value);
                                     let _ = req.resp.send(Ok(result_str));
-                                }
-                                Err(e) => {
+                        }
+                        Err(e) => {
                                     let _ = req.resp.send(Err(format!("execution error: {}", e)));
                                 }
                             }
@@ -993,22 +1011,51 @@ async fn main() {
                         println!("📊 Loading graph with {} nodes and {} edges",
                                  req.nodes.len(), req.edges.len());
 
-                        // For now, we'll just return a dummy graph_id since we can't actually
-                        // reconstruct the full CCOS state from the loaded graph data.
-                        // In a full implementation, we'd need to create proper Intent objects
-                        // and reconstruct the intent graph structure.
-
-                        let graph_id = req.root_id.unwrap_or_else(|| format!("loaded_graph_{}", chrono::Utc::now().timestamp()));
+                        // Determine graph_id (prefer provided root_id)
+                        let graph_id = req.root_id.clone().unwrap_or_else(|| format!("loaded_graph_{}", chrono::Utc::now().timestamp()));
                         println!("📝 Using graph ID: {}", graph_id);
 
-                        // We can't actually reconstruct the full CCOS intent graph from the loaded data
-                        // because we don't have the original Intent objects, just the visualization data.
-                        // For now, we'll just acknowledge the load but plan generation won't work
-                        // until we implement proper intent reconstruction.
+                        // Rehydrate intents into CCOS
+                        if let Ok(mut graph_lock) = ccos.get_intent_graph().lock() {
+                            // Insert intents
+                            for node in &req.nodes {
+                                if let (Some(id), Some(goal)) = (node.get("id").and_then(|v| v.as_str()), node.get("goal").and_then(|v| v.as_str())) {
+                                    // Skip if already present
+                                    if graph_lock.get_intent(&id.to_string()).is_some() {
+                                        continue;
+                                    }
+                                    let mut st = rtfs_compiler::ccos::types::StorableIntent::new(goal.to_string());
+                                    st.intent_id = id.to_string();
+                                    st.metadata.insert("graph_id".to_string(), graph_id.clone());
+                                    // Mark root intent specially (no plan)
+                                    if let Some(is_root) = node.get("is_root").and_then(|v| v.as_bool()) {
+                                        if is_root {
+                                            st.name = Some("Root".to_string());
+                                        }
+                                    }
+                                    if let Err(e) = graph_lock.store_intent(st) {
+                                        println!("⚠️ Failed to store intent {}: {}", id, e);
+                                    }
+                                }
+                            }
 
-                        println!("⚠️ Note: Loaded graph cannot be used for plan generation yet");
-                        println!("   This is because we can't reconstruct the original Intent objects");
-                        println!("   from the visualization data. Plan generation requires the full CCOS state.");
+                            // Insert edges
+                            for edge in &req.edges {
+                                if let (Some(from), Some(to)) = (edge.get("source").and_then(|v| v.as_str()), edge.get("target").and_then(|v| v.as_str())) {
+                                    let edge_type = match edge.get("type").and_then(|v| v.as_str()) {
+                                        Some("depends_on") => rtfs_compiler::ccos::types::EdgeType::DependsOn,
+                                        Some("is_subgoal_of") => rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf,
+                                        Some("conflicts_with") => rtfs_compiler::ccos::types::EdgeType::ConflictsWith,
+                                        Some("enables") => rtfs_compiler::ccos::types::EdgeType::Enables,
+                                        Some("related_to") => rtfs_compiler::ccos::types::EdgeType::RelatedTo,
+                                        _ => rtfs_compiler::ccos::types::EdgeType::DependsOn,
+                                    };
+                                    if let Err(e) = graph_lock.create_edge(from.to_string(), to.to_string(), edge_type) {
+                                        println!("⚠️ Failed to create edge {} -> {}: {}", from, to, e);
+                                    }
+                                }
+                            }
+                        }
 
                         let _ = req.resp.send(Ok(graph_id));
                     }
