@@ -604,7 +604,8 @@ async fn main() {
     
     // Create file storage config for demo persistence
     let storage_path = std::path::PathBuf::from("demo_storage");
-    let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(storage_path.clone());
+    let intent_storage_file = storage_path.join("intents.json");
+    let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(intent_storage_file);
     let plan_archive_path = storage_path.join("plans");
     
     let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_callback)).await {
@@ -662,7 +663,8 @@ async fn main() {
             
             // Create file storage config for demo persistence (same as main thread)
             let storage_path = std::path::PathBuf::from("demo_storage");
-            let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(storage_path.clone());
+            let intent_storage_file = storage_path.join("intents.json");
+            let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(intent_storage_file);
             let plan_archive_path = storage_path.join("plans");
             
             let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_cb)).await {

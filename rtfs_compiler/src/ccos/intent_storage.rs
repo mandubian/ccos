@@ -331,6 +331,12 @@ pub struct FileStorage {
 impl FileStorage {
     pub async fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let path = path.as_ref().to_path_buf();
+        
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        
         let mut storage = Self {
             in_memory: InMemoryStorage::new(),
             file_path: path.clone(),
@@ -563,8 +569,8 @@ impl StorageFactory {
             StorageConfig::File { path } => {
                 match Self::file(path).await {
                     Ok(storage) => storage,
-                    Err(_) => {
-                        eprintln!("Note: Using in-memory storage for fallback strategy");
+                    Err(e) => {
+                        eprintln!("Note: Using in-memory storage for fallback strategy. File storage failed: {}", e);
                         Self::with_fallback()
                     }
                 }
