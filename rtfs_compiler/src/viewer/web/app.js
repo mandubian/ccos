@@ -14,13 +14,14 @@ document.addEventListener('DOMContentLoaded', () => {
         layout: {
             hierarchical: {
                 enabled: true,
-                sortMethod: 'hubsize', // Better for execution order visualization
+                sortMethod: 'directed', // Use directed layout for proper parent-child hierarchy
                 direction: 'UD', // Up-Down layout (top to bottom = execution order)
-                levelSeparation: 180,
-                nodeSpacing: 250,
-                parentCentralization: false,
-                edgeMinimization: false,
-                blockShifting: true,
+                levelSeparation: 200, // Increased separation between levels
+                nodeSpacing: 300, // Increased spacing between nodes
+                parentCentralization: true, // Center parent nodes above their children
+                edgeMinimization: true, // Minimize edge crossings
+                blockShifting: true, // Allow block shifting for better layout
+                treeSpacing: 200, // Spacing between different branches
             },
         },
         physics: {
@@ -1435,10 +1436,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let nodeData;
             if (isRoot) {
-                // Root node: special styling
+                // Root node: special styling, positioned at top level
                 nodeData = {
                     id: nodeId,
                     label: node.label || nodeId,
+                    level: 0, // Force root node to be at the top level
                     color: {
                         border: '#FFD700', // Gold border for root
                         background: '#2a2a2a',
@@ -1454,6 +1456,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 nodeData = {
                     id: nodeId,
                     label: node.label || nodeId,
+                    level: node.execution_order || 1, // Use execution order as level (1-based)
                     color: getNodeColor(node.status || 'pending'),
                     title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\n\n💡 Top to bottom = execution sequence`
                 };
@@ -1671,10 +1674,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 let nodeData;
                 if (isRoot) {
-                    // Root node: special styling, no execution order
+                    // Root node: special styling, positioned at top level
                     nodeData = {
                         id: node.id,
                         label: node.label || node.id,
+                        level: 0, // Force root node to be at the top level
                         color: {
                             border: '#FFD700', // Gold border for root
                             background: '#2a2a2a',
@@ -1688,9 +1692,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     // Child nodes: execution order with standard styling
                     nodeData = {
-                    id: node.id,
-                    label: node.label || node.id,
-                    color: getNodeColor(node.status || 'pending'),
+                        id: node.id,
+                        label: node.label || node.id,
+                        level: node.execution_order || 1, // Use execution order as level (1-based)
+                        color: getNodeColor(node.status || 'pending'),
                         title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\n\n💡 Top to bottom = execution sequence`
                     };
 
