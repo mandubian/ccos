@@ -512,6 +512,7 @@ impl StorableIntent {
     }
 }
 
+
 impl RuntimeIntent {
     /// Convert to StorableIntent by converting runtime values back to RTFS source
     pub fn to_storable_intent(&self, ccos: &CCOS) -> Result<StorableIntent, RuntimeError> {
