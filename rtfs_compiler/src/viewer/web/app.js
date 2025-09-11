@@ -1062,10 +1062,19 @@ document.addEventListener('DOMContentLoaded', () => {
                             // Load nodes
                             graphData.nodes.forEach(node => {
                                 intentNodes.set(node.id, node);
+                                const hasPlan = generatedPlans.has(node.id);
+                                const labelText = node.label || node.id;
+                                const planIndicator = hasPlan ? ' 📋' : '';
+                                
                                 const nodeData = {
                                     id: node.id,
-                                    label: node.label || node.id,
-                                    color: getNodeColor(node.status || 'pending'),
+                                    label: labelText + planIndicator,
+                                    color: hasPlan ? {
+                                        border: '#00ff88',
+                                        background: '#2a2a2a',
+                                        highlight: { border: '#00ff88', background: '#3a3a3a' }
+                                    } : getNodeColor(node.status || 'pending'),
+                                    borderWidth: hasPlan ? 3 : 2,
                                     title: `${node.label || node.id}\nStatus: ${node.status || 'pending'}\nType: ${node.type || 'unknown'}${getBadgeText(node.id)}`
                                 };
                                 // Add to both local and network DataSets
@@ -1693,6 +1702,44 @@ document.addEventListener('DOMContentLoaded', () => {
         return `\n\n🏷️ Badges: ${badgeTexts}`;
     }
 
+    function updateNodePlanIndicator(nodeId, hasPlan) {
+        // Update the vis.js node data to trigger a redraw
+        const nodeData = nodes.get(nodeId);
+        if (nodeData) {
+            const node = intentNodes.get(nodeId);
+            const baseLabel = node?.label || nodeId;
+            const cleanLabel = baseLabel.replace(/^\d+\.\s*/, '').replace(/\s*📋\s*$/, '');
+            const planIndicator = hasPlan ? ' 📋' : '';
+            
+            // Handle execution order prefix
+            let newLabel;
+            if (node?.execution_order) {
+                newLabel = `🔢 ${node.execution_order}. ${cleanLabel}${planIndicator}`;
+            } else {
+                newLabel = cleanLabel + planIndicator;
+            }
+            
+            const updatedNode = { 
+                ...nodeData,
+                label: newLabel
+            };
+            
+            if (hasPlan) {
+                updatedNode.color = {
+                    border: '#00ff88',
+                    background: '#2a2a2a',
+                    highlight: { border: '#00ff88', background: '#3a3a3a' }
+                };
+                updatedNode.borderWidth = 3;
+            } else {
+                updatedNode.color = getNodeColor(node?.status || 'pending');
+                updatedNode.borderWidth = 2;
+            }
+            
+            nodes.update(updatedNode);
+        }
+    }
+
     function showActivity(message = 'Working...') {
         if (activityIndicator && activityText) {
             activityText.textContent = message;
@@ -2176,28 +2223,42 @@ document.addEventListener('DOMContentLoaded', () => {
             let nodeData;
             if (isRoot) {
                 // Root node: special styling, positioned at top level
+                const hasPlan = generatedPlans.has(nodeId);
+                const labelText = node.label || nodeId;
+                const planIndicator = hasPlan ? ' 📋' : '';
+                
                 nodeData = {
                     id: nodeId,
-                    label: node.label || nodeId,
+                    label: labelText + planIndicator,
                     level: 0, // Force root node to be at the top level
                     color: {
-                        border: '#FFD700', // Gold border for root
+                        border: hasPlan ? '#00ff88' : '#FFD700', // Green if has plan, gold otherwise
                         background: '#2a2a2a',
-                        highlight: { border: '#FFD700', background: '#3a3a3a' }
+                        highlight: { border: hasPlan ? '#00ff88' : '#FFD700', background: '#3a3a3a' }
                     },
                     title: `${baseTitle}\n\n🎯 Root Intent - Orchestrates execution of child intents${getBadgeText(nodeId)}`,
                     shape: 'diamond',
                     size: 30,
-                    font: { size: 16, color: '#FFD700', face: 'arial' }
+                    borderWidth: hasPlan ? 3 : 2,
+                    font: { size: 16, color: hasPlan ? '#00ff88' : '#FFD700', face: 'arial' }
                 };
             } else {
                 // Child nodes: depth-based level with execution order in label
                 const depth = nodeDepths.get(nodeId) || 1;
+                const hasPlan = generatedPlans.has(nodeId);
+                const labelText = node.label || nodeId;
+                const planIndicator = hasPlan ? ' 📋' : '';
+                
                 nodeData = {
                     id: nodeId,
-                    label: node.label || nodeId,
+                    label: labelText + planIndicator,
                     level: depth, // Use depth-based level for proper tree visualization
-                    color: getNodeColor(node.status || 'pending'),
+                    color: hasPlan ? {
+                        border: '#00ff88',
+                        background: '#2a2a2a',
+                        highlight: { border: '#00ff88', background: '#3a3a3a' }
+                    } : getNodeColor(node.status || 'pending'),
+                    borderWidth: hasPlan ? 3 : 2,
                     title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence${getBadgeText(nodeId)}`
                 };
             }
@@ -2327,6 +2388,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                 intent_id: plan.intent_id,
                                 status: plan.status
                             });
+                            
+                            // Update node visual styling to show it has a plan
+                            updateNodePlanIndicator(plan.intent_id, true);
                         }
                         
                         // Update UI to show plan indicators on nodes
@@ -2604,35 +2668,50 @@ document.addEventListener('DOMContentLoaded', () => {
                 let nodeData;
                 if (isRoot) {
                     // Root node: special styling, positioned at top level
+                    const hasPlan = generatedPlans.has(node.id);
+                    const labelText = node.label || node.id;
+                    const planIndicator = hasPlan ? ' 📋' : '';
+                    
                     nodeData = {
-                    id: node.id,
-                    label: node.label || node.id,
+                        id: node.id,
+                        label: labelText + planIndicator,
                         level: 0, // Force root node to be at the top level
                         color: {
-                            border: '#FFD700', // Gold border for root
+                            border: hasPlan ? '#00ff88' : '#FFD700', // Green if has plan, gold otherwise
                             background: '#2a2a2a',
-                            highlight: { border: '#FFD700', background: '#3a3a3a' }
+                            highlight: { border: hasPlan ? '#00ff88' : '#FFD700', background: '#3a3a3a' }
                         },
                         title: `${baseTitle}\n\n🎯 Root Intent - Orchestrates execution of child intents${getBadgeText(node.id)}`,
                         shape: 'diamond',
                         size: 30,
-                        font: { size: 16, color: '#FFD700', face: 'arial' }
+                        borderWidth: hasPlan ? 3 : 2,
+                        font: { size: 16, color: hasPlan ? '#00ff88' : '#FFD700', face: 'arial' }
                     };
                 } else {
                     // Child nodes: depth-based level with execution order in label
                     const depth = nodeDepths.get(node.id) || 1;
+                    const hasPlan = generatedPlans.has(node.id);
+                    const labelText = node.label || node.id;
+                    const planIndicator = hasPlan ? ' 📋' : '';
+                    
                     nodeData = {
                         id: node.id,
-                        label: node.label || node.id,
+                        label: labelText + planIndicator,
                         level: depth, // Use depth-based level for proper tree visualization
-                    color: getNodeColor(node.status || 'pending'),
+                        color: hasPlan ? {
+                            border: '#00ff88',
+                            background: '#2a2a2a',
+                            highlight: { border: '#00ff88', background: '#3a3a3a' }
+                        } : getNodeColor(node.status || 'pending'),
+                        borderWidth: hasPlan ? 3 : 2,
                         title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence${getBadgeText(node.id)}`
                     };
 
                     // Add visual emphasis for execution order
                     if (node.execution_order) {
                         const baseLabel = node.label || node.id;
-                        nodeData.label = `🔢 ${node.execution_order}. ${baseLabel.replace(/^\d+\.\s*/, '')}`;
+                        const cleanLabel = baseLabel.replace(/^\d+\.\s*/, '');
+                        nodeData.label = `🔢 ${node.execution_order}. ${cleanLabel}${planIndicator}`;
                     }
                 }
 
@@ -2834,6 +2913,9 @@ document.addEventListener('DOMContentLoaded', () => {
             graph_id: data.graph_id,
             timestamp: new Date().toISOString()
         });
+
+        // Update node visual styling to show it has a plan
+        updateNodePlanIndicator(data.intent_id, true);
 
         // Update plan pane if active
         if (isTabActive('plan') && selectedIntentId === data.intent_id) {
