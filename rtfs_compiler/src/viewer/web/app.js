@@ -2076,7 +2076,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         for (const plan of plansResult.plans) {
                             generatedPlans.set(plan.intent_id, {
                                 plan_id: plan.plan_id,
-                                rtfs_code: plan.body,
+                                body: plan.body,
                                 intent_id: plan.intent_id,
                                 status: plan.status
                             });
@@ -2574,7 +2574,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Store plan information for later retrieval
         generatedPlans.set(data.intent_id, {
             plan_id: data.plan_id,
-            rtfs_code: data.rtfs_code,
+            body: data.rtfs_code,
             intent_id: data.intent_id,
             graph_id: data.graph_id,
             timestamp: new Date().toISOString()
@@ -2618,7 +2618,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`📋 Available plans:`, Array.from(generatedPlans.keys()));
         console.log(`📄 Found stored plan:`, storedPlan);
 
-        const planCodeText = storedPlan ? storedPlan.rtfs_code : (node.plan_body_preview || 'Plan code not available');
+        const planCodeText = storedPlan ? storedPlan.body : (node.plan_body_preview || 'Plan code not available');
 
         // Clear previous content first
         rtfsCode.textContent = '';
