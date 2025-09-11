@@ -604,8 +604,7 @@ async fn main() {
     
     // Create file storage config for demo persistence
     let storage_path = std::path::PathBuf::from("demo_storage");
-    let intent_storage_file = storage_path.join("intents.json");
-    let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(intent_storage_file);
+    let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_archive_storage(storage_path.clone());
     let plan_archive_path = storage_path.join("plans");
     
     let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_callback)).await {
@@ -663,8 +662,7 @@ async fn main() {
             
             // Create file storage config for demo persistence (same as main thread)
             let storage_path = std::path::PathBuf::from("demo_storage");
-            let intent_storage_file = storage_path.join("intents.json");
-            let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_storage(intent_storage_file);
+            let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_archive_storage(storage_path.clone());
             let plan_archive_path = storage_path.join("plans");
             
             let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_cb)).await {
@@ -942,19 +940,30 @@ async fn main() {
                                         println!("🔗 Creating edges for {} intents...", sorted_order.len());
                                         for intent_id in &sorted_order {
                                             if let Some(st) = intent_map.get(intent_id.as_str()) {
-                                                // Only create edges when processing parents (not when processing children)
-                                                let child_intents = graph_lock.get_child_intents(&st.intent_id);
-                                                if !child_intents.is_empty() {
-                                                    println!("   {} has {} children:", st.intent_id, child_intents.len());
+                                                // Get actual edges with their types from the graph
+                                                let intent_edges = graph_lock.get_edges_for_intent(&st.intent_id);
+                                                if !intent_edges.is_empty() {
+                                                    println!("   {} has {} edges:", st.intent_id, intent_edges.len());
                                                 }
-                                                for child in child_intents {
-                                                    let _edge_id = format!("{}--{}", st.intent_id, child.intent_id);
-                                                    println!("     Edge: {} -> {}", st.intent_id, child.intent_id);
-                                                    edges.push(serde_json::json!({
-                                                        "source": st.intent_id.clone(),
-                                                        "target": child.intent_id,
-                                                        "type": "depends_on"
-                                                    }));
+                                                for edge in intent_edges {
+                                                    // Only include edges where this intent is the source (parent)
+                                                    if edge.from == st.intent_id {
+                                                        let edge_type_str = match edge.edge_type {
+                                                            rtfs_compiler::ccos::types::EdgeType::DependsOn => "depends_on",
+                                                            rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf => "is_subgoal_of",
+                                                            rtfs_compiler::ccos::types::EdgeType::ConflictsWith => "conflicts_with",
+                                                            rtfs_compiler::ccos::types::EdgeType::Enables => "enables",
+                                                            rtfs_compiler::ccos::types::EdgeType::RelatedTo => "related_to",
+                                                            rtfs_compiler::ccos::types::EdgeType::TriggeredBy => "triggered_by",
+                                                            rtfs_compiler::ccos::types::EdgeType::Blocks => "blocks",
+                                                        };
+                                                        println!("     Edge: {} -> {} (type: {})", edge.from, edge.to, edge_type_str);
+                                                        edges.push(serde_json::json!({
+                                                            "source": edge.from,
+                                                            "target": edge.to,
+                                                            "type": edge_type_str
+                                                        }));
+                                                    }
                                                 }
                                             }
                                         }
@@ -1021,24 +1030,42 @@ async fn main() {
                                     .filter(|st| st.metadata.get("graph_id").map(|v| v == &graph_id).unwrap_or(false))
                                     .collect();
 
-                                let intent_ids_in_graph: std::collections::HashSet<String> = intents_in_graph.iter().map(|i| i.intent_id.clone()).collect();
-                                let mut non_leaves: std::collections::HashSet<String> = std::collections::HashSet::new();
-
+                                // Find intents that have children via IsSubgoalOf edges (these are non-leaves)
+                                let mut has_children: std::collections::HashSet<String> = std::collections::HashSet::new();
                                 for intent in &intents_in_graph {
-                                    let children = graph_lock.get_child_intents(&intent.intent_id);
-                                    for child in children {
-                                        if intent_ids_in_graph.contains(&child.intent_id) {
-                                            non_leaves.insert(intent.intent_id.clone());
+                                    let edges = graph_lock.get_edges_for_intent(&intent.intent_id);
+                                    for edge in edges {
+                                        if edge.edge_type == rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf {
+                                            // IsSubgoalOf: from is subgoal of to, so 'to' has a child 'from'
+                                            has_children.insert(edge.to.clone());
+                                            println!("🔍 Found IsSubgoalOf edge: {} -> {}, marking {} as having child", edge.from, edge.to, edge.to);
                                         }
                                     }
                                 }
 
+                                // Find intents that are subgoals of other intents (these are non-roots)
+                                let mut is_subgoal: std::collections::HashSet<String> = std::collections::HashSet::new();
+                                for intent in &intents_in_graph {
+                                    let edges = graph_lock.get_edges_for_intent(&intent.intent_id);
+                                    for edge in edges {
+                                        if edge.edge_type == rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf {
+                                            // IsSubgoalOf: from is subgoal of to, so 'from' is a subgoal
+                                            is_subgoal.insert(edge.from.clone());
+                                            println!("🔍 Found IsSubgoalOf edge: {} -> {}, marking {} as subgoal", edge.from, edge.to, edge.from);
+                                        }
+                                    }
+                                }
+                                
+                                println!("🔍 Intents with children: {:?}", has_children);
+                                println!("🔍 Intents that are subgoals: {:?}", is_subgoal);
+                                
                                 let leaf_intents: Vec<_> = intents_in_graph.into_iter()
                                     .filter(|i| {
                                         // Exclude root intents (they don't need plans)
-                                        let is_root = i.name.as_ref().map(|n| n == "Root").unwrap_or(false) || 
-                                                     i.intent_id == graph_id;
-                                        let is_leaf = !non_leaves.contains(&i.intent_id);
+                                        let is_root = !is_subgoal.contains(&i.intent_id);
+                                        let is_leaf = !has_children.contains(&i.intent_id);
+                                        println!("🔍 Intent {}: is_root={}, is_leaf={}, is_subgoal={:?}, has_children={:?}", 
+                                                i.intent_id, is_root, is_leaf, is_subgoal.contains(&i.intent_id), has_children.contains(&i.intent_id));
                                         // Only include leaf intents that are not root
                                         is_leaf && !is_root
                                     })
@@ -1156,6 +1183,8 @@ async fn main() {
                                         Some("is_subgoal_of") => rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf,
                                         Some("conflicts_with") => rtfs_compiler::ccos::types::EdgeType::ConflictsWith,
                                         Some("enables") => rtfs_compiler::ccos::types::EdgeType::Enables,
+                                        Some("triggered_by") => rtfs_compiler::ccos::types::EdgeType::TriggeredBy,
+                                        Some("blocks") => rtfs_compiler::ccos::types::EdgeType::Blocks,
                                         Some("related_to") => rtfs_compiler::ccos::types::EdgeType::RelatedTo,
                                         _ => rtfs_compiler::ccos::types::EdgeType::DependsOn,
                                     };
