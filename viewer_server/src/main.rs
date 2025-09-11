@@ -1212,6 +1212,10 @@ async fn main() {
                                     let mut st = rtfs_compiler::ccos::types::StorableIntent::new(goal.to_string());
                                     st.intent_id = id.to_string();
                                     st.metadata.insert("graph_id".to_string(), graph_id.clone());
+                                    // Populate RTFS source if provided
+                                    if let Some(src) = node.get("rtfs_intent_source").and_then(|v| v.as_str()) {
+                                        st.rtfs_intent_source = src.to_string();
+                                    }
                                     // Mark root intent specially (no plan)
                                     if let Some(is_root) = node.get("is_root").and_then(|v| v.as_bool()) {
                                         if is_root {
@@ -1242,6 +1246,43 @@ async fn main() {
                                     }
                                 }
                             }
+                        }
+
+                        // Eagerly push RTFS for intents that provided sources
+                        for node in &req.nodes {
+                            if let (Some(id), Some(src)) = (node.get("id").and_then(|v| v.as_str()), node.get("rtfs_intent_source").and_then(|v| v.as_str())) {
+                                let _ = tx.send(ViewerEvent::IntentRtfsGenerated {
+                                    intent_id: id.to_string(),
+                                    graph_id: graph_id.clone(),
+                                    rtfs_code: src.to_string(),
+                                });
+                            }
+                        }
+
+                        // Synthesize and push Graph RTFS from provided nodes/edges
+                        {
+                            use std::fmt::Write as _;
+                            let mut graph_rtfs = String::new();
+                            let _ = write!(graph_rtfs, "(graph\n  {{:graph/id \"{}\"\n   :graph/intents\n     [", graph_id);
+                            for (i, n) in req.nodes.iter().enumerate() {
+                                let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                if i > 0 { let _ = write!(graph_rtfs, " "); }
+                                let _ = write!(graph_rtfs, "{{:intent/id \"{}\"}}", id);
+                            }
+                            let _ = write!(graph_rtfs, "]\n   :graph/edges\n     [");
+                            for (i, e) in req.edges.iter().enumerate() {
+                                let from = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                                let to = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                                let t = e.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                if i > 0 { let _ = write!(graph_rtfs, " "); }
+                                let _ = write!(graph_rtfs, "{{:from \"{}\" :to \"{}\" :type :{}}}", from, to, t.replace('_', "-"));
+                            }
+                            let _ = write!(graph_rtfs, "]}})\n");
+
+                            let _ = tx.send(ViewerEvent::GraphRtfsGenerated {
+                                graph_id: graph_id.clone(),
+                                rtfs_code: graph_rtfs,
+                            });
                         }
 
                         let _ = req.resp.send(Ok(graph_id));
