@@ -554,9 +554,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
+        const historicalGraph = graphHistory.get(selectedGraphId);
+        if (!historicalGraph) {
+            addLogEntry('❌ Selected graph not found in history');
+            return;
+        }
+        
         const success = await restoreGraphFromHistory(selectedGraphId);
         if (success) {
-            addLogEntry(`✅ Loaded graph "${graphHistory.get(selectedGraphId).name}" from history`);
+            addLogEntry(`✅ Loaded graph "${historicalGraph.name}" from history`);
             updateGoalStatus('Graph loaded from history. Ready to generate plans or execute.');
             
             // Update UI state
@@ -567,7 +573,10 @@ document.addEventListener('DOMContentLoaded', () => {
             graphHistorySelector.value = '';
             updateGraphHistoryButtons();
         } else {
-            addLogEntry(`❌ Failed to load graph from history`);
+            addLogEntry(`❌ Failed to load graph "${historicalGraph.name}" from history`);
+            // Clear selection even on failure
+            graphHistorySelector.value = '';
+            updateGraphHistoryButtons();
         }
     }
     
@@ -1509,6 +1518,8 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  - Edges to save:', intentEdges.size);
             console.log('  - Plans to save:', generatedPlans.size);
             console.log('  - Edge details:', Array.from(intentEdges.entries()));
+            console.log('  - Edge keys:', Array.from(intentEdges.keys()));
+            console.log('  - Edge values:', Array.from(intentEdges.values()));
             
             graphHistory.set(currentGraphId, {
                 nodes: new Map(intentNodes),
@@ -1530,7 +1541,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Function to restore a graph from history
-    function restoreGraphFromHistory(graphId) {
+    async function restoreGraphFromHistory(graphId) {
         const historicalGraph = graphHistory.get(graphId);
         if (!historicalGraph) {
             console.error(`❌ Graph ${graphId} not found in history`);
@@ -1620,31 +1631,62 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('  - Historical edges:', Array.from(intentEdges.entries()));
 
         // Inform server to rehydrate this graph into CCOS so that plan generation works
-        (async () => {
-            try {
-                const rehydrateResp = await fetch('/load-graph', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        nodes: Array.from(intentNodes.values()),
-                        edges: Array.from(intentEdges.values()),
-                        root_id: currentGraphId
-                    })
-                });
-                if (rehydrateResp.ok) {
-                    const r = await rehydrateResp.json();
-                    if (r.success) {
-                        console.log(`✅ Server rehydrated graph ${r.graph_id} into CCOS`);
-                    } else {
-                        console.warn('⚠️ Server failed to rehydrate graph:', r.error);
-                    }
+        let rehydrationSuccess = false;
+        try {
+            const nodesToSend = Array.from(intentNodes.values());
+            const edgesToSend = Array.from(intentEdges.values());
+            console.log('🔄 Rehydrating graph on server:');
+            console.log('  - Nodes to send:', nodesToSend.length);
+            console.log('  - Edges to send:', edgesToSend.length);
+            console.log('  - Edge details:', edgesToSend);
+            console.log('  - Root ID:', currentGraphId);
+            
+            const rehydrateResp = await fetch('/load-graph', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    nodes: nodesToSend,
+                    edges: edgesToSend,
+                    root_id: currentGraphId
+                })
+            });
+            if (rehydrateResp.ok) {
+                const r = await rehydrateResp.json();
+                if (r.success) {
+                    console.log(`✅ Server rehydrated graph ${r.graph_id} into CCOS`);
+                    rehydrationSuccess = true;
                 } else {
-                    console.warn('⚠️ /load-graph returned non-OK');
+                    console.warn('⚠️ Server failed to rehydrate graph:', r.error);
+                    // Graph doesn't exist on server - remove from history and show message
+                    addLogEntry(`❌ Graph "${historicalGraph.name}" not found on server. Removing from history.`);
+                    graphHistory.delete(graphId);
+                        populateGraphHistorySelector();
+                    addLogEntry(`🗑️ Removed invalid graph from history. ${graphHistory.size} graphs remaining.`);
+                    return false; // Indicate failure
                 }
-            } catch (e) {
-                console.warn('⚠️ Error rehydrating graph on server:', e);
+            } else {
+                console.warn('⚠️ /load-graph returned non-OK');
+                // Server error - remove from history and show message
+                addLogEntry(`❌ Server error loading graph "${historicalGraph.name}". Removing from history.`);
+                graphHistory.delete(graphId);
+                        populateGraphHistorySelector();
+                addLogEntry(`🗑️ Removed invalid graph from history. ${graphHistory.size} graphs remaining.`);
+                return false; // Indicate failure
             }
-        })();
+        } catch (e) {
+            console.warn('⚠️ Error rehydrating graph on server:', e);
+            // Network error - remove from history and show message
+            addLogEntry(`❌ Network error loading graph "${historicalGraph.name}". Removing from history.`);
+            graphHistory.delete(graphId);
+                        populateGraphHistorySelector();
+            addLogEntry(`🗑️ Removed invalid graph from history. ${graphHistory.size} graphs remaining.`);
+            return false; // Indicate failure
+        }
+
+        // Only proceed with graph restoration if rehydration was successful
+        if (!rehydrationSuccess) {
+            return false;
+        }
 
         // Calculate depth-based levels for proper tree visualization
         const nodeDepths = new Map();
@@ -1894,7 +1936,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         addLogEntry(`📋 Retrieved ${plansResult.plans.length} plans from server`);
                     } else {
                         console.log('📋 No plans found on server for this graph');
-                        addLogEntry('📋 No plans found on server. Use "Generate Plans" button to create them.');
+                        addLogEntry('📋 No plans found on server for this graph. Use "Generate Plans" button to create them.');
                     }
                 } else {
                     console.log('⚠️ Failed to retrieve plans from server');
@@ -2032,7 +2074,7 @@ document.addEventListener('DOMContentLoaded', () => {
         network.redraw();
 
         intentNodes.clear();
-        intentEdges.clear();
+        // Note: intentEdges.clear() removed - edges will be populated asynchronously later
         generatedPlans.clear(); // Also clear plans since they're specific to this graph
 
         console.log('📊 After clearing - Local nodes:', nodes.length, 'Network nodes:', network.body.data.nodes.length);
@@ -2261,6 +2303,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     network.body.data.edges.add(edgeData);
                     intentEdges.set(edgeId, edge);
                     console.log(`✅ Added edge ${edgeId} to shared DataSet`);
+                    console.log(`🔍 intentEdges Map now has ${intentEdges.size} edges`);
+                    console.log(`🔍 intentEdges contents:`, Array.from(intentEdges.keys()));
                 } catch (error) {
                     console.error(`❌ Failed to add edge ${edgeId}:`, error);
                     console.error('Edge data:', edgeData);
@@ -2269,6 +2313,12 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             }, 50); // 50ms delay to ensure clearing is complete
         }
+
+        // Store the new graph in history after edge processing is complete
+        setTimeout(() => {
+            console.log('💾 Storing new graph in history after edge processing...');
+            storeCurrentGraphInHistory();
+        }, 100); // Store after edges are processed
 
         // Smooth network update with additional delay for edge processing
         setTimeout(() => {
@@ -2297,8 +2347,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`✅ Graph replacement completed successfully: ${nodesAdded} nodes, ${data.edges ? data.edges.length : 0} edges`);
 
         // Store the new graph in history after it's fully processed
-        console.log('💾 Storing new graph in history...');
-        storeCurrentGraphInHistory();
+        // Note: This will be called after edge processing is complete
     }
 
     function handlePlanGenerated(data) {
