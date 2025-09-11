@@ -120,6 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabIntent = document.getElementById('tab-intent');
     const tabPlan = document.getElementById('tab-plan');
     const tabGraph = document.getElementById('tab-graph');
+    const toggleFormatBtn = document.getElementById('toggle-format');
     const logEntriesElement = document.getElementById('log-entries');
     const goalStatusElement = document.getElementById('goal-status');
     const graphStatsElement = document.getElementById('graph-stats');
@@ -1455,6 +1456,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Eager RTFS caches
     const intentRtfsCache = new Map(); // intent_id -> rtfs_code
     const graphRtfsCache = new Map(); // graph_id -> rtfs_code
+    
+    // Format toggle state
+    let isRtfsMode = true; // Default to RTFS mode
 
     function handleIntentRtfsGenerated(data) {
         if (!data || !data.intent_id) return;
@@ -1482,24 +1486,91 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderIntentRtfs(intentId) {
         if (!intentCodeElement) return;
-        const code = intentRtfsCache.get(intentId) || '';
+        const node = intentNodes.get(intentId);
+        if (!node) return;
+        
+        let code = '';
+        if (isRtfsMode) {
+            code = intentRtfsCache.get(intentId) || '';
+        } else {
+            // JSON representation
+            code = JSON.stringify({
+                id: node.id,
+                label: node.label,
+                goal: node.goal,
+                type: node.type,
+                status: node.status,
+                created_at: node.created_at,
+                execution_order: node.execution_order,
+                is_root: node.is_root,
+                rtfs_intent_source: intentRtfsCache.get(intentId) || ''
+            }, null, 2);
+        }
+        
         intentCodeElement.textContent = code;
+        intentCodeElement.className = isRtfsMode ? 'language-lisp' : 'language-json';
         if (typeof Prism !== 'undefined') Prism.highlightElement(intentCodeElement);
     }
 
     function renderGraphRtfs(graphId) {
         if (!graphCodeElement) return;
-        const code = graphRtfsCache.get(graphId) || '';
+        
+        let code = '';
+        if (isRtfsMode) {
+            code = graphRtfsCache.get(graphId) || '';
+        } else {
+            // JSON representation of current graph
+            const nodes = Array.from(intentNodes.values());
+            const edges = Array.from(intentEdges.values());
+            code = JSON.stringify({
+                graph_id: graphId,
+                nodes: nodes,
+                edges: edges,
+                metadata: {
+                    node_count: nodes.length,
+                    edge_count: edges.length,
+                    generated_at: new Date().toISOString()
+                }
+            }, null, 2);
+        }
+        
         graphCodeElement.textContent = code;
+        graphCodeElement.className = isRtfsMode ? 'language-lisp' : 'language-json';
         if (typeof Prism !== 'undefined') Prism.highlightElement(graphCodeElement);
     }
 
     function renderPlanRtfs(intentId) {
         if (!planCodeElement) return;
         const plan = generatedPlans.get(intentId);
-        const code = plan?.body || '';
+        
+        let code = '';
+        if (isRtfsMode) {
+            code = plan?.body || '';
+        } else {
+            // JSON representation
+            code = JSON.stringify(plan || {
+                intent_id: intentId,
+                body: '',
+                status: 'not_found',
+                message: 'No plan available for this intent'
+            }, null, 2);
+        }
+        
         planCodeElement.textContent = code;
+        planCodeElement.className = isRtfsMode ? 'language-lisp' : 'language-json';
         if (typeof Prism !== 'undefined') Prism.highlightElement(planCodeElement);
+    }
+
+    function toggleFormat() {
+        isRtfsMode = !isRtfsMode;
+        if (toggleFormatBtn) {
+            toggleFormatBtn.textContent = isRtfsMode ? 'RTFS' : 'JSON';
+            toggleFormatBtn.className = `format-toggle ${isRtfsMode ? 'rtfs-mode' : 'json-mode'}`;
+        }
+        // Re-render current active tab content
+        if (isTabActive('intent') && selectedIntentId) renderIntentRtfs(selectedIntentId);
+        if (isTabActive('plan') && selectedIntentId) renderPlanRtfs(selectedIntentId);
+        if (isTabActive('graph') && currentGraphId) renderGraphRtfs(currentGraphId);
     }
 
     function activateTab(which) {
@@ -1526,6 +1597,44 @@ document.addEventListener('DOMContentLoaded', () => {
         // Default to intent tab active
         activateTab('intent');
     }
+
+    if (toggleFormatBtn) {
+        toggleFormatBtn.addEventListener('click', toggleFormat);
+        // Initialize format toggle button
+        toggleFormatBtn.textContent = isRtfsMode ? 'RTFS' : 'JSON';
+        toggleFormatBtn.className = `format-toggle ${isRtfsMode ? 'rtfs-mode' : 'json-mode'}`;
+    }
+
+    // Keyboard shortcuts for tab switching
+    document.addEventListener('keydown', (e) => {
+        // Only trigger if not in an input field
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        
+        switch (e.key) {
+            case '1':
+                e.preventDefault();
+                activateTab('intent');
+                addLogEntry('⌨️ Switched to Intent tab (1)');
+                break;
+            case '2':
+                e.preventDefault();
+                activateTab('plan');
+                addLogEntry('⌨️ Switched to Plan tab (2)');
+                break;
+            case '3':
+                e.preventDefault();
+                activateTab('graph');
+                addLogEntry('⌨️ Switched to Graph tab (3)');
+                break;
+            case 't':
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    toggleFormat();
+                    addLogEntry(`⌨️ Toggled format to ${isRtfsMode ? 'RTFS' : 'JSON'} (Ctrl+T)`);
+                }
+                break;
+        }
+    });
 
     function handleNodeStatusChange(data) {
         console.log('🔄 Node status change:', data);
