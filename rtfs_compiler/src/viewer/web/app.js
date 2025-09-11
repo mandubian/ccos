@@ -2409,6 +2409,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         nodes.update(nodeData);
                         network.body.data.nodes.update(nodeData);
                         intentNodes.set(node.id, node);
+                        
+                        // Extract RTFS from rtfs_intent_source field if present
+                        if (node.rtfs_intent_source) {
+                            intentRtfsCache.set(node.id, node.rtfs_intent_source);
+                            console.log(`📝 Extracted RTFS for updated node ${node.id}:`, node.rtfs_intent_source);
+                        }
+                        
                         nodesAdded++;
                         console.log(`🔄 Updated existing node: ${node.label || node.id} (ID: ${node.id})`);
                     } catch (updateError) {
@@ -2423,6 +2430,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     network.body.data.nodes.add(nodeData);
                     intentNodes.set(node.id, node);
+                    
+                    // Extract RTFS from rtfs_intent_source field if present
+                    if (node.rtfs_intent_source) {
+                        intentRtfsCache.set(node.id, node.rtfs_intent_source);
+                        console.log(`📝 Extracted RTFS for node ${node.id}:`, node.rtfs_intent_source);
+                    }
                     nodesAdded++;
                     if (isRoot) {
                         console.log(`👑 Added root node: ${node.label || node.id} (ID: ${node.id})`);
