@@ -1169,6 +1169,11 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
 
                 let response = self.llm_provider.generate_text(&prompt).await?;
 
+                // Debug: Show raw LLM response
+                println!("🤖 LLM Response for goal '{}':", natural_language_goal);
+                println!("📝 Raw LLM Response:\n{}", response);
+                println!("--- End Raw LLM Response ---");
+
                 // Log provider, prompt and raw response
                 let _ = (|| -> Result<(), std::io::Error> {
                     let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
@@ -1179,12 +1184,42 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
 
                 // Reuse the robust RTFS extraction that prefers a balanced (do ...) block
                 let do_block = self.extract_rtfs_from_response(&response)?;
+                
+                // Debug: Show extracted RTFS
+                println!("🔍 Extracted RTFS from LLM response:");
+                println!("📋 RTFS Code:\n{}", do_block);
+                println!("--- End Extracted RTFS ---");
 
                 // Populate IntentGraph using the interpreter and return root intent id
         let mut graph = self.intent_graph
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
         let root_id = crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(&do_block, &mut graph)?;
+
+        // Debug: Show the parsed graph structure
+        println!("🏗️ Parsed Graph Structure:");
+        println!("🎯 Root Intent ID: {}", root_id);
+        
+        // Show all intents in the graph
+        let all_intents = graph.storage.list_intents(crate::ccos::intent_storage::IntentFilter::default()).await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to list intents: {}", e)))?;
+        
+        println!("📊 Total Intents in Graph: {}", all_intents.len());
+        for (i, intent) in all_intents.iter().enumerate() {
+            println!("  [{}] ID: {} | Goal: '{}' | Status: {:?}", 
+                i + 1, intent.intent_id, intent.goal, intent.status);
+        }
+        
+        // Show all edges in the graph
+        let all_edges = graph.storage.get_edges().await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to get edges: {}", e)))?;
+        
+        println!("🔗 Total Edges in Graph: {}", all_edges.len());
+        for (i, edge) in all_edges.iter().enumerate() {
+            println!("  [{}] {} -> {} (type: {:?})", 
+                i + 1, edge.from, edge.to, edge.edge_type);
+        }
+        println!("--- End Parsed Graph Structure ---");
 
         // After graph built, log the parsed root id and a compact serialization of current graph (best-effort)
         // Release the locked graph before doing any IO
