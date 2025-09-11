@@ -471,6 +471,43 @@ h1, h2, h3 {
     padding: 10px;
 }
 
+/* Tabs */
+#code-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 0 10px 10px 10px;
+}
+
+#code-tabs button {
+    background-color: #333;
+    border: 1px solid #555;
+    color: #f0f0f0;
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+#code-tabs button.active {
+    background-color: #00aaff;
+    border-color: #00aaff;
+    color: #000;
+}
+
+#code-panes {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.code-pane {
+    display: block;
+}
+
+.code-pane.hidden {
+    display: none;
+}
+
 /* Log Container */
 #log-container {
     flex: 1;

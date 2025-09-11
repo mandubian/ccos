@@ -113,7 +113,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const network = new vis.Network(container, data, options);
     console.log('Vis.js network initialized:', network);
-    const rtfsCodeElement = document.getElementById('rtfs-code');
+    // Code panes and tabs
+    const intentCodeElement = document.getElementById('intent-code');
+    const planCodeElement = document.getElementById('rtfs-code');
+    const graphCodeElement = document.getElementById('graph-code');
+    const tabIntent = document.getElementById('tab-intent');
+    const tabPlan = document.getElementById('tab-plan');
+    const tabGraph = document.getElementById('tab-graph');
     const logEntriesElement = document.getElementById('log-entries');
     const goalStatusElement = document.getElementById('goal-status');
     const graphStatsElement = document.getElementById('graph-stats');
@@ -755,7 +761,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 generatedPlans.clear();
 
             // Clear UI
-                if (rtfsCodeElement) rtfsCodeElement.textContent = '';
+                if (intentCodeElement) intentCodeElement.textContent = '';
+                if (planCodeElement) planCodeElement.textContent = '';
+                if (graphCodeElement) graphCodeElement.textContent = '';
                 if (selectedIntentInfoElement) selectedIntentInfoElement.textContent = 'Select an intent to view details';
                 if (graphStatsElement) graphStatsElement.textContent = 'No graph generated yet';
             updateGoalStatus('Ready to generate intent graph...');
@@ -979,7 +987,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     },
                     nodes: Array.from(intentNodes.values()),
                     edges: Array.from(intentEdges.values()),
-                    rtfsCode: rtfsCodeElement ? rtfsCodeElement.textContent : '',
+                    // legacy: removed rtfsCode in favor of eager events
+                    rtfsCode: graphCodeElement ? graphCodeElement.textContent : '',
                     goalStatus: goalStatusElement ? goalStatusElement.textContent : ''
                 };
 
@@ -1074,10 +1083,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
 
                             // Load RTFS code if available
-                            if (graphData.rtfsCode && rtfsCodeElement) {
-                                rtfsCodeElement.textContent = graphData.rtfsCode;
+                            if (graphData.rtfsCode && graphCodeElement) {
+                                graphCodeElement.textContent = graphData.rtfsCode;
                                 if (typeof Prism !== 'undefined') {
-                                    Prism.highlightElement(rtfsCodeElement);
+                                    Prism.highlightElement(graphCodeElement);
                                 }
                             }
 
@@ -1274,22 +1283,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 const nodeId = params.nodes[0];
                 const node = nodes.get(nodeId);
 
-                // If node has a plan, show plan details in RTFS container
-                if (node && node.has_plan) {
-                    showPlanDetails(node);
-                    addLogEntry(`📋 Showing plan in RTFS container: ${node.original_label || node.label}`);
-                } else {
-                    // Default zoom behavior
-                    const nodePosition = network.getPositions([nodeId])[nodeId];
+                // On double click, focus and render according to active tab
+                const nodePosition = network.getPositions([nodeId])[nodeId];
+                if (nodePosition) {
                     network.moveTo({
                         position: nodePosition,
                         scale: 1.5,
                         animation: { duration: 500, easingFunction: 'easeInOutQuad' }
                     });
-
-                    selectIntent(nodeId);
-                    addLogEntry(`🎯 Zoomed to node: ${intentNodes.get(nodeId)?.label || nodeId}`);
                 }
+                selectedIntentId = nodeId;
+                if (isTabActive('plan') && node && node.has_plan) {
+                    renderPlanRtfs(nodeId);
+                } else {
+                    activateTab('intent');
+                    renderIntentRtfs(nodeId);
+                }
+                selectIntent(nodeId);
+                addLogEntry(`🎯 Focused node: ${intentNodes.get(nodeId)?.label || nodeId}`);
             }
         } catch (err) {
             addLogEntry(`❌ Error in double-click handler: ${err.message}`);
@@ -1304,18 +1315,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 const nodeId = params.nodes[0];
                 const node = nodes.get(nodeId);
 
-                // If node has a plan, show plan details in RTFS container on single click
-                if (node && node.has_plan) {
-                    showPlanDetails(node);
+                // Single click: select and render according to active tab
+                selectedIntentId = nodeId;
+                if (isTabActive('plan') && node && node.has_plan) {
+                    renderPlanRtfs(nodeId);
                 } else {
-                    // Reset RTFS container if clicking on a node without a plan
-                    hidePlanDetails();
-                    // Default selection behavior
-                    selectIntent(nodeId);
+                    activateTab('intent');
+                    renderIntentRtfs(nodeId);
                 }
+                selectIntent(nodeId);
             } else {
-                // Reset RTFS container if clicking on empty space
-                hidePlanDetails();
+                // Clicked on empty space: keep panes as-is
             }
         } catch (err) {
             console.error('Error in click handler:', err);
@@ -1411,6 +1421,12 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'PlanGenerated':
                 handlePlanGenerated(event.data);
                 break;
+            case 'IntentRtfsGenerated':
+                handleIntentRtfsGenerated(event.data);
+                break;
+            case 'GraphRtfsGenerated':
+                handleGraphRtfsGenerated(event.data);
+                break;
             case 'ReadyForNext':
                 handleReadyForNext(event.data);
                 break;
@@ -1431,12 +1447,84 @@ document.addEventListener('DOMContentLoaded', () => {
                 network.body.data.edges.update({ ...e, id: edgeId });
             });
         }
-        if (typeof data.rtfs_code === 'string') {
-            rtfsCodeElement.textContent = data.rtfs_code;
-            Prism.highlightElement(rtfsCodeElement);
-        }
+        // Intentionally skip legacy rtfs_code population; use explicit events instead
         updateGraphStats();
         addLogEntry('Graph updated with new data.');
+    }
+
+    // Eager RTFS caches
+    const intentRtfsCache = new Map(); // intent_id -> rtfs_code
+    const graphRtfsCache = new Map(); // graph_id -> rtfs_code
+
+    function handleIntentRtfsGenerated(data) {
+        if (!data || !data.intent_id) return;
+        intentRtfsCache.set(data.intent_id, data.rtfs_code || '');
+        // If this intent is selected and Intent tab is active, render it
+        if (selectedIntentId === data.intent_id && isTabActive('intent')) {
+            renderIntentRtfs(data.intent_id);
+        }
+    }
+
+    function handleGraphRtfsGenerated(data) {
+        if (!data || !data.graph_id) return;
+        graphRtfsCache.set(data.graph_id, data.rtfs_code || '');
+        if (currentGraphId === data.graph_id && isTabActive('graph')) {
+            renderGraphRtfs(data.graph_id);
+        }
+    }
+
+    function isTabActive(which) {
+        if (which === 'intent') return tabIntent && tabIntent.classList.contains('active');
+        if (which === 'plan') return tabPlan && tabPlan.classList.contains('active');
+        if (which === 'graph') return tabGraph && tabGraph.classList.contains('active');
+        return false;
+    }
+
+    function renderIntentRtfs(intentId) {
+        if (!intentCodeElement) return;
+        const code = intentRtfsCache.get(intentId) || '';
+        intentCodeElement.textContent = code;
+        if (typeof Prism !== 'undefined') Prism.highlightElement(intentCodeElement);
+    }
+
+    function renderGraphRtfs(graphId) {
+        if (!graphCodeElement) return;
+        const code = graphRtfsCache.get(graphId) || '';
+        graphCodeElement.textContent = code;
+        if (typeof Prism !== 'undefined') Prism.highlightElement(graphCodeElement);
+    }
+
+    function renderPlanRtfs(intentId) {
+        if (!planCodeElement) return;
+        const plan = generatedPlans.get(intentId);
+        const code = plan?.body || '';
+        planCodeElement.textContent = code;
+        if (typeof Prism !== 'undefined') Prism.highlightElement(planCodeElement);
+    }
+
+    function activateTab(which) {
+        const panes = [
+            { btn: tabIntent, pane: document.getElementById('pane-intent') },
+            { btn: tabPlan, pane: document.getElementById('pane-plan') },
+            { btn: tabGraph, pane: document.getElementById('pane-graph') },
+        ];
+        panes.forEach(({ btn, pane }) => {
+            if (!btn || !pane) return;
+            const active = (btn.id === `tab-${which}`);
+            btn.classList.toggle('active', active);
+            pane.classList.toggle('hidden', !active);
+        });
+        if (which === 'intent' && selectedIntentId) renderIntentRtfs(selectedIntentId);
+        if (which === 'plan' && selectedIntentId) renderPlanRtfs(selectedIntentId);
+        if (which === 'graph' && currentGraphId) renderGraphRtfs(currentGraphId);
+    }
+
+    if (tabIntent && tabPlan && tabGraph) {
+        tabIntent.addEventListener('click', () => activateTab('intent'));
+        tabPlan.addEventListener('click', () => activateTab('plan'));
+        tabGraph.addEventListener('click', () => activateTab('graph'));
+        // Default to intent tab active
+        activateTab('intent');
     }
 
     function handleNodeStatusChange(data) {
@@ -2370,12 +2458,9 @@ document.addEventListener('DOMContentLoaded', () => {
             timestamp: new Date().toISOString()
         });
 
-        // Update the RTFS code display with the latest plan
-        if (data.rtfs_code) {
-            rtfsCodeElement.textContent = data.rtfs_code;
-            if (window.Prism) {
-            Prism.highlightElement(rtfsCodeElement);
-        }
+        // Update plan pane if active
+        if (isTabActive('plan') && selectedIntentId === data.intent_id) {
+            renderPlanRtfs(data.intent_id);
         }
 
         console.log(`📋 Stored plan for intent ${data.intent_id}:`, generatedPlans.get(data.intent_id));
@@ -2386,11 +2471,13 @@ document.addEventListener('DOMContentLoaded', () => {
         addLogEntry(`Ready for next step: ${data.next_step}`);
     }
 
-    // Plan details display function - now updates RTFS container
+    // Legacy plan details function (kept for compatibility but tabs take precedence)
     function showPlanDetails(node) {
-        const rtfsContainer = document.getElementById('rtfs-container');
-        const rtfsTitle = rtfsContainer ? rtfsContainer.querySelector('h3') : null;
-        const rtfsCode = document.getElementById('rtfs-code');
+        // Prefer tabs-based rendering
+        selectedIntentId = node.id;
+        activateTab('plan');
+        renderPlanRtfs(node.id);
+        return;
 
         console.log(`🔍 showPlanDetails called for node:`, node.id);
         console.log(`🔍 RTFS container found:`, !!rtfsContainer);
@@ -2446,7 +2533,7 @@ document.addEventListener('DOMContentLoaded', () => {
             rtfsContainer.style.border = '1px solid #444';
         }, 1000);
 
-        addLogEntry(`📋 Displaying plan in RTFS container: ${node.original_label || node.label}`);
+        addLogEntry(`📋 Displaying plan: ${node.original_label || node.label}`);
     }
 
     function hidePlanDetails() {
