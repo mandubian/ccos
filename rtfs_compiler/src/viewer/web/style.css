@@ -487,6 +487,9 @@ h1, h2, h3 {
     padding: 6px 10px;
     cursor: pointer;
     font-size: 13px;
+    min-width: 60px;
+    text-align: center;
+    flex-shrink: 0;
 }
 
 #code-tabs button.active {
