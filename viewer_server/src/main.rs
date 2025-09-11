@@ -47,6 +47,16 @@ enum ViewerEvent {
     ReadyForNext {
         next_step: String,  // e.g., "PlanGeneration", "Execution"
     },
+    // Eager RTFS payloads for intents and graphs
+    IntentRtfsGenerated {
+        intent_id: String,
+        graph_id: String,
+        rtfs_code: String,
+    },
+    GraphRtfsGenerated {
+        graph_id: String,
+        rtfs_code: String,
+    },
 }
 
 // Request sent from HTTP handler into the CCOS local runtime thread
@@ -651,11 +661,13 @@ async fn main() {
 
     // Spawn a dedicated thread that runs a current-thread Tokio runtime + LocalSet
     // This mirrors the example's pattern so we can call non-Send LLM-backed arbiter methods.
+    let tx_clone = tx.clone();
     let _worker_handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("worker runtime");
         let local = tokio::task::LocalSet::new();
 
         local.block_on(&rt, async move {
+            let tx = tx_clone;
             // Initialize CCOS inside the worker thread with file storage
             // Use a minimal debug callback that does nothing to avoid printing noise
             let debug_cb = Arc::new(move |_s: String| {});
@@ -896,7 +908,8 @@ async fn main() {
                                                     "status": status_str,
                                                     "created_at": st.created_at,
                                                     "execution_order": execution_order_value,
-                                                    "is_root": is_root
+                                                    "is_root": is_root,
+                                                    "rtfs_intent_source": st.rtfs_intent_source
                                                 }));
 
                                                 if !is_root {
@@ -994,7 +1007,43 @@ async fn main() {
                                         }
 
                                         println!("📤 Sending successful response with {} nodes in execution order and {} edges", nodes.len(), edges.len());
-                            let _ = req.resp.send(Ok((root_id, nodes, edges)));
+
+                                        // Eagerly generate and broadcast RTFS for each intent (if available)
+                                        for intent in &connected_intents {
+                                            if !intent.rtfs_intent_source.is_empty() {
+                                                let _ = tx.send(ViewerEvent::IntentRtfsGenerated {
+                                                    intent_id: intent.intent_id.clone(),
+                                                    graph_id: root_id.clone(),
+                                                    rtfs_code: intent.rtfs_intent_source.clone(),
+                                                });
+                                            }
+                                        }
+
+                                        // Synthesize a simple RTFS for the whole graph and broadcast
+                                        let mut graph_rtfs = String::new();
+                                        use std::fmt::Write as _;
+                                        let _ = write!(graph_rtfs, "(graph\n  {{:graph/id \"{}\"\n   :graph/intents\n     [", root_id);
+                                        for (i, n) in nodes.iter().enumerate() {
+                                            let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                            if i > 0 { let _ = write!(graph_rtfs, " "); }
+                                            let _ = write!(graph_rtfs, "{{:intent/id \"{}\"}}", id);
+                                        }
+                                        let _ = write!(graph_rtfs, "]\n   :graph/edges\n     [");
+                                        for (i, e) in edges.iter().enumerate() {
+                                            let from = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                                            let to = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                                            let t = e.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                            if i > 0 { let _ = write!(graph_rtfs, " "); }
+                                            let _ = write!(graph_rtfs, "{{:from \"{}\" :to \"{}\" :type :{}}}", from, to, t.replace('_', "-"));
+                                        }
+                                        let _ = write!(graph_rtfs, "]}})\n");
+
+                                        let _ = tx.send(ViewerEvent::GraphRtfsGenerated {
+                                            graph_id: root_id.clone(),
+                                            rtfs_code: graph_rtfs,
+                                        });
+
+                                        let _ = req.resp.send(Ok((root_id, nodes, edges)));
                                     } else {
                                         // Handle the case where we couldn't get the graph lock
                                         let _ = req.resp.send(Err("Failed to access intent graph".to_string()));

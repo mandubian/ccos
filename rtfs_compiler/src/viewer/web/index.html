@@ -88,10 +88,19 @@
                 </div>
             </div>
 
-            <!-- RTFS Code Container -->
+            <!-- Code Tabs: Intent / Plan / Graph -->
             <div id="rtfs-container">
-                <h3>📄 RTFS Plan</h3>
-                <pre><code id="rtfs-code" class="language-lisp"></code></pre>
+                <h3>📄 RTFS</h3>
+                <div id="code-tabs">
+                    <button id="tab-intent" class="active">Intent</button>
+                    <button id="tab-plan">Plan</button>
+                    <button id="tab-graph">Graph</button>
+                </div>
+                <div id="code-panes">
+                    <pre id="pane-intent" class="code-pane"><code id="intent-code" class="language-lisp"></code></pre>
+                    <pre id="pane-plan" class="code-pane hidden"><code id="rtfs-code" class="language-lisp"></code></pre>
+                    <pre id="pane-graph" class="code-pane hidden"><code id="graph-code" class="language-lisp"></code></pre>
+                </div>
             </div>
             <div id="log-container">
                 <h3>📝 Activity Log</h3>

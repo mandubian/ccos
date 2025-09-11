@@ -5,6 +5,7 @@ Single lightweight Axum-based server that:
 - Initializes CCOS runtime and starts the runtime service
 - Serves the demo frontend assets directly from `../rtfs_compiler/src/viewer/web`
 - Exposes a WebSocket endpoint at `/ws` streaming `ViewerEvent` JSON messages translated from `RuntimeEvent`
+- Eagerly pushes RTFS snippets for intents and whole-graph via new events
 
 ## Run
 
@@ -31,6 +32,21 @@ const socket = new WebSocket(`ws://${window.location.host}/ws`);
 ```
 
 (If you hardcoded a different host earlier for the Python server, revert that in the canonical `app.js` at `rtfs_compiler/src/viewer/web/app.js`).
+
+### RTFS-first Viewer
+
+The right panel now has three tabs with RTFS as a first-class citizen:
+
+- Intent (default): shows the `rtfs_intent_source` eagerly pushed for the selected node
+- Plan: shows the RTFS plan when available (after Generate Plans)
+- Graph: shows a synthesized RTFS representation of the current graph
+
+New WebSocket events:
+
+- `IntentRtfsGenerated { intent_id, graph_id, rtfs_code }`
+- `GraphRtfsGenerated { graph_id, rtfs_code }`
+
+The frontend caches these and renders based on the active tab. JSON views can still be added as optional toggles if needed.
 
 ## Why only one server now?
 
