@@ -322,3 +322,13 @@ impl Edge {
         self
     }
 }
+
+impl crate::ccos::storage::Archivable for Edge {
+    fn entity_id(&self) -> String {
+        format!("edge-{}-{}-{:?}", self.from, self.to, self.edge_type)
+    }
+    
+    fn entity_type(&self) -> &'static str {
+        "Edge"
+    }
+}
