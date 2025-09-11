@@ -124,7 +124,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const logEntriesElement = document.getElementById('log-entries');
     const goalStatusElement = document.getElementById('goal-status');
     const graphStatsElement = document.getElementById('graph-stats');
-    const selectedIntentInfoElement = document.getElementById('selected-intent-info');
 
     // State management
     let selectedIntentId = null;
@@ -1354,33 +1353,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function selectIntent(intentId) {
-        try {
         selectedIntentId = intentId;
         const node = intentNodes.get(intentId);
-            if (node && selectedIntentInfoElement) {
-                const status = node.status || 'pending';
-                const statusClass = `status-${status.toLowerCase()}`;
-            selectedIntentInfoElement.innerHTML = `
-                    <strong>ID:</strong> ${node.id || 'N/A'}<br>
-                <strong>Name:</strong> ${node.label || 'N/A'}<br>
-                    <strong>Status:</strong> <span class="${statusClass}">${status}</span><br>
-                <strong>Goal:</strong> ${node.goal || 'N/A'}<br>
-                    <strong>Created:</strong> ${node.created_at ? new Date(node.created_at * 1000).toLocaleString() : 'N/A'}<br>
-                    <strong>Type:</strong> ${node.type || 'N/A'}
-                `;
-                addLogEntry(`📋 Selected intent: ${node.label || node.id}`);
-            } else {
-                if (selectedIntentInfoElement) {
-                    selectedIntentInfoElement.textContent = 'Intent not found in graph data';
-                }
-                addLogEntry(`⚠️ Intent ${intentId} not found in current graph data`);
-            }
-        } catch (err) {
-            addLogEntry(`❌ Error displaying intent details: ${err.message}`);
-            console.error('Error in selectIntent:', err);
-            if (selectedIntentInfoElement) {
-                selectedIntentInfoElement.textContent = 'Error loading intent details';
-            }
+        if (node) {
+            addLogEntry(`📋 Selected intent: ${node.label || node.id}`);
+            // Re-render current tab to reflect selection
+            if (isTabActive('intent')) renderIntentRtfs(intentId);
+            if (isTabActive('plan')) renderPlanRtfs(intentId);
+        } else {
+            addLogEntry(`⚠️ Intent ${intentId} not found in current graph data`);
         }
     }
 
@@ -1609,7 +1590,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (e) => {
         // Only trigger if not in an input field
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-        
+
         switch (e.key) {
             case '1':
                 e.preventDefault();
