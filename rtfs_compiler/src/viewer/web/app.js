@@ -1074,14 +1074,6 @@ document.addEventListener('DOMContentLoaded', () => {
                                 });
                             }
 
-                            // Load metadata
-                            if (graphData.metadata) {
-                                currentGraphId = graphData.metadata.graphId;
-                                addLogEntry(`📁 Graph loaded: ${graphData.metadata.nodeCount || nodes.length} nodes, ${graphData.metadata.edgeCount || edges.length} edges`);
-                            } else {
-                                addLogEntry(`📁 Graph loaded: ${nodes.length} nodes, ${edges.length} edges`);
-                            }
-
                             // Load RTFS code if available
                             if (graphData.rtfsCode && graphCodeElement) {
                                 graphCodeElement.textContent = graphData.rtfsCode;
@@ -1113,6 +1105,13 @@ document.addEventListener('DOMContentLoaded', () => {
                                         currentGraphId = loadResult.graph_id;
                                         addLogEntry(`✅ Graph loaded and registered with server: ${currentGraphId}`);
                                         console.log('✅ Graph successfully registered with server:', currentGraphId);
+                                        
+                                        // Load metadata after server registration
+                                        if (graphData.metadata) {
+                                            addLogEntry(`📁 Graph loaded: ${graphData.metadata.nodeCount || nodes.length} nodes, ${graphData.metadata.edgeCount || edges.length} edges`);
+                                        } else {
+                                            addLogEntry(`📁 Graph loaded: ${nodes.length} nodes, ${edges.length} edges`);
+                                        }
                                     } else {
                                         addLogEntry(`⚠️ Graph loaded but server registration failed: ${loadResult.error || 'Unknown error'}`);
                                         console.error('Server registration failed:', loadResult.error);
@@ -1468,7 +1467,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderIntentRtfs(intentId) {
         if (!intentCodeElement) return;
         const node = intentNodes.get(intentId);
-        if (!node) return;
+        if (!node) {
+            console.log(`❌ Node not found for intentId: ${intentId}`);
+            return;
+        }
+        
+        console.log(`🎯 Rendering RTFS for intent: ${intentId}, mode: ${isRtfsMode ? 'RTFS' : 'JSON'}`);
+        console.log(`📝 RTFS cache has:`, intentRtfsCache.has(intentId) ? intentRtfsCache.get(intentId) : 'NOT FOUND');
         
         let code = '';
         if (isRtfsMode) {
@@ -1487,6 +1492,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 rtfs_intent_source: intentRtfsCache.get(intentId) || ''
             }, null, 2);
         }
+        
+        console.log(`📄 Final code to display (${code.length} chars):`, code.substring(0, 100) + (code.length > 100 ? '...' : ''));
         
         intentCodeElement.textContent = code;
         intentCodeElement.className = isRtfsMode ? 'language-lisp' : 'language-json';
