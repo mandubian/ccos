@@ -421,14 +421,35 @@ h1, h2, h3 {
 }
 
 /* Enhanced node styling for intents with plans */
-.vis-network .vis-network:focus .vis-node.has_plan {
+.vis-network .vis-node.has_plan {
     border-color: #00ff88 !important;
     box-shadow: 0 0 15px rgba(0, 255, 136, 0.3) !important;
+    border-width: 3px !important;
 }
 
 .vis-network .vis-node.has_plan .vis-node-label {
     color: #00ff88 !important;
     font-weight: bold !important;
+}
+
+/* Plan indicator badge on nodes */
+.vis-network .vis-node.has_plan::after {
+    content: "📋";
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: #00ff88;
+    color: #000;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    border: 2px solid #fff;
+    z-index: 1000;
 }
 
 /* RTFS Container */
