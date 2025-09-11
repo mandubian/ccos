@@ -5,6 +5,8 @@
 
 use super::intent_graph::Edge;
 use super::types::{IntentId, IntentStatus, StorableIntent};
+use super::storage::ContentAddressableArchive;
+use super::storage_backends::file_archive::FileArchive;
 use crate::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,8 +20,10 @@ use tokio::sync::RwLock;
 pub enum StorageConfig {
     /// In-memory storage (data lost on shutdown)
     InMemory,
-    /// File-based storage with specified path
+    /// File-based storage with specified path (monolithic JSON)
     File { path: PathBuf },
+    /// File-based storage using content-addressable archive (sharded files)
+    FileArchive { base_dir: PathBuf },
 }
 
 /// Storage-safe version of Value that excludes non-serializable types
@@ -470,6 +474,331 @@ impl IntentStorage for FileStorage {
     }
 }
 
+/// File-based storage using content-addressable archive (like plans)
+/// This stores each intent as a separate file in a sharded directory structure
+pub struct FileArchiveStorage {
+    intent_archive: FileArchive,
+    edge_archive: FileArchive,
+    // Index mapping intent_id -> content_hash for fast lookups
+    intent_id_to_hash: Arc<RwLock<HashMap<IntentId, String>>>,
+    // Index mapping edge content_hash -> edge for fast lookups
+    edge_hash_to_edge: Arc<RwLock<HashMap<String, Edge>>>,
+}
+
+impl FileArchiveStorage {
+    pub async fn new<P: AsRef<Path>>(base_dir: P) -> Result<Self, StorageError> {
+        let base_dir = base_dir.as_ref().to_path_buf();
+        println!("🔍 FileArchiveStorage::new called with base_dir: {:?}", base_dir);
+        
+        let intent_dir = base_dir.join("intents");
+        let edge_dir = base_dir.join("edges");
+        println!("🔍 FileArchiveStorage::new creating directories: {:?}, {:?}", intent_dir, edge_dir);
+        
+        // Create directories
+        tokio::fs::create_dir_all(&intent_dir).await.map_err(|e| {
+            println!("❌ FileArchiveStorage::new failed to create intent directory: {}", e);
+            StorageError::Storage(format!("Failed to create intent directory: {}", e))
+        })?;
+        tokio::fs::create_dir_all(&edge_dir).await.map_err(|e| {
+            println!("❌ FileArchiveStorage::new failed to create edge directory: {}", e);
+            StorageError::Storage(format!("Failed to create edge directory: {}", e))
+        })?;
+        
+        println!("✅ FileArchiveStorage::new directories created successfully");
+        
+        let intent_archive = FileArchive::new(&intent_dir)
+            .map_err(|e| {
+                println!("❌ FileArchiveStorage::new failed to create intent archive: {}", e);
+                StorageError::Storage(format!("Failed to create intent archive: {}", e))
+            })?;
+        let edge_archive = FileArchive::new(&edge_dir)
+            .map_err(|e| {
+                println!("❌ FileArchiveStorage::new failed to create edge archive: {}", e);
+                StorageError::Storage(format!("Failed to create edge archive: {}", e))
+            })?;
+        
+        println!("✅ FileArchiveStorage::new archives created successfully");
+        
+        let mut storage = Self {
+            intent_archive,
+            edge_archive,
+            intent_id_to_hash: Arc::new(RwLock::new(HashMap::new())),
+            edge_hash_to_edge: Arc::new(RwLock::new(HashMap::new())),
+        };
+        
+        // Load existing data to build indexes
+        storage.load_indexes().await.map_err(|e| {
+            println!("❌ FileArchiveStorage::new failed to load indexes: {}", e);
+            e
+        })?;
+        
+        println!("✅ FileArchiveStorage::new completed successfully");
+        Ok(storage)
+    }
+    
+    async fn load_indexes(&mut self) -> Result<(), StorageError> {
+        // Load intent indexes
+        let intent_hashes = <FileArchive as ContentAddressableArchive<StorableIntent>>::list_hashes(&self.intent_archive);
+        let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
+        
+        for hash in intent_hashes {
+            if let Ok(Some(intent)) = <FileArchive as ContentAddressableArchive<StorableIntent>>::retrieve(&self.intent_archive, &hash) {
+                intent_id_to_hash.insert(intent.intent_id.clone(), hash);
+            }
+        }
+        drop(intent_id_to_hash);
+        
+        // Load edge indexes
+        let edge_hashes = <FileArchive as ContentAddressableArchive<Edge>>::list_hashes(&self.edge_archive);
+        let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
+        
+        for hash in edge_hashes {
+            if let Ok(Some(edge)) = <FileArchive as ContentAddressableArchive<Edge>>::retrieve(&self.edge_archive, &hash) {
+                edge_hash_to_edge.insert(hash, edge);
+            }
+        }
+        drop(edge_hash_to_edge);
+        
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl IntentStorage for FileArchiveStorage {
+    async fn store_intent(&mut self, intent: StorableIntent) -> Result<IntentId, StorageError> {
+        let intent_id = intent.intent_id.clone();
+        println!("🔍 FileArchiveStorage::store_intent called for intent: {}", intent_id);
+        
+        let hash = self.intent_archive.store(intent)
+            .map_err(|e| {
+                println!("❌ FileArchive::store failed for intent {}: {}", intent_id, e);
+                StorageError::Storage(format!("Failed to store intent: {}", e))
+            })?;
+        
+        println!("✅ FileArchive::store succeeded for intent {} with hash: {}", intent_id, hash);
+        
+        // Update index
+        let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
+        intent_id_to_hash.insert(intent_id.clone(), hash);
+        
+        println!("✅ FileArchiveStorage::store_intent completed for intent: {}", intent_id);
+        Ok(intent_id)
+    }
+
+    async fn get_intent(&self, id: &IntentId) -> Result<Option<StorableIntent>, StorageError> {
+        let intent_id_to_hash = self.intent_id_to_hash.read().await;
+        if let Some(hash) = intent_id_to_hash.get(id) {
+            self.intent_archive.retrieve(hash)
+                .map_err(|e| StorageError::Storage(format!("Failed to retrieve intent: {}", e)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn update_intent(&mut self, intent: StorableIntent) -> Result<(), StorageError> {
+        let intent_id = intent.intent_id.clone();
+        println!("🔄 FileArchiveStorage::update_intent called for intent: {}", intent_id);
+        
+        // Remove old version from index and delete the file
+        let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
+        let old_hash = intent_id_to_hash.remove(&intent_id);
+        if let Some(old_hash) = old_hash {
+            println!("🗑️ Removing old version with hash: {}", old_hash);
+            // Delete the old file
+            <FileArchive as ContentAddressableArchive<StorableIntent>>::delete(&self.intent_archive, &old_hash)
+                .map_err(|e| StorageError::Storage(format!("Failed to delete old intent: {}", e)))?;
+            println!("✅ Deleted old file for hash: {}", old_hash);
+        }
+        
+        // Store new version
+        let hash = self.intent_archive.store(intent)
+            .map_err(|e| StorageError::Storage(format!("Failed to update intent: {}", e)))?;
+        
+        println!("💾 Stored new version with hash: {}", hash);
+        
+        // Update index with new hash
+        intent_id_to_hash.insert(intent_id, hash);
+        
+        Ok(())
+    }
+
+    async fn delete_intent(&mut self, id: &IntentId) -> Result<(), StorageError> {
+        let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
+        if let Some(hash) = intent_id_to_hash.remove(id) {
+            // Delete the file
+            <FileArchive as ContentAddressableArchive<StorableIntent>>::delete(&self.intent_archive, &hash)
+                .map_err(|e| StorageError::Storage(format!("Failed to delete intent: {}", e)))?;
+            Ok(())
+        } else {
+            Err(StorageError::NotFound(id.clone()))
+        }
+    }
+
+    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
+        let intent_id_to_hash = self.intent_id_to_hash.read().await;
+        let mut results = Vec::new();
+        
+        for hash in intent_id_to_hash.values() {
+            if let Ok(Some(intent)) = <FileArchive as ContentAddressableArchive<StorableIntent>>::retrieve(&self.intent_archive, hash) {
+                // Apply filters
+                if let Some(status) = &filter.status {
+                    if intent.status != *status {
+                        continue;
+                    }
+                }
+                
+                if let Some(name_contains) = &filter.name_contains {
+                    if !intent.name.as_ref().map_or(false, |n| n.contains(name_contains)) {
+                        continue;
+                    }
+                }
+                
+                if let Some(goal_contains) = &filter.goal_contains {
+                    if !intent.goal.contains(goal_contains) {
+                        continue;
+                    }
+                }
+                
+                if let Some(priority_min) = filter.priority_min {
+                    if intent.priority < priority_min {
+                        continue;
+                    }
+                }
+                
+                if let Some(priority_max) = filter.priority_max {
+                    if intent.priority > priority_max {
+                        continue;
+                    }
+                }
+                
+                results.push(intent);
+            }
+        }
+        
+        Ok(results)
+    }
+
+    async fn store_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
+        println!("🔍 FileArchiveStorage::store_edge called for edge: {} -> {}", edge.from, edge.to);
+        
+        let hash = self.edge_archive.store(edge.clone())
+            .map_err(|e| {
+                println!("❌ FileArchive::store failed for edge {} -> {}: {}", edge.from, edge.to, e);
+                StorageError::Storage(format!("Failed to store edge: {}", e))
+            })?;
+        
+        println!("✅ FileArchive::store succeeded for edge {} -> {} with hash: {}", edge.from, edge.to, hash);
+        
+        // Update index
+        let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
+        edge_hash_to_edge.insert(hash, edge.clone());
+        
+        println!("✅ FileArchiveStorage::store_edge completed for edge: {} -> {}", edge.from, edge.to);
+        Ok(())
+    }
+
+    async fn get_edges(&self) -> Result<Vec<Edge>, StorageError> {
+        let edge_hash_to_edge = self.edge_hash_to_edge.read().await;
+        Ok(edge_hash_to_edge.values().cloned().collect())
+    }
+
+    async fn get_edges_for_intent(&self, intent_id: &IntentId) -> Result<Vec<Edge>, StorageError> {
+        let edge_hash_to_edge = self.edge_hash_to_edge.read().await;
+        Ok(edge_hash_to_edge.values()
+            .filter(|edge| &edge.from == intent_id || &edge.to == intent_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn delete_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
+        let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
+        let hash_to_remove = edge_hash_to_edge.iter()
+            .find(|(_, e)| e == &edge)
+            .map(|(hash, _)| hash.clone());
+        
+        if let Some(hash) = hash_to_remove {
+            edge_hash_to_edge.remove(&hash);
+            Ok(())
+        } else {
+            Err(StorageError::Storage("Edge not found".to_string()))
+        }
+    }
+
+    async fn backup(&self, path: &Path) -> Result<(), StorageError> {
+        // Create a backup of all intents and edges
+        let intents = self.list_intents(IntentFilter::default()).await?;
+        let edges = self.get_edges().await?;
+        
+        let backup_data = StorageBackupData::new(
+            intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
+            edges
+        );
+
+        let json = serde_json::to_string_pretty(&backup_data)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        
+        // Atomic write
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut tmp = path.to_path_buf();
+        let tmp_name = format!("{}.tmp-{}", path.file_name().and_then(|s| s.to_str()).unwrap_or("backup.json"), std::process::id());
+        tmp.set_file_name(tmp_name);
+        if let Some(dir) = path.parent() { tmp = dir.join(tmp.file_name().unwrap()); }
+        {
+            let mut f = fs::File::create(&tmp)?;
+            use std::io::Write as _;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    async fn restore(&mut self, path: &Path) -> Result<(), StorageError> {
+        let content = fs::read_to_string(path)?;
+        let backup_data: StorageBackupData = serde_json::from_str(&content)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        // Clear existing data
+        self.clear_all().await?;
+        
+        // Restore intents
+        for (_, intent) in backup_data.intents {
+            self.store_intent(intent).await?;
+        }
+        
+        // Restore edges
+        for edge in backup_data.edges {
+            self.store_edge(&edge).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<(), StorageError> {
+        // Check that we can access the archives
+        let _stats = <FileArchive as ContentAddressableArchive<StorableIntent>>::stats(&self.intent_archive);
+        let _stats = <FileArchive as ContentAddressableArchive<Edge>>::stats(&self.edge_archive);
+        Ok(())
+    }
+
+    async fn clear_all(&mut self) -> Result<(), StorageError> {
+        // Clear indexes
+        let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
+        intent_id_to_hash.clear();
+        drop(intent_id_to_hash);
+        
+        let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
+        edge_hash_to_edge.clear();
+        drop(edge_hash_to_edge);
+        
+        // Note: FileArchive doesn't have a clear method, so we just clear the indexes
+        // The files will remain but won't be accessible
+        Ok(())
+    }
+}
+
 /// Backup data structure for serialization
 #[derive(Debug, Serialize, Deserialize)]
 struct StorageBackupData {
@@ -575,6 +904,15 @@ impl StorageFactory {
                     }
                 }
             }
+            StorageConfig::FileArchive { base_dir } => {
+                match Self::file_archive(base_dir).await {
+                    Ok(storage) => storage,
+                    Err(e) => {
+                        eprintln!("Note: Using in-memory storage for fallback strategy. File archive storage failed: {}", e);
+                        Self::with_fallback()
+                    }
+                }
+            }
         }
     }
 
@@ -586,6 +924,11 @@ impl StorageFactory {
     /// Create a file-based storage backend
     pub async fn file<P: AsRef<Path>>(path: P) -> Result<Box<dyn IntentStorage>, StorageError> {
         Ok(Box::new(FileStorage::new(path).await?))
+    }
+    
+    /// Create a file archive storage backend
+    pub async fn file_archive<P: AsRef<Path>>(base_dir: P) -> Result<Box<dyn IntentStorage>, StorageError> {
+        Ok(Box::new(FileArchiveStorage::new(base_dir).await?))
     }
     
     /// Create storage with fallback strategy (starts as in-memory, can be upgraded later)
