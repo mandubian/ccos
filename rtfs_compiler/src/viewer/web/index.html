@@ -27,6 +27,20 @@
             <span id="connection-indicator">●</span>
             <span id="connection-text">Disconnected</span>
         </div>
+        
+        <!-- Global Status Bar -->
+        <div id="status-bar">
+            <div id="status-left">
+                <span id="current-graph-id">Graph: None</span>
+                <span id="selected-intent-label">Intent: None</span>
+            </div>
+            <div id="status-right">
+                <div id="activity-indicator" class="activity-hidden">
+                    <span class="activity-spinner">⏳</span>
+                    <span id="activity-text">Working...</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Action Buttons -->
@@ -94,7 +108,9 @@
                     <button id="tab-plan" title="Plan (2)">Plan</button>
                     <button id="tab-graph" title="Graph (3)">Graph</button>
                     <div class="tab-controls">
-                        <button id="toggle-format" class="format-toggle" title="Toggle JSON/RTFS">RTFS</button>
+                        <button id="toggle-format" class="format-toggle" title="Toggle JSON/RTFS (Ctrl+T)">RTFS</button>
+                        <button id="toggle-wrap" class="wrap-toggle" title="Toggle Line Wrap">Wrap</button>
+                        <button id="copy-code" class="copy-btn" title="Copy to Clipboard">📋</button>
                     </div>
                 </div>
                 <div id="code-panes">
@@ -104,7 +120,20 @@
                 </div>
             </div>
             <div id="log-container">
-                <h3>📝 Activity Log</h3>
+                <div id="log-header">
+                    <h3>📝 Activity Log</h3>
+                    <div class="log-controls">
+                        <select id="log-filter" title="Filter Log Level">
+                            <option value="all">All</option>
+                            <option value="info">Info</option>
+                            <option value="warning">Warning</option>
+                            <option value="error">Error</option>
+                        </select>
+                        <button id="clear-logs" title="Clear Logs">🗑️</button>
+                        <button id="toggle-logs" title="Toggle Log Visibility">📝</button>
+                        <span id="log-count" class="log-counter">(0)</span>
+                    </div>
+                </div>
                 <div id="log-entries"></div>
             </div>
         </div>

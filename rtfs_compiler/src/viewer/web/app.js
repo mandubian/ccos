@@ -121,15 +121,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabPlan = document.getElementById('tab-plan');
     const tabGraph = document.getElementById('tab-graph');
     const toggleFormatBtn = document.getElementById('toggle-format');
+    const toggleWrapBtn = document.getElementById('toggle-wrap');
+    const copyCodeBtn = document.getElementById('copy-code');
     const logEntriesElement = document.getElementById('log-entries');
     const goalStatusElement = document.getElementById('goal-status');
     const graphStatsElement = document.getElementById('graph-stats');
+    const currentGraphIdSpan = document.getElementById('current-graph-id');
+    const selectedIntentLabelSpan = document.getElementById('selected-intent-label');
+    const activityIndicator = document.getElementById('activity-indicator');
+    const activityText = document.getElementById('activity-text');
+    const logFilter = document.getElementById('log-filter');
+    const clearLogsBtn = document.getElementById('clear-logs');
+    const toggleLogsBtn = document.getElementById('toggle-logs');
+    const logCountSpan = document.getElementById('log-count');
 
     // State management
     let selectedIntentId = null;
     let intentNodes = new Map(); // id -> node data
     let intentEdges = new Map(); // id -> edge data
     let generatedPlans = new Map(); // intent_id -> plan data
+    let isWrapMode = true; // true for wrap, false for no-wrap
+    let logEntries = []; // array of log entries
+    let logFilterLevel = 'all'; // current log filter level
+    let isLogsVisible = false; // logs collapsed by default
 
     // Graph history management
     let graphHistory = new Map(); // graph_id -> {nodes: Map, edges: Map, plans: Map, timestamp: Date, name: String}
@@ -404,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const submitBtn = document.getElementById('generate-graph-btn');
 
             if (!input || !submitBtn) {
-                addLogEntry('Error: Form elements not found');
+                addLogEntry('error', 'Error: Form elements not found');
                 return;
             }
 
@@ -412,21 +426,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Input validation
             if (!goal) {
-                addLogEntry('Error: Please enter a goal before submitting');
+                addLogEntry('error', 'Error: Please enter a goal before submitting');
                 updateGoalStatus('Please enter a goal');
                 input.focus();
                 return;
             }
 
             if (goal.length < 10) {
-                addLogEntry('Error: Goal must be at least 10 characters long');
+                addLogEntry('warning', 'Warning: Goal must be at least 10 characters long');
                 updateGoalStatus('Goal must be more descriptive');
                 input.focus();
                 return;
             }
 
             if (goal.length > 1000) {
-                addLogEntry('Error: Goal must be less than 1000 characters');
+                addLogEntry('warning', 'Warning: Goal must be less than 1000 characters');
                 updateGoalStatus('Goal is too long, please shorten it');
                 return;
             }
@@ -435,8 +449,10 @@ document.addEventListener('DOMContentLoaded', () => {
             submitBtn.disabled = true;
             submitBtn.textContent = 'Generating...';
             input.disabled = true;
-
-            addLogEntry(`Generating graph for goal: "${goal}"`);
+            
+            // Show activity indicator
+            showActivity('Generating intent graph...');
+            addLogEntry('info', `🚀 Generating graph for goal: "${goal.substring(0, 50)}..."`);
             updateGoalStatus('Generating intent graph...');
 
             try {
@@ -611,7 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generatePlansBtn) {
         generatePlansBtn.addEventListener('click', async () => {
             if (!currentGraphId) {
-                addLogEntry('❌ Error: No graph available. Generate a graph first.');
+                addLogEntry('error', '❌ Error: No graph available. Generate a graph first.');
                 updateGoalStatus('No graph available - generate a graph first');
                 return;
             }
@@ -619,8 +635,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const originalText = generatePlansBtn.textContent;
             generatePlansBtn.disabled = true;
             generatePlansBtn.textContent = 'Generating...';
-
-            addLogEntry('🔄 Generating plans for all intents...');
+            
+            // Show activity indicator
+            showActivity('Generating plans...');
+            addLogEntry('info', '📋 Generating plans for all intents...');
             updateGoalStatus('Generating plans...');
 
             try {
@@ -1048,7 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     id: node.id,
                                     label: node.label || node.id,
                                     color: getNodeColor(node.status || 'pending'),
-                                    title: `${node.label || node.id}\nStatus: ${node.status || 'pending'}\nType: ${node.type || 'unknown'}`
+                                    title: `${node.label || node.id}\nStatus: ${node.status || 'pending'}\nType: ${node.type || 'unknown'}${getBadgeText(node.id)}`
                                 };
                                 // Add to both local and network DataSets
                                 nodes.add(nodeData);
@@ -1355,12 +1373,14 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedIntentId = intentId;
         const node = intentNodes.get(intentId);
         if (node) {
-            addLogEntry(`📋 Selected intent: ${node.label || node.id}`);
+            addLogEntry('info', `📋 Selected intent: ${node.label || node.id}`);
             // Re-render current tab to reflect selection
             if (isTabActive('intent')) renderIntentRtfs(intentId);
             if (isTabActive('plan')) renderPlanRtfs(intentId);
+            // Update status bar
+            updateStatusBar();
         } else {
-            addLogEntry(`⚠️ Intent ${intentId} not found in current graph data`);
+            addLogEntry('warning', `⚠️ Intent ${intentId} not found in current graph data`);
         }
     }
 
@@ -1561,6 +1581,204 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isTabActive('graph') && currentGraphId) renderGraphRtfs(currentGraphId);
     }
 
+    function toggleWrap() {
+        isWrapMode = !isWrapMode;
+        if (toggleWrapBtn) {
+            toggleWrapBtn.textContent = isWrapMode ? 'Wrap' : 'No Wrap';
+            toggleWrapBtn.classList.toggle('active', isWrapMode);
+        }
+        
+        // Update all code panes
+        const codePanes = document.querySelectorAll('.code-pane');
+        codePanes.forEach(pane => {
+            if (isWrapMode) {
+                pane.style.whiteSpace = 'pre-wrap';
+                pane.style.wordWrap = 'break-word';
+                pane.style.wordBreak = 'break-all';
+            } else {
+                pane.style.whiteSpace = 'pre';
+                pane.style.wordWrap = 'normal';
+                pane.style.wordBreak = 'normal';
+            }
+        });
+    }
+
+    async function copyToClipboard() {
+        let content = '';
+        if (isTabActive('intent') && selectedIntentId) {
+            const node = intentNodes.get(selectedIntentId);
+            if (node) {
+                content = isRtfsMode ? node.rtfs_intent_source : JSON.stringify(node, null, 2);
+            }
+        } else if (isTabActive('plan') && selectedIntentId) {
+            const plan = generatedPlans.get(selectedIntentId);
+            if (plan) {
+                content = isRtfsMode ? plan.body : JSON.stringify(plan, null, 2);
+            }
+        } else if (isTabActive('graph') && currentGraphId) {
+            const graphRtfs = graphRtfsCache.get(currentGraphId);
+            if (graphRtfs) {
+                content = isRtfsMode ? graphRtfs : JSON.stringify({
+                    nodes: Array.from(intentNodes.values()),
+                    edges: Array.from(intentEdges.values())
+                }, null, 2);
+            }
+        }
+        
+        if (content) {
+            try {
+                await navigator.clipboard.writeText(content);
+                if (copyCodeBtn) {
+                    copyCodeBtn.textContent = '✓';
+                    setTimeout(() => {
+                        copyCodeBtn.textContent = '📋';
+                    }, 1000);
+                }
+            } catch (err) {
+                console.error('Failed to copy: ', err);
+            }
+        }
+    }
+
+    function updateStatusBar() {
+        if (currentGraphIdSpan) {
+            currentGraphIdSpan.textContent = `Graph: ${currentGraphId || 'None'}`;
+        }
+        if (selectedIntentLabelSpan) {
+            const node = selectedIntentId ? intentNodes.get(selectedIntentId) : null;
+            const label = node ? node.label || node.id : 'None';
+            selectedIntentLabelSpan.textContent = `Intent: ${label}`;
+        }
+    }
+
+    function getNodeBadges(nodeId) {
+        const badges = [];
+        const node = intentNodes.get(nodeId);
+        const plan = generatedPlans.get(nodeId);
+        
+        if (plan) {
+            badges.push({
+                text: '✓',
+                color: '#00aa00',
+                title: 'Has Plan'
+            });
+        }
+        
+        if (node && node.status) {
+            const statusConfig = {
+                'active': { text: '●', color: '#00aaff', title: 'Active' },
+                'pending': { text: '●', color: '#ffff00', title: 'Pending' },
+                'executing': { text: '●', color: '#ffaa00', title: 'Executing' },
+                'completed': { text: '✓', color: '#00aa00', title: 'Completed' },
+                'failed': { text: '✗', color: '#aa0000', title: 'Failed' },
+                'paused': { text: '⏸', color: '#ffaa00', title: 'Paused' }
+            };
+            
+            const config = statusConfig[node.status.toLowerCase()] || statusConfig['pending'];
+            badges.push({
+                text: config.text,
+                color: config.color,
+                title: config.title
+            });
+        }
+        
+        return badges;
+    }
+
+    function getBadgeText(nodeId) {
+        const badges = getNodeBadges(nodeId);
+        if (badges.length === 0) return '';
+        
+        const badgeTexts = badges.map(badge => `${badge.text} ${badge.title}`).join(', ');
+        return `\n\n🏷️ Badges: ${badgeTexts}`;
+    }
+
+    function showActivity(message = 'Working...') {
+        if (activityIndicator && activityText) {
+            activityText.textContent = message;
+            activityIndicator.classList.remove('activity-hidden');
+        }
+    }
+
+    function hideActivity() {
+        if (activityIndicator) {
+            activityIndicator.classList.add('activity-hidden');
+        }
+    }
+
+    function addLogEntry(level, message) {
+        const timestamp = new Date().toLocaleTimeString();
+        const entry = {
+            level,
+            message,
+            timestamp,
+            id: Date.now() + Math.random()
+        };
+        
+        logEntries.push(entry);
+        renderLogs();
+        updateLogCount();
+    }
+
+    function renderLogs() {
+        if (!logEntriesElement) return;
+        
+        const filteredEntries = logEntries.filter(entry => 
+            logFilterLevel === 'all' || entry.level === logFilterLevel
+        );
+        
+        logEntriesElement.innerHTML = filteredEntries.map(entry => 
+            `<div class="log-entry ${entry.level}">
+                <span class="log-time">[${entry.timestamp}]</span>
+                <span class="log-message">${entry.message}</span>
+            </div>`
+        ).join('');
+        
+        // Auto-scroll to bottom
+        logEntriesElement.scrollTop = logEntriesElement.scrollHeight;
+    }
+
+    function updateLogCount() {
+        if (logCountSpan) {
+            const errorCount = logEntries.filter(e => e.level === 'error').length;
+            const warningCount = logEntries.filter(e => e.level === 'warning').length;
+            const infoCount = logEntries.filter(e => e.level === 'info').length;
+            
+            if (errorCount > 0) {
+                logCountSpan.textContent = `(${errorCount} errors)`;
+                logCountSpan.style.color = '#aa0000';
+            } else if (warningCount > 0) {
+                logCountSpan.textContent = `(${warningCount} warnings)`;
+                logCountSpan.style.color = '#ffaa00';
+            } else {
+                logCountSpan.textContent = `(${logEntries.length})`;
+                logCountSpan.style.color = '#888';
+            }
+        }
+    }
+
+    function clearLogs() {
+        logEntries = [];
+        renderLogs();
+        updateLogCount();
+    }
+
+    function toggleLogsVisibility() {
+        isLogsVisible = !isLogsVisible;
+        const logContainer = document.getElementById('log-container');
+        const logEntriesContainer = document.getElementById('log-entries');
+        
+        if (logContainer && logEntriesContainer) {
+            if (isLogsVisible) {
+                logEntriesContainer.style.display = 'block';
+                toggleLogsBtn.textContent = '📝';
+            } else {
+                logEntriesContainer.style.display = 'none';
+                toggleLogsBtn.textContent = '📝';
+            }
+        }
+    }
+
     function activateTab(which) {
         const panes = [
             { btn: tabIntent, pane: document.getElementById('pane-intent') },
@@ -1593,6 +1811,40 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleFormatBtn.className = `format-toggle ${isRtfsMode ? 'rtfs-mode' : 'json-mode'}`;
     }
 
+    if (toggleWrapBtn) {
+        toggleWrapBtn.addEventListener('click', toggleWrap);
+        // Initialize wrap toggle button
+        toggleWrapBtn.textContent = isWrapMode ? 'Wrap' : 'No Wrap';
+        toggleWrapBtn.classList.toggle('active', isWrapMode);
+    }
+
+    if (copyCodeBtn) {
+        copyCodeBtn.addEventListener('click', copyToClipboard);
+    }
+
+    if (logFilter) {
+        logFilter.addEventListener('change', (e) => {
+            logFilterLevel = e.target.value;
+            renderLogs();
+        });
+    }
+
+    if (clearLogsBtn) {
+        clearLogsBtn.addEventListener('click', clearLogs);
+    }
+
+    if (toggleLogsBtn) {
+        toggleLogsBtn.addEventListener('click', toggleLogsVisibility);
+    }
+
+    // Initialize logs as collapsed
+    if (logEntriesElement) {
+        logEntriesElement.style.display = 'none';
+    }
+    if (toggleLogsBtn) {
+        toggleLogsBtn.textContent = '📝';
+    }
+
     // Keyboard shortcuts for tab switching
     document.addEventListener('keydown', (e) => {
         // Only trigger if not in an input field
@@ -1602,23 +1854,30 @@ document.addEventListener('DOMContentLoaded', () => {
             case '1':
                 e.preventDefault();
                 activateTab('intent');
-                addLogEntry('⌨️ Switched to Intent tab (1)');
+                addLogEntry('info', '⌨️ Switched to Intent tab (1)');
                 break;
             case '2':
                 e.preventDefault();
                 activateTab('plan');
-                addLogEntry('⌨️ Switched to Plan tab (2)');
+                addLogEntry('info', '⌨️ Switched to Plan tab (2)');
                 break;
             case '3':
                 e.preventDefault();
                 activateTab('graph');
-                addLogEntry('⌨️ Switched to Graph tab (3)');
+                addLogEntry('info', '⌨️ Switched to Graph tab (3)');
+                break;
+            case 'c':
+                if (e.ctrlKey) {
+                    e.preventDefault();
+                    copyToClipboard();
+                    addLogEntry('info', '⌨️ Copied to clipboard (Ctrl+C)');
+                }
                 break;
             case 't':
                 if (e.ctrlKey || e.metaKey) {
                     e.preventDefault();
                     toggleFormat();
-                    addLogEntry(`⌨️ Toggled format to ${isRtfsMode ? 'RTFS' : 'JSON'} (Ctrl+T)`);
+                    addLogEntry('info', `⌨️ Toggled format to ${isRtfsMode ? 'RTFS' : 'JSON'} (Ctrl+T)`);
                 }
                 break;
         }
@@ -1926,7 +2185,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         background: '#2a2a2a',
                         highlight: { border: '#FFD700', background: '#3a3a3a' }
                     },
-                    title: `${baseTitle}\n\n🎯 Root Intent - Orchestrates execution of child intents`,
+                    title: `${baseTitle}\n\n🎯 Root Intent - Orchestrates execution of child intents${getBadgeText(nodeId)}`,
                     shape: 'diamond',
                     size: 30,
                     font: { size: 16, color: '#FFD700', face: 'arial' }
@@ -1939,7 +2198,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     label: node.label || nodeId,
                     level: depth, // Use depth-based level for proper tree visualization
                     color: getNodeColor(node.status || 'pending'),
-                    title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence`
+                    title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence${getBadgeText(nodeId)}`
                 };
             }
 
@@ -2224,6 +2483,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Set current graph ID for multi-graph support
         currentGraphId = data.graph_id;
+        
+        // Update status bar and hide activity
+        updateStatusBar();
+        hideActivity();
+        addLogEntry('info', `✅ Graph generated: ${data.graph_id}`);
         console.log('📊 Current graph ID set to:', currentGraphId);
 
         // Note: We'll store the new graph in history after it's fully processed
@@ -2349,7 +2613,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             background: '#2a2a2a',
                             highlight: { border: '#FFD700', background: '#3a3a3a' }
                         },
-                        title: `${baseTitle}\n\n🎯 Root Intent - Orchestrates execution of child intents`,
+                        title: `${baseTitle}\n\n🎯 Root Intent - Orchestrates execution of child intents${getBadgeText(node.id)}`,
                         shape: 'diamond',
                         size: 30,
                         font: { size: 16, color: '#FFD700', face: 'arial' }
@@ -2362,7 +2626,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         label: node.label || node.id,
                         level: depth, // Use depth-based level for proper tree visualization
                     color: getNodeColor(node.status || 'pending'),
-                        title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence`
+                        title: `${baseTitle}\nExecution Order: ${node.execution_order || 'N/A'}\nDepth Level: ${depth}\n\n💡 Same depth = same execution level, numbers show sequence${getBadgeText(node.id)}`
                     };
 
                     // Add visual emphasis for execution order
@@ -2557,7 +2821,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         executeBtn.disabled = false;
         updateGoalStatus('Plans generated successfully. Ready to execute.');
-        addLogEntry(`Plan generated for intent ${data.intent_id}: ${data.plan_id}`);
+        addLogEntry('info', `✅ Plan generated for intent ${data.intent_id}: ${data.plan_id}`);
+        
+        // Hide activity indicator when first plan is generated
+        hideActivity();
 
         // Store plan information for later retrieval
         generatedPlans.set(data.intent_id, {

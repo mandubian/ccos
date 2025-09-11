@@ -521,6 +521,47 @@ h1, h2, h3 {
     color: #000;
 }
 
+.wrap-toggle {
+    background-color: #444;
+    border: 1px solid #666;
+    color: #f0f0f0;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.wrap-toggle:hover {
+    background-color: #555;
+}
+
+.wrap-toggle.active {
+    background-color: #00aa00;
+    border-color: #00aa00;
+    color: #000;
+}
+
+.copy-btn {
+    background-color: #444;
+    border: 1px solid #666;
+    color: #f0f0f0;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.copy-btn:hover {
+    background-color: #555;
+}
+
+.copy-btn:active {
+    background-color: #00aa00;
+    border-color: #00aa00;
+}
+
 #code-panes {
     display: flex;
     flex-direction: column;
@@ -615,8 +656,60 @@ h1, h2, h3 {
     flex-direction: column;
 }
 
-#log-container h3 {
-    margin: 10px;
+#log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #444;
+}
+
+#log-header h3 {
+    margin: 0;
+}
+
+.log-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+#log-filter {
+    padding: 4px 8px;
+    background-color: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #f0f0f0;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+#log-filter:focus {
+    outline: none;
+    border-color: #00aaff;
+}
+
+#clear-logs,
+#toggle-logs {
+    background-color: #444;
+    border: 1px solid #666;
+    color: #f0f0f0;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+#clear-logs:hover,
+#toggle-logs:hover {
+    background-color: #555;
+}
+
+.log-counter {
+    font-size: 12px;
+    color: #888;
+    font-weight: bold;
 }
 
 #log-entries {
@@ -721,4 +814,122 @@ h1, h2, h3 {
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
+}
+
+/* Status Bar */
+#status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: #ccc;
+}
+
+#status-left {
+    display: flex;
+    gap: 20px;
+}
+
+#status-right {
+    display: flex;
+    align-items: center;
+}
+
+#activity-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background-color: rgba(255, 170, 0, 0.1);
+    border: 1px solid #ffaa00;
+    color: #ffaa00;
+    transition: all 0.3s ease;
+}
+
+.activity-hidden {
+    display: none !important;
+}
+
+.activity-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Node Badges */
+.node-badge {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #fff;
+    z-index: 10;
+}
+
+.badge-plan {
+    background-color: #00aa00;
+    color: white;
+}
+
+.badge-status {
+    background-color: #00aaff;
+    color: white;
+}
+
+.badge-status.pending {
+    background-color: #ffff00;
+    color: #000;
+}
+
+.badge-status.active {
+    background-color: #00aaff;
+    color: white;
+}
+
+.badge-status.executing {
+    background-color: #ffaa00;
+    color: #000;
+}
+
+.badge-status.completed {
+    background-color: #00aa00;
+    color: white;
+}
+
+.badge-status.failed {
+    background-color: #aa0000;
+    color: white;
+}
+
+/* Log Entry Styling */
+.log-entry.info {
+    color: #00aaff;
+}
+
+.log-entry.warning {
+    color: #ffaa00;
+}
+
+.log-entry.error {
+    color: #aa0000;
+}
+
+.log-entry.hidden {
+    display: none;
 }
