@@ -99,17 +99,29 @@ where
 {
     fn store(&self, entity: T) -> Result<String, String> {
         let hash = entity.content_hash();
+        println!("🔍 FileArchive::store called for entity with hash: {}", hash);
+        
         // Determine deterministic relative path; prefer existing index entry
         let rel = {
             let idx = self.index.lock().map_err(|_| "index lock poisoned".to_string())?;
             idx.get(&hash).cloned().unwrap_or_else(|| Self::default_rel_path(&hash))
         };
         let path = self.base_dir.join(&rel);
+        println!("🔍 FileArchive::store writing to path: {:?}", path);
 
         // Serialize to JSON
-        let json = serde_json::to_string_pretty(&entity).map_err(|e| e.to_string())?;
+        let json = serde_json::to_string_pretty(&entity).map_err(|e| {
+            println!("❌ FileArchive::store JSON serialization failed: {}", e);
+            e.to_string()
+        })?;
+        println!("🔍 FileArchive::store JSON serialized, length: {}", json.len());
+        
         // Ensure directories and atomically write file
-        Self::atomic_write(&path, json.as_bytes())?;
+        Self::atomic_write(&path, json.as_bytes()).map_err(|e| {
+            println!("❌ FileArchive::store atomic_write failed: {}", e);
+            e
+        })?;
+        println!("✅ FileArchive::store atomic_write succeeded");
 
         // Update metadata
         let mut meta = self.metadata.lock().map_err(|_| "metadata lock poisoned".to_string())?;
@@ -137,6 +149,23 @@ where
 
     fn exists(&self, hash: &str) -> bool {
         self.path_for_hash(hash).exists()
+    }
+
+    fn delete(&self, hash: &str) -> Result<(), String> {
+        let path = self.path_for_hash(hash);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        
+        // Remove from index
+        let mut idx = self.index.lock().map_err(|_| "index lock poisoned".to_string())?;
+        idx.remove(hash);
+        
+        // Remove from metadata
+        let mut meta = self.metadata.lock().map_err(|_| "metadata lock poisoned".to_string())?;
+        meta.remove(hash);
+        
+        Ok(())
     }
 
     fn stats(&self) -> ArchiveStats {

@@ -43,6 +43,9 @@ pub trait ContentAddressableArchive<T: Archivable> {
     /// Check if an entity exists by content hash
     fn exists(&self, hash: &str) -> bool;
     
+    /// Delete an entity by content hash
+    fn delete(&self, hash: &str) -> Result<(), String>;
+    
     /// Get storage statistics
     fn stats(&self) -> ArchiveStats;
     
@@ -142,6 +145,24 @@ impl<T: Archivable> ContentAddressableArchive<T> for InMemoryArchive<T> {
         self.storage.lock()
             .map(|storage| storage.contains_key(hash))
             .unwrap_or(false)
+    }
+    
+    fn delete(&self, hash: &str) -> Result<(), String> {
+        // Remove from storage
+        {
+            let mut storage = self.storage.lock()
+                .map_err(|_| "Storage lock poisoned".to_string())?;
+            storage.remove(hash);
+        }
+        
+        // Remove from metadata
+        {
+            let mut metadata = self.metadata.lock()
+                .map_err(|_| "Metadata lock poisoned".to_string())?;
+            metadata.remove(hash);
+        }
+        
+        Ok(())
     }
     
     fn stats(&self) -> ArchiveStats {

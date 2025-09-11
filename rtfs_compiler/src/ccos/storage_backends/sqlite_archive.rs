@@ -76,6 +76,13 @@ where
         stmt.exists(params![hash]).unwrap_or(false)
     }
 
+    fn delete(&self, hash: &str) -> Result<(), String> {
+        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
+        conn_guard.execute("DELETE FROM objects WHERE hash = ?1", params![hash])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn stats(&self) -> ArchiveStats {
         let conn_guard = match self.conn.lock() {
             Ok(g) => g,
