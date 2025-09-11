@@ -476,6 +476,7 @@ h1, h2, h3 {
     display: flex;
     gap: 6px;
     padding: 0 10px 10px 10px;
+    align-items: center;
 }
 
 #code-tabs button {
@@ -491,6 +492,39 @@ h1, h2, h3 {
 #code-tabs button.active {
     background-color: #00aaff;
     border-color: #00aaff;
+    color: #000;
+}
+
+.tab-controls {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+}
+
+.format-toggle {
+    background-color: #444;
+    border: 1px solid #666;
+    color: #f0f0f0;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.format-toggle:hover {
+    background-color: #555;
+}
+
+.format-toggle.rtfs-mode {
+    background-color: #00aaff;
+    border-color: #00aaff;
+    color: #000;
+}
+
+.format-toggle.json-mode {
+    background-color: #ffaa00;
+    border-color: #ffaa00;
     color: #000;
 }
 

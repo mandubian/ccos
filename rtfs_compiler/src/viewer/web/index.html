@@ -9,6 +9,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-lisp.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
 </head>
 <body>
@@ -92,9 +93,12 @@
             <div id="rtfs-container">
                 <h3>📄 RTFS</h3>
                 <div id="code-tabs">
-                    <button id="tab-intent" class="active">Intent</button>
-                    <button id="tab-plan">Plan</button>
-                    <button id="tab-graph">Graph</button>
+                    <button id="tab-intent" class="active" title="Intent (1)">Intent</button>
+                    <button id="tab-plan" title="Plan (2)">Plan</button>
+                    <button id="tab-graph" title="Graph (3)">Graph</button>
+                    <div class="tab-controls">
+                        <button id="toggle-format" class="format-toggle" title="Toggle JSON/RTFS">RTFS</button>
+                    </div>
                 </div>
                 <div id="code-panes">
                     <pre id="pane-intent" class="code-pane"><code id="intent-code" class="language-lisp"></code></pre>
