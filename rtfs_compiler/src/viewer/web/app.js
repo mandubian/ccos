@@ -133,7 +133,101 @@ document.addEventListener('DOMContentLoaded', () => {
     const logFilter = document.getElementById('log-filter');
     const clearLogsBtn = document.getElementById('clear-logs');
     const toggleLogsBtn = document.getElementById('toggle-logs');
-    const logCountSpan = document.getElementById('log-count');
+    const logContainer = document.getElementById('log-container');
+    const logResizeHandle = document.getElementById('log-resize-handle');
+
+    // Activity Log: collapsed by default, expandable/resizable via CSS class
+    if (logContainer) {
+        logContainer.classList.remove('logs-expanded');
+    }
+    if (toggleLogsBtn && logContainer) {
+        // Initialize button text correctly (collapsed = Show)
+        toggleLogsBtn.textContent = '📋 Show';
+        toggleLogsBtn.title = 'Show Log Panel';
+        
+        toggleLogsBtn.addEventListener('click', () => {
+            logContainer.classList.toggle('logs-expanded');
+            // Update button text to reflect current state
+            const isExpanded = logContainer.classList.contains('logs-expanded');
+            toggleLogsBtn.textContent = isExpanded ? '📋 Hide' : '📋 Show';
+            toggleLogsBtn.title = isExpanded ? 'Hide Log Panel' : 'Show Log Panel';
+            
+            if (!isExpanded) {
+                // Collapsing: Clear inline styles to allow CSS to take over
+                logContainer.style.removeProperty('height');
+                logContainer.style.removeProperty('max-height');
+                logContainer.style.removeProperty('flex');
+                logContainer.style.removeProperty('flex-grow');
+                logContainer.style.removeProperty('flex-shrink');
+            } else {
+                // Expanding: Restore custom height if available
+                if (lastCustomHeight) {
+                    logContainer.style.setProperty('height', lastCustomHeight + 'px', 'important');
+                    logContainer.style.setProperty('max-height', 'none', 'important');
+                    logContainer.style.setProperty('flex', 'none', 'important');
+                    logContainer.style.setProperty('flex-grow', '0', 'important');
+                    logContainer.style.setProperty('flex-shrink', '0', 'important');
+                }
+            }
+        });
+        
+        // Add drag-to-resize functionality
+        let isDragging = false;
+        let startY = 0;
+        let startHeight = 0;
+        let lastCustomHeight = null; // Remember the last custom size
+        
+        if (logResizeHandle) {
+            logResizeHandle.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startY = e.clientY;
+                
+                // Get the actual visual height, not just offsetHeight
+                const computedStyle = window.getComputedStyle(logContainer);
+                const actualHeight = logContainer.offsetHeight;
+                startHeight = actualHeight;
+                
+                logContainer.style.userSelect = 'none';
+                logContainer.classList.add('dragging');
+                document.body.style.cursor = 'ns-resize';
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        }
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            
+            const deltaY = startY - e.clientY; // Reverse the direction
+            const newHeight = Math.max(150, Math.min(600, startHeight + deltaY));
+            
+            // Force the height change with !important and disable flex
+            logContainer.style.setProperty('height', newHeight + 'px', 'important');
+            logContainer.style.setProperty('max-height', 'none', 'important');
+            logContainer.style.setProperty('flex', 'none', 'important');
+            logContainer.style.setProperty('flex-grow', '0', 'important');
+            logContainer.style.setProperty('flex-shrink', '0', 'important');
+            
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mouseup', (e) => {
+            if (isDragging) {
+                // Save the final height as the custom size
+                lastCustomHeight = logContainer.offsetHeight;
+                
+                isDragging = false;
+                logContainer.style.userSelect = '';
+                logContainer.classList.remove('dragging');
+                document.body.style.cursor = '';
+            }
+        });
+    }
+
+    // Helper function for node badges (placeholder)
+    function getBadgeText(nodeId) {
+        return ''; // No badges for now
+    }
 
     // State management
     let selectedIntentId = null;
@@ -1590,242 +1684,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isTabActive('graph') && currentGraphId) renderGraphRtfs(currentGraphId);
     }
 
-    function toggleWrap() {
-        isWrapMode = !isWrapMode;
-        if (toggleWrapBtn) {
-            toggleWrapBtn.textContent = isWrapMode ? 'Wrap' : 'No Wrap';
-            toggleWrapBtn.classList.toggle('active', isWrapMode);
-        }
-        
-        // Update all code panes
-        const codePanes = document.querySelectorAll('.code-pane');
-        codePanes.forEach(pane => {
-            if (isWrapMode) {
-                pane.style.whiteSpace = 'pre-wrap';
-                pane.style.wordWrap = 'break-word';
-                pane.style.wordBreak = 'break-all';
-            } else {
-                pane.style.whiteSpace = 'pre';
-                pane.style.wordWrap = 'normal';
-                pane.style.wordBreak = 'normal';
-            }
-        });
-    }
-
-    async function copyToClipboard() {
-        let content = '';
-        if (isTabActive('intent') && selectedIntentId) {
-            const node = intentNodes.get(selectedIntentId);
-            if (node) {
-                content = isRtfsMode ? node.rtfs_intent_source : JSON.stringify(node, null, 2);
-            }
-        } else if (isTabActive('plan') && selectedIntentId) {
-            const plan = generatedPlans.get(selectedIntentId);
-            if (plan) {
-                content = isRtfsMode ? plan.body : JSON.stringify(plan, null, 2);
-            }
-        } else if (isTabActive('graph') && currentGraphId) {
-            const graphRtfs = graphRtfsCache.get(currentGraphId);
-            if (graphRtfs) {
-                content = isRtfsMode ? graphRtfs : JSON.stringify({
-                    nodes: Array.from(intentNodes.values()),
-                    edges: Array.from(intentEdges.values())
-                }, null, 2);
-            }
-        }
-        
-        if (content) {
-            try {
-                await navigator.clipboard.writeText(content);
-                if (copyCodeBtn) {
-                    copyCodeBtn.textContent = '✓';
-                    setTimeout(() => {
-                        copyCodeBtn.textContent = '📋';
-                    }, 1000);
-                }
-            } catch (err) {
-                console.error('Failed to copy: ', err);
-            }
-        }
-    }
-
-    function updateStatusBar() {
-        if (currentGraphIdSpan) {
-            currentGraphIdSpan.textContent = `Graph: ${currentGraphId || 'None'}`;
-        }
-        if (selectedIntentLabelSpan) {
-            const node = selectedIntentId ? intentNodes.get(selectedIntentId) : null;
-            const label = node ? node.label || node.id : 'None';
-            selectedIntentLabelSpan.textContent = `Intent: ${label}`;
-        }
-    }
-
-    function getNodeBadges(nodeId) {
-        const badges = [];
-        const node = intentNodes.get(nodeId);
-        const plan = generatedPlans.get(nodeId);
-        
-        if (plan) {
-            badges.push({
-                text: '✓',
-                color: '#00aa00',
-                title: 'Has Plan'
-            });
-        }
-        
-        if (node && node.status) {
-            const statusConfig = {
-                'active': { text: '●', color: '#00aaff', title: 'Active' },
-                'pending': { text: '●', color: '#ffff00', title: 'Pending' },
-                'executing': { text: '●', color: '#ffaa00', title: 'Executing' },
-                'completed': { text: '✓', color: '#00aa00', title: 'Completed' },
-                'failed': { text: '✗', color: '#aa0000', title: 'Failed' },
-                'paused': { text: '⏸', color: '#ffaa00', title: 'Paused' }
-            };
-            
-            const config = statusConfig[node.status.toLowerCase()] || statusConfig['pending'];
-            badges.push({
-                text: config.text,
-                color: config.color,
-                title: config.title
-            });
-        }
-        
-        return badges;
-    }
-
-    function getBadgeText(nodeId) {
-        const badges = getNodeBadges(nodeId);
-        if (badges.length === 0) return '';
-        
-        const badgeTexts = badges.map(badge => `${badge.text} ${badge.title}`).join(', ');
-        return `\n\n🏷️ Badges: ${badgeTexts}`;
-    }
-
-    function updateNodePlanIndicator(nodeId, hasPlan) {
-        // Update the vis.js node data to trigger a redraw
-        const nodeData = nodes.get(nodeId);
-        if (nodeData) {
-            const node = intentNodes.get(nodeId);
-            const baseLabel = node?.label || nodeId;
-            const cleanLabel = baseLabel.replace(/^\d+\.\s*/, '').replace(/\s*📋\s*$/, '');
-            const planIndicator = hasPlan ? ' 📋' : '';
-            
-            // Handle execution order prefix
-            let newLabel;
-            if (node?.execution_order) {
-                newLabel = `🔢 ${node.execution_order}. ${cleanLabel}${planIndicator}`;
-            } else {
-                newLabel = cleanLabel + planIndicator;
-            }
-            
-            const updatedNode = { 
-                ...nodeData,
-                label: newLabel
-            };
-            
-            if (hasPlan) {
-                updatedNode.color = {
-                    border: '#00ff88',
-                    background: '#2a2a2a',
-                    highlight: { border: '#00ff88', background: '#3a3a3a' }
-                };
-                updatedNode.borderWidth = 3;
-            } else {
-                updatedNode.color = getNodeColor(node?.status || 'pending');
-                updatedNode.borderWidth = 2;
-            }
-            
-            nodes.update(updatedNode);
-        }
-    }
-
-    function showActivity(message = 'Working...') {
-        if (activityIndicator && activityText) {
-            activityText.textContent = message;
-            activityIndicator.classList.remove('activity-hidden');
-        }
-    }
-
-    function hideActivity() {
-        if (activityIndicator) {
-            activityIndicator.classList.add('activity-hidden');
-        }
-    }
-
-    function addLogEntry(level, message) {
-        const timestamp = new Date().toLocaleTimeString();
-        const entry = {
-            level,
-            message,
-            timestamp,
-            id: Date.now() + Math.random()
-        };
-        
-        logEntries.push(entry);
-        renderLogs();
-        updateLogCount();
-    }
-
-    function renderLogs() {
-        if (!logEntriesElement) return;
-        
-        const filteredEntries = logEntries.filter(entry => 
-            logFilterLevel === 'all' || entry.level === logFilterLevel
-        );
-        
-        logEntriesElement.innerHTML = filteredEntries.map(entry => 
-            `<div class="log-entry ${entry.level}">
-                <span class="log-time">[${entry.timestamp}]</span>
-                <span class="log-message">${entry.message}</span>
-            </div>`
-        ).join('');
-        
-        // Auto-scroll to bottom
-        logEntriesElement.scrollTop = logEntriesElement.scrollHeight;
-    }
-
-    function updateLogCount() {
-        if (logCountSpan) {
-            const errorCount = logEntries.filter(e => e.level === 'error').length;
-            const warningCount = logEntries.filter(e => e.level === 'warning').length;
-            const infoCount = logEntries.filter(e => e.level === 'info').length;
-            
-            if (errorCount > 0) {
-                logCountSpan.textContent = `(${errorCount} errors)`;
-                logCountSpan.style.color = '#aa0000';
-            } else if (warningCount > 0) {
-                logCountSpan.textContent = `(${warningCount} warnings)`;
-                logCountSpan.style.color = '#ffaa00';
-            } else {
-                logCountSpan.textContent = `(${logEntries.length})`;
-                logCountSpan.style.color = '#888';
-            }
-        }
-    }
-
-    function clearLogs() {
-        logEntries = [];
-        renderLogs();
-        updateLogCount();
-    }
-
-    function toggleLogsVisibility() {
-        isLogsVisible = !isLogsVisible;
-        const logContainer = document.getElementById('log-container');
-        const logEntriesContainer = document.getElementById('log-entries');
-        
-        if (logContainer && logEntriesContainer) {
-            if (isLogsVisible) {
-                logEntriesContainer.style.display = 'block';
-                toggleLogsBtn.textContent = '📝';
-            } else {
-                logEntriesContainer.style.display = 'none';
-                toggleLogsBtn.textContent = '📝';
-            }
-        }
-    }
-
     function activateTab(which) {
         const panes = [
             { btn: tabIntent, pane: document.getElementById('pane-intent') },
@@ -1856,40 +1714,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // Initialize format toggle button
         toggleFormatBtn.textContent = isRtfsMode ? 'RTFS' : 'JSON';
         toggleFormatBtn.className = `format-toggle ${isRtfsMode ? 'rtfs-mode' : 'json-mode'}`;
-    }
-
-    if (toggleWrapBtn) {
-        toggleWrapBtn.addEventListener('click', toggleWrap);
-        // Initialize wrap toggle button
-        toggleWrapBtn.textContent = isWrapMode ? 'Wrap' : 'No Wrap';
-        toggleWrapBtn.classList.toggle('active', isWrapMode);
-    }
-
-    if (copyCodeBtn) {
-        copyCodeBtn.addEventListener('click', copyToClipboard);
-    }
-
-    if (logFilter) {
-        logFilter.addEventListener('change', (e) => {
-            logFilterLevel = e.target.value;
-            renderLogs();
-        });
-    }
-
-    if (clearLogsBtn) {
-        clearLogsBtn.addEventListener('click', clearLogs);
-    }
-
-    if (toggleLogsBtn) {
-        toggleLogsBtn.addEventListener('click', toggleLogsVisibility);
-    }
-
-    // Initialize logs as collapsed
-    if (logEntriesElement) {
-        logEntriesElement.style.display = 'none';
-    }
-    if (toggleLogsBtn) {
-        toggleLogsBtn.textContent = '📝';
     }
 
     // Keyboard shortcuts for tab switching
