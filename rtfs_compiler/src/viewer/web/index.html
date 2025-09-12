@@ -22,22 +22,22 @@
             <input id="goal-input" placeholder="e.g. Create a financial budget for a small business including expense categories, revenue projections, and a monthly cash flow forecast" />
             <button type="submit" id="generate-graph-btn">Generate Graph</button>
         </form>
-        <div id="goal-status">Ready to generate intent graph...</div>
-        <div id="connection-status" class="status-disconnected">
-            <span id="connection-indicator">●</span>
-            <span id="connection-text">Disconnected</span>
-        </div>
         
         <!-- Global Status Bar -->
         <div id="status-bar">
             <div id="status-left">
                 <span id="current-graph-id">Graph: None</span>
                 <span id="selected-intent-label">Intent: None</span>
+                <span id="goal-status">Ready to generate intent graph...</span>
             </div>
             <div id="status-right">
                 <div id="activity-indicator" class="activity-hidden">
                     <span class="activity-spinner">⏳</span>
                     <span id="activity-text">Working...</span>
+                </div>
+                <div id="connection-status" class="status-disconnected">
+                    <span id="connection-indicator">●</span>
+                    <span id="connection-text">Disconnected</span>
                 </div>
             </div>
         </div>
