@@ -69,7 +69,9 @@ h1, h2, h3 {
 
 #goal-status {
     color: #888;
-    font-size: 14px;
+    font-size: 12px;
+    margin-left: 16px;
+    font-style: italic;
 }
 
 /* Action Buttons */
@@ -788,16 +790,16 @@ h1, h2, h3 {
 #connection-status {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 14px;
-    margin-top: 10px;
-    padding: 8px 12px;
+    gap: 6px;
+    font-size: 12px;
+    margin-left: 8px;
+    padding: 4px 8px;
     border-radius: 4px;
     transition: all 0.3s ease;
 }
 
 #connection-indicator {
-    font-size: 16px;
+    font-size: 12px;
     font-weight: bold;
 }
 
