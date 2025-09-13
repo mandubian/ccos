@@ -498,6 +498,11 @@ document.addEventListener('DOMContentLoaded', () => {
             socket.close();
         }
         stopHeartbeat();
+        try {
+            // Attempt to persist any current graph and plans before the page unloads
+            try { storeCurrentGraphInHistory(); } catch (e) { console.warn('⚠️ storeCurrentGraphInHistory failed during unload:', e); }
+            try { saveGraphHistoryToStorage(); } catch (e) { console.warn('⚠️ saveGraphHistoryToStorage failed during unload:', e); }
+        } catch (e) {}
     });
 
     // Load stored graphs from local storage
