@@ -604,8 +604,9 @@ h1, h2, h3 {
     font-family: 'Courier New', monospace;
     font-size: 13px;
     line-height: 1.4;
-    max-height: 400px;
-    overflow: auto;
+    /* Allow the pane to flex and fill available space inside #code-panes */
+    flex: 1 1 auto;
+    min-height: 0; /* allow flex children to shrink properly */
     margin: 0;
     padding: 10px;
     white-space: pre-wrap;
@@ -631,6 +632,10 @@ h1, h2, h3 {
     max-width: 100% !important;
     box-sizing: border-box;
     overflow-wrap: anywhere;
+    /* Make code fill the pane and scroll internally when content overflows */
+    height: 100%;
+    max-height: none;
+    overflow: auto;
 }
 
 .code-pane pre {
@@ -640,6 +645,10 @@ h1, h2, h3 {
     width: 100% !important;
     max-width: 100% !important;
     box-sizing: border-box;
+    /* Make pre elements fill the pane and scroll when content overflows */
+    height: 100%;
+    max-height: none;
+    overflow: auto;
 }
 
 /* Intent Actions */
