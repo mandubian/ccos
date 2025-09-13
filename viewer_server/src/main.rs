@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use std::path::PathBuf;
 use futures_util::{StreamExt, sink::SinkExt};
 use chrono;
+use uuid::Uuid; // for execution run identifiers
 
 // CCOS runtime types for background arbiter calls
 use rtfs_compiler::ccos::{CCOS, runtime_service};
@@ -56,6 +57,28 @@ enum ViewerEvent {
     GraphRtfsGenerated {
         graph_id: String,
         rtfs_code: String,
+    },
+    // --- Execution streaming events ---
+    ExecutionStarted {
+        execution_id: String,
+        graph_id: String,
+        started_at: i64,
+    },
+    IntentExecution {
+        execution_id: String,
+        graph_id: String,
+        intent_id: String,
+        phase: String,            // "started" | "completed" | "failed"
+        result: Option<serde_json::Value>,
+        error: Option<String>,
+        occurred_at: i64,
+    },
+    ExecutionFinished {
+        execution_id: String,
+        graph_id: String,
+        success: bool,
+        summary: serde_json::Value, // {results: {...}, failures:[...], intent_count:n}
+        finished_at: i64,
     },
 }
 
@@ -150,6 +173,7 @@ struct ExecuteResponse {
     success: bool,
     result: Option<String>,
     error: Option<String>,
+    execution_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -396,23 +420,30 @@ async fn execute_handler(
             success: false,
             result: None,
             error: Some("Execution service unavailable".to_string()),
+            execution_id: None,
         });
     }
 
     // Await response with timeout
     match tokio::time::timeout(std::time::Duration::from_secs(300), resp_rx).await {
         Ok(Ok(Ok(result))) => {
-            // Broadcast completion
+            // Expect format: execution_id=<id>|<result>
+            let (exec_id_opt, result_text) = if let Some((first, rest)) = result.split_once('|') {
+                if first.starts_with("execution_id=") {
+                    (Some(first.trim_start_matches("execution_id=").to_string()), rest.to_string())
+                } else { (None, result) }
+            } else { (None, result.clone()) };
             let _ = state.tx.send(ViewerEvent::StepLog {
                 step: "Execution".to_string(),
                 status: "completed".to_string(),
                 message: format!("Execution completed successfully"),
                 details: Some(serde_json::json!({
                     "graph_id": graph_id.clone(),
-                    "result": result.clone()
+                    "execution_id": exec_id_opt.clone(),
+                    "result": result_text.clone()
                 })),
             });
-            Json(ExecuteResponse { success: true, result: Some(result), error: None })
+            Json(ExecuteResponse { success: true, result: Some(result_text), error: None, execution_id: exec_id_opt })
         }
         Ok(Ok(Err(e))) => {
             let _ = state.tx.send(ViewerEvent::StepLog {
@@ -424,11 +455,7 @@ async fn execute_handler(
                     "error": e.clone()
                 })),
             });
-    Json(ExecuteResponse {
-                success: false,
-                result: None,
-                error: Some(e),
-            })
+            Json(ExecuteResponse { success: false, result: None, error: Some(e), execution_id: None })
         }
         _ => {
             let _ = state.tx.send(ViewerEvent::StepLog {
@@ -440,11 +467,7 @@ async fn execute_handler(
                     "error": "timeout"
                 })),
             });
-    Json(ExecuteResponse {
-                success: false,
-                result: None,
-                error: Some("Execution timed out".to_string()),
-            })
+            Json(ExecuteResponse { success: false, result: None, error: Some("Execution timed out".to_string()), execution_id: None })
         }
     }
 }
@@ -1172,23 +1195,175 @@ async fn main() {
 
                     Some(req) = execute_rx.recv() => {
                         let graph_id = req.graph_id.clone();
+                        // Generate execution_id
+                        let execution_id = Uuid::new_v4().to_string();
+                        let started_at = chrono::Utc::now().timestamp();
+                        let _ = tx.send(ViewerEvent::ExecutionStarted {
+                            execution_id: execution_id.clone(),
+                            graph_id: graph_id.clone(),
+                            started_at,
+                        });
 
-                        // Execute the intent graph using the orchestrator
-                        if let Some(_arb) = ccos.get_delegating_arbiter() {
-                            let ctx = runtime_service::default_controlled_context();
-
-                            match ccos.get_orchestrator().execute_intent_graph(&graph_id, &ctx).await {
-                                Ok(result) => {
-                                    let result_str = format!("Execution result: {}", result.value);
-                                    let _ = req.resp.send(Ok(result_str));
+                        // Reset node statuses to pending_execution in UI
+                        if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                            for intent in graph_lock.storage.get_all_intents_sync().into_iter()
+                                .filter(|i| i.metadata.get("graph_id").map(|g| g == &graph_id).unwrap_or(false)) {
+                                let _ = tx.send(ViewerEvent::NodeStatusChange {
+                                    id: intent.intent_id.clone(),
+                                    status: "pending_execution".to_string(),
+                                    details: None,
+                                });
+                            }
                         }
-                        Err(e) => {
-                                    let _ = req.resp.send(Err(format!("execution error: {}", e)));
+
+                        if ccos.get_delegating_arbiter().is_none() {
+                            let _ = req.resp.send(Err("no delegating arbiter available".to_string()));
+                            continue;
+                        }
+
+                        let ctx = runtime_service::default_controlled_context();
+                        let mut results = serde_json::Map::new();
+                        let mut failures = Vec::new();
+                        let mut overall_success = true;
+
+                        // Collect executable intents (leaf intents with stored plans; root excluded)
+                        let mut executable: Vec<rtfs_compiler::ccos::types::StorableIntent> = Vec::new();
+                        if let Ok(graph_lock) = ccos.get_intent_graph().lock() {
+                            let all = graph_lock.storage.get_all_intents_sync();
+                            use std::collections::HashSet;
+                            let mut has_children = HashSet::new();
+                            let mut is_subgoal = HashSet::new();
+                            for intent in &all {
+                                if intent.metadata.get("graph_id").map(|g| g == &graph_id).unwrap_or(false) {
+                                    let edges = graph_lock.get_edges_for_intent(&intent.intent_id);
+                                    for edge in edges {
+                                        if edge.edge_type == rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf {
+                                            has_children.insert(edge.to.clone()); // parent has child
+                                            is_subgoal.insert(edge.from.clone()); // child is subgoal
+                                        }
+                                    }
                                 }
                             }
-                        } else {
-                            let _ = req.resp.send(Err("no delegating arbiter available".to_string()));
+                            for intent in &all {
+                                if intent.metadata.get("graph_id").map(|g| g == &graph_id).unwrap_or(false) {
+                                    let is_root = !is_subgoal.contains(&intent.intent_id);
+                                    let is_leaf = !has_children.contains(&intent.intent_id);
+                                    if is_leaf && !is_root { executable.push(intent.clone()); }
+                                }
+                            }
                         }
+
+                        let executable_count = executable.len();
+                        for st in executable {
+                            let intent_id = st.intent_id.clone();
+                            let now = chrono::Utc::now().timestamp();
+                            let _ = tx.send(ViewerEvent::IntentExecution {
+                                execution_id: execution_id.clone(),
+                                graph_id: graph_id.clone(),
+                                intent_id: intent_id.clone(),
+                                phase: "started".to_string(),
+                                result: None,
+                                error: None,
+                                occurred_at: now,
+                            });
+                            let _ = tx.send(ViewerEvent::NodeStatusChange {
+                                id: intent_id.clone(),
+                                status: "executing".to_string(),
+                                details: Some(serde_json::json!({ "execution_id": execution_id })),
+                            });
+
+                            // Fetch plan (already stored earlier)
+                            let plan_opt = ccos.get_orchestrator().get_plan_for_intent(&intent_id).ok().flatten();
+                            if plan_opt.is_none() {
+                                // Instead of failing execution, mark as skipped (no plan yet). This lets users
+                                // generate plans later and re-run without polluting failure stats.
+                                let now = chrono::Utc::now().timestamp();
+                                let _ = tx.send(ViewerEvent::IntentExecution {
+                                    execution_id: execution_id.clone(),
+                                    graph_id: graph_id.clone(),
+                                    intent_id: intent_id.clone(),
+                                    phase: "skipped".to_string(),
+                                    result: None,
+                                    error: Some("No plan available (skipped)".to_string()),
+                                    occurred_at: now,
+                                });
+                                let _ = tx.send(ViewerEvent::NodeStatusChange {
+                                    id: intent_id.clone(),
+                                    status: "skipped".to_string(),
+                                    details: Some(serde_json::json!({ "reason": "No plan available" })),
+                                });
+                                // Do not mark as overall failure; just omit from executed results
+                                continue;
+                            }
+                            let plan = plan_opt.unwrap();
+
+                            match ccos.get_orchestrator().execute_plan(&plan, &ctx).await {
+                                Ok(exec_res) => {
+                                    let now = chrono::Utc::now().timestamp();
+                                    results.insert(intent_id.clone(), serde_json::json!({
+                                        "success": exec_res.success,
+                                        "value": exec_res.value.to_string()
+                                    }));
+                                    let _ = tx.send(ViewerEvent::IntentExecution {
+                                        execution_id: execution_id.clone(),
+                                        graph_id: graph_id.clone(),
+                                        intent_id: intent_id.clone(),
+                                        phase: if exec_res.success { "completed" } else { "failed" }.to_string(),
+                                        result: Some(serde_json::json!({ "value": exec_res.value.to_string() })),
+                                        error: if exec_res.success { None } else { Some("Execution returned failure".to_string()) },
+                                        occurred_at: now,
+                                    });
+                                    let _ = tx.send(ViewerEvent::NodeStatusChange {
+                                        id: intent_id.clone(),
+                                        status: if exec_res.success { "executed" } else { "failed" }.to_string(),
+                                        details: Some(serde_json::json!({
+                                            "execution_id": execution_id,
+                                            "value": exec_res.value.to_string()
+                                        })),
+                                    });
+                                    if !exec_res.success { overall_success = false; failures.push(intent_id.clone()); }
+                                }
+                                Err(e) => {
+                                    overall_success = false;
+                                    failures.push(intent_id.clone());
+                                    let now = chrono::Utc::now().timestamp();
+                                    let err_s = e.to_string();
+                                    let _ = tx.send(ViewerEvent::IntentExecution {
+                                        execution_id: execution_id.clone(),
+                                        graph_id: graph_id.clone(),
+                                        intent_id: intent_id.clone(),
+                                        phase: "failed".to_string(),
+                                        result: None,
+                                        error: Some(err_s.clone()),
+                                        occurred_at: now,
+                                    });
+                                    let _ = tx.send(ViewerEvent::NodeStatusChange {
+                                        id: intent_id.clone(),
+                                        status: "failed".to_string(),
+                                        details: Some(serde_json::json!({ "error": err_s })),
+                                    });
+                                }
+                            }
+                        }
+
+                        let finished_at = chrono::Utc::now().timestamp();
+                        let summary = serde_json::json!({
+                            "results": results,
+                            "failures": failures,
+                            "skipped": executable_count - results.len() - failures.len(),
+                            "intent_count": results.len(),
+                        });
+                        let _ = tx.send(ViewerEvent::ExecutionFinished {
+                            execution_id: execution_id.clone(),
+                            graph_id: graph_id.clone(),
+                            success: overall_success,
+                            summary: summary.clone(),
+                            finished_at,
+                        });
+
+                        // HTTP channel response: pack execution_id + summary text
+                        let summary_text = format!("execution_id={}|Summary: {}", execution_id, if overall_success { "success" } else { "partial/failure" });
+                        let _ = req.resp.send(Ok(summary_text));
                     }
 
                     Some(req) = load_graph_rx.recv() => {

@@ -1487,6 +1487,64 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Safely update the small status bar region (current graph + selected intent label)
+    // This was referenced before being defined, causing a ReferenceError. We implement
+    // a defensive version here so calls earlier in the code path succeed regardless
+    // of load timing.
+    function updateStatusBar() {
+        try {
+            if (currentGraphIdSpan) {
+                currentGraphIdSpan.textContent = currentGraphId ? currentGraphId : '—';
+            }
+            if (selectedIntentLabelSpan) {
+                if (selectedIntentId) {
+                    const node = intentNodes.get(selectedIntentId);
+                    const label = node?.label || node?.goal || selectedIntentId;
+                    selectedIntentLabelSpan.textContent = label;
+                    selectedIntentLabelSpan.title = label;
+                } else {
+                    selectedIntentLabelSpan.textContent = 'None';
+                    selectedIntentLabelSpan.title = 'No intent selected';
+                }
+            }
+            // Optionally reflect counts (nodes/edges) if elements exist in future
+            if (graphStatsElement) {
+                const nodeCount = nodes.length;
+                const edgeCount = edges.length;
+                graphStatsElement.textContent = `${nodeCount} intents, ${edgeCount} relationships`;
+            }
+        } catch (e) {
+            console.error('Error updating status bar:', e);
+        }
+    }
+
+    // Simple activity indicator helpers (were referenced before being defined)
+    // Provide non-throwing implementations that manipulate #activity-indicator and #activity-text.
+    function showActivity(message) {
+        try {
+            if (activityIndicator) {
+                activityIndicator.classList.remove('hidden');
+                activityIndicator.style.display = 'inline-flex';
+            }
+            if (activityText) {
+                activityText.textContent = message || 'Working...';
+            }
+        } catch (e) {
+            console.warn('showActivity failed:', e);
+        }
+    }
+
+    function hideActivity() {
+        try {
+            if (activityIndicator) {
+                activityIndicator.classList.add('hidden');
+                activityIndicator.style.display = 'none';
+            }
+        } catch (e) {
+            console.warn('hideActivity failed:', e);
+        }
+    }
+
     function updateGoalStatus(message) {
         goalStatusElement.textContent = message;
     }
@@ -1516,6 +1574,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
             case 'StepLog':
                 handleStepLog(event.data);
+                break;
+            case 'ExecutionStarted':
+                handleExecutionStarted(event.data);
+                break;
+            case 'IntentExecution':
+                handleIntentExecution(event.data);
+                break;
+            case 'ExecutionFinished':
+                handleExecutionFinished(event.data);
                 break;
             case 'GraphGenerated':
                 console.log('📡 RECEIVED GraphGenerated event:', event.data);
@@ -1689,6 +1756,7 @@ document.addEventListener('DOMContentLoaded', () => {
             { btn: tabIntent, pane: document.getElementById('pane-intent') },
             { btn: tabPlan, pane: document.getElementById('pane-plan') },
             { btn: tabGraph, pane: document.getElementById('pane-graph') },
+            { btn: document.getElementById('tab-exec'), pane: document.getElementById('pane-exec') },
         ];
         panes.forEach(({ btn, pane }) => {
             if (!btn || !pane) return;
@@ -1702,10 +1770,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (tabIntent && tabPlan && tabGraph) {
+        const tabExec = document.getElementById('tab-exec');
         tabIntent.addEventListener('click', () => activateTab('intent'));
         tabPlan.addEventListener('click', () => activateTab('plan'));
         tabGraph.addEventListener('click', () => activateTab('graph'));
-        // Default to intent tab active
+        if (tabExec) tabExec.addEventListener('click', () => { renderExecutionRuns(); activateTab('exec'); });
         activateTab('intent');
     }
 
@@ -1812,6 +1881,168 @@ document.addEventListener('DOMContentLoaded', () => {
 
             addLogEntry(`Intent ${data.id} status changed: ${oldStatus || 'unknown'} → ${data.status}`);
         }
+    }
+
+    // Execution event handlers
+    const executionRuns = new Map(); // execution_id -> run data
+    const executionLog = []; // { ts, run, type, intent_id?, phase?, error?, result?, message }
+
+    function renderExecutionRuns() {
+        const listEl = document.getElementById('exec-runs-list');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        const runs = Array.from(executionRuns.entries()).sort((a,b) => b[1].started_at - a[1].started_at);
+        runs.forEach(([id, run]) => {
+            const li = document.createElement('li');
+            li.className = 'exec-run-item';
+            const status = run.success === null ? 'running' : (run.success ? 'success' : 'partial');
+            li.innerHTML = `<span class="exec-run-id" title="${id}">${id.substring(0,8)}</span>`+
+                           `<span class="exec-run-status exec-status-${status}">${status}</span>`+
+                           `<span class="exec-run-time">${timeAgo(run.started_at)}</span>`;
+            li.addEventListener('click', () => renderExecutionDetails(id));
+            listEl.appendChild(li);
+        });
+    }
+
+    function timeAgo(tsSec) {
+        const delta = Date.now()/1000 - tsSec;
+        if (delta < 60) return `${Math.floor(delta)}s ago`;
+        if (delta < 3600) return `${Math.floor(delta/60)}m ago`;
+        return `${Math.floor(delta/3600)}h ago`;
+    }
+
+    function renderExecutionDetails(executionId) {
+        const run = executionRuns.get(executionId);
+        if (!run) return;
+        const titleEl = document.getElementById('exec-run-title');
+        const statusEl = document.getElementById('exec-run-status');
+        const metaEl = document.getElementById('exec-run-meta');
+        const intentsTableBody = document.querySelector('#exec-intents-table tbody');
+        const summaryEl = document.getElementById('exec-summary-json');
+        const execLogEl = document.getElementById('exec-log-entries');
+        if (titleEl) titleEl.textContent = `Execution ${executionId.substring(0,8)}`;
+        if (statusEl) {
+            const status = run.success === null ? 'RUNNING' : (run.success ? 'SUCCESS' : 'PARTIAL/FAIL');
+            statusEl.textContent = status;
+            statusEl.className = 'exec-status-badge ' + (run.success === null ? 'exec-status-running' : (run.success ? 'exec-status-success' : 'exec-status-fail'));
+        }
+        if (metaEl) {
+            metaEl.innerHTML = `Started: ${new Date(run.started_at*1000).toLocaleTimeString()}<br>`+
+                               `Finished: ${run.finished_at ? new Date(run.finished_at*1000).toLocaleTimeString() : '—'}<br>`+
+                               `Duration: ${run.finished_at ? (run.finished_at - run.started_at).toFixed(1)+'s' : '—'}`;
+        }
+        if (intentsTableBody) {
+            intentsTableBody.innerHTML = '';
+            Object.entries(run.intents).forEach(([intentId, info]) => {
+                const tr = document.createElement('tr');
+                const phasesStr = info.phases.map(p=>p.phase).join(' → ');
+                tr.innerHTML = `<td title="${intentId}">${intentId.substring(0,8)}</td>`+
+                               `<td>${phasesStr}</td>`+
+                               `<td>${info.result ? escapeHtml(JSON.stringify(info.result)) : ''}</td>`+
+                               `<td class="err-cell">${info.error ? escapeHtml(info.error) : ''}</td>`;
+                intentsTableBody.appendChild(tr);
+            });
+        }
+        if (summaryEl) {
+            summaryEl.textContent = run.summary ? JSON.stringify(run.summary, null, 2) : 'No summary yet.';
+        }
+        if (execLogEl) {
+            execLogEl.innerHTML = '';
+            executionLog.filter(e => e.run === executionId).forEach(e => {
+                const div = document.createElement('div');
+                const icon = (
+                    e.type === 'start' ? '🚀' :
+                    e.type === 'finish' ? (e.success ? '🏁' : '⚠️') :
+                    e.type === 'summary' ? '📊' :
+                    e.type === 'intent-phase' ? (e.error ? '❌' : '🧩') : '•'
+                );
+                const phaseBadge = e.phase ? `<span class="exec-phase-badge phase-${e.phase}">${e.phase}</span>` : '';
+                const intentSpan = e.intent_id ? `<span class="exec-intent-id" title="${e.intent_id}">${e.intent_id.substring(0,8)}</span>` : '';
+                const errorSpan = e.error ? `<span class="exec-error">${escapeHtml(e.error)}</span>` : '';
+                const resultSpan = e.result ? `<span class="exec-result" title='${escapeHtml(JSON.stringify(e.result))}'>result</span>` : '';
+                const summaryBlock = e.type === 'summary' && e.summary ? `<pre class="exec-summary-inline">${escapeHtml(JSON.stringify(e.summary, null, 2))}</pre>` : '';
+                div.className = `exec-log-entry exec-type-${e.type} ${e.error ? 'has-error' : ''}`;
+                div.innerHTML = `
+                    <span class="exec-log-time">${new Date(e.ts).toLocaleTimeString()}</span>
+                    <span class="exec-log-icon">${icon}</span>
+                    ${intentSpan}
+                    ${phaseBadge}
+                    <span class="exec-log-message">${e.message || ''}</span>
+                    ${resultSpan}
+                    ${errorSpan}
+                    ${summaryBlock}
+                `;
+                execLogEl.appendChild(div);
+            });
+            execLogEl.scrollTop = execLogEl.scrollHeight;
+        }
+    }
+
+    function escapeHtml(str){
+        return str.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+
+    function handleExecutionStarted(data) {
+        if (!data || !data.execution_id) return;
+        executionRuns.set(data.execution_id, {
+            started_at: data.started_at || Date.now()/1000,
+            finished_at: null,
+            success: null,
+            intents: {}
+        });
+    executionLog.push({ ts: Date.now(), run: data.execution_id, type: 'start', message: 'Execution started' });
+        addLogEntry(`[EXEC] Execution started (ID: ${data.execution_id.substring(0,8)})`);
+    renderExecutionRuns();
+    }
+
+    function handleIntentExecution(data) {
+        if (!data || !data.execution_id || !data.intent_id) return;
+        const run = executionRuns.get(data.execution_id);
+        if (!run) {
+            // Late creation if started event missed
+            executionRuns.set(data.execution_id, {
+                started_at: data.occurred_at || Date.now()/1000,
+                finished_at: null,
+                success: null,
+                intents: {}
+            });
+        }
+        const exec = executionRuns.get(data.execution_id);
+        if (!exec.intents[data.intent_id]) {
+            exec.intents[data.intent_id] = { phases: [], result: null, error: null };
+        }
+        exec.intents[data.intent_id].phases.push({ phase: data.phase, at: data.occurred_at });
+        if (data.result) exec.intents[data.intent_id].result = data.result;
+        if (data.error) exec.intents[data.intent_id].error = data.error;
+        // Add concise log line
+        executionLog.push({
+            ts: Date.now(),
+            run: data.execution_id,
+            type: 'intent-phase',
+            intent_id: data.intent_id,
+            phase: data.phase,
+            error: data.error || null,
+            result: data.result || null,
+            message: `Intent phase update`
+        });
+        addLogEntry(`[EXEC] ${data.intent_id.substring(0,8)} phase: ${data.phase}` + (data.error ? ` ❌ ${data.error}` : '') + (data.result ? ` ✅ result` : ''));
+    renderExecutionDetails(data.execution_id);
+    }
+
+    function handleExecutionFinished(data) {
+        if (!data || !data.execution_id) return;
+        const run = executionRuns.get(data.execution_id);
+        if (run) {
+            run.finished_at = data.finished_at || Date.now()/1000;
+            run.success = data.success;
+            run.summary = data.summary;
+        }
+    executionLog.push({ ts: Date.now(), run: data.execution_id, type: 'finish', success: data.success, message: 'Execution finished' });
+        addLogEntry(`[EXEC] Execution finished (ID: ${data.execution_id.substring(0,8)}) status: ${data.success ? 'SUCCESS' : 'FAIL/PARTIAL'}`);
+    if (data.summary) executionLog.push({ ts: Date.now(), run: data.execution_id, type: 'summary', summary: data.summary, message: 'Execution summary' });
+        if (data.summary) addLogEntry(`[EXEC] Summary: ${JSON.stringify(data.summary)}`);
+        renderExecutionRuns();
+        renderExecutionDetails(data.execution_id);
     }
 
     function handleStepLog(data) {
@@ -1937,6 +2168,7 @@ document.addEventListener('DOMContentLoaded', () => {
         intentNodes = new Map(historicalGraph.nodes);
         intentEdges = new Map(historicalGraph.edges);
         generatedPlans = new Map(historicalGraph.plans);
+
         
         console.log('📊 Restoring graph data:');
         console.log('  - Nodes:', intentNodes.size);
@@ -2837,6 +3069,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getNodeColor(status) {
         switch (status) {
+            case 'pending_execution':
+                return {
+                    border: '#555555',
+                    background: '#2a2a2a',
+                    highlight: { border: '#777777', background: '#333333' }
+                };
+            case 'skipped':
+                return {
+                    border: '#888888',
+                    background: '#2f2f2f',
+                    highlight: { border: '#aaaaaa', background: '#3a3a3a' }
+                };
             case 'Active':
             case 'active':
                 return {

@@ -1040,3 +1040,90 @@ h1, h2, h3 {
 .log-entry.hidden {
     display: none;
 }
+
+/* Execution History (Exec tab) */
+#exec-layout {
+    display: flex;
+    gap: 12px;
+    height: 100%;
+}
+
+#exec-runs-panel {
+    width: 160px;
+    border-right: 1px solid #333;
+    overflow-y: auto;
+}
+
+.exec-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 6px;
+    border-bottom: 1px solid #333;
+    background: #1f1f1f;
+}
+
+.exec-runs-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.exec-run-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid #222;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.exec-run-item:hover { background: #2a2a2a; }
+
+.exec-run-id { font-family: monospace; color: #ccc; }
+.exec-run-status { margin-left: auto; font-size: 10px; padding: 2px 4px; border-radius: 3px; text-transform: uppercase; }
+.exec-status-running { background: #555; color: #fff; }
+.exec-status-success { background: #056f05; color: #d3ffd3; }
+.exec-status-partial { background: #8a6e00; color: #fff1bd; }
+.exec-status-fail { background: #6f0505; color: #ffd3d3; }
+.exec-run-time { color: #777; font-size: 10px; }
+
+#exec-details-panel { flex: 1; overflow: auto; }
+#exec-details-panel h5 { margin: 10px 0 5px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+
+.exec-status-badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+.exec-status-running { background: rgba(255,255,0,0.2); }
+.exec-status-success { background: rgba(0,170,0,0.25); }
+.exec-status-fail { background: rgba(170,0,0,0.25); }
+
+#exec-intents-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#exec-intents-table th, #exec-intents-table td { border: 1px solid #333; padding: 4px 6px; text-align: left; vertical-align: top; }
+#exec-intents-table th { background: #1f1f1f; }
+#exec-intents-table tbody tr:hover { background: #222; }
+
+.err-cell { color: #ff6b6b; font-family: monospace; }
+
+.exec-phase-badge { display: inline-block; padding: 2px 6px; margin-right: 4px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: .5px; }
+.phase-started { background: #004a7a; color: #8fd3ff; }
+.phase-executing { background: #7a5e00; color: #ffe08f; }
+.phase-completed { background: #005a1f; color: #8fffbe; }
+.phase-failed { background: #5a0000; color: #ff9f9f; }
+.phase-skipped { background: #404040; color: #cfcfcf; }
+
+#exec-summary-json { background: #1a1a1a; border: 1px solid #333; padding: 8px; font-size: 11px; max-height: 150px; overflow: auto; }
+
+.exec-log { background: #111; border: 1px solid #333; padding: 6px; font-family: "Fira Code", monospace; font-size: 11px; max-height: 160px; overflow-y: auto; }
+.exec-log-entry { padding: 3px 4px; border-bottom: 1px solid #222; line-height: 1.3; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.exec-log-entry:last-child { border-bottom: none; }
+.exec-log-time { color: #666; font-size: 10px; }
+.exec-log-icon { width: 18px; text-align: center; }
+.exec-intent-id { font-family: monospace; background: #2a2a2a; padding: 2px 4px; border-radius: 3px; color: #ccc; }
+.exec-log-message { color: #ddd; }
+.exec-error { color: #ff5555; font-weight: 600; }
+.exec-result { background: #004a1f; color: #8fffbe; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
+.exec-summary-inline { background: #000; border: 1px solid #222; padding: 6px; margin: 6px 0 0 0; width: 100%; white-space: pre-wrap; }
+.exec-type-start { background: rgba(0,170,255,0.05); }
+.exec-type-finish { background: rgba(0,170,0,0.05); }
+.exec-type-summary { background: rgba(255,170,0,0.05); }
+.exec-type-intent-phase.has-error { background: rgba(170,0,0,0.08); }
