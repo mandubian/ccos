@@ -1162,6 +1162,7 @@ h1, h2, h3 {
 .exec-subtab { background:#1c1c1c; border:1px solid #333; padding:4px 10px; cursor:pointer; font-size:11px; border-radius:4px; }
 .exec-subtab.active { background:#333; }
 .exec-subtab-panel { font-size:12px; }
+.exec-subtab-panel.hidden { display:none; }
 .exec-summary-box { background:#121212; border:1px solid #333; padding:8px; font-size:11px; max-height:200px; overflow:auto; }
 
 /* Intents table (rendered into subtab-intents) */
