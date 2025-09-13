@@ -1598,6 +1598,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Update the goal status small text in the UI (defensive, non-throwing)
+    function updateGoalStatus(message) {
+        try {
+            if (goalStatusElement) {
+                goalStatusElement.textContent = message || '';
+            } else {
+                // If the element isn't available yet, log as a fallback so callers still get observability
+                console.log('goalStatus:', message);
+            }
+        } catch (e) {
+            console.warn('⚠️ updateGoalStatus failed:', e);
+        }
+    }
+
     // Ensure code panes (<pre> elements) fill the available height of their container
     function updateCodePaneHeights() {
         // Try tabs-based rendering first (preferred)
