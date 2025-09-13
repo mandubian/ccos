@@ -639,6 +639,20 @@ async fn main() {
     let storage_path = std::path::PathBuf::from("demo_storage");
     let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_archive_storage(storage_path.clone());
     let plan_archive_path = storage_path.join("plans");
+    // Ensure storage directories exist and print canonical paths for debugging
+    if let Err(e) = std::fs::create_dir_all(&plan_archive_path) { eprintln!("⚠️ Failed to create plan archive dir {}: {}", plan_archive_path.display(), e); }
+    match std::fs::canonicalize(&storage_path) {
+        Ok(abs) => println!("📁 Storage path (abs): {}", abs.display()),
+        Err(_) => println!("📁 Storage path (cwd-relative): {}", storage_path.display()),
+    }
+    match std::fs::canonicalize(&plan_archive_path) {
+        Ok(abs) => println!("📁 Plan archive path (abs): {}", abs.display()),
+        Err(_) => println!("📁 Plan archive path (cwd-relative): {}", plan_archive_path.display()),
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => println!("📂 Current working dir: {}", cwd.display()),
+        Err(_) => println!("📂 Current working dir: <unknown>"),
+    }
     
     let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_callback)).await {
         Ok(c) => {
@@ -699,6 +713,20 @@ async fn main() {
             let storage_path = std::path::PathBuf::from("demo_storage");
             let intent_graph_config = rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig::with_file_archive_storage(storage_path.clone());
             let plan_archive_path = storage_path.join("plans");
+            // Ensure storage directories exist and print canonical paths for debugging in worker
+            if let Err(e) = std::fs::create_dir_all(&plan_archive_path) { eprintln!("⚠️ Worker: Failed to create plan archive dir {}: {}", plan_archive_path.display(), e); }
+            match std::fs::canonicalize(&storage_path) {
+                Ok(abs) => println!("🧵 Worker storage path (abs): {}", abs.display()),
+                Err(_) => println!("🧵 Worker storage path (cwd-relative): {}", storage_path.display()),
+            }
+            match std::fs::canonicalize(&plan_archive_path) {
+                Ok(abs) => println!("🧵 Worker plan archive path (abs): {}", abs.display()),
+                Err(_) => println!("🧵 Worker plan archive path (cwd-relative): {}", plan_archive_path.display()),
+            }
+            match std::env::current_dir() {
+                Ok(cwd) => println!("🧵 Worker current working dir: {}", cwd.display()),
+                Err(_) => println!("🧵 Worker current working dir: <unknown>"),
+            }
             
             let ccos = Arc::new(match CCOS::new_with_configs_and_debug_callback(intent_graph_config, Some(plan_archive_path), Some(debug_cb)).await {
                 Ok(c) => c,
