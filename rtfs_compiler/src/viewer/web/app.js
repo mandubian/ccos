@@ -204,7 +204,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Force the height change with !important and disable flex
             logContainer.style.setProperty('height', newHeight + 'px', 'important');
             logContainer.style.setProperty('max-height', 'none', 'important');
-            logContainer.style.setProperty('flex', 'none', 'important');
+                    // Adjust code pane heights after log resize
+                    updateCodePaneHeights();
             logContainer.style.setProperty('flex-grow', '0', 'important');
             logContainer.style.setProperty('flex-shrink', '0', 'important');
             
@@ -227,6 +228,46 @@ document.addEventListener('DOMContentLoaded', () => {
     // Helper function for node badges (placeholder)
     function getBadgeText(nodeId) {
         return ''; // No badges for now
+    }
+
+    // Update visual indicator on a node when a plan is available (or removed)
+    function updateNodePlanIndicator(nodeId, hasPlan) {
+        if (!nodeId) return;
+        const node = nodes.get(nodeId);
+        if (!node) {
+            console.warn(`⚠️ updateNodePlanIndicator: node not found: ${nodeId}`);
+            return;
+        }
+
+        const nodeUpdate = { id: nodeId };
+        if (hasPlan) {
+            // mark as having a plan
+            nodeUpdate.has_plan = true;
+            nodeUpdate.original_label = node.original_label || node.label;
+            let newLabel = nodeUpdate.original_label || node.label;
+            if (newLabel && !newLabel.includes('📋')) newLabel = newLabel + ' 📋';
+            nodeUpdate.label = newLabel;
+            nodeUpdate.plan_id = node.plan_id || null;
+            nodeUpdate.color = {
+                border: '#00ff88',
+                background: node.color?.background || '#2a2a2a',
+                highlight: { border: '#88ffaa', background: '#3a3a3a' }
+            };
+            nodeUpdate.title = `${node.original_label || node.label}\n📋 Has Plan Available\nClick to view plan details`;
+        } else {
+            // remove plan indicator
+            nodeUpdate.has_plan = false;
+            nodeUpdate.plan_id = null;
+            nodeUpdate.label = node.original_label || node.label;
+            nodeUpdate.color = node.color || getNodeColor(node.status || 'pending');
+            nodeUpdate.title = node.original_label || node.label;
+        }
+
+        try {
+            nodes.update(nodeUpdate);
+        } catch (e) {
+            console.error(`❌ updateNodePlanIndicator failed for ${nodeId}:`, e);
+        }
     }
 
     // State management
@@ -474,6 +515,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize graph history selector after DOM elements are available
     populateGraphHistorySelector();
+    // Ensure code panes size correctly on initial load and when window resizes
+    try {
+        updateCodePaneHeights();
+        window.addEventListener('resize', updateCodePaneHeights);
+    } catch (e) {
+        console.warn('⚠️ Failed to initialize code pane height handler:', e);
+    }
 
     // Real-time input validation
     const goalInput = document.getElementById('goal-input');
@@ -639,11 +687,42 @@ document.addEventListener('DOMContentLoaded', () => {
         const sortedGraphs = Array.from(graphHistory.entries())
             .sort(([,a], [,b]) => b.timestamp - a.timestamp);
         
+        console.log('📚 populateGraphHistorySelector: graphHistory size=', graphHistory.size);
+        console.log('📚 populateGraphHistorySelector: keys=', Array.from(graphHistory.keys()));
         sortedGraphs.forEach(([graphId, graph]) => {
             const option = document.createElement('option');
             option.value = graphId;
             const timeStr = graph.timestamp.toLocaleString();
-            const planCount = graph.plans.size;
+            // Support both Map (runtime) and Array (legacy/serialized) representations for plans
+            let planCount = 0;
+            let planType = typeof graph.plans;
+            if (graph.plans) {
+                if (typeof graph.plans.size === 'number') {
+                    planCount = graph.plans.size;
+                    planType = 'Map';
+                } else if (Array.isArray(graph.plans)) {
+                    planCount = graph.plans.length;
+                    planType = 'Array';
+                } else if (typeof graph.plans.length === 'number') {
+                    planCount = graph.plans.length;
+                    planType = 'ArrayLike';
+                }
+            }
+            console.log(`📚 populateGraphHistorySelector: graphId=${graphId} planType=${planType} planCount=${planCount}`);
+
+            // Fallback: if planCount is zero, check generatedPlans for plans that belong to this graph (by rootId)
+            if (planCount === 0 && typeof graph.rootId === 'string') {
+                try {
+                    const fallback = Array.from(generatedPlans.values()).filter(p => p && p.graph_id === graph.rootId).length;
+                    if (fallback > 0) {
+                        console.log(`🔎 populateGraphHistorySelector: fallback found ${fallback} plans for graph.rootId=${graph.rootId}`);
+                        planCount = fallback;
+                    }
+                } catch (e) {
+                    console.warn('⚠️ populateGraphHistorySelector fallback counting failed:', e);
+                }
+            }
+
             option.textContent = `${graph.name} (${timeStr}) - ${planCount} plans`;
             graphHistorySelector.appendChild(option);
         });
@@ -869,7 +948,8 @@ document.addEventListener('DOMContentLoaded', () => {
             network.body.data.nodes.clear();
             network.body.data.edges.clear();
             intentNodes.clear();
-            intentEdges.clear();
+                // Update code panes when logs toggle
+                updateCodePaneHeights();
                 generatedPlans.clear();
 
             // Clear UI
@@ -1518,35 +1598,60 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Simple activity indicator helpers (were referenced before being defined)
-    // Provide non-throwing implementations that manipulate #activity-indicator and #activity-text.
-    function showActivity(message) {
+    // Ensure code panes (<pre> elements) fill the available height of their container
+    function updateCodePaneHeights() {
+        // Try tabs-based rendering first (preferred)
         try {
-            if (activityIndicator) {
-                activityIndicator.classList.remove('hidden');
-                activityIndicator.style.display = 'inline-flex';
-            }
-            if (activityText) {
-                activityText.textContent = message || 'Working...';
+            if (tabPlan && typeof renderPlanRtfs === 'function' && planCodeElement) {
+                selectedIntentId = node.id;
+                activateTab('plan');
+                renderPlanRtfs(node.id);
+                return;
             }
         } catch (e) {
-            console.warn('showActivity failed:', e);
+            console.warn('⚠️ tabs-based plan rendering failed, falling back to legacy view:', e);
         }
-    }
 
-    function hideActivity() {
-        try {
-            if (activityIndicator) {
-                activityIndicator.classList.add('hidden');
-                activityIndicator.style.display = 'none';
-            }
-        } catch (e) {
-            console.warn('hideActivity failed:', e);
+        // Fallback: legacy inline RTFS pane rendering
+        console.log(`🔍 showPlanDetails (legacy fallback) called for node:`, node.id);
+        console.log(`🔍 legacy RTFS elements: rtfsContainer=${!!rtfsContainer}, rtfsTitle=${!!rtfsTitle}, rtfsCode=${!!rtfsCode}`);
+
+        if (!rtfsContainer || !rtfsTitle || !rtfsCode) {
+            console.error('RTFS container elements not found for legacy fallback');
+            console.error('Elements:', { rtfsContainer, rtfsTitle, rtfsCode });
+            return;
         }
-    }
 
-    function updateGoalStatus(message) {
-        goalStatusElement.textContent = message;
+        // Get plan information from stored plans
+        const storedPlan = generatedPlans.get(node.id);
+        console.log(`🔍 Looking for plan with node.id: ${node.id}`);
+        console.log(`📋 Available plans:`, Array.from(generatedPlans.keys()));
+        console.log(`📄 Found stored plan:`, storedPlan);
+
+        const planCodeText = storedPlan ? storedPlan.body : (node.plan_body_preview || 'Plan code not available');
+
+        // Clear previous content first
+        rtfsCode.textContent = '';
+
+        // Update RTFS container title to show which plan is selected
+        rtfsTitle.textContent = `📄 Plan: ${node.original_label || node.label}`;
+
+        // Set plan code with syntax highlighting
+        rtfsCode.textContent = planCodeText;
+        console.log(`📝 Setting RTFS plan code to:`, planCodeText);
+
+        if (window.Prism) {
+            // Use setTimeout to ensure DOM is updated before highlighting
+            setTimeout(() => {
+                try { Prism.highlightElement(rtfsCode); console.log('✨ Applied syntax highlighting'); } catch (e) { console.warn('Prism highlighting failed:', e); }
+            }, 10);
+        }
+
+        // Scroll the RTFS container into view and add a temporary visual indicator
+        setTimeout(() => {
+            try { rtfsContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+            try { rtfsContainer.style.border = '2px solid #00ff88'; setTimeout(() => { rtfsContainer.style.border = '1px solid #444'; }, 1000); } catch (e) {}
+        }, 100);
     }
 
     function updateGraphStats() {
@@ -2063,6 +2168,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('  - Nodes to save:', intentNodes.size);
             console.log('  - Edges to save:', intentEdges.size);
             console.log('  - Plans to save:', generatedPlans.size);
+            console.log('  - generatedPlans keys:', Array.from(generatedPlans.keys()));
             console.log('  - Edge details:', Array.from(intentEdges.entries()));
             console.log('  - Edge keys:', Array.from(intentEdges.keys()));
             console.log('  - Edge values:', Array.from(intentEdges.values()));
@@ -2168,6 +2274,9 @@ document.addEventListener('DOMContentLoaded', () => {
         intentNodes = new Map(historicalGraph.nodes);
         intentEdges = new Map(historicalGraph.edges);
         generatedPlans = new Map(historicalGraph.plans);
+
+        console.log('🔁 restoreGraphFromHistory: restored generatedPlans size =', generatedPlans.size);
+        console.log('🔁 restoreGraphFromHistory: generatedPlans keys =', Array.from(generatedPlans.keys()));
 
         
         console.log('📊 Restoring graph data:');
@@ -2421,6 +2530,8 @@ document.addEventListener('DOMContentLoaded', () => {
             network.fit();
             
             console.log('✅ Graph restoration completed');
+            // Ensure code panes are sized after restoring graph
+            try { updateCodePaneHeights(); } catch (e) { console.warn('⚠️ updateCodePaneHeights failed after restore:', e); }
             
             // Try to retrieve plans from server for this graph
             try {
@@ -2435,6 +2546,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const plansResult = await plansResponse.json();
                     if (plansResult.success && plansResult.plans && plansResult.plans.length > 0) {
                         console.log(`📋 Retrieved ${plansResult.plans.length} plans from server`);
+                        console.log('📋 plansResult.plans:', plansResult.plans.map(p=>p.intent_id));
                         
                         // Store the retrieved plans
                         for (const plan of plansResult.plans) {
@@ -2451,6 +2563,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         // Update UI to show plan indicators on nodes
                         console.log('🔄 Updating node UI to show plan indicators...');
+                        console.log('🔄 After storing retrieved plans, generatedPlans size =', generatedPlans.size);
                         for (const plan of plansResult.plans) {
                             const nodeId = plan.intent_id;
                             const node = nodes.get(nodeId);
@@ -2497,6 +2610,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Update button states
                         if (executeBtn) executeBtn.disabled = generatedPlans.size === 0;
                         
+                        // Sync graphHistory entry as well
+                        if (graphHistory.has(currentGraphId)) {
+                            const gh = graphHistory.get(currentGraphId);
+                            console.log('🔁 restoreGraphFromHistory: syncing graphHistory plans. gh before size =', gh.plans.size);
+                            gh.plans = new Map(generatedPlans);
+                            graphHistory.set(currentGraphId, gh);
+                            console.log('🔁 restoreGraphFromHistory: gh after size =', gh.plans.size);
+                            populateGraphHistorySelector();
+                        }
+
                         addLogEntry(`📋 Retrieved ${plansResult.plans.length} plans from server`);
                     } else {
                         console.log('📋 No plans found on server for this graph');
@@ -2970,8 +3093,25 @@ document.addEventListener('DOMContentLoaded', () => {
             timestamp: new Date().toISOString()
         });
 
+        console.log('📋 handlePlanGenerated: generatedPlans size =', generatedPlans.size);
+        console.log('📋 handlePlanGenerated: generatedPlans keys =', Array.from(generatedPlans.keys()));
+
         // Update node visual styling to show it has a plan
         updateNodePlanIndicator(data.intent_id, true);
+
+        // Keep graph history in sync so plan counts in the selector update
+        try {
+            if (currentGraphId && graphHistory.has(currentGraphId)) {
+                const gh = graphHistory.get(currentGraphId);
+                console.log('🔁 handlePlanGenerated: gh before size =', gh.plans.size);
+                gh.plans = new Map(generatedPlans);
+                graphHistory.set(currentGraphId, gh);
+                console.log('🔁 handlePlanGenerated: gh after size =', gh.plans.size);
+                populateGraphHistorySelector();
+            }
+        } catch (e) {
+            console.warn('⚠️ Failed to sync graphHistory after plan generation:', e);
+        }
 
         // Update plan pane if active
         if (isTabActive('plan') && selectedIntentId === data.intent_id) {
