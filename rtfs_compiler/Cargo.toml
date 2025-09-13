@@ -8,11 +8,13 @@ license = "MIT"
 repository = "https://github.com/yourusername/rtfs-compiler"
 
 [features]
-default = ["pest", "regex", "repl"]
-pest = ["dep:pest"]
+default = ["pest", "regex"]
+# Parser (pest grammar + derives)
+pest = ["dep:pest", "dep:pest_derive"]
+# Regex-based intent extraction & validators
 regex = ["dep:regex"]
-repl = ["rustyline"]
-cuda = ["llama_cpp/cuda"]
+# REPL (line editing)
+repl = ["dep:rustyline"]
 metrics_exporter = []
 
 [[bin]]
@@ -22,6 +24,11 @@ path = "src/bin/rtfs_compiler.rs"
 [[bin]]
 name = "rtfs-repl"
 path = "src/bin/rtfs_repl.rs"
+required-features = ["repl"]
+
+[[bin]]
+name = "rtfs-ccos-repl"
+path = "src/bin/rtfs_ccos_repl.rs"
 required-features = ["repl"]
 
 [[bin]]
@@ -36,11 +43,14 @@ path = "examples/arbiter_rtfs_graph_demo_live.rs"
 name = "ccos-viewer"
 path = "src/viewer/main.rs"
 
+[[bin]]
+name = "diagnose_storage"
+path = "src/bin/diagnose_storage.rs"
 
 [dependencies]
 # Parser dependencies
 pest = { version = "2.7", optional = true }
-pest_derive = "2.7"
+pest_derive = { version = "2.7", optional = true }
 regex = { version = "1.10", optional = true }
 
 # Runtime dependencies
@@ -113,6 +123,7 @@ tower-http = { version = "0.5", features = ["fs"] }
 pretty_assertions = "1.4.0"
 wat = "1.0"
 tempfile = "3.8"
+filetime = "0.2"
 
 [[example]]
 name = "hierarchical_context_demo"

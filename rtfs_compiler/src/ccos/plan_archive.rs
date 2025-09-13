@@ -1,15 +1,14 @@
-use super::storage::{ContentAddressableArchive, InMemoryArchive};
+use super::storage::{ContentAddressableArchive, InMemoryArchive, IndexedArchive};
 use super::storage_backends::file_archive::FileArchive;
 use super::archivable_types::ArchivablePlan;
 use super::types::{Plan, PlanId, IntentId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
-
 /// Storage backend for PlanArchive
 pub enum PlanArchiveStorage {
     InMemory(InMemoryArchive<ArchivablePlan>),
-    File(FileArchive),
+    File(IndexedArchive<ArchivablePlan, FileArchive>),
 }
 
 /// Domain-specific Plan archive with indexing and retrieval capabilities
@@ -20,6 +19,69 @@ pub struct PlanArchive {
 }
 
 impl PlanArchive {
+
+    pub fn rehydrate(&mut self) -> Result<(), String> {
+        // Try loading indices from storage sidecar if available. If load succeeds, use them.
+        // If loading fails (parse/IO error) or sidecars are missing we'll fall back to scanning stored plans
+        // and rebuild indices, then persist repaired sidecars.
+        if let PlanArchiveStorage::File(f) = &self.storage {
+            match f.try_load_indices() {
+                Ok(true) => {
+                    // Populate local mutexes from the wrapper's clones
+                    let plan_map = f.plan_index_clone();
+                    let intent_map = f.intent_index_clone();
+                    {
+                        let mut p = self.plan_id_index.lock().map_err(|_| "plan index lock poisoned".to_string())?;
+                        *p = plan_map.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
+                    }
+                    {
+                        let mut i = self.intent_id_index.lock().map_err(|_| "intent index lock poisoned".to_string())?;
+                        *i = intent_map.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
+                    }
+                    return Ok(());
+                }
+                Ok(false) => {
+                    // sidecars not present; fallthrough to scanning
+                }
+                Err(e) => {
+                    // Could not read/parse sidecars; log and fall back to scanning and repair
+                    eprintln!("⚠️ Failed to load sidecar indices (will rebuild by scanning): {}", e);
+                }
+            }
+        }
+
+        let hashes: Vec<String> = match &self.storage {
+            PlanArchiveStorage::File(f) => <IndexedArchive<ArchivablePlan, FileArchive> as ContentAddressableArchive<ArchivablePlan>>::list_hashes(f),
+            PlanArchiveStorage::InMemory(_) => return Ok(()),
+        };
+        if hashes.is_empty() { return Ok(()); }
+        for h in hashes {
+            if let Some(plan) = self.retrieve_plan(&h)? {
+                {
+                    let mut p = self.plan_id_index.lock().map_err(|_| "plan index lock poisoned".to_string())?;
+                    p.insert(plan.plan_id.clone(), h.clone());
+                    // If file-backed, update wrapper indices so we can persist repaired sidecars
+                    if let PlanArchiveStorage::File(f) = &self.storage {
+                        let _ = f.insert_plan_mapping(plan.plan_id.clone(), h.clone());
+                    }
+                }
+                {
+                    let mut i = self.intent_id_index.lock().map_err(|_| "intent index lock poisoned".to_string())?;
+                    for iid in &plan.intent_ids {
+                        i.entry(iid.clone()).or_insert_with(Vec::new).push(h.clone());
+                        if let PlanArchiveStorage::File(f) = &self.storage {
+                            let _ = f.add_intent_mapping(iid.clone(), h.clone());
+                        }
+                    }
+                }
+            }
+        }
+        // Persist via storage backend if available
+        if let PlanArchiveStorage::File(f) = &self.storage {
+            if let Err(e) = f.try_persist_indices() { eprintln!("⚠️ Failed to persist plan indices via storage: {}", e); }
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
             storage: PlanArchiveStorage::InMemory(InMemoryArchive::new()),
@@ -29,19 +91,22 @@ impl PlanArchive {
     }
 
     pub fn with_file_storage(path: PathBuf) -> Result<Self, String> {
-        let file_archive = FileArchive::new(path).map_err(|e| e.to_string())?;
-        Ok(Self {
-            storage: PlanArchiveStorage::File(file_archive),
+        let file_archive = FileArchive::new(path.clone()).map_err(|e| e.to_string())?;
+        let indexed = IndexedArchive::new(file_archive);
+        let mut this = Self {
+            storage: PlanArchiveStorage::File(indexed),
             plan_id_index: Arc::new(Mutex::new(HashMap::new())),
             intent_id_index: Arc::new(Mutex::new(HashMap::new())),
-        })
+        };
+        if let Err(e) = this.rehydrate() { eprintln!("⚠️ PlanArchive rehydrate failed: {}", e); }
+        Ok(this)
     }
 
     /// Store a plan using the appropriate storage backend
     fn store_plan(&self, plan: &ArchivablePlan) -> Result<String, String> {
         match &self.storage {
             PlanArchiveStorage::InMemory(archive) => archive.store(plan.clone()),
-            PlanArchiveStorage::File(archive) => archive.store(plan.clone()),
+            PlanArchiveStorage::File(archive) => <IndexedArchive<ArchivablePlan, FileArchive> as ContentAddressableArchive<ArchivablePlan>>::store(archive, plan.clone()),
         }
     }
 
@@ -49,7 +114,7 @@ impl PlanArchive {
     fn retrieve_plan(&self, hash: &str) -> Result<Option<ArchivablePlan>, String> {
         match &self.storage {
             PlanArchiveStorage::InMemory(archive) => archive.retrieve(hash),
-            PlanArchiveStorage::File(archive) => archive.retrieve(hash),
+            PlanArchiveStorage::File(archive) => <IndexedArchive<ArchivablePlan, FileArchive> as ContentAddressableArchive<ArchivablePlan>>::retrieve(archive, hash),
         }
     }
 
@@ -62,6 +127,10 @@ impl PlanArchive {
         {
             let mut plan_index = self.plan_id_index.lock().unwrap();
             plan_index.insert(plan.plan_id.clone(), hash.clone());
+            // If file-backed, also update the storage wrapper's in-memory indices
+            if let PlanArchiveStorage::File(f) = &self.storage {
+                let _ = f.insert_plan_mapping(plan.plan_id.clone(), hash.clone());
+            }
         }
 
         // Update intent_id index for all intent IDs associated with this plan
@@ -71,7 +140,15 @@ impl PlanArchive {
                 intent_index.entry(intent_id.clone())
                     .or_insert_with(Vec::new)
                     .push(hash.clone());
+                if let PlanArchiveStorage::File(f) = &self.storage {
+                    let _ = f.add_intent_mapping(intent_id.clone(), hash.clone());
+                }
             }
+        }
+
+        // Persist indices via storage backend if possible
+        if let PlanArchiveStorage::File(f) = &self.storage {
+            if let Err(e) = f.try_persist_indices() { eprintln!("⚠️ Failed to persist plan indices via storage: {}", e); }
         }
 
         Ok(hash)
@@ -113,7 +190,7 @@ impl PlanArchive {
 
         let storage_size_bytes = match &self.storage {
             PlanArchiveStorage::InMemory(archive) => archive.size_bytes(),
-            PlanArchiveStorage::File(archive) => <FileArchive as ContentAddressableArchive<ArchivablePlan>>::stats(archive).total_size_bytes,
+            PlanArchiveStorage::File(archive) => <IndexedArchive<ArchivablePlan, FileArchive> as ContentAddressableArchive<ArchivablePlan>>::stats(archive).total_size_bytes,
         };
 
         PlanArchiveStatistics {
@@ -261,5 +338,53 @@ mod tests {
         assert_eq!(plan_ids.len(), 2);
         assert!(plan_ids.contains(&plan1.plan_id));
         assert!(plan_ids.contains(&plan2.plan_id));
+    }
+
+    #[test]
+    fn test_persistence_and_rehydration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan_dir = tmp.path().join("plans");
+        std::fs::create_dir_all(&plan_dir).unwrap();
+        // First lifecycle: create archive, add plan
+        let archive1 = PlanArchive::with_file_storage(plan_dir.clone()).expect("create file archive");
+        let plan = create_test_plan();
+        let pid = plan.plan_id.clone();
+        archive1.archive_plan(&plan).expect("archive plan");
+        assert!(archive1.contains_plan(&pid));
+        // Drop archive1 (goes out of scope) then recreate
+        drop(archive1);
+        let archive2 = PlanArchive::with_file_storage(plan_dir.clone()).expect("rehydrate archive");
+        // Ensure indices were rehydrated
+        assert!(archive2.contains_plan(&pid), "rehydrated archive should contain previously stored plan");
+        let retrieved = archive2.get_plan_by_id(&pid).expect("plan present");
+        assert_eq!(retrieved.plan_id, pid);
+    }
+
+    #[test]
+    fn test_rehydrate_recovers_from_corrupt_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan_dir = tmp.path().join("plans");
+        std::fs::create_dir_all(&plan_dir).unwrap();
+
+        // Create an archive and add a plan
+        let archive1 = PlanArchive::with_file_storage(plan_dir.clone()).expect("create file archive");
+        let plan = create_test_plan();
+        let pid = plan.plan_id.clone();
+        archive1.archive_plan(&plan).expect("archive plan");
+        assert!(archive1.contains_plan(&pid));
+
+        // Corrupt the plan_index.json on disk
+        let index_path = plan_dir.join("plan_index.json");
+        assert!(index_path.exists());
+        std::fs::write(&index_path, b"{ this is not valid json: }").unwrap();
+
+        // Reopen; rehydrate should detect parse error, scan stored plans, rebuild indices, and persist repaired sidecars
+        drop(archive1);
+        let archive2 = PlanArchive::with_file_storage(plan_dir.clone()).expect("rehydrate archive");
+        assert!(archive2.contains_plan(&pid), "rehydrated archive should recover plan despite corrupt sidecar");
+        // Ensure repaired sidecar looks parseable
+        let repaired = std::fs::read_to_string(plan_dir.join("plan_index.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&repaired).expect("repaired sidecar JSON parse");
+        assert!(parsed.get(&pid).is_some());
     }
 }

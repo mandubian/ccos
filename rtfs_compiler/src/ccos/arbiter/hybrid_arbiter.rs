@@ -487,7 +487,7 @@ Plan:"#,
         
         // Find the first expression and convert to Intent
         if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
-            intent_from_function_call(expr)
+            intent_from_function_call(&expr)
                 .ok_or_else(|| RuntimeError::Generic("Parsed AST expression was not a valid intent definition".to_string()))
         } else {
             Err(RuntimeError::Generic("Parsed AST did not contain a top-level expression for the intent".to_string()))

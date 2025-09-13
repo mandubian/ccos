@@ -29,6 +29,120 @@ pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> {
     fn entity_type(&self) -> &'static str;
 }
 
+// --- Generic indexing abstraction ---
+use std::collections::HashMap as StdHashMap;
+
+/// Trait for archives that can persist/load domain-specific sidecar indices.
+/// Implementations are optional; the `IndexedArchive` wrapper will use them when available.
+pub trait IndexableArchive {
+    /// Save plan and intent indices as sidecar files. Keys/values are strings here to keep the trait
+    /// simple and backend-agnostic.
+    fn save_plan_intent_indices(&self, plan_index: &StdHashMap<String, String>, intent_index: &StdHashMap<String, Vec<String>>) -> Result<(), String>;
+
+    /// Load plan and intent indices if both are present. Returns Ok(None) when sidecars are missing.
+    fn load_plan_intent_indices(&self) -> Result<Option<(StdHashMap<String, String>, StdHashMap<String, Vec<String>>)>, String>;
+}
+
+/// A wrapper that composes a content-addressable archive and provides in-memory indices
+/// plus automatic load/persist hooks delegating to the inner backend when it implements `IndexableArchive`.
+#[derive(Clone)]
+pub struct IndexedArchive<T, A> {
+    inner: A,
+    plan_index: Arc<Mutex<StdHashMap<String, String>>>,
+    intent_index: Arc<Mutex<StdHashMap<String, Vec<String>>>>,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T, A> IndexedArchive<T, A>
+where
+    T: Archivable,
+    A: ContentAddressableArchive<T> + Clone,
+{
+    pub fn new(inner: A) -> Self {
+        Self {
+            inner,
+            plan_index: Arc::new(Mutex::new(StdHashMap::new())),
+            intent_index: Arc::new(Mutex::new(StdHashMap::new())),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Try to rehydrate indices from the inner archive when it supports sidecar indices.
+    /// If not supported or files missing, returns Ok(false) so callers can fallback to scanning.
+    pub fn try_load_indices(&self) -> Result<bool, String>
+    where
+        A: IndexableArchive,
+    {
+        if let Some((plan_map, intent_map)) = self.inner.load_plan_intent_indices()? {
+            let mut pi = self.plan_index.lock().map_err(|_| "plan index poisoned".to_string())?;
+            *pi = plan_map;
+            let mut ii = self.intent_index.lock().map_err(|_| "intent index poisoned".to_string())?;
+            *ii = intent_map;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Persist current in-memory indices via the inner archive when it supports sidecars.
+    pub fn try_persist_indices(&self) -> Result<(), String>
+    where
+        A: IndexableArchive,
+    {
+        let pi = self.plan_index.lock().map_err(|_| "plan index poisoned".to_string())?;
+        let ii = self.intent_index.lock().map_err(|_| "intent index poisoned".to_string())?;
+        self.inner.save_plan_intent_indices(&*pi, &*ii)
+    }
+
+    /// Expose read-only access for PlanArchive to use
+    pub fn plan_index_clone(&self) -> StdHashMap<String, String> {
+        self.plan_index.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+
+    pub fn intent_index_clone(&self) -> StdHashMap<String, Vec<String>> {
+        self.intent_index.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+
+    /// Insert or update a single plan_id -> hash mapping in the wrapper's in-memory index.
+    /// Returns Err when the lock is poisoned.
+    pub fn insert_plan_mapping(&self, plan_id: String, hash: String) -> Result<(), String> {
+        let mut pi = self.plan_index.lock().map_err(|_| "plan index poisoned".to_string())?;
+        pi.insert(plan_id, hash);
+        Ok(())
+    }
+
+    /// Add a mapping from intent_id -> hash (appends to list). Returns Err when the lock is poisoned.
+    pub fn add_intent_mapping(&self, intent_id: String, hash: String) -> Result<(), String> {
+        let mut ii = self.intent_index.lock().map_err(|_| "intent index poisoned".to_string())?;
+        ii.entry(intent_id).or_insert_with(Vec::new).push(hash);
+        Ok(())
+    }
+}
+
+impl<T, A> ContentAddressableArchive<T> for IndexedArchive<T, A>
+where
+    T: Archivable + Serialize + for<'de> Deserialize<'de> + Clone,
+    A: ContentAddressableArchive<T> + Clone,
+{
+    fn store(&self, entity: T) -> Result<String, String> {
+        let hash = self.inner.store(entity.clone())?;
+        // Update metadata indices are left to callers (PlanArchive) since domain keys (PlanId, IntentId)
+        // are outside the generic wrapper's knowledge. Persistence is triggered explicitly by PlanArchive.
+        Ok(hash)
+    }
+
+    fn retrieve(&self, hash: &str) -> Result<Option<T>, String> { self.inner.retrieve(hash) }
+
+    fn exists(&self, hash: &str) -> bool { self.inner.exists(hash) }
+
+    fn delete(&self, hash: &str) -> Result<(), String> { self.inner.delete(hash) }
+
+    fn stats(&self) -> ArchiveStats { self.inner.stats() }
+
+    fn verify_integrity(&self) -> Result<bool, String> { self.inner.verify_integrity() }
+
+    fn list_hashes(&self) -> Vec<String> { self.inner.list_hashes() }
+}
+
 /// Thread-safe, content-addressable archive for immutable entities.
 /// 
 /// This trait provides the core storage interface used by all CCOS archives.
