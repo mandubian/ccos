@@ -133,22 +133,21 @@
                                     <span id="exec-run-status" class="exec-status-badge">—</span>
                                 </div>
                                 <div id="exec-run-meta" class="exec-meta"></div>
-                                <div id="exec-intents-section">
-                                    <h5>Intents</h5>
-                                    <table id="exec-intents-table">
-                                        <thead>
-                                            <tr><th>Intent</th><th>Phases</th><th>Result</th><th>Error</th></tr>
-                                        </thead>
-                                        <tbody></tbody>
-                                    </table>
+                                <div id="exec-run-stats" class="exec-run-stats"></div>
+                                <div id="exec-intent-timeline" class="intent-timeline"></div>
+                                <div class="exec-subtabs">
+                                    <button class="exec-subtab active" data-subtab="intents" title="Intent phases & results">Intents</button>
+                                    <button class="exec-subtab" data-subtab="log" title="Raw execution log">Log</button>
+                                    <button class="exec-subtab" data-subtab="summary" title="Run summary JSON">Summary</button>
                                 </div>
-                                <div id="exec-summary-section">
-                                    <h5>Summary</h5>
-                                    <pre id="exec-summary-json"></pre>
-                                </div>
-                                <div id="exec-log-section">
-                                    <h5>Execution Log</h5>
-                                    <div id="exec-log-entries" class="exec-log"></div>
+                                <div id="exec-subtab-panels">
+                                    <div id="subtab-intents" class="exec-subtab-panel"></div>
+                                    <div id="subtab-log" class="exec-subtab-panel hidden">
+                                        <div id="exec-log-entries" class="exec-log"></div>
+                                    </div>
+                                    <div id="subtab-summary" class="exec-subtab-panel hidden">
+                                        <pre id="exec-summary-json" class="exec-summary-box"></pre>
+                                    </div>
                                 </div>
                             </div>
                         </div>

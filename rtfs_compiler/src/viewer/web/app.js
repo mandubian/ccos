@@ -2035,15 +2035,100 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${Math.floor(delta/3600)}h ago`;
     }
 
+    let currentExecSubtab = 'intents';
+    function setExecSubtab(tab){
+        currentExecSubtab = tab;
+        document.querySelectorAll('.exec-subtab').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.subtab === tab);
+        });
+        document.querySelectorAll('#exec-subtab-panels .exec-subtab-panel').forEach(p => {
+            if (!p.id) return;
+            const is = p.id === `subtab-${tab}`;
+            p.classList.toggle('hidden', !is);
+        });
+    }
+    function buildIntentTimeline(run){
+        const timelineEl = document.getElementById('exec-intent-timeline');
+        if (!timelineEl) return;
+        timelineEl.innerHTML = '';
+        const entries = Object.entries(run.intents);
+        entries.forEach(([intentId, info]) => {
+            const chip = document.createElement('div');
+            const phases = info.phases.map(p=>p.phase);
+            const finalPhase = phases[phases.length-1] || '';
+            const statusClass = finalPhase === 'failed' ? 'fail' : finalPhase === 'completed' ? 'success' : finalPhase === 'skipped' ? 'skipped' : (finalPhase ? 'running' : '');
+            chip.className = `intent-chip ${statusClass}`;
+            chip.title = `${intentId}\n${phases.join(' → ')}`;
+            const dotsUnique = [];
+            for (const ph of phases){ if (!dotsUnique.includes(ph)) dotsUnique.push(ph); }
+            chip.innerHTML = `<span class="ic-id">${intentId.substring(0,6)}</span><div class="ic-phases">${dotsUnique.map(ph=>`<span class='phase-dot ${ph}'></span>`).join('')}</div>`;
+            chip.addEventListener('click', () => highlightIntentRow(intentId));
+            timelineEl.appendChild(chip);
+        });
+    }
+    function highlightIntentRow(intentId){
+        const row = document.querySelector(`.exec-intents-table tbody tr[data-intent='${intentId}']`);
+        if (row){
+            row.classList.add('highlight-intent-row');
+            row.scrollIntoView({block:'nearest'});
+            setTimeout(()=> row.classList.remove('highlight-intent-row'), 1500);
+        }
+        setExecSubtab('intents');
+    }
+    function renderExecIntentsTable(run){
+        const container = document.getElementById('subtab-intents');
+        if (!container) return;
+        container.innerHTML = '';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'exec-intents-wrapper';
+        const table = document.createElement('table');
+        table.className = 'exec-intents-table';
+        table.innerHTML = `<thead><tr><th>Intent</th><th>Phases</th><th>Result</th><th>Error</th></tr></thead><tbody></tbody>`;
+        const tbody = table.querySelector('tbody');
+        Object.entries(run.intents).forEach(([intentId, info]) => {
+            const tr = document.createElement('tr');
+            tr.dataset.intent = intentId;
+            const phases = info.phases.map(p=>p.phase);
+            const uniqueOrdered = [];
+            for (const ph of phases){ if(!uniqueOrdered.includes(ph)) uniqueOrdered.push(ph); }
+            const phaseHtml = uniqueOrdered.map(ph=>`<span class='phase-mini ${ph}'>${ph[0].toUpperCase()}</span>`).join('');
+            const resultPill = info.result ? `<span class='result-pill' title='${escapeHtml(JSON.stringify(info.result))}'>res</span>` : '';
+            const errorPill = info.error ? `<span class='error-pill' title='${escapeHtml(info.error)}'>err</span>` : '';
+            tr.innerHTML = `<td title='${intentId}'>${intentId.substring(0,8)}</td><td class='phase-seq'>${phaseHtml}</td><td>${resultPill}</td><td>${errorPill}</td>`;
+            tbody.appendChild(tr);
+        });
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
+    }
+    function renderExecLog(executionId){
+        const execLogEl = document.getElementById('exec-log-entries');
+        if (!execLogEl) return;
+        execLogEl.innerHTML='';
+        executionLog.filter(e=> e.run===executionId).forEach(e => {
+            const div = document.createElement('div');
+            const icon = (
+                e.type === 'start' ? '🚀' :
+                e.type === 'finish' ? (e.success ? '🏁' : '⚠️') :
+                e.type === 'summary' ? '📊' :
+                e.type === 'intent-phase' ? (e.error ? '❌' : '🧩') : '•'
+            );
+            const intentSpan = e.intent_id ? `<span class="exec-intent-id" title="${e.intent_id}">${e.intent_id.substring(0,6)}</span>` : '';
+            const errorSpan = e.error ? `<span class="exec-error">${escapeHtml(e.error)}</span>` : '';
+            const resultSpan = e.result ? `<span class="exec-result" title='${escapeHtml(JSON.stringify(e.result))}'>res</span>` : '';
+            div.className = `exec-log-entry exec-type-${e.type} ${e.error ? 'has-error' : ''}`;
+            div.innerHTML = `<span class='exec-log-time'>${new Date(e.ts).toLocaleTimeString()}</span><span class='exec-log-icon'>${icon}</span>${intentSpan}<span class='exec-log-message'>${e.message||''}</span>${resultSpan}${errorSpan}`;
+            execLogEl.appendChild(div);
+        });
+        execLogEl.scrollTop = execLogEl.scrollHeight;
+    }
     function renderExecutionDetails(executionId) {
         const run = executionRuns.get(executionId);
         if (!run) return;
         const titleEl = document.getElementById('exec-run-title');
         const statusEl = document.getElementById('exec-run-status');
         const metaEl = document.getElementById('exec-run-meta');
-        const intentsTableBody = document.querySelector('#exec-intents-table tbody');
+        const statsEl = document.getElementById('exec-run-stats');
         const summaryEl = document.getElementById('exec-summary-json');
-        const execLogEl = document.getElementById('exec-log-entries');
         if (titleEl) titleEl.textContent = `Execution ${executionId.substring(0,8)}`;
         if (statusEl) {
             const status = run.success === null ? 'RUNNING' : (run.success ? 'SUCCESS' : 'PARTIAL/FAIL');
@@ -2055,52 +2140,28 @@ document.addEventListener('DOMContentLoaded', () => {
                                `Finished: ${run.finished_at ? new Date(run.finished_at*1000).toLocaleTimeString() : '—'}<br>`+
                                `Duration: ${run.finished_at ? (run.finished_at - run.started_at).toFixed(1)+'s' : '—'}`;
         }
-        if (intentsTableBody) {
-            intentsTableBody.innerHTML = '';
-            Object.entries(run.intents).forEach(([intentId, info]) => {
-                const tr = document.createElement('tr');
-                const phasesStr = info.phases.map(p=>p.phase).join(' → ');
-                tr.innerHTML = `<td title="${intentId}">${intentId.substring(0,8)}</td>`+
-                               `<td>${phasesStr}</td>`+
-                               `<td>${info.result ? escapeHtml(JSON.stringify(info.result)) : ''}</td>`+
-                               `<td class="err-cell">${info.error ? escapeHtml(info.error) : ''}</td>`;
-                intentsTableBody.appendChild(tr);
-            });
+        if (statsEl){
+            let success=0, fail=0, skipped=0, total=0;
+            Object.values(run.intents).forEach(info => {
+                total++;
+                const phases = info.phases.map(p=>p.phase);
+                if (phases.includes('failed')) fail++; else if (phases.includes('completed')) success++; else if (phases.includes('skipped')) skipped++; });
+            statsEl.innerHTML = `<span class='exec-stat-chip'>INTENTS ${total}</span><span class='exec-stat-chip success'>${success}</span><span class='exec-stat-chip fail'>${fail}</span><span class='exec-stat-chip skipped'>${skipped}</span>`;
         }
-        if (summaryEl) {
-            summaryEl.textContent = run.summary ? JSON.stringify(run.summary, null, 2) : 'No summary yet.';
-        }
-        if (execLogEl) {
-            execLogEl.innerHTML = '';
-            executionLog.filter(e => e.run === executionId).forEach(e => {
-                const div = document.createElement('div');
-                const icon = (
-                    e.type === 'start' ? '🚀' :
-                    e.type === 'finish' ? (e.success ? '🏁' : '⚠️') :
-                    e.type === 'summary' ? '📊' :
-                    e.type === 'intent-phase' ? (e.error ? '❌' : '🧩') : '•'
-                );
-                const phaseBadge = e.phase ? `<span class="exec-phase-badge phase-${e.phase}">${e.phase}</span>` : '';
-                const intentSpan = e.intent_id ? `<span class="exec-intent-id" title="${e.intent_id}">${e.intent_id.substring(0,8)}</span>` : '';
-                const errorSpan = e.error ? `<span class="exec-error">${escapeHtml(e.error)}</span>` : '';
-                const resultSpan = e.result ? `<span class="exec-result" title='${escapeHtml(JSON.stringify(e.result))}'>result</span>` : '';
-                const summaryBlock = e.type === 'summary' && e.summary ? `<pre class="exec-summary-inline">${escapeHtml(JSON.stringify(e.summary, null, 2))}</pre>` : '';
-                div.className = `exec-log-entry exec-type-${e.type} ${e.error ? 'has-error' : ''}`;
-                div.innerHTML = `
-                    <span class="exec-log-time">${new Date(e.ts).toLocaleTimeString()}</span>
-                    <span class="exec-log-icon">${icon}</span>
-                    ${intentSpan}
-                    ${phaseBadge}
-                    <span class="exec-log-message">${e.message || ''}</span>
-                    ${resultSpan}
-                    ${errorSpan}
-                    ${summaryBlock}
-                `;
-                execLogEl.appendChild(div);
-            });
-            execLogEl.scrollTop = execLogEl.scrollHeight;
-        }
+        buildIntentTimeline(run);
+        renderExecIntentsTable(run);
+        if (summaryEl) summaryEl.textContent = run.summary ? JSON.stringify(run.summary, null, 2) : 'No summary yet.';
+        renderExecLog(executionId);
+        setExecSubtab(currentExecSubtab);
     }
+
+    // Subtab events (delegated after DOM ready)
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.exec-subtab');
+        if (btn){
+            setExecSubtab(btn.dataset.subtab);
+        }
+    });
 
     function escapeHtml(str){
         return str.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
