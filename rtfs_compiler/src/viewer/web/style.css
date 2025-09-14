@@ -1,9 +1,15 @@
+html, body {
+    height: 100%;
+}
+
 body {
+    display: flex;
+    flex-direction: column;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background-color: #1a1a1a;
     color: #f0f0f0;
     margin: 0;
-    padding: 20px;
+    padding: 0; /* page padding removed; main container should manage spacing */
 }
 
 h1, h2, h3 {
@@ -250,7 +256,12 @@ h1, h2, h3 {
     display: flex;
     flex-direction: row;
     gap: 20px;
-    height: calc(100vh - 300px);
+    /* Allow the container to grow and shrink with the viewport, avoid internal page scrolling */
+    flex: 1 1 auto;
+    min-height: 0; /* enables proper flexbox children shrinking */
+    padding: 20px; /* keep spacing previously provided by body padding */
+    box-sizing: border-box;
+    overflow: hidden; /* prevent page-level vertical scrolling; child panes scroll internally */
 }
 
 .left-panel, .right-panel {
@@ -493,22 +504,39 @@ h1, h2, h3 {
 }
 
 #code-tabs button {
-    background-color: #333;
+    background: linear-gradient(180deg, #3a3a3a 0%, #2a2a2a 100%);
     border: 1px solid #555;
-    color: #f0f0f0;
+    color: #e6e6e6;
     border-radius: 6px;
-    padding: 6px 10px;
+    padding: 7px 14px;
     cursor: pointer;
-    font-size: 13px;
-    min-width: 60px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: .25px;
+    min-width: 70px;
     text-align: center;
     flex-shrink: 0;
+    line-height: 1.1;
+    position: relative;
+    transition: background .15s ease, color .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
-
+#code-tabs button:hover:not(.active) {
+    background: linear-gradient(180deg, #4a4a4a 0%, #353535 100%);
+    border-color: #666;
+}
+#code-tabs button:focus-visible {
+    outline: 2px solid #00ccff;
+    outline-offset: 2px;
+}
 #code-tabs button.active {
-    background-color: #00aaff;
-    border-color: #00aaff;
-    color: #000;
+    background: linear-gradient(180deg, #00bbff 0%, #0095d4 100%);
+    border-color: #00caff;
+    color: #0b0b0b;
+    box-shadow: 0 0 0 1px #003d4d inset, 0 0 4px rgba(0,200,255,0.4);
+    font-weight:600;
+}
+#code-tabs button.active:hover {
+    background: linear-gradient(180deg, #22c8ff 0%, #00a6e6 100%);
 }
 
 .tab-controls {
@@ -678,32 +706,33 @@ h1, h2, h3 {
 
 /* Log Container */
 #log-container {
-    flex: 1;
-    max-height: 300px;
-    min-height: 150px;
+    /* Use flex so the log container can grow/shrink with its parent pane */
+    flex: 1 1 auto;
     border: 1px solid #444;
     border-radius: 8px;
     background-color: #252525;
     display: flex;
     flex-direction: column;
+    min-height: 0; /* enable proper flex shrink behavior */
 }
 
 /* Collapsed by default: show header row only */
 #log-container:not(.logs-expanded) {
+    flex: 0 0 auto;
     height: 40px;
     min-height: 40px;
     max-height: 40px;
     overflow: hidden;
 }
 
-/* Expanded: allow vertical resize to show more logs */
+/* Expanded: allow the container to fill available space and let entries scroll internally */
 #log-container.logs-expanded {
+    flex: 1 1 auto;
+    height: auto; /* let flex sizing decide */
     min-height: 150px;
-    height: 150px; /* Start with default height */
-    max-height: none; /* Remove max-height constraint */
+    max-height: none;
     overflow: hidden; /* header fixed, entries scroll */
     position: relative;
-    flex: none; /* Disable flex behavior to respect fixed height */
 }
 
 /* During dragging, disable flex behavior and allow manual height control */
@@ -715,27 +744,7 @@ h1, h2, h3 {
     max-height: none !important;
 }
 
-/* Resize handle */
-#log-resize-handle {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 8px;
-    background: linear-gradient(to right, #666 0%, #888 50%, #666 100%);
-    cursor: ns-resize;
-    z-index: 10;
-    display: none;
-}
-
-#log-container.logs-expanded #log-resize-handle {
-    display: block;
-}
-
-#log-resize-handle:hover {
-    background: linear-gradient(to right, #888 0%, #aaa 50%, #888 100%);
-    height: 10px;
-}
+/* Resize handle removed: activity logs are toggle-only and not manually resizable */
 
 /* Visual feedback during dragging */
 #log-container.dragging {
@@ -765,6 +774,8 @@ h1, h2, h3 {
 /* Show logs when expanded */
 #log-container.logs-expanded #log-entries {
     display: block;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 #log-header {
@@ -829,14 +840,14 @@ h1, h2, h3 {
 
 
 #log-entries {
-    flex: 1;
+    flex: 1 1 auto;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 10px;
     font-family: "Fira Code", monospace;
     font-size: 0.9em;
-    max-height: calc(300px - 40px); /* Account for header */
-    min-height: calc(150px - 40px); /* Account for header */
+    max-height: none; /* let parent control height */
+    min-height: 0;
 }
 
 .log-entry {
@@ -1055,10 +1066,12 @@ h1, h2, h3 {
     display: flex;
     gap: 12px;
     height: 100%;
+    min-height: 0;
 }
 
 #exec-runs-panel {
-    width: 160px;
+    width: 140px;
+    min-width: 120px;
     border-right: 1px solid #333;
     overflow-y: auto;
 }
@@ -1091,29 +1104,27 @@ h1, h2, h3 {
 .exec-run-item:hover { background: #2a2a2a; }
 
 .exec-run-id { font-family: monospace; color: #ccc; }
-.exec-run-status { margin-left: auto; font-size: 10px; padding: 2px 4px; border-radius: 3px; text-transform: uppercase; }
+.exec-run-status { margin-left: auto; font-size: 1px; padding: 2px 4px; border-radius: 3px; text-transform: uppercase; }
 .exec-status-running { background: #555; color: #fff; }
 .exec-status-success { background: #056f05; color: #d3ffd3; }
 .exec-status-partial { background: #8a6e00; color: #fff1bd; }
 .exec-status-fail { background: #6f0505; color: #ffd3d3; }
 .exec-run-time { color: #777; font-size: 10px; }
 
-#exec-details-panel { flex: 1; overflow: auto; }
-#exec-details-panel h5 { margin: 10px 0 5px; border-bottom: 1px solid #333; padding-bottom: 4px; }
-
-.exec-status-badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+.exec-status-badge { padding: 6px 10px; border-radius: 4px; font-size: 12px; font-weight: 700; }
 .exec-status-running { background: rgba(255,255,0,0.2); }
 .exec-status-success { background: rgba(0,170,0,0.25); }
 .exec-status-fail { background: rgba(170,0,0,0.25); }
 
-#exec-intents-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-#exec-intents-table th, #exec-intents-table td { border: 1px solid #333; padding: 4px 6px; text-align: left; vertical-align: top; }
-#exec-intents-table th { background: #1f1f1f; }
-#exec-intents-table tbody tr:hover { background: #222; }
+/* Consolidated exec intents table rule (single authoritative definition) */
+.exec-intents-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.exec-intents-table th, .exec-intents-table td { border: 1px solid #333; padding: 6px; text-align: left; vertical-align: top; }
+.exec-intents-table th { background: #1f1f1f; }
+.exec-intents-table tbody tr:hover { background: #222; }
 
 .err-cell { color: #ff6b6b; font-family: monospace; }
 
-.exec-phase-badge { display: inline-block; padding: 2px 6px; margin-right: 4px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: .5px; }
+.exec-phase-badge { display: inline-block; padding: 3px 8px; margin-right: 6px; border-radius: 3px; font-size: 11px; font-weight: 700; letter-spacing: .5px; }
 .phase-started { background: #004a7a; color: #8fd3ff; }
 .phase-executing { background: #7a5e00; color: #ffe08f; }
 .phase-completed { background: #005a1f; color: #8fffbe; }
@@ -1122,8 +1133,8 @@ h1, h2, h3 {
 
 #exec-summary-json { background: #1a1a1a; border: 1px solid #333; padding: 8px; font-size: 11px; max-height: 150px; overflow: auto; }
 
-.exec-log { background: #111; border: 1px solid #333; padding: 6px; font-family: "Fira Code", monospace; font-size: 11px; max-height: 160px; overflow-y: auto; }
-.exec-log-entry { padding: 3px 4px; border-bottom: 1px solid #222; line-height: 1.3; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.exec-log { background: #111; border: 1px solid #333; padding: 4px; font-family: "Fira Code", monospace; font-size: 10px; max-height: 140px; overflow-y: auto; }
+.exec-log-entry { padding: 2px 3px; border-bottom: 1px solid #222; line-height: 1.15; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
 .exec-log-entry:last-child { border-bottom: none; }
 .exec-log-time { color: #666; font-size: 10px; }
 .exec-log-icon { width: 18px; text-align: center; }
@@ -1137,47 +1148,218 @@ h1, h2, h3 {
 .exec-type-summary { background: rgba(255,170,0,0.05); }
 .exec-type-intent-phase.has-error { background: rgba(170,0,0,0.08); }
 
-/* --- Compact Execution UI Enhancements (hybrid) --- */
-.exec-run-stats { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 6px; font-size:11px; }
-.exec-stat-chip { background:#222; padding:2px 6px; border-radius:10px; line-height:1.2; display:inline-flex; align-items:center; gap:4px; }
+/* --- Compact Execution UI Enhancements (hybrid) ---
+   Consolidated and increased font sizes for better readability. */
+.exec-run-stats { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 6px; font-size:14px; }
+.exec-stat-chip { background:#222; padding:6px 10px; border-radius:10px; line-height:1.15; display:inline-flex; align-items:center; gap:8px; font-size:14px; }
 .exec-stat-chip.success { background:#0a3; color:#d2ffd2; }
 .exec-stat-chip.fail { background:#600; color:#ffd2d2; }
 .exec-stat-chip.skipped { background:#444; color:#ccc; }
-.intent-timeline { display:flex; gap:5px; overflow-x:auto; padding:4px 2px 6px; border-bottom:1px solid #222; margin-bottom:4px; }
-.intent-chip { min-width:70px; background:#1d1d1d; padding:4px 6px; border-radius:4px; cursor:pointer; font-size:10px; position:relative; border:1px solid #2a2a2a; }
+.intent-timeline { display:flex; gap:8px; overflow-x:auto; padding:4px 2px 6px; border-bottom:1px solid #222; margin-bottom:6px; }
+.intent-chip { min-width:72px; background:#1d1d1d; padding:8px 10px; border-radius:4px; cursor:pointer; font-size:13px; position:relative; border:1px solid #2a2a2a; }
 .intent-chip.running { border-color:#888; }
 .intent-chip.success { border-color:#0a3; }
 .intent-chip.fail { border-color:#a00; }
-.intent-chip.skipped { opacity:.55; }
+.intent-chip.skipped { opacity:.75; }
 .intent-chip:hover { background:#242424; }
-.intent-chip .ic-id { font-family:monospace; display:block; }
-.intent-chip .ic-phases { display:flex; gap:2px; flex-wrap:wrap; margin-top:2px; }
-.phase-dot { width:6px; height:6px; border-radius:50%; background:#555; }
+.intent-chip .ic-id { font-family:monospace; display:block; font-size:13px; }
+.intent-chip .ic-phases { display:flex; gap:4px; flex-wrap:wrap; margin-top:4px; }
+.phase-dot { width:8px; height:8px; border-radius:50%; background:#555; }
 .phase-dot.started { background:#167ac1; }
 .phase-dot.executing { background:#b27c00; }
 .phase-dot.completed { background:#0a7a3a; }
 .phase-dot.failed { background:#a00; }
 .phase-dot.skipped { background:#444; }
-.exec-subtabs { display:flex; gap:6px; margin:2px 0 4px; }
-.exec-subtab { background:#1c1c1c; border:1px solid #333; padding:4px 10px; cursor:pointer; font-size:11px; border-radius:4px; }
-.exec-subtab.active { background:#333; }
-.exec-subtab-panel { font-size:12px; }
-.exec-subtab-panel.hidden { display:none; }
-.exec-summary-box { background:#121212; border:1px solid #333; padding:8px; font-size:11px; max-height:200px; overflow:auto; }
+.exec-subtabs { display:flex; gap:8px; margin:6px 0 6px; }
+.exec-subtab { background: linear-gradient(180deg,#2a2a2a 0%, #1c1c1c 100%); border:1px solid #444; padding:8px 12px; cursor:pointer; font-size:14px; border-radius:6px; color:#e6eef6; box-shadow: 0 1px 0 rgba(0,0,0,0.6); transition: all .12s ease; }
+.exec-subtab:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
+.exec-subtab.active { background: linear-gradient(180deg,#00bbff 0%, #0095d4 100%); border-color: #00caff; color: #071014; font-weight:700; box-shadow: 0 4px 10px rgba(0,170,255,0.15); }
+.exec-subtab-panel { font-size:14px; }
 
-/* Intents table (rendered into subtab-intents) */
-.exec-intents-wrapper { max-height:240px; overflow:auto; border:1px solid #222; }
-.exec-intents-table { width:100%; border-collapse:collapse; font-size:11px; }
-.exec-intents-table th, .exec-intents-table td { border:1px solid #2a2a2a; padding:3px 5px; text-align:left; }
-.exec-intents-table th { background:#1f1f1f; position:sticky; top:0; }
-.exec-intents-table tbody tr:hover { background:#222; }
-.phase-seq { display:flex; gap:2px; flex-wrap:wrap; }
-.phase-mini { padding:1px 4px; border-radius:3px; font-size:9px; background:#2a2a2a; }
+/* Prevent subtab content from resizing the overall exec layout: make details panel a flex column and allow subtab panels to share height and scroll internally */
+#exec-details-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+#exec-details-panel > * { flex: 0 0 auto; }
+
+#exec-subtab-panels { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; height: 100%; }
+
+#exec-subtab-panels .exec-subtab-panel { overflow: auto; flex: 1 1 auto; min-height: 0; }
+
+/* Execute button is visible again (handled in app.js). */
+
+/* Force hidden exec subtab panels and intent wrappers to collapse fully
+   so they don't reserve vertical space when hidden. Use important to
+   override inline styles or other rules that might keep space. */
+.exec-subtab-panel.hidden,
+.exec-subtab-panel[hidden],
+.exec-intents-wrapper.hidden,
+.exec-intents-wrapper[hidden] {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+}
+
+/* Ensure normal visible panels don't have unnecessary top/bottom spacing */
+.exec-subtab-panel,
+.exec-intents-wrapper {
+    display: block;
+    padding: 6px 0;
+    margin: 0;
+}
+.exec-summary-box { background:#121212; border:1px solid #333; padding:10px; font-size:14px; max-height:220px; overflow:auto; }
+
+/* Intents table wrapper and phase chips */
+.exec-intents-wrapper { max-height:260px; overflow:auto; border:1px solid #222; }
+.phase-seq { display:flex; gap:6px; flex-wrap:wrap; }
+.phase-mini { padding:2px 6px; border-radius:3px; font-size:12px; background:#2a2a2a; }
 .phase-mini.completed { background:#0a3; color:#d2ffd2; }
 .phase-mini.failed { background:#600; color:#ffd2d2; }
 .phase-mini.skipped { background:#444; color:#bbb; }
 .phase-mini.executing { background:#b27c00; color:#fff; }
-.result-pill { background:#003f1b; color:#8fffbe; padding:1px 6px; border-radius:12px; font-size:10px; cursor:pointer; }
+.result-pill { background:#003f1b; color:#8fffbe; padding:3px 8px; border-radius:11px; font-size:13px; cursor:pointer; }
 .result-pill:hover { background:#005a27; }
-.error-pill { background:#5a0000; color:#ffbdbd; padding:1px 6px; border-radius:12px; font-size:10px; }
+.error-pill { background:#5a0000; color:#ffbdbd; padding:3px 8px; border-radius:11px; font-size:13px; }
 .highlight-intent-row { outline:2px solid #0af; }
+
+.exec-log { background: #111; border: 1px solid #333; padding: 8px; font-family: "Fira Code", monospace; font-size: 14px; max-height: 200px; overflow-y: auto; }
+.exec-log-entry { padding: 6px 8px; border-bottom: 1px solid #222; line-height: 1.25; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.exec-log-entry:last-child { border-bottom: none; }
+.exec-log-time { color: #666; font-size: 12px; }
+.exec-log-icon { width: 22px; text-align: center; }
+/* --- Dedicated compact execution pane overrides (decouple from generic code-pane) --- */
+#pane-exec.code-pane { /* keep base box model but strip code-pane padding & typographic spacing */
+    padding: 6px 6px 4px 6px !important;
+    line-height: 1.2;
+    font-size: 14px; /* increase base execution UI font for readability */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    font-weight: 400;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    /* Ensure the exec pane fills the available area and can shrink without expanding parent */
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+#pane-exec h4, #pane-exec h5, #pane-exec h3 { margin: 0 0 2px 0; padding:0; line-height:1.1; }
+
+/* Meta line: convert multi-line <br> block into compact inline rows */
+.exec-meta { display:flex; flex-wrap:wrap; gap:10px; font-size:13px; line-height:1.25; margin:4px 0 0 0; }
+.exec-meta span { color:#ccc; }
+.exec-meta span strong { color:#fff; font-weight:700; }
+
+/* Tighten panel header */
+#pane-exec .exec-panel-header { padding:2px 4px; }
+#pane-exec .exec-panel-header h4 { font-size:12px; }
+
+/* Reduce gap in runs list item */
+#pane-exec .exec-run-item { padding:4px 6px; gap:4px; }
+
+/* Timeline minimal height handling */
+#pane-exec .intent-timeline { padding:1px 1px 3px; margin-bottom:2px; }
+
+/* Subtabs spacing tightening */
+#pane-exec .exec-subtabs { margin:1px 0 2px; gap:4px; }
+#pane-exec .exec-subtab { padding:2px 6px; font-size:9px; }
+
+/* Intents table wrapper tighter */
+#pane-exec .exec-intents-wrapper { max-height:260px; }
+#pane-exec .exec-intents-table { font-size:14px; font-family: inherit; }
+#pane-exec .exec-intents-table th, #pane-exec .exec-intents-table td { padding:8px 10px; }
+
+/* Log area tighter */
+#pane-exec .exec-log { padding:6px; font-size:13px; max-height:160px; font-family: inherit; }
+#pane-exec .exec-log-entry { padding:4px 6px; gap:6px; line-height:1.2; font-family: inherit; }
+#pane-exec .exec-log-icon { width:18px; }
+
+/* Summary box tighter */
+#pane-exec .exec-summary-box { padding:8px; font-size:13px; max-height:180px; font-family: inherit; }
+
+/* Chips & pills size alignment inside exec pane */
+#pane-exec .exec-stat-chip { padding:4px 8px; font-size:13px; }
+#pane-exec .result-pill, #pane-exec .error-pill { font-size:12px; padding:3px 8px; }
+#pane-exec .phase-mini { font-size:11px; padding:2px 6px; }
+
+/* Reinforce details/subtab scrolling: ensure consistent sizing and internal scrolling */
+/* Details panel should grow to fill available horizontal space while runs panel stays fixed */
+#exec-details-panel { display:flex; flex-direction:column; gap:4px; min-height:0; height:100%; overflow:hidden; flex: 1 1 auto; }
+#exec-details-panel > * { flex:0 0 auto; }
+
+/* Ensure the exec-layout children behave predictably: runs panel fixed, details panel flexible */
+#exec-layout > #exec-runs-panel { flex: 0 0 auto; }
+#exec-layout > #exec-details-panel { flex: 1 1 auto; min-width: 0; }
+
+/* Make subtab panels scroll if overflow and share available height */
+#exec-subtab-panels { display:flex; flex-direction:column; gap:4px; min-height:0; height:100%; }
+#exec-subtab-panels .exec-subtab-panel:not(.hidden) { overflow:auto; flex:1 1 auto; min-height:0; }
+
+/* Remove bottom margin from last element to avoid trailing blank space */
+#pane-exec .exec-subtab-panel:last-child { margin-bottom:0; }
+
+/* Bottom panel: unified execution history + activity log
+   Keep the panel in document flow so it scrolls with the page. The parent
+   panels (.container / .right-panel) manage layout and internal scrolling. */
+#bottom-panel {
+    position: relative; /* in-flow */
+    background: #121212;
+    border-top: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    height: 260px; /* default height */
+    min-height: 80px;
+    max-height: 60vh;
+    width: 100%;
+}
+
+#bottom-panel.hidden { display: none; }
+
+/* Collapsed state: shrink the panel to a small visible bar so user can click to expand */
+#bottom-panel.collapsed {
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    overflow: visible;
+}
+
+/* When collapsed, avoid large body padding - but keep a tiny padding so content isn't flush with the bar */
+
+
+/* Hide the body of the panel when collapsed, but keep header (tabs and toggle) visible */
+#bottom-panel.collapsed .bottom-panel-body {
+    display: none;
+}
+
+/* Ensure header remains visible and clickable when panel is collapsed */
+#bottom-panel.collapsed #bottom-panel-header {
+    position: relative;
+}
+
+#bottom-panel-header { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border-bottom:1px solid #222; }
+#bottom-tabs { display:flex; gap:8px; }
+.bottom-tab { background:#2a2a2a; border:1px solid #444; color:#e6eef6; padding:6px 10px; border-radius:6px; cursor:pointer; }
+.bottom-tab.active { background: linear-gradient(180deg,#00bbff 0%, #0095d4 100%); border-color:#00caff; color:#071014; font-weight:700; }
+#bottom-panel-controls { display:flex; gap:8px; }
+#bottom-panel-toggle { background:#333; color:#fff; border:1px solid #444; padding:4px 8px; border-radius:4px; cursor:pointer; }
+
+#bottom-panel-body { display:flex; flex:1 1 auto; min-height:0; }
+.bottom-panel-pane { flex:1 1 100%; display:flex; flex-direction:column; min-height:0; overflow:auto; }
+.bottom-panel-pane.hidden { display:none; }
+
+/* Resize handle */
+#bottom-panel-resize { position:absolute; right:8px; top:6px; cursor:ns-resize; padding:4px; color:#999; }
+
+/* Make exec layout fill bottom pane */
+#exec-layout { height: 100%; min-height:0; display:flex; gap:12px; }
+#exec-runs-panel { overflow-y:auto; }
+#exec-details-panel { overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+#exec-subtab-panels { min-height:0; }
