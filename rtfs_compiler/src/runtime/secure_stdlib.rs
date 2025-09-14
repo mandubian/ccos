@@ -4,7 +4,7 @@
 //! in any context without security concerns. All dangerous operations (file I/O,
 //! network access, system calls) are moved to CCOS capabilities.
 
-use crate::ast::{MapKey, Expression, Keyword};
+use crate::ast::{MapKey, Expression};
 use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::{BuiltinFunction, Arity, Function, BuiltinFunctionWithContext};
@@ -411,12 +411,12 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Sort function - collection sorting (supports optional comparison function)
+        // Sort function - collection sorting
         env.define(
             &Symbol("sort".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "sort".to_string(),
-                arity: Arity::Range(1, 2),
+                arity: Arity::Fixed(1),
                 func: Arc::new(Self::sort),
             })),
         );
@@ -489,26 +489,6 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Map-indexed function
-        env.define(
-            &Symbol("map-indexed".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "map-indexed".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::map_indexed_with_context),
-            })),
-        );
-
-        // Some function - returns true if any element satisfies predicate
-        env.define(
-            &Symbol("some".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "some".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::some_with_context),
-            })),
-        );
-
         // Conj function
         env.define(
             &Symbol("conj".to_string()),
@@ -518,17 +498,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::conj),
             })),
         );
-
-        // Conj! function - destructive conjoin (same as conj for immutable collections)
-        env.define(
-            &Symbol("conj!".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "conj!".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::conj_bang),
-            })),
-        );
-
+        
         env.define(
             &Symbol("get".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -629,16 +599,6 @@ impl SecureStandardLibrary {
                 name: "reset!".to_string(),
                 arity: Arity::Fixed(2),
                 func: Arc::new(Self::reset_bang),
-            })),
-        );
-
-        // Update function - update collection with function result
-        env.define(
-            &Symbol("update".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "update".to_string(),
-                arity: Arity::Variadic(3), // collection, key, function, optional args
-                func: Arc::new(Self::update_with_context),
             })),
         );
 
@@ -777,54 +737,6 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::some_with_context),
             })),
         );
-
-
-
-
-        // Type function for testing
-        env.define(
-            &Symbol("type".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "type".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::type_func),
-            })),
-        );
-
-        // Val function for extracting values from key-value pairs
-        env.define(
-            &Symbol("val".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "val".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::val),
-            })),
-        );
-
-
-
-        // Keys function - get keys from a map
-        env.define(
-            &Symbol("keys".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "keys".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::keys),
-            })),
-        );
-
-        // Vals function - get values from a map
-        env.define(
-            &Symbol("vals".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "vals".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::vals),
-            })),
-        );
-
-
-
     }
     
     pub(crate) fn load_type_predicate_functions(env: &mut Environment) {
@@ -1478,9 +1390,8 @@ impl SecureStandardLibrary {
             Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
             Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
             Value::String(s) => Ok(Value::Integer(s.chars().count() as i64)),
-            Value::Integer(n) => Ok(Value::Integer(*n)), // Return the integer itself
             _ => Err(RuntimeError::TypeError {
-                expected: "vector, map, string, or integer".to_string(),
+                expected: "vector, map, or string".to_string(),
                 actual: args[0].type_name().to_string(),
                 operation: "count".to_string(),
             }),
@@ -1724,65 +1635,6 @@ impl SecureStandardLibrary {
         Ok(Value::Vector(result))
     }
 
-    fn map_indexed_with_context(
-        args: Vec<Value>,
-        evaluator: &Evaluator,
-        env: &mut Environment,
-    ) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "map-indexed".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-        let function = &args[0];
-        let collection = &args[1];
-        let collection_vec = match collection {
-            Value::Vector(v) => v.clone(),
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
-                    actual: collection.type_name().to_string(),
-                    operation: "map-indexed".to_string(),
-                })
-            }
-        };
-        let mut result = Vec::new();
-        for (index, item) in collection_vec.into_iter().enumerate() {
-            match function {
-                Value::Function(Function::Builtin(builtin_func)) => {
-                    // Fast path for builtin functions
-                    let func_args = vec![Value::Float(index as f64), item];
-                    let mapped_value = (builtin_func.func)(func_args)?;
-                    result.push(mapped_value);
-                }
-                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
-                    // Handle builtin functions with context
-                    let func_args = vec![Value::Float(index as f64), item];
-                    let mapped_value = (builtin_func.func)(func_args, evaluator, env)?;
-                    result.push(mapped_value);
-                }
-                Value::Function(Function::Closure(closure)) => {
-                    // Handle user-defined functions with full evaluator access
-                    let mut func_env = Environment::with_parent(closure.env.clone());
-                    func_env.define(&closure.params[0], Value::Float(index as f64));
-                    func_env.define(&closure.params[1], item);
-                    let mapped_value = evaluator.eval_expr(&closure.body, &mut func_env)?;
-                    result.push(mapped_value);
-                }
-                _ => {
-                    return Err(RuntimeError::TypeError {
-                        expected: "function".to_string(),
-                        actual: function.type_name().to_string(),
-                        operation: "map-indexed".to_string(),
-                    });
-                }
-            }
-        }
-        Ok(Value::Vector(result))
-    }
-
     fn filter_with_context(
         args: Vec<Value>,
         evaluator: &Evaluator,
@@ -1797,76 +1649,48 @@ impl SecureStandardLibrary {
         }
         let function = &args[0];
         let collection = &args[1];
-        
-        match collection {
-            Value::Vector(v) => {
-                let mut result = Vec::new();
-                for item in v {
-                    let keep = Self::apply_predicate(function, item.clone(), evaluator, env)?;
-                    if keep {
-                        result.push(item.clone());
-                    }
-                }
-                Ok(Value::Vector(result))
-            }
-            Value::Map(m) => {
-                let mut result = HashMap::new();
-                for (key, value) in m {
-                    // For maps, pass [key, value] pair to match expected destructuring
-                    let key_value = match key {
-                        MapKey::Keyword(k) => Value::Keyword(k.clone()),
-                        MapKey::String(s) => Value::String(s.clone()),
-                        MapKey::Integer(i) => Value::Integer(*i),
-                    };
-                    let pair = Value::Vector(vec![key_value, value.clone()]);
-                    let keep = Self::apply_predicate(function, pair, evaluator, env)?;
-                    if keep {
-                        result.insert(key.clone(), value.clone());
-                    }
-                }
-                Ok(Value::Map(result))
-            }
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector or map".to_string(),
+                    expected: "vector".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "filter".to_string(),
                 })
             }
-        }
-    }
-
-    fn apply_predicate(
-        function: &Value,
-        item: Value,
-        evaluator: &Evaluator,
-        env: &mut Environment,
-    ) -> RuntimeResult<bool> {
-        match function {
-            Value::Function(Function::Builtin(builtin_func)) => {
-                let func_args = vec![item];
-                let v = (builtin_func.func)(func_args)?;
-                Ok(v.is_truthy())
-            }
-            Value::Function(Function::BuiltinWithContext(builtin_func)) => {
-                let func_args = vec![item];
-                let v = (builtin_func.func)(func_args, evaluator, env)?;
-                Ok(v.is_truthy())
-            }
-            Value::Function(Function::Closure(closure)) => {
-                let mut func_env = Environment::with_parent(closure.env.clone());
-                func_env.define(&closure.params[0], item);
-                let v = evaluator.eval_expr(&closure.body, &mut func_env)?;
-                Ok(v.is_truthy())
-            }
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "function".to_string(),
-                    actual: function.type_name().to_string(),
-                    operation: "filter predicate".to_string(),
-                });
+        };
+        let mut result = Vec::new();
+        for item in collection_vec {
+            let keep = match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args, evaluator, env)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], item.clone());
+                    let v = evaluator.eval_expr(&closure.body, &mut func_env)?;
+                    v.is_truthy()
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "filter".to_string(),
+                    });
+                }
+            };
+            if keep {
+                result.push(item);
             }
         }
+        Ok(Value::Vector(result))
     }
 
     fn reduce_with_context(
@@ -1882,10 +1706,12 @@ impl SecureStandardLibrary {
         let collection_val = &args[collection_arg_index];
         let collection = match collection_val {
             Value::Vector(v) => v.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::List(list) => list.clone(),
             _ => {
-                // If it's not a vector, try to treat it as a single value
-                // This handles cases where variadic parameters aren't properly collected
-                vec![collection_val.clone()]
+                return Err(RuntimeError::new(
+                    "reduce expects a vector, string, or list as its last argument",
+                ))
             }
         };
         if collection.is_empty() {
@@ -1925,125 +1751,6 @@ impl SecureStandardLibrary {
             };
         }
         Ok(accumulator)
-    }
-
-    fn update_with_context(
-        args: Vec<Value>,
-        evaluator: &Evaluator,
-        env: &mut Environment,
-    ) -> RuntimeResult<Value> {
-        if args.len() < 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "update".to_string(),
-                expected: "at least 3".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let collection = &args[0];
-        let key = &args[1];
-        let function = &args[2];
-        let additional_args = &args[3..];
-
-        match collection {
-            Value::Map(map) => {
-                let map_key = Self::value_to_map_key(key)?;
-                if let Some(existing_value) = map.get(&map_key) {
-                    // Apply function to existing value
-                    let mut func_args = vec![existing_value.clone()];
-                    func_args.extend(additional_args.iter().cloned());
-
-                    let new_value = match function {
-                        Value::Function(Function::Builtin(builtin_func)) => (builtin_func.func)(func_args)?,
-                        Value::Function(Function::BuiltinWithContext(builtin_func)) => {
-                            (builtin_func.func)(func_args, evaluator, env)?
-                        }
-                        Value::Function(Function::Closure(closure)) => {
-                            let mut func_env = Environment::with_parent(closure.env.clone());
-                            func_env.define(&closure.params[0], existing_value.clone());
-                            if !additional_args.is_empty() {
-                                for (i, arg) in additional_args.iter().enumerate() {
-                                    if i < closure.params.len() - 1 {
-                                        func_env.define(&closure.params[i + 1], arg.clone());
-                                    }
-                                }
-                            }
-                            evaluator.eval_expr(&closure.body, &mut func_env)?
-                        }
-                        _ => {
-                            return Err(RuntimeError::TypeError {
-                                expected: "function".to_string(),
-                                actual: function.type_name().to_string(),
-                                operation: "update".to_string(),
-                            });
-                        }
-                    };
-
-                    let mut new_map = map.clone();
-                    new_map.insert(map_key, new_value);
-                    Ok(Value::Map(new_map))
-                } else {
-                    Err(RuntimeError::new("Key not found in map"))
-                }
-            }
-            Value::Vector(vec) => {
-                if let Value::Integer(index) = key {
-                    let idx = *index as usize;
-                    if idx < vec.len() {
-                        let existing_value = &vec[idx];
-                        // Apply function to existing value
-                        let mut func_args = vec![existing_value.clone()];
-                        func_args.extend(additional_args.iter().cloned());
-
-                        let new_value = match function {
-                            Value::Function(Function::Builtin(builtin_func)) => (builtin_func.func)(func_args)?,
-                            Value::Function(Function::BuiltinWithContext(builtin_func)) => {
-                                (builtin_func.func)(func_args, evaluator, env)?
-                            }
-                            Value::Function(Function::Closure(closure)) => {
-                                let mut func_env = Environment::with_parent(closure.env.clone());
-                                func_env.define(&closure.params[0], existing_value.clone());
-                                if !additional_args.is_empty() {
-                                    for (i, arg) in additional_args.iter().enumerate() {
-                                        if i < closure.params.len() - 1 {
-                                            func_env.define(&closure.params[i + 1], arg.clone());
-                                        }
-                                    }
-                                }
-                                evaluator.eval_expr(&closure.body, &mut func_env)?
-                            }
-                            _ => {
-                                return Err(RuntimeError::TypeError {
-                                    expected: "function".to_string(),
-                                    actual: function.type_name().to_string(),
-                                    operation: "update".to_string(),
-                                });
-                            }
-                        };
-
-                        let mut new_vec = vec.clone();
-                        new_vec[idx] = new_value;
-                        Ok(Value::Vector(new_vec))
-                    } else {
-                        Err(RuntimeError::IndexOutOfBounds {
-                            index: *index,
-                            length: vec.len(),
-                        })
-                    }
-                } else {
-                    Err(RuntimeError::TypeError {
-                        expected: "integer index".to_string(),
-                        actual: key.type_name().to_string(),
-                        operation: "update vector".to_string(),
-                    })
-                }
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "map or vector".to_string(),
-                actual: collection.type_name().to_string(),
-                operation: "update".to_string(),
-            }),
-        }
     }
 
     fn max_value(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2123,11 +1830,6 @@ impl SecureStandardLibrary {
                 operation: "conj".to_string(),
             }),
         }
-    }
-
-    fn conj_bang(args: Vec<Value>) -> RuntimeResult<Value> {
-        // For now, conj! works the same as conj (immutable collections)
-        Self::conj(args)
     }
 
     fn empty_p(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -3294,83 +2996,28 @@ impl SecureStandardLibrary {
     }
 
     fn sort(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() < 1 || args.len() > 2 {
+        if args.len() != 1 {
             return Err(RuntimeError::ArityMismatch {
                 function: "sort".to_string(),
-                expected: "1 or 2".to_string(),
+                expected: "1".to_string(),
                 actual: args.len(),
             });
         }
 
-        // Handle different argument patterns:
-        // (sort collection) - sort in ascending order
-        // (sort collection reverse-flag) - sort with optional reverse flag
-        // (sort comparator collection) - sort with custom comparator
-
-        let (collection, reverse) = if args.len() == 1 {
-            // (sort collection) - just collection, ascending
-            (&args[0], false)
-        } else {
-            // Two arguments - could be (comparator collection) or (collection reverse-flag)
-            match &args[0] {
-                Value::Function(f) => {
-                    // Check if this is the > or < function by name
-                    match f {
-                        Function::Builtin(bf) if bf.name == ">" => {
-                            // (sort > collection) - descending sort
-                            (&args[1], true)
-                        }
-                        Function::Builtin(bf) if bf.name == "<" => {
-                            // (sort < collection) - ascending sort (explicit)
-                            (&args[1], false)
-                        }
-                        _ => {
-                            // Unknown function - assume (collection comparator)
-                            (&args[0], false)
-                        }
-                    }
-                }
-                Value::Symbol(s) if s.0 == ">" => {
-                    // (sort > collection) - descending sort (symbol version)
-                    (&args[1], true)
-                }
-                Value::Symbol(s) if s.0 == "<" => {
-                    // (sort < collection) - ascending sort (explicit, symbol version)
-                    (&args[1], false)
-                }
-                Value::Boolean(b) => {
-                    // (sort collection reverse-flag)
-                    (&args[1], *b)
-                }
-                _ => {
-                    // Assume (collection comparator) - treat as ascending for now
-                    (&args[0], false)
-                }
-            }
-        };
-
-        match collection {
+        match &args[0] {
             Value::Vector(v) => {
                 let mut sorted = v.clone();
-                if reverse {
-                    sorted.sort_by(|a, b| b.compare(a));
-                } else {
-                    sorted.sort_by(|a, b| a.compare(b));
-                }
+                sorted.sort_by(|a, b| a.compare(b));
                 Ok(Value::Vector(sorted))
             }
             Value::String(s) => {
                 let mut chars: Vec<char> = s.chars().collect();
-                if reverse {
-                    chars.sort_by(|a, b| b.cmp(a));
-                } else {
-                    chars.sort();
-                }
+                chars.sort();
                 Ok(Value::String(chars.iter().collect()))
             }
             _ => Err(RuntimeError::TypeError {
                 expected: "vector or string".to_string(),
-                actual: collection.type_name().to_string(),
+                actual: args[0].type_name().to_string(),
                 operation: "sort".to_string(),
             }),
         }
@@ -3400,90 +3047,4 @@ impl SecureStandardLibrary {
         }
         Ok(Value::Map(out))
     }
-
-    // Additional utility functions for testing
-
-    fn type_func(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "type".to_string(),
-                expected: "1".to_string(),
-                actual: args.len()
-            });
-        }
-        Ok(Value::String(args[0].type_name().to_string()))
-    }
-
-    fn val(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "val".to_string(),
-                expected: "1".to_string(),
-                actual: args.len()
-            });
-        }
-
-        // Expect a key-value pair like [key value]
-        match &args[0] {
-            Value::Vector(v) if v.len() == 2 => {
-                Ok(v[1].clone())
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "key-value pair vector [key value]".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "val".to_string(),
-            }),
-        }
-    }
-
-
-
-    fn keys(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "keys".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Map(m) => {
-                let keys: Vec<Value> = m.keys().map(|k| match k {
-                    MapKey::Keyword(kw) => Value::Keyword(kw.clone()),
-                    MapKey::String(s) => Value::String(s.clone()),
-                    MapKey::Integer(i) => Value::Integer(*i),
-                }).collect();
-                Ok(Value::Vector(keys))
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "map".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "keys".to_string(),
-            }),
-        }
-    }
-
-    fn vals(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "vals".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Map(m) => {
-                let vals: Vec<Value> = m.values().cloned().collect();
-                Ok(Value::Vector(vals))
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "map".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "vals".to_string(),
-            }),
-        }
-    }
-
 }

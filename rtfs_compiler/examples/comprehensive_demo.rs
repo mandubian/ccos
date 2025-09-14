@@ -38,6 +38,7 @@ use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
 use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
+use rtfs_compiler::ccos::plan_archive::PlanArchive;
 use rtfs_compiler::ccos::types::PlanBody;
 use rtfs_compiler::ccos::plan_archive::PlanArchive;
 
@@ -115,13 +116,14 @@ impl DemoContext {
         capability_marketplace.bootstrap().await?;
         let capability_marketplace = Arc::new(capability_marketplace);
         rtfs_compiler::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
+        let plan_archive = Arc::new(PlanArchive::new());
 
         // Orchestrator that will execute plans and update graph/chain
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
             Arc::clone(&capability_marketplace),
-            Arc::new(PlanArchive::new()),
+            Arc::clone(&plan_archive),
         ));
 
         println!("✅ Demo context initialized");

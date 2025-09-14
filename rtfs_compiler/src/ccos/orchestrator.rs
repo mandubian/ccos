@@ -1096,7 +1096,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Seed an Active intent
     let stored = StorableIntent::new("test goal".to_string());
@@ -1152,7 +1153,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Seed an Active intent
         let stored = StorableIntent::new("test goal".to_string());
@@ -1207,7 +1209,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test pure function call - should get Inherit isolation
         let pure_expr = Expression::List(vec![
@@ -1235,7 +1238,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test network operation - should get Isolated isolation
         let network_expr = Expression::List(vec![
@@ -1272,7 +1276,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test file operation - should get Isolated isolation
         let file_expr = Expression::List(vec![
@@ -1307,7 +1312,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test system operation - should get Sandboxed isolation
         let system_expr = Expression::List(vec![
@@ -1334,7 +1340,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test computationally intensive operation gets higher limits
         let intensive_expr = Expression::List(vec![
@@ -1362,7 +1369,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test that runtime context constraints are respected
         let file_expr = Expression::List(vec![
@@ -1389,7 +1397,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         let network_expr = Expression::List(vec![
             Expression::Symbol(Symbol("call".to_string())),
@@ -1419,7 +1428,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         let expr = Expression::List(vec![
             Expression::Symbol(Symbol("call".to_string())),
@@ -1450,7 +1460,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test that dangerous operations get comprehensive security flags
         let dangerous_expr = Expression::List(vec![
@@ -1478,7 +1489,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test that network operations get appropriate bandwidth limits
         let network_expr = Expression::List(vec![
@@ -1503,7 +1515,8 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
-    let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::new(PlanArchive::new()));
+        let plan_archive = Arc::new(PlanArchive::new());
+        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
 
         // Test that data operations are marked as deterministic
         let data_expr = Expression::List(vec![
