@@ -19,6 +19,7 @@ use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
+use rtfs_compiler::ccos::plan_archive::PlanArchive;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
@@ -72,11 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // This makes marketplace.execute_capability route to registry.execute_capability_with_microvm()
     let _ = marketplace.remove_capability("ccos.network.http-fetch").await;
     let marketplace = Arc::new(marketplace);
+    let plan_archive = Arc::new(PlanArchive::new());
     let orchestrator = Arc::new(Orchestrator::new(
         Arc::clone(&causal_chain),
         Arc::clone(&intent_graph),
         Arc::clone(&marketplace),
-        Arc::new(PlanArchive::new()),
+        Arc::clone(&plan_archive),
     ));
 
     // --- Build a graph ---
