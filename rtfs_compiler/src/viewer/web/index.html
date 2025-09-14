@@ -107,7 +107,7 @@
                     <button id="tab-intent" class="active" title="Intent (1)">Intent</button>
                     <button id="tab-plan" title="Plan (2)">Plan</button>
                     <button id="tab-graph" title="Graph (3)">Graph</button>
-                    <button id="tab-exec" title="Execution History">Exec</button>
+                    <!-- Exec tab removed: execution pane is available separately -->
                     <div class="tab-controls">
                         <button id="toggle-format" class="format-toggle" title="Toggle JSON/RTFS (Ctrl+T)">RTFS</button>
                         <button id="toggle-wrap" class="wrap-toggle" title="Toggle Line Wrap">Wrap</button>
@@ -118,7 +118,21 @@
                     <pre id="pane-intent" class="code-pane"><code id="intent-code" class="language-lisp"></code></pre>
                     <pre id="pane-plan" class="code-pane hidden"><code id="rtfs-code" class="language-lisp"></code></pre>
                     <pre id="pane-graph" class="code-pane hidden"><code id="graph-code" class="language-lisp"></code></pre>
-                    <div id="pane-exec" class="code-pane hidden">
+                    </div>
+            </div>
+            <!-- Bottom panel: unified Execution History + Activity Log -->
+            <div id="bottom-panel" class="hidden">
+                <div id="bottom-panel-header">
+                    <div id="bottom-tabs">
+                        <button id="bottom-tab-exec" class="bottom-tab active">Execution History</button>
+                        <button id="bottom-tab-activity" class="bottom-tab">Activity Log</button>
+                    </div>
+                    <div id="bottom-panel-controls">
+                        <button id="bottom-panel-toggle" title="Collapse/Expand">▲/▼</button>
+                    </div>
+                </div>
+                <div id="bottom-panel-body">
+                    <div id="bottom-panel-exec" class="bottom-panel-pane">
                         <div id="exec-layout">
                             <div id="exec-runs-panel">
                                 <div class="exec-panel-header">
@@ -152,24 +166,26 @@
                             </div>
                         </div>
                     </div>
-                </div>
-            </div>
-            <div id="log-container">
-                <div id="log-resize-handle"></div>
-                <div id="log-header">
-                    <h3>📝 Activity Log</h3>
-                    <div class="log-controls">
-                        <select id="log-filter" title="Filter Log Level">
-                            <option value="all">All</option>
-                            <option value="info">Info</option>
-                            <option value="warning">Warning</option>
-                            <option value="error">Error</option>
-                        </select>
-                        <button id="clear-logs" title="Clear Logs">🗑️</button>
-                        <button id="toggle-logs" title="Show Log Panel">📋 Show</button>
+                    <div id="bottom-panel-activity" class="bottom-panel-pane hidden">
+                <div id="log-container">
+                            <div id="log-header">
+                                <h3>📝 Activity Log</h3>
+                                <div class="log-controls">
+                                    <select id="log-filter" title="Filter Log Level">
+                                        <option value="all">All</option>
+                                        <option value="info">Info</option>
+                                        <option value="warning">Warning</option>
+                                        <option value="error">Error</option>
+                                    </select>
+                                    <button id="clear-logs" title="Clear Logs">🗑️</button>
+                                    <button id="toggle-logs" title="Show Log Panel">📋 Show</button>
+                                </div>
+                            </div>
+                            <div id="log-entries"></div>
+                        </div>
                     </div>
                 </div>
-                <div id="log-entries"></div>
+                <div id="bottom-panel-resize" title="Resize">↕</div>
             </div>
         </div>
     </div>

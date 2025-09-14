@@ -130,6 +130,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectedIntentLabelSpan = document.getElementById('selected-intent-label');
     const activityIndicator = document.getElementById('activity-indicator');
     const activityText = document.getElementById('activity-text');
+    
+    // Activity helpers: show/hide the small status indicator in the header
+    function showActivity(message = 'Working...') {
+        try {
+            if (activityText) activityText.textContent = message;
+            if (activityIndicator) activityIndicator.classList.remove('activity-hidden');
+        } catch (e) {
+            console.warn('showActivity failed:', e);
+        }
+    }
+
+    function hideActivity() {
+        try {
+            if (activityIndicator) activityIndicator.classList.add('activity-hidden');
+        } catch (e) {
+            console.warn('hideActivity failed:', e);
+        }
+    }
     const logFilter = document.getElementById('log-filter');
     const clearLogsBtn = document.getElementById('clear-logs');
     const toggleLogsBtn = document.getElementById('toggle-logs');
@@ -138,12 +156,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Activity Log: collapsed by default, expandable/resizable via CSS class
     if (logContainer) {
-        logContainer.classList.remove('logs-expanded');
+        // Expand logs by default so activity is visible immediately
+        logContainer.classList.add('logs-expanded');
     }
     if (toggleLogsBtn && logContainer) {
         // Initialize button text correctly (collapsed = Show)
-        toggleLogsBtn.textContent = '📋 Show';
-        toggleLogsBtn.title = 'Show Log Panel';
+        // Since we expand by default, initialize button as Hide
+        toggleLogsBtn.textContent = '📋 Hide';
+        toggleLogsBtn.title = 'Hide Log Panel';
         
         toggleLogsBtn.addEventListener('click', () => {
             logContainer.classList.toggle('logs-expanded');
@@ -171,59 +191,106 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         
-        // Add drag-to-resize functionality
-        let isDragging = false;
+        // Removed drag-to-resize code and handle; logs are toggled via the button and CSS only.
+    }
+
+    // ---- Bottom panel integration ----
+    const bottomPanel = document.getElementById('bottom-panel');
+    const bottomTabExec = document.getElementById('bottom-tab-exec');
+    const bottomTabActivity = document.getElementById('bottom-tab-activity');
+    const bottomPanelExec = document.getElementById('bottom-panel-exec');
+    const bottomPanelActivity = document.getElementById('bottom-panel-activity');
+    const bottomPanelToggle = document.getElementById('bottom-panel-toggle');
+    const bottomPanelResize = document.getElementById('bottom-panel-resize');
+
+    function showBottomPanel() {
+        if (!bottomPanel) return;
+        bottomPanel.classList.remove('hidden');
+        bottomPanel.classList.remove('collapsed');
+        // Defensive: some elements may be absent in older builds; guard access
+        if (bottomTabExec && bottomTabExec.classList) bottomTabExec.classList.add('active');
+        if (bottomPanelExec && bottomPanelExec.classList) bottomPanelExec.classList.remove('hidden');
+        if (bottomPanelActivity && bottomPanelActivity.classList) bottomPanelActivity.classList.add('hidden');
+        // Keep body padding in sync
+        // Panel is shown; do not modify document body padding so the panel stays in-flow
+        if (bottomPanelToggle) bottomPanelToggle.textContent = '▼/▲';
+    }
+
+    function hideBottomPanel() {
+        if (!bottomPanel) return;
+        // collapse the panel visually but keep a small bar visible so user can expand it
+        bottomPanel.classList.remove('hidden');
+        bottomPanel.classList.add('collapsed');
+        // Panel collapsed: do not change body padding; panel remains in document flow and will scroll with page
+        if (bottomPanelToggle) bottomPanelToggle.textContent = '▲/▼';
+    }
+
+    if (bottomTabExec && bottomTabActivity && bottomPanelExec && bottomPanelActivity) {
+        bottomTabExec.addEventListener('click', () => {
+            bottomTabExec.classList.add('active');
+            bottomTabActivity.classList.remove('active');
+            bottomPanelExec.classList.remove('hidden');
+            bottomPanelActivity.classList.add('hidden');
+        });
+        bottomTabActivity.addEventListener('click', () => {
+            bottomTabActivity.classList.add('active');
+            bottomTabExec.classList.remove('active');
+            bottomPanelActivity.classList.remove('hidden');
+            bottomPanelExec.classList.add('hidden');
+        });
+    }
+
+    if (bottomPanelToggle) {
+        bottomPanelToggle.addEventListener('click', () => {
+            if (!bottomPanel) return;
+            // Toggle collapsed state (keep element present so a small bar remains visible)
+            const isCollapsed = bottomPanel.classList.toggle('collapsed');
+            if (isCollapsed) {
+                // Keep panel in flow; nothing to change on body
+                bottomPanelToggle.textContent = '▲/▼';
+            } else {
+                bottomPanelToggle.textContent = '▼/▲';
+            }
+        });
+    }
+
+    if (bottomPanelResize && bottomPanel) {
+        let resizing = false;
         let startY = 0;
         let startHeight = 0;
-        let lastCustomHeight = null; // Remember the last custom size
-        
-        if (logResizeHandle) {
-            logResizeHandle.addEventListener('mousedown', (e) => {
-                isDragging = true;
-                startY = e.clientY;
-                
-                // Get the actual visual height, not just offsetHeight
-                const computedStyle = window.getComputedStyle(logContainer);
-                const actualHeight = logContainer.offsetHeight;
-                startHeight = actualHeight;
-                
-                logContainer.style.userSelect = 'none';
-                logContainer.classList.add('dragging');
-                document.body.style.cursor = 'ns-resize';
-                e.preventDefault();
-                e.stopPropagation();
-            });
-        }
-        
-        document.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-            
-            const deltaY = startY - e.clientY; // Reverse the direction
-            const newHeight = Math.max(150, Math.min(600, startHeight + deltaY));
-            
-            // Force the height change with !important and disable flex
-            logContainer.style.setProperty('height', newHeight + 'px', 'important');
-            logContainer.style.setProperty('max-height', 'none', 'important');
-                    // Adjust code pane heights after log resize
-                    updateCodePaneHeights();
-            logContainer.style.setProperty('flex-grow', '0', 'important');
-            logContainer.style.setProperty('flex-shrink', '0', 'important');
-            
+        bottomPanelResize.addEventListener('mousedown', (e) => {
+            resizing = true;
+            startY = e.clientY;
+            startHeight = bottomPanel.offsetHeight;
+            document.body.style.cursor = 'ns-resize';
             e.preventDefault();
         });
-        
-        document.addEventListener('mouseup', (e) => {
-            if (isDragging) {
-                // Save the final height as the custom size
-                lastCustomHeight = logContainer.offsetHeight;
-                
-                isDragging = false;
-                logContainer.style.userSelect = '';
-                logContainer.classList.remove('dragging');
+        document.addEventListener('mousemove', (e) => {
+            if (!resizing) return;
+            const delta = startY - e.clientY;
+            let newH = Math.max(80, Math.min(window.innerHeight * 0.8, startHeight + delta));
+            bottomPanel.style.height = newH + 'px';
+            e.preventDefault();
+        });
+        document.addEventListener('mouseup', () => {
+            if (resizing) {
+                resizing = false;
                 document.body.style.cursor = '';
             }
         });
     }
+
+    // Expose for other modules to show execution panel when new data arrives
+    window.showExecutionPanel = function(){
+        showBottomPanel();
+        // ensure body padding is set when programmatically opening
+        if (bottomPanel && !bottomPanel.classList.contains('collapsed')) {
+            if (bottomPanelToggle) bottomPanelToggle.textContent = '▼/▲';
+        }
+    };
+
+    // Make the bottom panel visible by default so activity logs are always accessible.
+    try { showBottomPanel(); } catch (e) { console.warn('showBottomPanel failed on init:', e); }
 
     // Helper function for node badges (placeholder)
     function getBadgeText(nodeId) {
@@ -1880,7 +1947,6 @@ document.addEventListener('DOMContentLoaded', () => {
             { btn: tabIntent, pane: document.getElementById('pane-intent') },
             { btn: tabPlan, pane: document.getElementById('pane-plan') },
             { btn: tabGraph, pane: document.getElementById('pane-graph') },
-            { btn: document.getElementById('tab-exec'), pane: document.getElementById('pane-exec') },
         ];
         panes.forEach(({ btn, pane }) => {
             if (!btn || !pane) return;
@@ -1894,11 +1960,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (tabIntent && tabPlan && tabGraph) {
-        const tabExec = document.getElementById('tab-exec');
         tabIntent.addEventListener('click', () => activateTab('intent'));
         tabPlan.addEventListener('click', () => activateTab('plan'));
         tabGraph.addEventListener('click', () => activateTab('graph'));
-        if (tabExec) tabExec.addEventListener('click', () => { renderExecutionRuns(); activateTab('exec'); });
+        // Keep initial active tab
         activateTab('intent');
     }
 
@@ -2026,6 +2091,10 @@ document.addEventListener('DOMContentLoaded', () => {
             li.addEventListener('click', () => renderExecutionDetails(id));
             listEl.appendChild(li);
         });
+        // Auto-show bottom panel when there are runs
+        if (typeof window.showExecutionPanel === 'function' && runs.length > 0) {
+            window.showExecutionPanel();
+        }
     }
 
     function timeAgo(tsSec) {
@@ -2061,8 +2130,33 @@ document.addEventListener('DOMContentLoaded', () => {
             chip.title = `${intentId}\n${phases.join(' → ')}`;
             const dotsUnique = [];
             for (const ph of phases){ if (!dotsUnique.includes(ph)) dotsUnique.push(ph); }
-            chip.innerHTML = `<span class="ic-id">${intentId.substring(0,6)}</span><div class="ic-phases">${dotsUnique.map(ph=>`<span class='phase-dot ${ph}'></span>`).join('')}</div>`;
-            chip.addEventListener('click', () => highlightIntentRow(intentId));
+            // Prefer a short human label when available, otherwise show the id prefix
+            const node = intentNodes.get(intentId);
+            const displayLabel = node?.label ? (node.label.length > 18 ? node.label.substring(0,18) + '…' : node.label) : intentId.substring(0,8);
+            // Show label (or id prefix) and the id prefix in monospace for clarity
+            chip.innerHTML = `<span class="ic-id">${escapeHtml(displayLabel)}</span><div style="font-family:monospace;font-size:11px;color:#999;margin-top:2px">${escapeHtml(intentId.substring(0,8))}</div><div class="ic-phases">${dotsUnique.map(ph=>`<span class='phase-dot ${ph}'></span>`).join('')}</div>`;
+            chip.addEventListener('click', () => {
+                try {
+                    // Select the intent logically
+                    selectIntent(intentId);
+                    // Vis.js select in graph view
+                    if (typeof network !== 'undefined' && network && typeof network.selectNodes === 'function') {
+                        network.selectNodes([intentId], false);
+                        // center on node for user context
+                        try {
+                            const pos = network.getPositions([intentId])[intentId];
+                            if (pos) network.moveTo({ position: pos, scale: 1.2, animation: { duration: 300 } });
+                        } catch (e) { /* ignore positioning errors */ }
+                    }
+                    // Switch to the Intent tab and render code
+                    activateTab('intent');
+                    if (typeof renderIntentRtfs === 'function') renderIntentRtfs(intentId);
+                    // Also highlight the corresponding row in the exec table
+                    highlightIntentRow(intentId);
+                } catch (e) {
+                    console.error('Error handling timeline chip click:', e);
+                }
+            });
             timelineEl.appendChild(chip);
         });
     }
