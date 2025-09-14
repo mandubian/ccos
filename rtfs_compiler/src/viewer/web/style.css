@@ -1176,13 +1176,19 @@ h1, h2, h3 {
 .exec-subtab.active { background: linear-gradient(180deg,#00bbff 0%, #0095d4 100%); border-color: #00caff; color: #071014; font-weight:700; box-shadow: 0 4px 10px rgba(0,170,255,0.15); }
 .exec-subtab-panel { font-size:14px; }
 
-/* Prevent subtab content from resizing the overall exec layout: make details panel a flex column and allow subtab panels to share height and scroll internally */
+/* Prevent subtab content from resizing the overall exec layout: make details panel a flex column
+   and allow subtab panels to share height. Make the details panel itself vertically scrollable so
+   long content won't overflow the layout. */
 #exec-details-panel {
     display: flex;
     flex-direction: column;
+    gap: 4px;
     min-height: 0;
     height: 100%;
-    overflow: hidden;
+    flex: 1 1 auto;
+    overflow-y: auto; /* allow vertical scrolling */
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
 }
 
 #exec-details-panel > * { flex: 0 0 auto; }
@@ -1292,7 +1298,7 @@ h1, h2, h3 {
 
 /* Reinforce details/subtab scrolling: ensure consistent sizing and internal scrolling */
 /* Details panel should grow to fill available horizontal space while runs panel stays fixed */
-#exec-details-panel { display:flex; flex-direction:column; gap:4px; min-height:0; height:100%; overflow:hidden; flex: 1 1 auto; }
+#exec-details-panel { display:flex; flex-direction:column; gap:4px; min-height:0; height:100%; overflow-y:auto; overflow-x:hidden; flex: 1 1 auto; }
 #exec-details-panel > * { flex:0 0 auto; }
 
 /* Ensure the exec-layout children behave predictably: runs panel fixed, details panel flexible */
@@ -1361,5 +1367,5 @@ h1, h2, h3 {
 /* Make exec layout fill bottom pane */
 #exec-layout { height: 100%; min-height:0; display:flex; gap:12px; }
 #exec-runs-panel { overflow-y:auto; }
-#exec-details-panel { overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+#exec-details-panel { display:flex; flex-direction:column; min-height:0; overflow-y:auto; overflow-x:hidden; }
 #exec-subtab-panels { min-height:0; }
