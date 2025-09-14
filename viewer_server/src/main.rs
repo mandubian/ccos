@@ -9,8 +9,12 @@ use futures_util::{StreamExt, sink::SinkExt};
 use chrono;
 use uuid::Uuid; // for execution run identifiers
 
+// Local modules (shared with lib facade)
+mod snapshot;
+
 // CCOS runtime types for background arbiter calls
 use rtfs_compiler::ccos::{CCOS, runtime_service};
+use crate::snapshot::build_architecture_snapshot; // re-exported for binary
 use rtfs_compiler::ccos::arbiter::arbiter_engine::ArbiterEngine;
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -110,6 +114,13 @@ struct GetPlansRequestInternal {
     resp: oneshot::Sender<Result<Vec<serde_json::Value>, String>>,
 }
 
+struct ArchitectureRequestInternal {
+    include_capabilities: bool,
+    recent_intents_limit: usize,
+    cap_limit: Option<usize>,
+    resp: oneshot::Sender<Result<serde_json::Value, String>>,
+}
+
 struct AppState {
     tx: broadcast::Sender<ViewerEvent>,
     // Channel to send graph generation requests to the CCOS-local worker
@@ -118,6 +129,7 @@ struct AppState {
     execute_req_tx: mpsc::Sender<ExecuteRequestInternal>,
     load_graph_req_tx: mpsc::Sender<LoadGraphRequestInternal>,
     get_plans_req_tx: mpsc::Sender<GetPlansRequestInternal>,
+    architecture_req_tx: mpsc::Sender<ArchitectureRequestInternal>,
 }
 
 #[derive(serde::Deserialize)]
@@ -695,6 +707,7 @@ async fn main() {
     let (execute_req_tx, execute_req_rx) = mpsc::channel::<ExecuteRequestInternal>(16);
     let (load_graph_req_tx, load_graph_req_rx) = mpsc::channel::<LoadGraphRequestInternal>(16);
     let (get_plans_req_tx, mut get_plans_req_rx) = mpsc::channel::<GetPlansRequestInternal>(16);
+    let (architecture_req_tx, architecture_req_rx) = mpsc::channel::<ArchitectureRequestInternal>(16);
 
     // Spawn a dedicated thread that runs a current-thread Tokio runtime + LocalSet
     // This mirrors the example's pattern so we can call non-Send LLM-backed arbiter methods.
@@ -744,6 +757,7 @@ async fn main() {
             let mut plan_rx = plan_req_rx;
             let mut execute_rx = execute_req_rx;
             let mut load_graph_rx = load_graph_req_rx;
+            let mut architecture_rx = architecture_req_rx;
 
             loop {
                 tokio::select! {
@@ -896,6 +910,30 @@ async fn main() {
                                         }
 
                                         println!("📋 Topological sort completed: {} nodes ordered", sorted_order.len());
+
+                                        // Backfill parent_intent for any node that has an incoming IsSubgoalOf edge but missing parent
+                                        // Build quick lookup of first parent via IsSubgoalOf
+                                        let mut parent_map: HashMap<String, String> = HashMap::new();
+                                        for intent in &connected_intents {
+                                            let edges = graph_lock.get_edges_for_intent(&intent.intent_id);
+                                            for edge in edges {
+                                                if edge.edge_type == rtfs_compiler::ccos::types::EdgeType::IsSubgoalOf {
+                                                    // from is subgoal of to  => parent(to) of child(from)
+                                                    parent_map.entry(edge.from.clone()).or_insert(edge.to.clone());
+                                                }
+                                            }
+                                        }
+                                        // Apply backfill updates
+                                        for intent in &connected_intents {
+                                            if intent.parent_intent.is_none() {
+                                                if let Some(p) = parent_map.get(&intent.intent_id) {
+                                                    if let Some(mut stored) = graph_lock.storage.get_intent_sync(&intent.intent_id) {
+                                                        stored.parent_intent = Some(p.clone());
+                                                        if let Err(e) = graph_lock.storage.update_intent(&stored).await { println!("⚠️ Failed to backfill parent for {}: {}", stored.intent_id, e); }
+                                                    }
+                                                }
+                                            }
+                                        }
 
                                         // Identify the root node (the one we started with)
                                         let root_node_id = Some(root_id.clone());
@@ -1540,6 +1578,12 @@ async fn main() {
                         }
                     }
 
+                    Some(req) = architecture_rx.recv() => {
+                        println!("🔄 Processing architecture snapshot request");
+                        let snapshot = build_architecture_snapshot(&ccos, req.include_capabilities, req.recent_intents_limit, req.cap_limit).await;
+                        let _ = req.resp.send(Ok(snapshot));
+                    }
+
                     else => break,
                 }
             }
@@ -1553,6 +1597,7 @@ async fn main() {
         execute_req_tx,
         load_graph_req_tx,
         get_plans_req_tx,
+        architecture_req_tx,
     });
 
     // Serve the frontend directory via a small static handler and add phased POST endpoints
@@ -1565,7 +1610,8 @@ async fn main() {
         .route("/generate-plans", post(generate_plans_handler))
         .route("/execute", post(execute_handler))
         .route("/load-graph", post(load_graph_handler))
-        .route("/get-plans", post(get_plans_handler))
+    .route("/get-plans", post(get_plans_handler))
+    .route("/architecture", get(architecture_handler))
         .route("/", get(|| async { serve_file_path(frontend_base().join("index.html"), "text/html; charset=utf-8").await }))
         .route("/*file", get(static_handler))
         .with_state(state);
@@ -1607,6 +1653,42 @@ async fn static_handler(Path(file): Path<String>) -> impl IntoResponse {
             // try to serve index.html as SPA fallback
             serve_file_path(frontend_base().join("index.html"), "text/html; charset=utf-8").await
         }
+    }
+}
+
+// ---------------- Architecture Introspection -----------------
+
+#[derive(serde::Deserialize, Default)]
+struct ArchQuery {
+    include: Option<String>,
+    recent_intents: Option<usize>,
+    cap_limit: Option<usize>,
+}
+
+// ---------------- Snapshot builder (extracted for testing & reuse) -----------------
+/// Build an architecture snapshot JSON object.
+/// This function is intentionally `pub(crate)` to allow crate tests to validate invariants
+/// without spinning up the HTTP server. It applies:
+/// - recent intents limiting
+/// - capability inclusion / truncation
+// build_architecture_snapshot has been moved to snapshot.rs (library module)
+
+async fn architecture_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<ArchQuery>,
+) -> Json<serde_json::Value> {
+    let include_caps = q.include.as_deref().map(|s| s.split(',').any(|t| t.trim()=="capabilities")).unwrap_or(false);
+    let recent_intents_limit = q.recent_intents.unwrap_or(5).min(50);
+    let cap_limit = q.cap_limit;
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let req = ArchitectureRequestInternal { include_capabilities: include_caps, recent_intents_limit, cap_limit, resp: resp_tx };
+    if let Err(_e) = state.architecture_req_tx.clone().try_send(req) {
+        return Json(serde_json::json!({"error":"architecture service unavailable"}));
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(10), resp_rx).await {
+        Ok(Ok(Ok(v))) => Json(v),
+        Ok(Ok(Err(e))) => Json(serde_json::json!({"error":e})),
+        _ => Json(serde_json::json!({"error":"timeout"})),
     }
 }
 
