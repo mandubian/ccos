@@ -1924,6 +1924,12 @@ impl Evaluator {
     }
 
     fn eval_fn(&self, fn_expr: &FnExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Extract variadic parameter for anonymous functions if present
+        let variadic_param = fn_expr
+            .variadic_param
+            .as_ref()
+            .map(|p| self.extract_param_symbol(&p.pattern));
+
         Ok(Value::Function(Function::new_closure(
             fn_expr
                 .params
@@ -1931,7 +1937,7 @@ impl Evaluator {
                 .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
             fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
-            None, // FnExpr doesn't support variadic parameters
+            variadic_param,
             Box::new(Expression::Do(DoExpr {
                 expressions: fn_expr.body.clone(),
             })),
