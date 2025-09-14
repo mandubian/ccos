@@ -1449,9 +1449,51 @@ impl Evaluator {
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
 
-                // Bind arguments to parameter patterns (supports destructuring)
-                for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
-                    self.bind_pattern(pat, arg, &mut func_env)?;
+                // Bind arguments to parameter patterns (supports destructuring and variadic)
+                if !closure.param_patterns.is_empty() {
+                    let last_pattern = &closure.param_patterns[closure.param_patterns.len() - 1];
+                    
+                    
+                    // Check if the last parameter is variadic (VectorDestructuring with rest)
+                    let is_variadic = matches!(last_pattern, crate::ast::Pattern::VectorDestructuring { rest: Some(_), .. });
+                    
+                    if is_variadic {
+                        // Handle variadic parameters
+                        let required_patterns = &closure.param_patterns[..closure.param_patterns.len() - 1];
+                        
+                        // Check minimum argument count for required parameters
+                        if args.len() < required_patterns.len() {
+                            return Err(RuntimeError::ArityMismatch {
+                                function: "user-defined function".to_string(),
+                                expected: format!("at least {}", required_patterns.len()),
+                                actual: args.len(),
+                            });
+                        }
+                        
+                        // Bind required parameters
+                        for (pat, arg) in required_patterns.iter().zip(args.iter()) {
+                            self.bind_pattern(pat, arg, &mut func_env)?;
+                        }
+                        
+                        // Bind variadic parameter - collect remaining args into a list
+                        if let crate::ast::Pattern::VectorDestructuring { rest: Some(rest_symbol), .. } = last_pattern {
+                            let rest_args = args[required_patterns.len()..].to_vec();
+                            func_env.define(rest_symbol, Value::List(rest_args));
+                        }
+                    } else {
+                        // Normal parameter binding for non-variadic functions
+                        if closure.param_patterns.len() != args.len() {
+                            return Err(RuntimeError::ArityMismatch {
+                                function: "user-defined function".to_string(),
+                                expected: closure.param_patterns.len().to_string(),
+                                actual: args.len(),
+                            });
+                        }
+                        
+                        for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
+                            self.bind_pattern(pat, arg, &mut func_env)?;
+                        }
+                    }
                 }
 
                 // Execute function body
