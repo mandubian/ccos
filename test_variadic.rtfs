@@ -1,3 +1,0 @@
-(defn sum-all [& numbers]
-  (reduce + numbers))
-(sum-all 1 2 3 4 5)

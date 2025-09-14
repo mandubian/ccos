@@ -1,3 +1,0 @@
-(defn sum-all [& numbers]
-  (println "numbers:" numbers)
-  (reduce + numbers))
