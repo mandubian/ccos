@@ -173,7 +173,7 @@ impl StandardLibrary {
             })),
         );
 
-        // Backwards-compatible alias used in some tests/examples: `tool.log` (dot)
+        // Alias for dot notation (tool.log)
         env.define(
             &Symbol("tool.log".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -193,7 +193,7 @@ impl StandardLibrary {
             })),
         );
 
-        // Backwards-compatible dotted alias
+        // Alias for dot notation (tool.time-ms)
         env.define(
             &Symbol("tool.time-ms".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {

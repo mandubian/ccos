@@ -1322,68 +1322,34 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
     // Parse the structured pest pairs from the grammar
     let mut pairs = meta_pair.into_inner();
 
-    // Skip the "^:delegation" literal and any whitespace/comments that may follow
-    while let Some(p) = pairs.peek() {
-        match p.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT => {
-                pairs.next();
-            }
-            _ => break,
-        }
-    }
+    // Find the delegation_target rule within the delegation_meta
+    let delegation_target_pair = pairs.find(|p| p.as_rule() == Rule::delegation_target)
+        .ok_or_else(|| PestParseError::InvalidInput {
+            message: "delegation_meta must contain delegation_target".to_string(),
+            span: Some(meta_span),
+        })?;
 
-    // Get the outer delegation_target rule
-    let target_outer_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "delegation_meta requires delegation_target".to_string(),
-        span: Some(meta_span),
+    let delegation_target_span = pair_to_source_span(&delegation_target_pair);
+    
+    // Get the concrete delegation variant from delegation_target
+    let mut target_inner = delegation_target_pair.into_inner();
+    let concrete_pair = target_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "delegation_target must contain a concrete delegation variant".to_string(),
+        span: Some(delegation_target_span.clone()),
     })?;
+    let concrete_span = pair_to_source_span(&concrete_pair);
 
-    // Capture its span before moving it
-    let target_outer_span = pair_to_source_span(&target_outer_pair);
-
-    // Handle the case where we get delegation_meta directly
-    let (target_pair, target_span) = if target_outer_pair.as_rule() == Rule::delegation_meta {
-        // Extract the delegation_target from delegation_meta
-        let mut inner = target_outer_pair.into_inner();
-        // Skip the "^:delegation" part and find the delegation_target
-        let delegation_target_pair = inner.find(|p| p.as_rule() == Rule::delegation_target)
-            .ok_or_else(|| PestParseError::InvalidInput {
-                message: "delegation_meta must contain delegation_target".to_string(),
-                span: Some(target_outer_span.clone()),
-            })?;
-        let delegation_target_span = pair_to_source_span(&delegation_target_pair);
-        
-        // Now get the concrete delegation variant from delegation_target
-        let mut target_inner = delegation_target_pair.into_inner();
-        let concrete_pair = target_inner.next().ok_or_else(|| PestParseError::InvalidInput {
-            message: "delegation_target must contain a concrete delegation variant".to_string(),
-            span: Some(delegation_target_span.clone()),
-        })?;
-        let concrete_span = pair_to_source_span(&concrete_pair);
-        (concrete_pair, concrete_span)
-    } else if target_outer_pair.as_rule() == Rule::delegation_target {
-        let mut inner = target_outer_pair.into_inner();
-        let concrete_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
-            message: "delegation_target must contain a concrete delegation variant".to_string(),
-            span: Some(target_outer_span.clone()),
-        })?;
-        let concrete_span = pair_to_source_span(&concrete_pair);
-        (concrete_pair, concrete_span)
-    } else {
-        (target_outer_pair, target_outer_span)
-    };
-
-    match target_pair.as_rule() {
+    match concrete_pair.as_rule() {
         Rule::local_delegation => Ok(DelegationHint::LocalPure),
 
         Rule::local_model_delegation => {
             // Extract the required model id string
-            let model_id_pair = target_pair
+            let model_id_pair = concrete_pair
                 .into_inner()
                 .find(|p| p.as_rule() == Rule::string)
                 .ok_or_else(|| PestParseError::InvalidInput {
                     message: ":local-model requires a string argument".to_string(),
-                    span: Some(target_span.clone()),
+                    span: Some(concrete_span.clone()),
                 })?;
 
             let model_id = model_id_pair.as_str().trim_matches('"').to_string();
@@ -1392,12 +1358,12 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
 
         Rule::remote_delegation => {
             // Extract the required remote model id string
-            let remote_id_pair = target_pair
+            let remote_id_pair = concrete_pair
                 .into_inner()
                 .find(|p| p.as_rule() == Rule::string)
                 .ok_or_else(|| PestParseError::InvalidInput {
                     message: ":remote requires a string argument".to_string(),
-                    span: Some(target_span.clone()),
+                    span: Some(concrete_span.clone()),
                 })?;
 
             let remote_id = remote_id_pair.as_str().trim_matches('"').to_string();
@@ -1407,9 +1373,9 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
         _ => Err(PestParseError::InvalidInput {
             message: format!(
                 "Expected concrete delegation variant, found {:?}",
-                target_pair.as_rule()
+                concrete_pair.as_rule()
             ),
-            span: Some(target_span),
+            span: Some(concrete_span),
         }),
     }
 }
