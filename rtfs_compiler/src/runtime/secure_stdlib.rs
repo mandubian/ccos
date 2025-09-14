@@ -1710,7 +1710,7 @@ impl SecureStandardLibrary {
             Value::List(list) => list.clone(),
             _ => {
                 return Err(RuntimeError::new(
-                    "reduce expects a vector, string, or list as its last argument",
+                    &format!("reduce expects a vector, string, or list as its last argument, got {}", collection_val.type_name()),
                 ))
             }
         };
