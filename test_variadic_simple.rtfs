@@ -1,0 +1,7 @@
+; Test variadic parameter parsing
+(defn sum-all [& numbers]
+  (println "numbers:" numbers)
+  (reduce + numbers))
+
+; Call the function
+(sum-all 1 2 3 4 5)
