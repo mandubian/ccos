@@ -3448,6 +3448,7 @@ dependencies = [
  "chrono",
  "futures",
  "futures-util",
+ "reqwest 0.11.27",
  "rtfs_compiler",
  "serde",
  "serde_json",

@@ -1047,4 +1047,70 @@ impl CapabilityMarketplace {
             serde_json::Value::Null => Ok(Value::Nil),
         }
     }
+
+    /// Return a sanitized snapshot of registered capabilities for observability purposes.
+    /// This intentionally omits any sensitive data (auth tokens, plugin internal paths, handlers).
+    /// The shape is a vec of minimal JSON objects built manually to avoid leaking internal structs.
+    pub async fn public_capabilities_snapshot(&self, limit: Option<usize>) -> Vec<serde_json::Value> {
+        let caps_guard = self.capabilities.read().await;
+        let mut out: Vec<serde_json::Value> = Vec::with_capacity(caps_guard.len());
+        for (id, manifest) in caps_guard.iter() {
+            if let Some(lim) = limit { if out.len() >= lim { break; } }
+            // Derive provider type label
+            let provider_type = match &manifest.provider {
+                ProviderType::Local(_) => "local",
+                ProviderType::Http(_) => "http",
+                ProviderType::MCP(_) => "mcp",
+                ProviderType::A2A(_) => "a2a",
+                ProviderType::Plugin(_) => "plugin",
+                ProviderType::RemoteRTFS(_) => "remote_rtfs",
+                ProviderType::Stream(_) => "stream",
+            };
+            // Namespace heuristic: split by '.' keep first or use entire if absent
+            let namespace = id.split('.').next().unwrap_or("");
+            out.push(serde_json::json!({
+                "id": id,
+                "namespace": namespace,
+                "provider_type": provider_type,
+                "version": manifest.version,
+            }));
+        }
+        out
+    }
+
+    /// Return a lightweight summary useful for counts & grouping without iterating twice.
+    pub async fn public_capabilities_aggregate(&self) -> serde_json::Value {
+        use std::collections::HashMap;
+        let caps_guard = self.capabilities.read().await;
+        let mut by_provider: HashMap<&'static str, u64> = HashMap::new();
+        let mut namespaces: HashMap<String, u64> = HashMap::new();
+        for (id, manifest) in caps_guard.iter() {
+            let provider_label: &'static str = match &manifest.provider {
+                ProviderType::Local(_) => "local",
+                ProviderType::Http(_) => "http",
+                ProviderType::MCP(_) => "mcp",
+                ProviderType::A2A(_) => "a2a",
+                ProviderType::Plugin(_) => "plugin",
+                ProviderType::RemoteRTFS(_) => "remote_rtfs",
+                ProviderType::Stream(_) => "stream",
+            };
+            *by_provider.entry(provider_label).or_insert(0) += 1;
+            let ns = id.split('.').next().unwrap_or("").to_string();
+            *namespaces.entry(ns).or_insert(0) += 1;
+        }
+        serde_json::json!({
+            "total": caps_guard.len(),
+            "by_provider_type": by_provider,
+            "namespaces": namespaces,
+        })
+    }
+
+    /// Snapshot the isolation policy in a serializable, non-sensitive form.
+    pub fn isolation_policy_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "allowed_patterns": self.isolation_policy.allowed_capabilities,
+            "denied_patterns": self.isolation_policy.denied_capabilities,
+            "time_constraints_active": self.isolation_policy.time_constraints.is_some(),
+        })
+    }
 }

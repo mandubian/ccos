@@ -13,8 +13,16 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
 </head>
 <body>
-    <h1>CCOS Intent Graph & Execution Demo</h1>
-    
+    <h1>CCOS Runtime Viewer</h1>
+
+    <!-- Top-Level Navigation -->
+    <nav id="top-nav">
+        <button class="top-nav-btn active" data-view="intents" id="nav-intents" title="Intent / Plan / Execution View (g i)">Intents</button>
+        <button class="top-nav-btn" data-view="architecture" id="nav-architecture" title="CCOS Architecture (g a)">Architecture</button>
+    </nav>
+
+    <!-- INTENTS VIEW -->
+    <section id="view-intents" class="top-view active">
     <!-- Goal Input Section at Top -->
     <div id="goal-section">
         <h2>🎯 Enter Your Goal</h2>
@@ -107,6 +115,7 @@
                     <button id="tab-intent" class="active" title="Intent (1)">Intent</button>
                     <button id="tab-plan" title="Plan (2)">Plan</button>
                     <button id="tab-graph" title="Graph (3)">Graph</button>
+                        <!-- Architecture tab removed: promoted to top-level view -->
                     <!-- Exec tab removed: execution pane is available separately -->
                     <div class="tab-controls">
                         <button id="toggle-format" class="format-toggle" title="Toggle JSON/RTFS (Ctrl+T)">RTFS</button>
@@ -118,6 +127,7 @@
                     <pre id="pane-intent" class="code-pane"><code id="intent-code" class="language-lisp"></code></pre>
                     <pre id="pane-plan" class="code-pane hidden"><code id="rtfs-code" class="language-lisp"></code></pre>
                     <pre id="pane-graph" class="code-pane hidden"><code id="graph-code" class="language-lisp"></code></pre>
+                    <!-- (Architecture pane removed from code panes) -->
                     </div>
             </div>
             <!-- Bottom panel: unified Execution History + Activity Log -->
@@ -189,6 +199,69 @@
             </div>
         </div>
     </div>
+
+    </section>
+
+    <!-- ARCHITECTURE VIEW -->
+    <section id="view-architecture" class="top-view" aria-hidden="true">
+        <div id="architecture-view-container">
+            <div id="architecture-header-bar">
+                <h2>CCOS Architecture</h2>
+                <div class="arch-controls">
+                    <button id="architecture-refresh" title="Refresh Snapshot (r)">🔄 Refresh</button>
+                    <button id="architecture-export" title="Export JSON">📤 Export</button>
+                    <label class="arch-auto-refresh"><input type="checkbox" id="architecture-auto-refresh" /> Auto Refresh (15s)</label>
+                    <span id="architecture-meta">Snapshot: <em id="architecture-generated">—</em></span>
+                    <span id="architecture-status" class="arch-status-badge" hidden>—</span>
+                </div>
+            </div>
+            <div id="architecture-main-layout">
+                <div id="architecture-visualization" class="arch-graph"></div>
+                <aside id="architecture-inspector" class="arch-inspector">
+                    <h3>Inspector</h3>
+                    <div id="arch-inspector-tabs" class="arch-inspector-tabs">
+                        <button class="arch-itab active" data-itab="overview">Overview</button>
+                        <button class="arch-itab" data-itab="capabilities">Capabilities</button>
+                        <button class="arch-itab" data-itab="security">Security</button>
+                        <button class="arch-itab" data-itab="delegation">Delegation</button>
+                        <button class="arch-itab" data-itab="chain">Chain</button>
+                        <button class="arch-itab" data-itab="runtime">Runtime</button>
+                    </div>
+                    <div id="arch-inspector-panels">
+                        <div id="arch-panel-overview" class="arch-panel active">
+                            <div id="arch-overview-content">Select a node or refresh to view snapshot.</div>
+                        </div>
+                        <div id="arch-panel-capabilities" class="arch-panel">
+                            <div class="arch-capability-filters">
+                                <input id="cap-search" placeholder="Search capabilities..." />
+                                <select id="cap-filter-namespace"><option value="">All Namespaces</option></select>
+                                <select id="cap-filter-provider"><option value="">All Providers</option></select>
+                            </div>
+                            <div id="capabilities-table-wrapper">
+                                <table id="capabilities-table">
+                                    <thead><tr><th>ID</th><th>Namespace</th><th>Provider</th><th>Allowed</th></tr></thead>
+                                    <tbody id="capabilities-tbody"></tbody>
+                                </table>
+                                <div id="capabilities-pagination" class="arch-pagination hidden"></div>
+                            </div>
+                        </div>
+                        <div id="arch-panel-security" class="arch-panel">
+                            <pre id="arch-security-json" class="arch-pre">Loading...</pre>
+                        </div>
+                        <div id="arch-panel-delegation" class="arch-panel">
+                            <pre id="arch-delegation-json" class="arch-pre">Loading...</pre>
+                        </div>
+                        <div id="arch-panel-chain" class="arch-panel">
+                            <pre id="arch-chain-json" class="arch-pre">Loading...</pre>
+                        </div>
+                            <div id="arch-panel-runtime" class="arch-panel">
+                            <pre id="arch-runtime-json" class="arch-pre">Loading...</pre>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </section>
 
     <script src="app.js"></script>
 </body>

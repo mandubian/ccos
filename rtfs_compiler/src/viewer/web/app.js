@@ -120,6 +120,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabIntent = document.getElementById('tab-intent');
     const tabPlan = document.getElementById('tab-plan');
     const tabGraph = document.getElementById('tab-graph');
+    // Top-level navigation buttons
+    const navIntents = document.getElementById('nav-intents');
+    const navArchitecture = document.getElementById('nav-architecture');
     const toggleFormatBtn = document.getElementById('toggle-format');
     const toggleWrapBtn = document.getElementById('toggle-wrap');
     const copyCodeBtn = document.getElementById('copy-code');
@@ -148,6 +151,387 @@ document.addEventListener('DOMContentLoaded', () => {
             console.warn('hideActivity failed:', e);
         }
     }
+
+    // Architecture pane elements
+    // Architecture top-level view elements
+    const architectureView = document.getElementById('view-architecture');
+    const architectureVizContainer = document.getElementById('architecture-visualization');
+    const architectureInspector = document.getElementById('architecture-details');
+    const architectureGenerated = document.getElementById('architecture-generated');
+    const architectureRefreshBtn = document.getElementById('architecture-refresh');
+    const architectureExportBtn = document.getElementById('architecture-export');
+    const architectureAutoRefreshCheckbox = document.getElementById('architecture-auto-refresh');
+    let architectureAutoInterval = null;
+    const architectureStatusBadge = document.getElementById('architecture-status');
+    // Instrumentation: track layout element sizes to detect unwanted growth
+    const graphViz = document.getElementById('graph-visualization');
+    const archViz = document.getElementById('architecture-visualization');
+    let lastGraphDims = null;
+    let lastArchDims = null;
+
+    function logIfChanged(label, el, lastDimsRef) {
+        if (!el) return lastDimsRef;
+        const r = el.getBoundingClientRect();
+        const dims = { w: Math.round(r.width), h: Math.round(r.height) };
+        if (!lastDimsRef || lastDimsRef.w !== dims.w || lastDimsRef.h !== dims.h) {
+            console.debug(`[layout] ${label} ->`, dims);
+            return dims;
+        }
+        return lastDimsRef;
+    }
+
+    function clampGraphContainers() {
+        try {
+            const maxH = window.innerHeight - 160; // leave space for headers & bottom panel
+            [graphViz, archViz].forEach(el => {
+                if (!el) return;
+                const r = el.getBoundingClientRect();
+                if (r.height > maxH) {
+                    el.style.maxHeight = maxH + 'px';
+                    el.style.overflow = 'auto';
+                }
+            });
+        } catch (_) {}
+    }
+
+    // ResizeObserver to catch intrinsic canvas growth
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => {
+            lastGraphDims = logIfChanged('graph-visualization', graphViz, lastGraphDims);
+            lastArchDims = logIfChanged('architecture-visualization', archViz, lastArchDims);
+            clampGraphContainers();
+        });
+        if (graphViz) ro.observe(graphViz);
+        if (archViz) ro.observe(archViz);
+    } else {
+        // Fallback polling (low frequency)
+        setInterval(() => {
+            lastGraphDims = logIfChanged('graph-visualization', graphViz, lastGraphDims);
+            lastArchDims = logIfChanged('architecture-visualization', archViz, lastArchDims);
+            clampGraphContainers();
+        }, 8000);
+    }
+
+    // Create separate vis network for architecture
+    let architectureNetwork = null;
+    let architectureNodes = null;
+    let architectureEdges = null;
+    let architectureSnapshot = null; // cached last snapshot
+    let filteredCapabilities = [];
+    let capabilityPage = 0;
+    const CAP_PAGE_SIZE = 100;
+
+    // Inspector elements (lazy query to avoid errors if structure changes)
+    const inspectorTabsContainer = () => document.getElementById('arch-inspector-tabs');
+    const capabilitySearchInput = () => document.getElementById('cap-search');
+    const capabilityNamespaceSelect = () => document.getElementById('cap-filter-namespace');
+    const capabilityProviderSelect = () => document.getElementById('cap-filter-provider');
+    const capabilitiesTbody = () => document.getElementById('capabilities-tbody');
+    const capabilitiesPagination = () => document.getElementById('capabilities-pagination');
+    const securityPre = () => document.getElementById('arch-security-json');
+    const delegationPre = () => document.getElementById('arch-delegation-json');
+    const chainPre = () => document.getElementById('arch-chain-json');
+    const runtimePre = () => document.getElementById('arch-runtime-json');
+    const overviewContent = () => document.getElementById('arch-overview-content');
+
+    function switchInspectorTab(tabName) {
+        const buttons = document.querySelectorAll('.arch-itab');
+        const panels = document.querySelectorAll('.arch-panel');
+        buttons.forEach(b => b.classList.toggle('active', b.getAttribute('data-itab') === tabName));
+        panels.forEach(p => p.classList.toggle('active', p.id === 'arch-panel-' + tabName));
+    }
+
+    function initInspectorTabs() {
+        const container = inspectorTabsContainer();
+        if (!container) return;
+        container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.arch-itab');
+            if (!btn) return;
+            const tab = btn.getAttribute('data-itab');
+            switchInspectorTab(tab);
+            if (tab === 'capabilities') renderCapabilitiesTable();
+        });
+    }
+
+    function populateOverview(snapshot) {
+        const el = overviewContent();
+        if (!el || !snapshot) return;
+        const comp = snapshot.components || {};
+        const cg = comp.intent_graph || {};
+        const cm = snapshot.capability_marketplace || {};
+        const del = snapshot.delegation || {};
+                const meta = snapshot.meta || {};
+                const warnings = Array.isArray(meta.warnings) ? meta.warnings : [];
+                const degraded = meta.degraded === true;
+
+                // Update status badge if present
+                if (typeof architectureStatusBadge !== 'undefined' && architectureStatusBadge) {
+                        architectureStatusBadge.textContent = degraded ? 'Degraded' : (warnings.length ? `${warnings.length} warning${warnings.length>1?'s':''}` : 'OK');
+                        architectureStatusBadge.className = 'status-badge';
+                        if (degraded) architectureStatusBadge.classList.add('status-degraded');
+                        else if (warnings.length) architectureStatusBadge.classList.add('status-warning');
+                        else architectureStatusBadge.classList.add('status-ok');
+                }
+
+                const warningsHtml = warnings.length ? `
+                    <div class="arch-warnings">
+                        <div class="arch-warnings-header">Heuristic Warnings (${warnings.length})</div>
+                        <ul class="arch-warnings-list">${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+                    </div>` : '';
+
+                el.innerHTML = `
+                        <div class="arch-overview-grid">
+                            <div><strong>Generated:</strong> ${snapshot.generated_at || '—'}</div>
+                            <div><strong>Version:</strong> ${snapshot.version}</div>
+                            <div><strong>Intents Total:</strong> ${cg.total ?? '—'}</div>
+                            <div><strong>Active:</strong> ${cg.active ?? '—'}</div>
+                            <div><strong>Capabilities:</strong> ${cm.total ?? '—'}</div>
+                            <div><strong>Delegation Enabled:</strong> ${del.enabled === true}</div>
+                            <div><strong>Degraded:</strong> ${degraded}</div>
+                            <div><strong>Warnings:</strong> ${warnings.length}</div>
+                        </div>
+                        ${warningsHtml}`;
+    }
+
+    function buildCapabilityFilters(snapshot) {
+        const caps = snapshot.capabilities || [];
+        const nsSet = new Set();
+        const provSet = new Set();
+        caps.forEach(c => { if (c.namespace) nsSet.add(c.namespace); if (c.provider_type) provSet.add(c.provider_type); });
+        const nsSel = capabilityNamespaceSelect();
+        const provSel = capabilityProviderSelect();
+        if (nsSel && nsSel.options.length <= 1) {
+            Array.from(nsSet).sort().forEach(ns => {
+                const opt = document.createElement('option'); opt.value = ns; opt.textContent = ns; nsSel.appendChild(opt);
+            });
+        }
+        if (provSel && provSel.options.length <= 1) {
+            Array.from(provSet).sort().forEach(p => {
+                const opt = document.createElement('option'); opt.value = p; opt.textContent = p; provSel.appendChild(opt);
+            });
+        }
+    }
+
+    function filterCapabilities() {
+        if (!architectureSnapshot) return [];
+        const searchVal = (capabilitySearchInput()?.value || '').toLowerCase();
+        const nsFilter = capabilityNamespaceSelect()?.value || '';
+        const provFilter = capabilityProviderSelect()?.value || '';
+        const caps = architectureSnapshot.capabilities || [];
+        return caps.filter(c => {
+            if (nsFilter && c.namespace !== nsFilter) return false;
+            if (provFilter && c.provider_type !== provFilter) return false;
+            if (searchVal) {
+                const txt = `${c.id} ${c.namespace} ${c.provider_type}`.toLowerCase();
+                if (!txt.includes(searchVal)) return false;
+            }
+            return true;
+        });
+    }
+
+    function renderCapabilitiesTable() {
+        filteredCapabilities = filterCapabilities();
+        const tbody = capabilitiesTbody();
+        const pagEl = capabilitiesPagination();
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        capabilityPage = Math.max(0, Math.min(capabilityPage, Math.floor(filteredCapabilities.length / CAP_PAGE_SIZE)));
+        const start = capabilityPage * CAP_PAGE_SIZE;
+        const slice = filteredCapabilities.slice(start, start + CAP_PAGE_SIZE);
+        for (const c of slice) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${c.id}</td><td>${c.namespace}</td><td>${c.provider_type}</td><td>${c.allowed_by_policy}</td>`;
+            tbody.appendChild(tr);
+        }
+        if (pagEl) {
+            if (filteredCapabilities.length > CAP_PAGE_SIZE) {
+                pagEl.classList.remove('hidden');
+                const totalPages = Math.ceil(filteredCapabilities.length / CAP_PAGE_SIZE);
+                pagEl.innerHTML = '';
+                const prev = document.createElement('button'); prev.textContent = 'Prev'; prev.disabled = capabilityPage === 0; prev.onclick = () => { capabilityPage--; renderCapabilitiesTable(); };
+                const next = document.createElement('button'); next.textContent = 'Next'; next.disabled = capabilityPage >= totalPages - 1; next.onclick = () => { capabilityPage++; renderCapabilitiesTable(); };
+                const stats = document.createElement('span'); stats.textContent = `Page ${capabilityPage + 1}/${totalPages} (${filteredCapabilities.length} items)`;
+                pagEl.append(prev, stats, next);
+            } else { pagEl.classList.add('hidden'); }
+        }
+    }
+
+    function populateSecurity(snapshot) { if (securityPre()) securityPre().textContent = JSON.stringify(snapshot.security, null, 2); }
+    function populateDelegation(snapshot) { if (delegationPre()) delegationPre().textContent = JSON.stringify(snapshot.delegation, null, 2); }
+    function populateRuntime(snapshot) { if (runtimePre()) runtimePre().textContent = JSON.stringify(snapshot.components?.rtfs_runtime || {}, null, 2); }
+    function populateChain(snapshot) { if (chainPre()) chainPre().textContent = JSON.stringify(snapshot.components?.causal_chain || {}, null, 2); }
+
+    function wireCapabilityFilters() {
+        const inputs = [capabilitySearchInput(), capabilityNamespaceSelect(), capabilityProviderSelect()];
+        inputs.forEach(inp => inp && inp.addEventListener('input', () => { capabilityPage = 0; renderCapabilitiesTable(); }));
+        inputs.forEach(sel => sel && sel.addEventListener('change', () => { capabilityPage = 0; renderCapabilitiesTable(); }));
+    }
+
+    function ensureArchitectureNetwork() {
+        if (architectureNetwork) return;
+        architectureNodes = new vis.DataSet([]);
+        architectureEdges = new vis.DataSet([]);
+        const data = { nodes: architectureNodes, edges: architectureEdges };
+        const opts = {
+            layout: { improvedLayout: true },
+            physics: { enabled: false },
+            nodes: { shape: 'ellipse', color: { background: '#222', border: '#00aaff' }, font: { color: '#fff' } },
+            edges: { arrows: { to: { enabled: true } }, color: '#00aaff' },
+            interaction: { hover: true, navigationButtons: true }
+        };
+        try {
+            architectureNetwork = new vis.Network(architectureVizContainer, data, opts);
+            architectureNetwork.on('click', (params) => {
+                if (params.nodes && params.nodes.length > 0) {
+                    const id = params.nodes[0];
+                    const node = architectureNodes.get(id);
+                    showArchitectureInspector(node);
+                }
+            });
+        } catch (e) {
+            console.error('Failed to initialize architecture network', e);
+            addLogEntry('error', 'Failed to initialize architecture network: ' + e.message);
+        }
+    }
+
+    function showArchitectureInspector(node) {
+        if (!architectureInspector) return;
+        if (!node) {
+            architectureInspector.innerHTML = 'No node selected';
+            return;
+        }
+        const lines = [];
+        lines.push('<strong>' + (node.label || node.id) + '</strong>');
+        if (node.group) lines.push('<div><em>Group:</em> ' + node.group + '</div>');
+        if (node.present !== undefined) lines.push('<div><em>Present:</em> ' + node.present + '</div>');
+        if (node.details) lines.push('<pre>' + JSON.stringify(node.details, null, 2) + '</pre>');
+        architectureInspector.innerHTML = lines.join('\n');
+    }
+
+    async function fetchAndRenderArchitecture() {
+        showActivity('Loading architecture...');
+        try {
+            const resp = await fetch('/architecture?include=capabilities');
+            if (!resp.ok) {
+                const txt = await resp.text();
+                addLogEntry('error', 'Failed to fetch architecture: ' + txt);
+                updateGoalStatus('Failed to fetch architecture');
+                hideActivity();
+                return;
+            }
+            const data = await resp.json();
+            architectureSnapshot = data; // cache
+            if (architectureGenerated) architectureGenerated.textContent = data.generated_at || '—';
+            ensureArchitectureNetwork();
+            // Build nodes and edges
+            const nodesArr = (data.graph_model && data.graph_model.nodes) || [];
+            const edgesArr = (data.graph_model && data.graph_model.flow_edges) || [];
+            const visNodes = nodesArr.map(n => ({ id: n.id, label: n.label, group: n.group || 'default', title: n.label, details: n }));
+            const visEdges = edgesArr.map(e => ({ from: e.from, to: e.to, arrows: 'to', title: e.relation }));
+            architectureNodes.clear(); architectureEdges.clear();
+            architectureNodes.add(visNodes); architectureEdges.add(visEdges);
+            // Use non-animated fit to avoid repeated animated layout reflows
+            // which can interact poorly with flexbox and cause gradual pane growth.
+            architectureNetwork.fit();
+            // Populate panels
+            populateOverview(data);
+            buildCapabilityFilters(data);
+            renderCapabilitiesTable();
+            populateSecurity(data);
+            populateDelegation(data);
+            populateRuntime(data);
+            populateChain(data);
+            addLogEntry('info', 'Architecture snapshot loaded');
+            enforceBottomPanelBounds();
+        } catch (e) {
+            console.error('Error fetching architecture', e);
+            addLogEntry('error', 'Error fetching architecture: ' + e.message);
+            updateGoalStatus('Error fetching architecture');
+        } finally {
+            hideActivity();
+        }
+    }
+
+    if (architectureRefreshBtn) architectureRefreshBtn.addEventListener('click', () => fetchAndRenderArchitecture());
+    initInspectorTabs();
+    wireCapabilityFilters();
+
+    if (architectureExportBtn) {
+        architectureExportBtn.addEventListener('click', () => {
+            if (!architectureSnapshot) { addLogEntry('warning', 'No snapshot to export'); return; }
+            const blob = new Blob([JSON.stringify(architectureSnapshot, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const ts = architectureSnapshot.generated_at || new Date().toISOString();
+            a.download = `ccos_architecture_${ts.replace(/[:]/g,'-')}.json`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    }
+
+    function startArchitectureAutoRefresh() {
+        if (architectureAutoInterval) return;
+        architectureAutoInterval = setInterval(() => {
+            if (!document.getElementById('view-architecture')?.classList.contains('active')) return; // only refresh when visible
+            fetchAndRenderArchitecture();
+        }, 15000);
+    }
+    function stopArchitectureAutoRefresh() {
+        if (architectureAutoInterval) { clearInterval(architectureAutoInterval); architectureAutoInterval = null; }
+    }
+    if (architectureAutoRefreshCheckbox) {
+        architectureAutoRefreshCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) startArchitectureAutoRefresh(); else stopArchitectureAutoRefresh();
+        });
+    }
+
+    // Tab activation for Architecture
+    // ---------------- Top-Level View Routing ----------------
+    function activateView(name) {
+        const views = document.querySelectorAll('.top-view');
+        views.forEach(v => v.classList.remove('active'));
+        if (name === 'architecture' && architectureView) {
+            architectureView.classList.add('active');
+            if (navIntents) navIntents.classList.remove('active');
+            if (navArchitecture) navArchitecture.classList.add('active');
+            ensureArchitectureNetwork();
+            // Only fetch if we have no nodes yet
+            if (!architectureNodes || architectureNodes.length === 0 || (architectureNodes.length && architectureNodes.length() === 0)) {
+                fetchAndRenderArchitecture();
+            }
+        } else {
+            // default fallback is intents view
+            const intentsView = document.getElementById('view-intents');
+            if (intentsView) intentsView.classList.add('active');
+            if (navArchitecture) navArchitecture.classList.remove('active');
+            if (navIntents) navIntents.classList.add('active');
+        }
+        // Update hash (suppress duplicate writes)
+        const targetHash = '#' + (name === 'architecture' ? 'architecture' : 'intents');
+        if (window.location.hash !== targetHash) {
+            history.replaceState(null, '', targetHash);
+        }
+    }
+
+    function handleHashNavigation() {
+        const h = window.location.hash.replace('#', '');
+        if (h === 'architecture') {
+            activateView('architecture');
+        } else {
+            activateView('intents');
+        }
+    }
+
+    if (navArchitecture) {
+        navArchitecture.addEventListener('click', () => activateView('architecture'));
+    }
+    if (navIntents) {
+        navIntents.addEventListener('click', () => activateView('intents'));
+    }
+    window.addEventListener('hashchange', handleHashNavigation);
+    // Initialize based on current hash
+    handleHashNavigation();
     const logFilter = document.getElementById('log-filter');
     const clearLogsBtn = document.getElementById('clear-logs');
     const toggleLogsBtn = document.getElementById('toggle-logs');
@@ -591,6 +975,9 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
         updateCodePaneHeights();
         window.addEventListener('resize', updateCodePaneHeights);
+        window.addEventListener('resize', enforceBottomPanelBounds);
+        // Initial clamp
+        enforceBottomPanelBounds();
     } catch (e) {
         console.warn('⚠️ Failed to initialize code pane height handler:', e);
     }
@@ -1357,7 +1744,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                             // Update UI
                             updateGraphStats();
-                            network.fit({ animation: { duration: 500 } });
+                            // Use non-animated fit to avoid animation-induced layout jitter
+                            network.fit();
 
                             // Send loaded graph to server to reconstruct CCOS state
                             try {
@@ -1684,60 +2072,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Ensure code panes (<pre> elements) fill the available height of their container
+    // Ensure code panes (<pre> elements) fill the available height of their container without causing cumulative growth.
     function updateCodePaneHeights() {
-        // Try tabs-based rendering first (preferred)
         try {
-            if (tabPlan && typeof renderPlanRtfs === 'function' && planCodeElement) {
-                selectedIntentId = node.id;
-                activateTab('plan');
-                renderPlanRtfs(node.id);
-                return;
+            const panesContainer = document.getElementById('code-panes');
+            if (!panesContainer) return;
+            const tabsBar = document.getElementById('code-tabs');
+            const parent = panesContainer.parentElement; // typically the RTFS container
+            if (!parent) return;
+            const parentRect = parent.getBoundingClientRect();
+            const tabsH = tabsBar ? tabsBar.getBoundingClientRect().height : 0;
+            // Padding fudge factor (matches internal spacing) so we don't overflow.
+            const available = Math.floor(parentRect.height - tabsH - 8);
+            if (available > 120) { // only apply if we have a sensible space
+                panesContainer.style.height = available + 'px';
+                const pres = panesContainer.querySelectorAll('pre');
+                const innerMax = available - 16; // subtract a little for padding
+                pres.forEach(p => {
+                    p.style.maxHeight = innerMax + 'px';
+                    p.style.minHeight = '0px';
+                });
             }
         } catch (e) {
-            console.warn('⚠️ tabs-based plan rendering failed, falling back to legacy view:', e);
+            console.warn('updateCodePaneHeights failed:', e);
         }
+    }
 
-        // Fallback: legacy inline RTFS pane rendering
-        console.log(`🔍 showPlanDetails (legacy fallback) called for node:`, node.id);
-        console.log(`🔍 legacy RTFS elements: rtfsContainer=${!!rtfsContainer}, rtfsTitle=${!!rtfsTitle}, rtfsCode=${!!rtfsCode}`);
-
-        if (!rtfsContainer || !rtfsTitle || !rtfsCode) {
-            console.error('RTFS container elements not found for legacy fallback');
-            console.error('Elements:', { rtfsContainer, rtfsTitle, rtfsCode });
-            return;
+    // Clamp bottom panel height defensively to its CSS max (60vh) in case any incremental layout jitter accumulates.
+    function enforceBottomPanelBounds() {
+        try {
+            const bp = document.getElementById('bottom-panel');
+            if (!bp || bp.classList.contains('collapsed')) return;
+            const maxPx = Math.round(window.innerHeight * 0.60);
+            const hStr = bp.style.height || window.getComputedStyle(bp).height;
+            const current = parseInt(hStr, 10);
+            if (!isNaN(current) && current > maxPx) {
+                bp.style.height = maxPx + 'px';
+            }
+        } catch (e) {
+            // Silent: purely defensive
         }
-
-        // Get plan information from stored plans
-        const storedPlan = generatedPlans.get(node.id);
-        console.log(`🔍 Looking for plan with node.id: ${node.id}`);
-        console.log(`📋 Available plans:`, Array.from(generatedPlans.keys()));
-        console.log(`📄 Found stored plan:`, storedPlan);
-
-        const planCodeText = storedPlan ? storedPlan.body : (node.plan_body_preview || 'Plan code not available');
-
-        // Clear previous content first
-        rtfsCode.textContent = '';
-
-        // Update RTFS container title to show which plan is selected
-        rtfsTitle.textContent = `📄 Plan: ${node.original_label || node.label}`;
-
-        // Set plan code with syntax highlighting
-        rtfsCode.textContent = planCodeText;
-        console.log(`📝 Setting RTFS plan code to:`, planCodeText);
-
-        if (window.Prism) {
-            // Use setTimeout to ensure DOM is updated before highlighting
-            setTimeout(() => {
-                try { Prism.highlightElement(rtfsCode); console.log('✨ Applied syntax highlighting'); } catch (e) { console.warn('Prism highlighting failed:', e); }
-            }, 10);
-        }
-
-        // Scroll the RTFS container into view and add a temporary visual indicator
-        setTimeout(() => {
-            try { rtfsContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
-            try { rtfsContainer.style.border = '2px solid #00ff88'; setTimeout(() => { rtfsContainer.style.border = '1px solid #444'; }, 1000); } catch (e) {}
-        }, 100);
     }
 
     function updateGraphStats() {

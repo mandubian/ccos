@@ -29,3 +29,6 @@ rtfs_compiler = { path = "../rtfs_compiler" }
 # UUIDs for execution run tracking
 uuid = { version = "1", features = ["v4"] }
 
+[dev-dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+
