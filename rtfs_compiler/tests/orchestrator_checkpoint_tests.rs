@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 fn test_checkpoint_and_resume_helpers() {
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
     let intent_graph = Arc::new(Mutex::new(IntentGraph::new().unwrap()));
-    let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
+    let capability_marketplace = rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()))
     );
     let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
     let orchestrator = Orchestrator::new(
@@ -23,16 +23,16 @@ fn test_checkpoint_and_resume_helpers() {
     // Minimal plan and evaluator
     let plan = Plan::new_rtfs("(+ 1 1)".to_string(), vec!["intent-1".to_string()]);
     let runtime_context = RuntimeContext::pure();
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain.clone(),
-        Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-            Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
+        Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()))
         )),
         runtime_context.clone(),
     ));
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let delegation_engine: std::sync::Arc<dyn rtfs_compiler::ccos::delegation::DelegationEngine> =
-        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new()));
+        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let evaluator = rtfs_compiler::runtime::evaluator::Evaluator::new(
         module_registry,
         delegation_engine,

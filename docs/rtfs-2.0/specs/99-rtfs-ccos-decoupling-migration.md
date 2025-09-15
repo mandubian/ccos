@@ -118,15 +118,48 @@ Related: 13-rtfs-ccos-integration-guide.md, 04-streaming-syntax.md, specs-incomi
 - **CCOS Tests Fixed**: All CCOS unit tests and integration tests now compile and run successfully
 
 ### 🔄 **REMAINING TASKS**
+- **Delegation Engine Interface**: Resolve incompatibility between RTFS and CCOS delegation systems
+- **Integration Tests**: Fix remaining 14/24 integration tests with delegation interface issues
 - **Final Validation**: Run comprehensive test suite and validate complete independence
 - **Performance Testing**: Benchmark the new architecture
 - **Production Readiness**: Final integration testing and documentation review
 
-### 📊 **Progress**: 20/20 tasks completed (100%) - Phase 6 Complete! ✅
+### 📊 **Progress**: 18/20 tasks completed (90%) - Phase 6 In Progress ⚠️
 
 ## 14) Open items / risks
 - Contract availability at compile time (static vs runtime checks)
 - Determinism metadata for streaming (replayability)
 - Callback re-entry semantics (ensure Orchestrator hops are well defined)
 - Performance regression risk from macro lowering; validate with benchmarks
+
+## 15) Delegation Engine Interface Issue
+
+### Problem Description
+During the decoupling migration, we created two separate delegation systems:
+- **RTFS Delegation System** (`src/runtime/delegation.rs`) - Used by RTFS evaluator
+- **CCOS Delegation System** (`src/ccos/delegation.rs`) - Used by CCOS components
+
+Both systems have identical trait signatures but are incompatible types, causing compilation errors in 14/24 integration tests.
+
+### Current Error Pattern
+```rust
+// This fails because types are incompatible:
+let delegation_engine: Arc<dyn ccos::delegation::DelegationEngine> = 
+    Arc::new(runtime::delegation::StaticDelegationEngine::new_empty());
+let evaluator = Evaluator::new(module_registry, delegation_engine, ...); // ❌ Type mismatch
+```
+
+### Possible Solutions
+1. **Create an Adapter**: Make CCOS delegation engines implement the RTFS delegation engine trait
+2. **Unify the Systems**: Merge the two delegation systems into one shared system
+3. **Use RTFS Delegation**: Change tests to use RTFS delegation engines instead of CCOS ones
+4. **Interface Redesign**: Redesign the interface between RTFS and CCOS to use a common delegation trait
+
+### Recommendation
+The delegation system should be unified as it's a core concept that both RTFS and CCOS need to share. The current split creates unnecessary complexity and type incompatibilities.
+
+### Impact
+- 14/24 integration tests failing to compile
+- Prevents complete validation of the decoupled architecture
+- Blocks final migration completion
 

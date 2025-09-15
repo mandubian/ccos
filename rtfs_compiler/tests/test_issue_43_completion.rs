@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use chrono::Utc;
-use rtfs_compiler::runtime::capability_marketplace::{
+use rtfs_compiler::ccos::capability_marketplace::{
     CapabilityMarketplace, CapabilityManifest, CapabilityAttestation, CapabilityProvenance,
     LocalCapability, ProviderType
 };
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::{TypeExpr, PrimitiveType, MapTypeEntry, Keyword};
 use tokio::sync::RwLock;

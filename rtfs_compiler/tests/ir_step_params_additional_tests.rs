@@ -1,13 +1,13 @@
 use rtfs_compiler::runtime::ir_runtime::IrRuntime;
 use rtfs_compiler::ir::core::{IrNode, IrMapEntry};
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
 use std::sync::Arc;
 
 // 1) Confirm %params binding behavior (duplicate of main test style)
 #[test]
 fn step_params_success_smoke() {
-    let delegation_engine = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let mut runtime = IrRuntime::new_compat(delegation_engine);
 
     // params: {:k 7}
@@ -37,7 +37,7 @@ fn step_params_success_smoke() {
 // We simulate failure by using a map whose key expression evaluates to a non-string/non-keyword (e.g., a vector)
 #[test]
 fn step_params_eval_failure_cleanup() {
-    let delegation_engine = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let mut runtime = IrRuntime::new_compat(delegation_engine);
 
     // Build a map with a key that evaluates to a vector (invalid map key)
@@ -64,7 +64,7 @@ fn step_params_eval_failure_cleanup() {
 // 3) If no :params provided, the step should execute body in the same env and return its value.
 #[test]
 fn step_no_params_executes_body() {
-    let delegation_engine = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let mut runtime = IrRuntime::new_compat(delegation_engine);
 
     let body = vec![IrNode::Literal { id: 310, value: rtfs_compiler::ast::Literal::Integer(55), ir_type: rtfs_compiler::ir::core::IrType::Int, source_location: None }];

@@ -1,8 +1,8 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::runtime::host::RuntimeHost;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::evaluator::Evaluator;
@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 fn step_params_binding_visible_in_body() -> Result<(), String> {
     // Build evaluator like test helpers would do but using only public APIs
     let module_registry = Arc::new(ModuleRegistry::new());
-    let delegation_engine = std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
+    let delegation_engine = std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();
 

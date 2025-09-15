@@ -1,9 +1,9 @@
 use rtfs_compiler::{
-    runtime::capabilities::providers::weather_mcp::WeatherMCPCapability,
+    ccos::capabilities::providers::weather_mcp::WeatherMCPCapability,
     runtime::{
         security::RuntimeContext,
-        capabilities::provider::CapabilityProvider,
     },
+    ccos::capabilities::provider::CapabilityProvider,
 };
 
 #[tokio::test] 

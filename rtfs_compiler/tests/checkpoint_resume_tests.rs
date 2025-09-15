@@ -2,12 +2,12 @@ use std::sync::{Arc, Mutex};
 
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::runtime::host::RuntimeHost;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use tokio::sync::RwLock;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
 use rtfs_compiler::runtime::values::Value;
 
 #[test]
@@ -19,7 +19,7 @@ fn test_checkpoint_store_and_resume_from_disk() {
 
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
     let module_registry = Arc::new(ModuleRegistry::new());
-    let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let de = Arc::new(StaticDelegationEngine::new_empty());
     let evaluator = Evaluator::new(module_registry, de, RuntimeContext::pure(), host.clone());
 
     // Initialize context and set a value
@@ -52,7 +52,7 @@ fn test_checkpoint_store_and_resume_from_disk() {
     let causal_chain2 = Arc::new(Mutex::new(CausalChain::new().expect("cc2")));
     let host2 = Arc::new(RuntimeHost::new(causal_chain2, capability_marketplace2, RuntimeContext::pure()));
     let module_registry2 = Arc::new(ModuleRegistry::new());
-    let de2 = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let de2 = Arc::new(StaticDelegationEngine::new_empty());
     let evaluator2 = Evaluator::new(module_registry2, de2, RuntimeContext::pure(), host2);
 
     {

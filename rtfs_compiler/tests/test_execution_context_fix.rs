@@ -1,14 +1,14 @@
 // Test execution context fix for Issue #43
 use rtfs_compiler::runtime::Evaluator;
-use rtfs_compiler::runtime::host::RuntimeHost;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::ModuleRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::host_interface::HostInterface;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
 use rtfs_compiler::parser::parse;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ fn test_host_interface_execution_context_methods() {
 fn test_execution_context_validation() {
     // Create test components
     let module_registry = Arc::new(ModuleRegistry::new());
-    let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let security_context = RuntimeContext::pure();
     
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));

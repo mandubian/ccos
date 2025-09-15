@@ -3,13 +3,13 @@
 //! This module provides reusable functions for initializing capability registry,
 //! marketplace, runtime host, and evaluators with consistent patterns across tests.
 
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::runtime::host::RuntimeHost;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -42,7 +42,7 @@ pub fn create_causal_chain() -> Rc<RefCell<CausalChain>> {
 
 /// Creates a new delegation engine with empty configuration
 pub fn create_delegation_engine() -> Arc<StaticDelegationEngine> {
-    Arc::new(StaticDelegationEngine::new(HashMap::new()))
+    Arc::new(StaticDelegationEngine::new_empty())
 }
 
 /// Creates a new module registry wrapped in Rc<>

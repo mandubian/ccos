@@ -5,8 +5,8 @@ use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::types::{EdgeType, IntentId, IntentStatus, Plan, StorableIntent};
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 
 fn ensure_test_env() {

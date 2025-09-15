@@ -3,15 +3,15 @@
 //! This module provides reusable functions for initializing capability registry,
 //! marketplace, runtime host, and evaluators with consistent patterns across tests.
 
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::stdlib::{StandardLibrary, register_default_capabilities};
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::runtime::host::RuntimeHost;
+use rtfs_compiler::ccos::host::RuntimeHost;
 use rtfs_compiler::runtime::host_interface::HostInterface;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -51,7 +51,7 @@ pub fn create_causal_chain() -> Rc<RefCell<CausalChain>> {
 
 /// Creates a new delegation engine with empty configuration
 pub fn create_delegation_engine() -> Arc<StaticDelegationEngine> {
-    Arc::new(StaticDelegationEngine::new(HashMap::new()))
+    Arc::new(StaticDelegationEngine::new_empty())
 }
 
 /// Creates a new module registry wrapped in Rc<>
@@ -64,11 +64,11 @@ pub fn create_runtime_host(security_context: RuntimeContext) -> std::sync::Arc<R
     let marketplace = Arc::new(create_capability_marketplace());
     let causal_chain = create_causal_chain();
     
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
@@ -83,7 +83,7 @@ pub fn create_runtime_host_with_marketplace(
 ) -> std::sync::Arc<RuntimeHost> {
     
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
