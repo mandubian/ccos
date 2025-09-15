@@ -634,7 +634,7 @@ impl ModuleRegistry {
             }
         } else {
             // Before failing, try to load the module
-            let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
+            let delegation_engine = Arc::new(crate::runtime::delegation::StaticDelegationEngine::new_empty());
             let mut ir_runtime = IrRuntime::new_compat(delegation_engine); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
@@ -760,7 +760,7 @@ impl ModuleAwareRuntime {
     pub fn new() -> Self {
         let module_registry = ModuleRegistry::new();
         ModuleAwareRuntime {
-            ir_runtime: IrRuntime::new_compat(Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()))),
+            ir_runtime: IrRuntime::new_compat(Arc::new(crate::runtime::delegation::StaticDelegationEngine::new_empty())),
             module_registry,
         }
     }

@@ -9,7 +9,7 @@ use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value, pure_host::PureHost, security::RuntimeContext,
 };
-use crate::ccos::delegation::StaticDelegationEngine;
+use crate::runtime::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
 
