@@ -8,10 +8,12 @@
 
 use crate::runtime::{
     Evaluator, RuntimeContext, 
-    host::RuntimeHost,
-    capability_marketplace::CapabilityMarketplace,
     values::Value,
     error::{RuntimeError, RuntimeResult},
+};
+use crate::ccos::{
+    host::RuntimeHost,
+    capability_marketplace::CapabilityMarketplace,
 };
 use crate::runtime::host_interface::HostInterface;
 use crate::ccos::{
@@ -113,7 +115,7 @@ pub struct CCOSEnvironment {
     #[allow(dead_code)]
     marketplace: Arc<CapabilityMarketplace>,
     // TODO: Remove this field once we have a proper capability marketplace
-    registry: crate::runtime::capabilities::registry::CapabilityRegistry,
+    registry: crate::ccos::capabilities::registry::CapabilityRegistry,
     /// Optional Working Memory exposed when WM ingestor is enabled
     wm: Option<Arc<Mutex<WorkingMemory>>>,
 }
@@ -122,7 +124,7 @@ impl CCOSEnvironment {
     /// Create a new CCOS environment with the given configuration
     pub fn new(config: CCOSConfig) -> RuntimeResult<Self> {
         // Create capability registry
-        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         // Create capability marketplace with integrated registry
         let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
         // Create causal chain for tracking
@@ -369,7 +371,7 @@ impl CCOSEnvironment {
             host,
             evaluator,
             marketplace,
-            registry: crate::runtime::capabilities::registry::CapabilityRegistry::new(), // This field may be redundant now
+            registry: crate::ccos::capabilities::registry::CapabilityRegistry::new(), // This field may be redundant now
             wm,
         })
     }

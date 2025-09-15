@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::streaming::{StreamType, StreamCallbacks};
 use crate::runtime::values::Value;
 

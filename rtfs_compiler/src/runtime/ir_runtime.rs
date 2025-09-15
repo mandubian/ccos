@@ -13,12 +13,12 @@ use crate::runtime::RuntimeStrategy;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::runtime::host::RuntimeHost;
+use crate::ccos::host::RuntimeHost;
 use crate::runtime::host_interface::HostInterface;
 use crate::ccos::types::ExecutionResult;
 use crate::ccos::execution_context::{ContextManager, IsolationLevel};
 use crate::runtime::security::RuntimeContext;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::delegation_l4::L4AwareDelegationEngine;
 use crate::ccos::caching::l4_content_addressable::L4CacheClient;
@@ -42,7 +42,7 @@ impl IrStrategy {
         let wrapped = L4AwareDelegationEngine::new(l4_client, inner);
         let delegation_engine: Arc<dyn crate::ccos::delegation::DelegationEngine> = Arc::new(wrapped);
         // Build a minimal host for IR runtime so it can notify the CCOS host about steps
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
         let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = RuntimeContext::pure();
@@ -58,7 +58,7 @@ impl IrStrategy {
     pub fn with_delegation_engine(mut module_registry: ModuleRegistry, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
         let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = RuntimeContext::pure();
@@ -127,7 +127,7 @@ impl IrRuntime {
     pub fn new_compat(delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         let model_registry = Arc::new(ModelRegistry::with_defaults());
         // Build defaults matching IrStrategy construction
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
         let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = RuntimeContext::pure();
