@@ -25,7 +25,6 @@ use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ccos::types::StorableIntent;
-use rtfs_compiler::ccos::plan_archive::PlanArchive;
 
 #[derive(Parser, Debug)]
 #[command(name = "intent_graph_demo")] 
