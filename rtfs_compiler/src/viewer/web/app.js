@@ -431,6 +431,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Helper to safely get count of items in a vis.DataSet
+    function datasetCount(ds) {
+        try {
+            if (!ds) return 0;
+            if (typeof ds.length === 'number') return ds.length;
+            if (typeof ds.size === 'number') return ds.size; // some collections
+            if (typeof ds.getIds === 'function') return ds.getIds().length;
+            if (typeof ds.get === 'function') {
+                const all = ds.get();
+                if (Array.isArray(all)) return all.length;
+            }
+        } catch (e) {
+            console.warn('datasetCount failed', e);
+        }
+        return 0;
+    }
+
     function showArchitectureInspector(node) {
         if (!architectureInspector) return;
         if (!node) {
@@ -477,15 +494,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 rtfs_runtime: 2
             };
 
-            const visNodes = nodesArr.map(n => ({
-                id: n.id,
-                label: n.label,
-                group: n.group || 'default',
-                title: n.label,
-                details: n,
-                level: levelMap[n.id] !== undefined ? levelMap[n.id] : undefined,
-                shape: undefined
-            }));
+            // Group-based fallback levels to ensure every node has a level
+            const groupLevelMap = {
+                input: 0,
+                arbiter: 0,
+                governance: 1,
+                orchestrator: 2,
+                runtime: 2,
+                marketplace: 3,
+                store: 3,
+                ledger: 3,
+                storage: 4,
+                llm: 2,
+                default: 3
+            };
+
+            const visNodes = nodesArr.map(n => {
+                const group = n.group || 'default';
+                // Prefer explicit id-level mapping, otherwise use group fallback
+                const explicit = levelMap[n.id];
+                const fallback = groupLevelMap[group] !== undefined ? groupLevelMap[group] : groupLevelMap['default'];
+                const level = (explicit !== undefined) ? explicit : fallback;
+                return ({
+                    id: n.id,
+                    label: n.label,
+                    group: group,
+                    title: n.label,
+                    details: n,
+                    level: level,
+                    shape: undefined
+                });
+            });
 
             const relationStyles = {
                 proposes_plan: { color: '#ffaa00' },
@@ -599,7 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
             applyToggleState();
             if (!currentlyVisible) {
                 ensureArchitectureNetwork();
-                if (architectureNodes.length && architectureNodes.length() === 0) {
+                if (datasetCount(architectureNodes) === 0) {
                     fetchAndRenderArchitecture();
                 } else if (architectureNetwork) {
                     setTimeout(() => architectureNetwork.fit({ animation: false }), 0);
@@ -645,13 +684,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function activateView(name) {
         const views = document.querySelectorAll('.top-view');
         views.forEach(v => v.classList.remove('active'));
-        if (name === 'architecture' && architectureView) {
+            if (name === 'architecture' && architectureView) {
             architectureView.classList.add('active');
             if (navIntents) navIntents.classList.remove('active');
             if (navArchitecture) navArchitecture.classList.add('active');
             ensureArchitectureNetwork();
             // Only fetch if we have no nodes yet
-            if (!architectureNodes || architectureNodes.length === 0 || (architectureNodes.length && architectureNodes.length() === 0)) {
+            if (!architectureNodes || datasetCount(architectureNodes) === 0) {
                 fetchAndRenderArchitecture();
             }
         } else {
