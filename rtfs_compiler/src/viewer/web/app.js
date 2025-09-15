@@ -373,11 +373,38 @@ document.addEventListener('DOMContentLoaded', () => {
         architectureEdges = new vis.DataSet([]);
         const data = { nodes: architectureNodes, edges: architectureEdges };
         const opts = {
-            layout: { improvedLayout: true },
-            physics: { enabled: false },
-            nodes: { shape: 'ellipse', color: { background: '#222', border: '#00aaff' }, font: { color: '#fff' } },
-            edges: { arrows: { to: { enabled: true } }, color: '#00aaff' },
-            interaction: { hover: true, navigationButtons: true }
+            layout: {
+                hierarchical: {
+                    enabled: true,
+                    direction: 'LR',
+                    sortMethod: 'hubsize',
+                    levelSeparation: 180,
+                    nodeSpacing: 160,
+                    treeSpacing: 200,
+                },
+                improvedLayout: true
+            },
+            physics: { enabled: false }, // deterministic positioning
+            groups: {
+                arbiter: { color: { background: '#222', border: '#ffcc00' }, shape: 'box' },
+                governance: { color: { background: '#202830', border: '#00b4ec' }, shape: 'box' },
+                orchestrator: { color: { background: '#262626', border: '#ffaa00' }, shape: 'box' },
+                store: { color: { background: '#1d1d1d', border: '#888' }, shape: 'database' },
+                ledger: { color: { background: '#281d1d', border: '#d45555' }, shape: 'box' },
+                marketplace: { color: { background: '#1d281d', border: '#4caf50' }, shape: 'box' },
+                storage: { color: { background: '#222222', border: '#666' }, shape: 'box' },
+                runtime: { color: { background: '#1f2430', border: '#8f7fff' }, shape: 'box' },
+                default: { color: { background: '#222', border: '#00aaff' }, shape: 'ellipse' }
+            },
+            nodes: { font: { color: '#fff', size: 14 }, margin: 10 },
+            edges: {
+                arrows: { to: { enabled: true, scaleFactor: 0.8 } },
+                smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
+                width: 1.5,
+                color: { color: '#00aaff', highlight: '#ffffff', hover: '#ffffff' },
+                font: { color: '#ccc', strokeWidth: 0, size: 10, background: 'transparent' }
+            },
+            interaction: { hover: true, navigationButtons: false, keyboard: false }
         };
         try {
             architectureNetwork = new vis.Network(architectureVizContainer, data, opts);
@@ -388,6 +415,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     showArchitectureInspector(node);
                 }
             });
+                // When edges clicked, show relation description in inspector
+                architectureNetwork.on('click', (params) => {
+                    if (params.edges && params.edges.length > 0) {
+                        const edgeId = params.edges[0];
+                        const edge = architectureEdges.get(edgeId);
+                        if (edge) {
+                            showEdgeRelationInInspector(edge);
+                        }
+                    }
+                });
         } catch (e) {
             console.error('Failed to initialize architecture network', e);
             addLogEntry('error', 'Failed to initialize architecture network: ' + e.message);
@@ -426,13 +463,79 @@ document.addEventListener('DOMContentLoaded', () => {
             // Build nodes and edges
             const nodesArr = (data.graph_model && data.graph_model.nodes) || [];
             const edgesArr = (data.graph_model && data.graph_model.flow_edges) || [];
-            const visNodes = nodesArr.map(n => ({ id: n.id, label: n.label, group: n.group || 'default', title: n.label, details: n }));
-            const visEdges = edgesArr.map(e => ({ from: e.from, to: e.to, arrows: 'to', title: e.relation }));
+
+            // Assign levels for hierarchical layout (simple mapping by component role)
+            const levelMap = {
+                arbiter: 0,
+                delegating_arbiter: 0,
+                governance_kernel: 1,
+                orchestrator: 2,
+                intent_graph: 3,
+                capability_marketplace: 3,
+                causal_chain: 3,
+                plan_archive: 4,
+                rtfs_runtime: 2
+            };
+
+            const visNodes = nodesArr.map(n => ({
+                id: n.id,
+                label: n.label,
+                group: n.group || 'default',
+                title: n.label,
+                details: n,
+                level: levelMap[n.id] !== undefined ? levelMap[n.id] : undefined,
+                shape: undefined
+            }));
+
+            const relationStyles = {
+                proposes_plan: { color: '#ffaa00' },
+                validated_plan: { color: '#00b4ec' },
+                dispatches_calls: { color: '#4caf50' },
+                updates_intents: { color: '#8f7fff' },
+                creates_intents: { color: '#ffcc00' },
+                records_actions: { color: '#d45555' },
+                records_validation: { color: '#d45555' }
+            };
+
+            const visEdges = edgesArr.map(e => {
+                const style = relationStyles[e.relation] || {};
+                return {
+                    from: e.from,
+                    to: e.to,
+                    arrows: 'to',
+                    title: e.relation,
+                    label: e.relation.replace(/_/g, '\n'),
+                    color: style.color || '#00aaff'
+                };
+            });
             architectureNodes.clear(); architectureEdges.clear();
             architectureNodes.add(visNodes); architectureEdges.add(visEdges);
-            // Use non-animated fit to avoid repeated animated layout reflows
-            // which can interact poorly with flexbox and cause gradual pane growth.
-            architectureNetwork.fit();
+            architectureNetwork.fit({ animation: false });
+            // Apply mapping classes for special groups so CSS can style them
+            // vis.js renders canvas nodes; we can set 'className' on nodes to help with DOM overlays
+            visNodes.forEach(n => {
+                if (n.group === 'input' || n.group === 'llm') {
+                    architectureNodes.update({ id: n.id, className: n.group });
+                }
+            });
+            // Populate legend dynamically
+            const legend = document.getElementById('architecture-legend');
+            if (legend) {
+                legend.innerHTML = '';
+                const items = [
+                    { color: '#00ff88', label: 'User Goal (input)' },
+                    { color: '#ffcc00', label: 'Arbiter / Orchestration' },
+                    { color: '#00b4ec', label: 'Governance' },
+                    { color: '#8f7fff', label: 'Runtime / Delegation (LLM)' },
+                    { color: '#4caf50', label: 'Capability Marketplace' },
+                ];
+                items.forEach(it => {
+                    const el = document.createElement('div'); el.className = 'legend-item';
+                    const sw = document.createElement('div'); sw.className = 'legend-swatch'; sw.style.background = it.color;
+                    const lab = document.createElement('div'); lab.className = 'legend-label'; lab.textContent = it.label;
+                    el.appendChild(sw); el.appendChild(lab); legend.appendChild(el);
+                });
+            }
             // Populate panels
             populateOverview(data);
             buildCapabilityFilters(data);
@@ -452,7 +555,58 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function showEdgeRelationInInspector(edge) {
+        if (!architectureInspector) return;
+        const rel = edge.label || edge.title || edge.relation || 'relation';
+        // Map common relations to friendly descriptions
+        const descMap = {
+            'proposes_plan': 'Arbiter proposes a plan (NL -> Plan)',
+            'validated_plan': 'Governance Kernel validates and sanitizes plans',
+            'dispatches_calls': 'Orchestrator dispatches calls to capabilities',
+            'updates_intents': 'Orchestrator updates intent statuses',
+            'creates_intents': 'Arbiter creates intents in the intent graph',
+            'records_actions': 'Actions recorded to the causal chain for auditing',
+            'records_validation': 'Governance validation recorded to ledger',
+            'delegates': 'Arbiter delegates planning/interpretation to Delegating Arbiter',
+            'llm_call': 'Delegating Arbiter calls external LLM provider for plan synthesis',
+            'submits_goal': 'User submits natural language goal to Arbiter'
+        };
+        const desc = descMap[rel] || rel;
+        architectureInspector.innerHTML = `<strong>Relation:</strong> ${rel}<div style="margin-top:6px;">${desc}</div>`;
+    }
+
     if (architectureRefreshBtn) architectureRefreshBtn.addEventListener('click', () => fetchAndRenderArchitecture());
+    const architectureToggleGraphBtn = document.getElementById('architecture-toggle-graph');
+    if (architectureToggleGraphBtn && architectureVizContainer) {
+        // Persist toggle state in localStorage
+        const KEY = 'ccos_arch_graph_visible';
+        function applyToggleState() {
+            const visible = localStorage.getItem(KEY) !== 'false';
+            if (visible) {
+                architectureVizContainer.style.display = '';
+                architectureToggleGraphBtn.classList.remove('inactive');
+                architectureToggleGraphBtn.textContent = '🧩 Graph';
+            } else {
+                architectureVizContainer.style.display = 'none';
+                architectureToggleGraphBtn.classList.add('inactive');
+                architectureToggleGraphBtn.textContent = '🧩 Graph (hidden)';
+            }
+        }
+        applyToggleState();
+        architectureToggleGraphBtn.addEventListener('click', () => {
+            const currentlyVisible = architectureVizContainer.style.display !== 'none';
+            localStorage.setItem(KEY, currentlyVisible ? 'false' : 'true');
+            applyToggleState();
+            if (!currentlyVisible) {
+                ensureArchitectureNetwork();
+                if (architectureNodes.length && architectureNodes.length() === 0) {
+                    fetchAndRenderArchitecture();
+                } else if (architectureNetwork) {
+                    setTimeout(() => architectureNetwork.fit({ animation: false }), 0);
+                }
+            }
+        });
+    }
     initInspectorTabs();
     wireCapabilityFilters();
 

@@ -131,27 +131,47 @@ pub async fn build_architecture_snapshot(
         (provider.to_string(), model)
     } else { ("none".to_string(), "".to_string()) };
 
+    // Build dynamic graph model including user goal (if any) and LLM provider delegation path
+    let mut graph_nodes: Vec<serde_json::Value> = vec![
+        serde_json::json!({"id":"arbiter","label":"Arbiter","group":"arbiter"}),
+        serde_json::json!({"id":"delegating_arbiter","label":"Delegating Arbiter","group":"arbiter","present":delegation_enabled}),
+        serde_json::json!({"id":"governance_kernel","label":"Governance Kernel","group":"governance"}),
+        serde_json::json!({"id":"orchestrator","label":"Orchestrator","group":"orchestrator"}),
+        serde_json::json!({"id":"intent_graph","label":"Intent Graph","group":"store"}),
+        serde_json::json!({"id":"causal_chain","label":"Causal Chain","group":"ledger"}),
+        serde_json::json!({"id":"capability_marketplace","label":"Capability Marketplace","group":"marketplace"}),
+        serde_json::json!({"id":"plan_archive","label":"Plan Archive","group":"storage"}),
+        serde_json::json!({"id":"rtfs_runtime","label":"RTFS Runtime","group":"runtime"}),
+    ];
+    let mut graph_edges: Vec<serde_json::Value> = vec![
+        serde_json::json!({"from":"arbiter","to":"governance_kernel","relation":"proposes_plan"}),
+        serde_json::json!({"from":"governance_kernel","to":"orchestrator","relation":"validated_plan"}),
+        serde_json::json!({"from":"orchestrator","to":"capability_marketplace","relation":"dispatches_calls"}),
+        serde_json::json!({"from":"orchestrator","to":"intent_graph","relation":"updates_intents"}),
+        serde_json::json!({"from":"arbiter","to":"intent_graph","relation":"creates_intents"}),
+        serde_json::json!({"from":"orchestrator","to":"causal_chain","relation":"records_actions"}),
+        serde_json::json!({"from":"governance_kernel","to":"causal_chain","relation":"records_validation"}),
+    ];
+    // Add user goal node if at least one recent intent exists
+    if let Some(first_recent) = intent_graph_json.get("recent").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+        if let Some(goal) = first_recent.get("goal").and_then(|g| g.as_str()) {
+            // Truncate overly long goal to keep graph readable
+            let trimmed = if goal.len() > 80 { format!("{}…", &goal[..77]) } else { goal.to_string() };
+            graph_nodes.push(serde_json::json!({"id":"user_goal","label":trimmed,"group":"input"}));
+            graph_edges.push(serde_json::json!({"from":"user_goal","to":"arbiter","relation":"submits_goal"}));
+        }
+    }
+    // Add LLM provider node if delegation enabled and provider is known
+    if delegation_enabled && provider != "none" {
+        let provider_node_id = format!("llm_provider_{}", provider);
+        let provider_label = format!("LLM Provider ({}): {}", provider, model);
+        graph_nodes.push(serde_json::json!({"id":provider_node_id, "label":provider_label, "group":"llm"}));
+        graph_edges.push(serde_json::json!({"from":"arbiter","to":"delegating_arbiter","relation":"delegates"}));
+        graph_edges.push(serde_json::json!({"from":"delegating_arbiter","to":provider_node_id, "relation":"llm_call"}));
+    }
     let graph_model = serde_json::json!({
-        "nodes": [
-            {"id":"arbiter","label":"Arbiter","group":"arbiter"},
-            {"id":"delegating_arbiter","label":"Delegating Arbiter","group":"arbiter","present":delegation_enabled},
-            {"id":"governance_kernel","label":"Governance Kernel","group":"governance"},
-            {"id":"orchestrator","label":"Orchestrator","group":"orchestrator"},
-            {"id":"intent_graph","label":"Intent Graph","group":"store"},
-            {"id":"causal_chain","label":"Causal Chain","group":"ledger"},
-            {"id":"capability_marketplace","label":"Capability Marketplace","group":"marketplace"},
-            {"id":"plan_archive","label":"Plan Archive","group":"storage"},
-            {"id":"rtfs_runtime","label":"RTFS Runtime","group":"runtime"}
-        ],
-        "flow_edges": [
-            {"from":"arbiter","to":"governance_kernel","relation":"proposes_plan"},
-            {"from":"governance_kernel","to":"orchestrator","relation":"validated_plan"},
-            {"from":"orchestrator","to":"capability_marketplace","relation":"dispatches_calls"},
-            {"from":"orchestrator","to":"intent_graph","relation":"updates_intents"},
-            {"from":"arbiter","to":"intent_graph","relation":"creates_intents"},
-            {"from":"orchestrator","to":"causal_chain","relation":"records_actions"},
-            {"from":"governance_kernel","to":"causal_chain","relation":"records_validation"}
-        ]
+        "nodes": graph_nodes,
+        "flow_edges": graph_edges,
     });
 
     let security = serde_json::json!({

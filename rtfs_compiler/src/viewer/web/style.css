@@ -851,6 +851,22 @@ nav#top-nav {
 #architecture-main-layout { display:flex; gap:16px; min-height:0; flex:1 1 auto; }
 .arch-graph { flex:1 1 auto; min-height:0; background:#111; border:1px solid #333; border-radius:8px; position:relative; }
 
+/* Legend and additional group styles for architecture graph */
+#architecture-legend {
+    display:flex;
+    gap:8px;
+    align-items:center;
+    margin-left:12px;
+    font-size:12px;
+}
+.legend-item { display:flex; gap:6px; align-items:center; padding:4px 6px; background:rgba(255,255,255,0.02); border-radius:6px; border:1px solid rgba(255,255,255,0.03); }
+.legend-swatch { width:14px; height:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.3); }
+.legend-label { color:#ccc; }
+
+/* visual hint groups */
+.vis-network .vis-node.input { box-shadow: 0 0 8px rgba(0,255,128,0.08); }
+.vis-network .vis-node.llm { box-shadow: 0 0 8px rgba(143,127,255,0.08); }
+
 /* Ensure vis-network canvas fills parent without expanding layout */
 .arch-graph .vis-network,
 #graph-visualization .vis-network {
