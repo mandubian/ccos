@@ -906,8 +906,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_rtfs_streaming_syntax_execution() {
-    let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::capability_registry::CapabilityRegistry::new()));
-        let marketplace = Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+        let marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
         let mut executor = RtfsStreamingSyntaxExecutor::new(marketplace);
 
         // Test registering a stream capability
@@ -947,8 +947,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_pipeline_execution() {
-    let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::capability_registry::CapabilityRegistry::new()));
-        let marketplace = Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+        let marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
         let mut executor = RtfsStreamingSyntaxExecutor::new(marketplace);
 
         // First, register the capabilities that will be used in the pipeline
