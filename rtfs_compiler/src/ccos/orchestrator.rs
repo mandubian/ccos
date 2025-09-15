@@ -357,7 +357,7 @@ impl StepProfileDeriver {
             profile.resource_limits.max_memory_bytes
         );
         // If runtime context doesn't allow the derived isolation level, downgrade
-        if !context.is_isolation_allowed(&profile.isolation_level) {
+        if !context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::from_ccos(&profile.isolation_level)) {
             match profile.isolation_level {
                 IsolationLevel::Sandboxed => {
                     if context.allow_isolated_isolation {
