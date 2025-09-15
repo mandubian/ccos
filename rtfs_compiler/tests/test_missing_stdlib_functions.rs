@@ -9,16 +9,16 @@ use rtfs_compiler::runtime::values::Value;
 fn test_missing_stdlib_functions() {
     let mut env = StandardLibrary::create_global_environment();
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");

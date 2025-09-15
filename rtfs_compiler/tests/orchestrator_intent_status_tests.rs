@@ -23,8 +23,8 @@ fn test_status_transition_success() {
     intent.status = IntentStatus::Active; // initial
     intent_graph.store_intent(intent).unwrap();
     let intent_graph = Arc::new(Mutex::new(intent_graph));
-    let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
+    let capability_marketplace = rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()))
     );
     let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
     let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace), plan_archive);
@@ -64,8 +64,8 @@ fn test_status_transition_failure() {
     intent.status = IntentStatus::Active;
     intent_graph.store_intent(intent).unwrap();
     let intent_graph = Arc::new(Mutex::new(intent_graph));
-    let capability_marketplace = rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(
-        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()))
+    let capability_marketplace = rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+        Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()))
     );
     let plan_archive = Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new());
     let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), Arc::new(capability_marketplace), plan_archive);

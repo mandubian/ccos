@@ -3,8 +3,8 @@
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::environment::Environment;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::parser::parse;
 use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ast::Keyword;
@@ -25,13 +25,13 @@ async fn test_readme_scenario() {
     use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
   use std::sync::Arc as StdArc;
     use rtfs_compiler::runtime::security::RuntimeContext;
-    use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
-    use rtfs_compiler::runtime::host::RuntimeHost;
+    use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+    use rtfs_compiler::ccos::host::RuntimeHost;
     use rtfs_compiler::ccos::causal_chain::CausalChain;
     use std::sync::Mutex;
     
   let module_registry = StdArc::new(ModuleRegistry::new());
-    let delegation_engine = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let security_context = RuntimeContext::pure();
     
     // Create a minimal host interface

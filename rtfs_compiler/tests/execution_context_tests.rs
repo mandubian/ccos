@@ -194,7 +194,7 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
     use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
     use std::sync::{Arc, Mutex};
     use rtfs_compiler::runtime::security::RuntimeContext;
-    use rtfs_compiler::runtime::host::RuntimeHost;
+    use rtfs_compiler::ccos::host::RuntimeHost;
     use rtfs_compiler::ccos::causal_chain::CausalChain;
     use rtfs_compiler::ast::{Expression, Literal};
 
@@ -202,13 +202,13 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
     let module_registry = Arc::new(ModuleRegistry::new());
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let capability_marketplace = {
-        use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
-        use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+        use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+        use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
         use tokio::sync::RwLock;
         Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(CapabilityRegistry::new()))))
     };
     let host = std::sync::Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), RuntimeContext::pure(), host);
 
     // Initialize root context and set parent value :k = "parent"
     {

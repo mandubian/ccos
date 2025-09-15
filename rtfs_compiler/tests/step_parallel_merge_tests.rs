@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::runtime::host::RuntimeHost;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use tokio::sync::RwLock;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
 use rtfs_compiler::runtime::values::Value;
 
 #[test]
@@ -20,7 +20,7 @@ fn test_step_parallel_deep_merge_policy() {
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("cc")));
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
     let module_registry = Arc::new(ModuleRegistry::new());
-    let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
+    let de = Arc::new(StaticDelegationEngine::new_empty());
     let evaluator = Evaluator::new(module_registry, de, RuntimeContext::pure(), host.clone());
 
     // Initialize root context and seed complex map

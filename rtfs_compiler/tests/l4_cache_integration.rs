@@ -36,11 +36,11 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     let de: Arc<dyn DelegationEngine> = Arc::new(l4_de);
 
     // 5. Create evaluator with empty env, but register a placeholder `add` so lookup succeeds.
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
@@ -87,11 +87,11 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
     let inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
 
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),

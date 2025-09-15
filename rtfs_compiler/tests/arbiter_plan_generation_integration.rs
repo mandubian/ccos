@@ -6,7 +6,7 @@ use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::types::IntentStatus;
 use rtfs_compiler::ccos::orchestrator::{self, Orchestrator};
 use rtfs_compiler::ccos::types::{Intent, StorableIntent};
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::stdlib::register_default_capabilities;
 

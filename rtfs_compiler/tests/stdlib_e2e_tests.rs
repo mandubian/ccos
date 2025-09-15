@@ -17,20 +17,20 @@ impl StdlibTestRunner {
     fn new() -> Self {
         let env = StandardLibrary::create_global_environment();
     let module_registry = Arc::new(ModuleRegistry::new());
-        let registry = Arc::new(RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(
-            rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry)
+            rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry)
         );
         let causal_chain = std::sync::Arc::new(Mutex::new(
             rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()
         ));
         let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
-        let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+        let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
         ));
-        let delegation_engine = Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(
+        let delegation_engine = Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new(
             std::collections::HashMap::new()
         ));
         let evaluator = Evaluator::new(
