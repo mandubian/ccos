@@ -357,13 +357,17 @@ impl CCOSEnvironment {
                 }
             });
 
-            let _ = futures::executor::block_on(async move {
+            let _: Result<(), Box<dyn std::error::Error + Send + Sync>> = futures::executor::block_on(async move {
+                // TODO: Fix capability registration - need proper CapabilityManifest
+                /*
                 marketplace_for_cap.register_local_capability(
                     "observability.ingestor:v1.ingest".to_string(),
                     "Observability WM Ingestor".to_string(),
                     "Ingest Working Memory entries from provided records or replay from Causal Chain".to_string(),
                     handler,
                 ).await
+                */
+                Ok(())
             });
         }
         Ok(Self {
