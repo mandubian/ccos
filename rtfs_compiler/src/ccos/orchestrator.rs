@@ -19,12 +19,12 @@
 
 use std::sync::{Arc, Mutex};
 use serde_json::{self, Value as JsonValue};
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::values::Value;
 use crate::ast::MapKey;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::evaluator::Evaluator;
-use crate::runtime::host::RuntimeHost;
+use crate::ccos::host::RuntimeHost;
 use crate::runtime::error::{RuntimeResult, RuntimeError};
 use crate::parser::parse_expression;
 use crate::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};

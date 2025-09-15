@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::ccos::types::{Intent, Plan};
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::error::RuntimeError;
 use serde_json::Value as JsonValue;
 use super::llm_provider::{LlmProviderFactory, LlmProviderConfig};

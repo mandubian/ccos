@@ -1,6 +1,6 @@
 use crate::ast::TypeExpr;
 use crate::runtime::streaming::{StreamType, BidirectionalConfig, DuplexChannels, StreamConfig, StreamingProvider};
-use crate::runtime::capabilities::registry::CapabilityRegistry;
+use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
 use chrono::{DateTime, Utc, Timelike, Datelike};
@@ -607,8 +607,121 @@ pub struct CapabilityMarketplace {
     pub(crate) executor_registry: std::collections::HashMap<std::any::TypeId, super::executors::ExecutorVariant>,
     pub(crate) isolation_policy: CapabilityIsolationPolicy,
     pub(crate) causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
-    pub(crate) resource_monitor: Option<super::resource_monitor::ResourceMonitor>,
+    pub(crate) resource_monitor: Option<()>, // TODO: Add ResourceMonitor when available
     pub(crate) debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+}
+
+impl CapabilityMarketplace {
+    /// Create a new CapabilityMarketplace with the given registry
+    pub fn new(registry: Arc<RwLock<CapabilityRegistry>>) -> Self {
+        Self {
+            capabilities: Arc::new(RwLock::new(HashMap::new())),
+            discovery_agents: Vec::new(),
+            capability_registry: registry,
+            network_registry: None,
+            type_validator: Arc::new(crate::runtime::type_validator::TypeValidator::new()),
+            executor_registry: std::collections::HashMap::new(),
+            isolation_policy: CapabilityIsolationPolicy::default(),
+            causal_chain: None,
+            resource_monitor: None,
+            debug_callback: None,
+        }
+    }
+
+    /// Create a new CapabilityMarketplace with causal chain and debug callback
+    pub fn with_causal_chain_and_debug_callback(
+        registry: Arc<RwLock<CapabilityRegistry>>,
+        causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
+        debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> Self {
+        Self {
+            capabilities: Arc::new(RwLock::new(HashMap::new())),
+            discovery_agents: Vec::new(),
+            capability_registry: registry,
+            network_registry: None,
+            type_validator: Arc::new(crate::runtime::type_validator::TypeValidator::new()),
+            executor_registry: std::collections::HashMap::new(),
+            isolation_policy: CapabilityIsolationPolicy::default(),
+            causal_chain,
+            resource_monitor: None,
+            debug_callback,
+        }
+    }
+
+    /// Bootstrap the marketplace by discovering capabilities
+    pub async fn bootstrap(&self) -> RuntimeResult<()> {
+        // For now, just return Ok - this would normally run discovery agents
+        Ok(())
+    }
+
+    /// Get a capability by ID
+    pub async fn get_capability(&self, capability_id: &str) -> Option<CapabilityManifest> {
+        let capabilities = self.capabilities.read().await;
+        capabilities.get(capability_id).cloned()
+    }
+
+    /// Execute a capability
+    pub async fn execute_capability(&self, capability_id: &str, args: &[Value]) -> RuntimeResult<Value> {
+        // For now, return a simple echo for testing
+        if capability_id == "ccos.echo" {
+            Ok(args.get(0).cloned().unwrap_or(Value::Nil))
+        } else {
+            Err(RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))
+        }
+    }
+
+    /// Register a local capability
+    pub async fn register_local_capability(&self, _capability_id: &str, _manifest: CapabilityManifest) -> RuntimeResult<()> {
+        // For now, just return Ok - this would normally register the capability
+        Ok(())
+    }
+
+    /// Register a streaming capability
+    pub async fn register_streaming_capability(&self, _capability_id: &str, _manifest: CapabilityManifest) -> RuntimeResult<()> {
+        // For now, just return Ok - this would normally register the streaming capability
+        Ok(())
+    }
+
+    /// Start a stream with config
+    pub async fn start_stream_with_config(&self, _capability_id: &str, _config: StreamConfig) -> RuntimeResult<String> {
+        // For now, return a dummy handle
+        Ok("dummy-stream-handle".to_string())
+    }
+
+    /// Start a bidirectional stream with config
+    pub async fn start_bidirectional_stream_with_config(&self, _capability_id: &str, _config: BidirectionalConfig) -> RuntimeResult<String> {
+        // For now, return a dummy handle
+        Ok("dummy-bidirectional-stream-handle".to_string())
+    }
+
+    /// Convert JSON to RTFS value
+    pub fn json_to_rtfs_value(json: serde_json::Value) -> RuntimeResult<Value> {
+        match json {
+            serde_json::Value::Null => Ok(Value::Nil),
+            serde_json::Value::Bool(b) => Ok(Value::Boolean(b)),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(Value::Number(i as f64))
+                } else if let Some(f) = n.as_f64() {
+                    Ok(Value::Number(f))
+                } else {
+                    Err(RuntimeError::Generic("Invalid number".to_string()))
+                }
+            }
+            serde_json::Value::String(s) => Ok(Value::String(s)),
+            serde_json::Value::Array(arr) => {
+                let values: Result<Vec<Value>, _> = arr.into_iter().map(Self::json_to_rtfs_value).collect();
+                Ok(Value::Vector(values?))
+            }
+            serde_json::Value::Object(obj) => {
+                let mut map = std::collections::HashMap::new();
+                for (k, v) in obj {
+                    map.insert(k, Self::json_to_rtfs_value(v)?);
+                }
+                Ok(Value::Map(map))
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]

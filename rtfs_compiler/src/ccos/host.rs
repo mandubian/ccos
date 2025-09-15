@@ -9,7 +9,7 @@ use crate::runtime::host_interface::HostInterface;
 use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeResult, RuntimeError};
 use crate::ccos::causal_chain::CausalChain;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::security::RuntimeContext;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
 // futures::executor used via fully qualified path below

@@ -4,8 +4,8 @@
 
 use crate::runtime::values::{Value, Arity};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::capabilities::capability::Capability;
-use crate::runtime::capabilities::provider::CapabilityProvider;
+use crate::ccos::capabilities::capability::Capability;
+use crate::ccos::capabilities::provider::CapabilityProvider;
 use crate::runtime::microvm::{MicroVMFactory, ExecutionContext, MicroVMConfig};
 use crate::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use crate::ast::Keyword;
@@ -351,7 +351,7 @@ impl CapabilityRegistry {
 		// If a provider is registered for this capability, delegate
 		if let Some(provider) = self.providers.get(capability_id) {
 			// Use default execution context for now
-			let context = crate::runtime::capabilities::provider::ExecutionContext {
+            let context = crate::ccos::capabilities::provider::ExecutionContext {
 				trace_id: uuid::Uuid::new_v4().to_string(),
 				timeout: std::time::Duration::from_secs(10),
 			};

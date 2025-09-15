@@ -35,6 +35,14 @@ pub mod local_models;
 // Infrastructure
 pub mod caching;
 
+// Capability system (moved from runtime)
+pub mod capability_marketplace;
+pub mod capabilities;
+pub mod host;
+pub mod environment;
+pub mod observability;
+pub mod streaming;
+
  // Advanced components
 pub mod context_horizon;
 pub mod subconscious;
@@ -62,7 +70,7 @@ use std::sync::{Arc, Mutex};
 use crate::ccos::arbiter::{DelegatingArbiter, Arbiter};
 use crate::config::types::AgentConfig;
 use crate::ccos::agent::AgentRegistry; // bring trait into scope for record_feedback
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::{RTFSRuntime, Runtime, ModuleRegistry};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::security::RuntimeContext;
@@ -127,7 +135,7 @@ impl CCOS {
     let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
     let intent_graph = Arc::new(Mutex::new(IntentGraph::with_config_and_event_sink(intent_graph_config, sink)?));
         // Initialize capability marketplace with registry
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
             Arc::clone(&capability_registry),
             Some(Arc::clone(&causal_chain)),

@@ -13,7 +13,7 @@ use uuid::Uuid;
 // Forward declarations for types used in this module - these should be replaced with real imports
 pub use super::intent_graph::IntentGraph;
 pub use super::causal_chain::CausalChain;  
-pub use crate::runtime::capability_marketplace::CapabilityMarketplace;
+pub use crate::ccos::capability_marketplace::CapabilityMarketplace;
 
 // Use the real CCOS type from the main module
 pub use crate::ccos::CCOS;
@@ -631,7 +631,7 @@ impl CCOSContext<'_> {
         self.ccos.causal_chain.lock().unwrap()
     }
     
-    pub fn capability_marketplace(&self) -> &std::sync::Arc<crate::runtime::capability_marketplace::CapabilityMarketplace> {
+    pub fn capability_marketplace(&self) -> &std::sync::Arc<crate::ccos::capability_marketplace::CapabilityMarketplace> {
         &self.ccos.capability_marketplace
     }
 }

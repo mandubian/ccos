@@ -1260,7 +1260,7 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
         };
 
         // For now, we don't pass a real marketplace; provider currently doesn't use it.
-        let marketplace = Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()))));
+        let marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))));
         plan_gen_provider.generate_plan(&rt_intent, marketplace).await
     }
 }

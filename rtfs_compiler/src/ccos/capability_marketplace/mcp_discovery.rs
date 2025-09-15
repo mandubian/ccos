@@ -1,6 +1,6 @@
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::capability_marketplace::types::{CapabilityManifest, ProviderType, MCPCapability};
-use crate::runtime::capability_marketplace::types::CapabilityDiscovery;
+use crate::ccos::capability_marketplace::types::{CapabilityManifest, ProviderType, MCPCapability};
+use crate::ccos::capability_marketplace::types::CapabilityDiscovery;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -251,7 +251,7 @@ impl MCPDiscoveryProvider {
             input_schema: None, // TODO: Convert JSON schema to TypeExpr
             output_schema: None, // TODO: Convert JSON schema to TypeExpr
             attestation: None,
-            provenance: Some(crate::runtime::capability_marketplace::types::CapabilityProvenance {
+            provenance: Some(crate::ccos::capability_marketplace::types::CapabilityProvenance {
                 source: "mcp_discovery".to_string(),
                 version: Some("1.0.0".to_string()),
                 content_hash: format!("mcp_{}_{}", self.config.name, tool.name),
@@ -916,7 +916,7 @@ impl MCPDiscoveryProvider {
             input_schema,
             output_schema,
             attestation: None,
-            provenance: Some(crate::runtime::capability_marketplace::types::CapabilityProvenance {
+            provenance: Some(crate::ccos::capability_marketplace::types::CapabilityProvenance {
                 source: "rtfs_persistence".to_string(),
                 version: Some("1.0.0".to_string()),
                 content_hash: format!("rtfs_{}", name),
@@ -1148,7 +1148,7 @@ impl MCPDiscoveryProvider {
             input_schema: None,
             output_schema: None, // MCP resources don't have structured schemas like tools
             attestation: None,
-            provenance: Some(crate::runtime::capability_marketplace::types::CapabilityProvenance {
+            provenance: Some(crate::ccos::capability_marketplace::types::CapabilityProvenance {
                 source: "mcp_discovery".to_string(),
                 version: Some("1.0.0".to_string()),
                 content_hash: format!("mcp_resource_{}_{}", self.config.name, resource_name),

@@ -4,13 +4,11 @@
 //! implemented in the submodules listed below.
 
 pub mod streaming;
-pub mod capability_marketplace;
-pub mod ccos_environment;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
-pub mod host;
 pub mod host_interface;
+pub mod pure_host;
 pub mod ir_runtime;
 pub mod microvm;
 pub mod module_runtime;
@@ -20,9 +18,6 @@ pub mod type_validator;
 pub mod values;
 pub mod security;
 pub mod param_binding;
-#[cfg(feature = "metrics_exporter")]
-pub mod metrics_exporter;
-pub mod capabilities;
 
 #[cfg(test)]
 mod stdlib_tests;
@@ -34,19 +29,16 @@ pub use ir_runtime::IrRuntime;
 pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
-pub use ccos_environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory};
+// CCOSEnvironment moved to ccos::environment
 pub use security::RuntimeContext;
 
 use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
-use crate::runtime::host::RuntimeHost;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::capabilities::registry::CapabilityRegistry;
-use crate::ccos::causal_chain::CausalChain;
+use crate::runtime::pure_host::create_pure_host;
 use crate::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Trait for RTFS runtime operations needed by CCOS
 pub trait RTFSRuntime {
@@ -110,16 +102,7 @@ impl Runtime {
     pub fn new_with_tree_walking_strategy(module_registry: Arc<ModuleRegistry>) -> Self {
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
+        let host = create_pure_host();
 
         let evaluator = Evaluator::new(module_registry.clone(), de, security_context, host);
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
@@ -134,16 +117,7 @@ impl Runtime {
         let module_registry = ModuleRegistry::new();
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
+        let host = create_pure_host();
 
         let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
         evaluator.eval_toplevel(&parsed)
@@ -158,16 +132,7 @@ impl Runtime {
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
+        let host = create_pure_host();
 
         let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
         evaluator.eval_toplevel(&parsed)
@@ -186,16 +151,7 @@ impl IrWithFallbackStrategy {
         let ir_strategy = IrStrategy::new(module_registry.clone());
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
-
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
+        let host = create_pure_host();
 
         let evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
