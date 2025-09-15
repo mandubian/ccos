@@ -3,7 +3,7 @@
 //! This module provides reusable functions for initializing capability registry,
 //! marketplace, runtime host, and evaluators with consistent patterns across tests.
 
-use crate::ccos::delegation::StaticDelegationEngine;
+use crate::runtime::delegation::StaticDelegationEngine;
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::host::RuntimeHost;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;

@@ -36,7 +36,7 @@ use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, Plan
 use crate::ast::{Expression, Literal};
 
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
+use crate::runtime::delegation::{DelegationEngine, StaticDelegationEngine};
 use crate::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
 use sha2::{Digest, Sha256};

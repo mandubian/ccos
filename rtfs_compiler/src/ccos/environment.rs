@@ -18,8 +18,8 @@ use crate::ccos::{
 use crate::runtime::host_interface::HostInterface;
 use crate::ccos::{
     causal_chain::CausalChain,
-    delegation::StaticDelegationEngine,
 };
+use crate::runtime::delegation::StaticDelegationEngine;
 use crate::ast::{Expression, TopLevel};
 use crate::parser;
 use std::sync::Arc;

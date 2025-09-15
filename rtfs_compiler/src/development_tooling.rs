@@ -9,7 +9,7 @@ use crate::runtime::{
 };
 use crate::ccos::host::RuntimeHost;
 use crate::ccos::causal_chain::CausalChain;
-use crate::ccos::delegation::StaticDelegationEngine;
+use crate::runtime::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -23,7 +23,7 @@ struct IrStrategy {
 
 impl IrStrategy {
     fn new() -> Self {
-        let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
+        let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
         // Use compatibility constructor which builds a default host + security context
         Self {
             ir_runtime: IrRuntime::new_compat(delegation_engine),

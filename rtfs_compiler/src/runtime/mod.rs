@@ -18,6 +18,7 @@ pub mod type_validator;
 pub mod values;
 pub mod security;
 pub mod param_binding;
+pub mod delegation;
 
 #[cfg(test)]
 mod stdlib_tests;
@@ -36,7 +37,7 @@ use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
 use crate::runtime::pure_host::create_pure_host;
-use crate::ccos::delegation::StaticDelegationEngine;
+use crate::runtime::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
 
