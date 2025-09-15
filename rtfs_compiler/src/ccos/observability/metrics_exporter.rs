@@ -206,8 +206,8 @@ fn handle_client(stream: &mut TcpStream, chain: &Arc<Mutex<CausalChain>>) -> std
 mod tests {
     use super::*;
     use std::time::Duration;
-    use crate::runtime::host::RuntimeHost;
-    use crate::runtime::capability_marketplace::CapabilityMarketplace;
+    use crate::ccos::host::RuntimeHost;
+    use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::runtime::security::RuntimeContext;
     use crate::runtime::host_interface::HostInterface;
     use crate::runtime::values::Value;
@@ -216,7 +216,7 @@ mod tests {
     fn test_render_and_server_smoke() {
         // Build a tiny environment: chain + host + minimal marketplace
         let chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-    let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::capability_registry::CapabilityRegistry::new()));
+    let registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let host = RuntimeHost::new(chain.clone(), marketplace, RuntimeContext::full());
         // Execute a capability that likely doesn't exist; ignore error but ensure chain has at least one action via delegation event

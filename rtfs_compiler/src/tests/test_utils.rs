@@ -8,6 +8,9 @@ use crate::runtime::{
     values::Value,
 };
 use crate::ccos::delegation::StaticDelegationEngine;
+use crate::ccos::capabilities::registry::CapabilityRegistry;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::host::RuntimeHost;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -23,11 +26,11 @@ pub fn create_test_module_registry() -> ModuleRegistry {
 pub fn create_test_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
     let security_context = crate::runtime::security::RuntimeContext::pure();
-    let host = std::sync::Arc::new(crate::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
@@ -45,10 +48,10 @@ pub fn create_test_evaluator() -> Evaluator {
 pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::RuntimeContext) -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-    let host = std::sync::Arc::new(crate::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         ctx.clone(),

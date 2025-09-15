@@ -6,6 +6,9 @@ mod primitives_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
     use crate::ccos::delegation::StaticDelegationEngine;
+    use crate::ccos::capabilities::registry::CapabilityRegistry;
+    use crate::ccos::capability_marketplace::CapabilityMarketplace;
+    use crate::ccos::host::RuntimeHost;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -64,11 +67,11 @@ mod primitives_tests {
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
-        let capability_marketplace = std::sync::Arc::new(crate::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+        let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-        let security_context =  crate::runtime::security::RuntimeContext::pure();
-        let host = std::sync::Arc::new(crate::runtime::host::RuntimeHost::new(
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
