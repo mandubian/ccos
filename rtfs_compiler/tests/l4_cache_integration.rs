@@ -54,8 +54,9 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
             Pattern::Symbol(Symbol("x".to_string())),
             Pattern::Symbol(Symbol("y".to_string())),
         ],
+        None, // variadic parameter
         Box::new(rtfs_compiler::ast::Expression::Literal(Literal::Nil)),
-    Arc::new(Environment::new()),
+        Arc::new(Environment::new()),
         None,
     );
     evaluator.env.define(&symbol_add, Value::Function(dummy_closure));

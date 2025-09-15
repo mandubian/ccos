@@ -24,7 +24,6 @@ use rtfs_compiler::ccos::plan_archive::PlanArchive;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::ccos::plan_archive::PlanArchive;
 
 use rtfs_compiler::ccos::arbiter::plan_generation::{
     PlanGenerationProvider,
