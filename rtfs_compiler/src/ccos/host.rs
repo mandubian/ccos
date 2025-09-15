@@ -208,7 +208,7 @@ impl HostInterface for RuntimeHost {
         // Bridge async marketplace to sync evaluator using futures::executor::block_on
         let result = futures::executor::block_on(async {
             self.capability_marketplace
-                .execute_capability(name, &capability_args)
+                .execute_capability(name, args)
                 .await
         });
 

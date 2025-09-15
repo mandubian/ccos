@@ -701,9 +701,9 @@ impl CapabilityMarketplace {
             serde_json::Value::Bool(b) => Ok(Value::Boolean(b)),
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
-                    Ok(Value::Number(i as f64))
+                    Ok(Value::Integer(i))
                 } else if let Some(f) = n.as_f64() {
-                    Ok(Value::Number(f))
+                    Ok(Value::Float(f))
                 } else {
                     Err(RuntimeError::Generic("Invalid number".to_string()))
                 }
@@ -716,7 +716,7 @@ impl CapabilityMarketplace {
             serde_json::Value::Object(obj) => {
                 let mut map = std::collections::HashMap::new();
                 for (k, v) in obj {
-                    map.insert(k, Self::json_to_rtfs_value(v)?);
+                    map.insert(crate::ast::MapKey::String(k), Self::json_to_rtfs_value(v)?);
                 }
                 Ok(Value::Map(map))
             }

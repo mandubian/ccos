@@ -2634,6 +2634,8 @@ impl StandardLibrary {
 /// Register default capabilities in the marketplace
 pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
     // Register ccos.echo capability
+    // TODO: Fix capability registration - moved to CCOS
+    /*
     marketplace.register_local_capability(
         "ccos.echo".to_string(),
         "Echo Capability".to_string(),
@@ -2682,8 +2684,10 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
             }
         }),
     ).await.map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.echo: {:?}", e)))?;
+    */
 
     // Register ccos.math.add capability
+    /*
     marketplace.register_local_capability(
         "ccos.math.add".to_string(),
         "Math Add Capability".to_string(),
@@ -2759,6 +2763,7 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
             }
         }),
     ).await.map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
+    */
 
     Ok(())
 }
