@@ -1,8 +1,9 @@
 use super::errors::{pair_to_source_span, PestParseError};
 use super::Rule;
-use crate::ast::Expression;
+use crate::ast::{Expression, MapKey};
 use pest::iterators::{Pair, Pairs};
 use super::expressions::build_expression;
+use std::collections::HashMap;
 
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
@@ -216,7 +217,15 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
         match peek_pair.as_rule() {
             Rule::metadata => {
                 let meta_pair = pairs.next().unwrap();
-                delegation_hint = Some(parse_delegation_meta(meta_pair)?);
+                let meta_span = pair_to_source_span(&meta_pair);
+                // Find the delegation_meta within metadata
+                let delegation_meta_pair = meta_pair.into_inner()
+                    .find(|p| p.as_rule() == Rule::delegation_meta)
+                    .ok_or_else(|| PestParseError::InvalidInput {
+                        message: "metadata must contain delegation_meta".to_string(),
+                        span: Some(meta_span),
+                    })?;
+                delegation_hint = Some(parse_delegation_meta(delegation_meta_pair)?);
                 continue;
             }
             Rule::fn_param_list => {
@@ -442,15 +451,38 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
     if let Some(p) = pairs.peek() {
         if p.as_rule() == Rule::defn_keyword {
             pairs.next();
-            while let Some(sp) = pairs.peek() {
-                if sp.as_rule() == Rule::WHITESPACE || sp.as_rule() == Rule::COMMENT {
-                    pairs.next();
-                } else {
-                    break;
-                }
-            }
         }
     }
+
+    // Parse optional metadata before symbol name (new grammar: metadata comes after defn and before symbol)
+    let mut delegation_hint: Option<DelegationHint> = None;
+    let mut metadata: Option<HashMap<MapKey, Expression>> = None;
+    while let Some(peek_pair) = pairs.peek() {
+        match peek_pair.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+            }
+            Rule::metadata => {
+                let meta_pair = pairs.next().unwrap();
+                let meta_span = pair_to_source_span(&meta_pair);
+                // Determine if this is delegation metadata or general metadata
+                let inner_pairs: Vec<_> = meta_pair.clone().into_inner().collect();
+                if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::delegation_meta {
+                    let delegation_meta_pair = meta_pair.into_inner()
+                        .find(|p| p.as_rule() == Rule::delegation_meta)
+                        .ok_or_else(|| PestParseError::InvalidInput {
+                            message: "metadata must contain delegation_meta".to_string(),
+                            span: Some(meta_span),
+                        })?;
+                    delegation_hint = Some(parse_delegation_meta(delegation_meta_pair)?);
+                } else if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::general_meta {
+                    metadata = Some(parse_general_meta(meta_pair)?);
+                }
+            }
+            _ => break,
+        }
+    }
+
     let symbol_pair = pairs.next().ok_or_else(|| {
         PestParseError::InvalidInput { message: "defn requires a symbol (function name)".to_string(), span: Some(defn_span.clone()) }
     })?;
@@ -462,41 +494,12 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
     }
     let name = build_symbol(symbol_pair.clone())?;
 
-    // ---------------------------------------------------------
-    // Parse optional metadata before parameter list (defn)
-    // ---------------------------------------------------------
-    let mut delegation_hint: Option<DelegationHint> = None;
-    loop {
-        // Skip whitespace/comments
-        while let Some(p) = pairs.peek() {
-            if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-                pairs.next();
-            } else {
-                break;
-            }
-        }
-
-        let peek_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput { message: "defn requires parameter list".to_string(), span: Some(defn_span.clone()) })?;
-
-        match peek_pair.as_rule() {
-            Rule::metadata => {
-                let meta_pair = pairs.next().unwrap();
-                delegation_hint = Some(parse_delegation_meta(meta_pair)?);
-                continue;
-            }
-            Rule::fn_param_list => {
-                break;
-            }
-            Rule::WHITESPACE | Rule::COMMENT => {
-                pairs.next();
-                continue;
-            }
-            other => {
-                return Err(PestParseError::InvalidInput {
-                    message: format!("Unexpected token {:?} before defn param list", other),
-                    span: Some(pair_to_source_span(&peek_pair.clone())),
-                });
-            }
+    // Skip whitespace/comments before parameter list
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
         }
     }
 
@@ -638,6 +641,7 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         body,
         return_type,
         delegation_hint,
+        metadata,
     })
 }
 
@@ -1333,68 +1337,34 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
     // Parse the structured pest pairs from the grammar
     let mut pairs = meta_pair.into_inner();
 
-    // Skip the "^:delegation" literal and any whitespace/comments that may follow
-    while let Some(p) = pairs.peek() {
-        match p.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT => {
-                pairs.next();
-            }
-            _ => break,
-        }
-    }
+    // Find the delegation_target rule within the delegation_meta
+    let delegation_target_pair = pairs.find(|p| p.as_rule() == Rule::delegation_target)
+        .ok_or_else(|| PestParseError::InvalidInput {
+            message: "delegation_meta must contain delegation_target".to_string(),
+            span: Some(meta_span),
+        })?;
 
-    // Get the outer delegation_target rule
-    let target_outer_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "delegation_meta requires delegation_target".to_string(),
-        span: Some(meta_span),
+    let delegation_target_span = pair_to_source_span(&delegation_target_pair);
+    
+    // Get the concrete delegation variant from delegation_target
+    let mut target_inner = delegation_target_pair.into_inner();
+    let concrete_pair = target_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "delegation_target must contain a concrete delegation variant".to_string(),
+        span: Some(delegation_target_span.clone()),
     })?;
+    let concrete_span = pair_to_source_span(&concrete_pair);
 
-    // Capture its span before moving it
-    let target_outer_span = pair_to_source_span(&target_outer_pair);
-
-    // Handle the case where we get delegation_meta directly
-    let (target_pair, target_span) = if target_outer_pair.as_rule() == Rule::delegation_meta {
-        // Extract the delegation_target from delegation_meta
-        let mut inner = target_outer_pair.into_inner();
-        // Skip the "^:delegation" part and find the delegation_target
-        let delegation_target_pair = inner.find(|p| p.as_rule() == Rule::delegation_target)
-            .ok_or_else(|| PestParseError::InvalidInput {
-                message: "delegation_meta must contain delegation_target".to_string(),
-                span: Some(target_outer_span.clone()),
-            })?;
-        let delegation_target_span = pair_to_source_span(&delegation_target_pair);
-        
-        // Now get the concrete delegation variant from delegation_target
-        let mut target_inner = delegation_target_pair.into_inner();
-        let concrete_pair = target_inner.next().ok_or_else(|| PestParseError::InvalidInput {
-            message: "delegation_target must contain a concrete delegation variant".to_string(),
-            span: Some(delegation_target_span.clone()),
-        })?;
-        let concrete_span = pair_to_source_span(&concrete_pair);
-        (concrete_pair, concrete_span)
-    } else if target_outer_pair.as_rule() == Rule::delegation_target {
-        let mut inner = target_outer_pair.into_inner();
-        let concrete_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
-            message: "delegation_target must contain a concrete delegation variant".to_string(),
-            span: Some(target_outer_span.clone()),
-        })?;
-        let concrete_span = pair_to_source_span(&concrete_pair);
-        (concrete_pair, concrete_span)
-    } else {
-        (target_outer_pair, target_outer_span)
-    };
-
-    match target_pair.as_rule() {
+    match concrete_pair.as_rule() {
         Rule::local_delegation => Ok(DelegationHint::LocalPure),
 
         Rule::local_model_delegation => {
             // Extract the required model id string
-            let model_id_pair = target_pair
+            let model_id_pair = concrete_pair
                 .into_inner()
                 .find(|p| p.as_rule() == Rule::string)
                 .ok_or_else(|| PestParseError::InvalidInput {
                     message: ":local-model requires a string argument".to_string(),
-                    span: Some(target_span.clone()),
+                    span: Some(concrete_span.clone()),
                 })?;
 
             let model_id = model_id_pair.as_str().trim_matches('"').to_string();
@@ -1403,12 +1373,12 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
 
         Rule::remote_delegation => {
             // Extract the required remote model id string
-            let remote_id_pair = target_pair
+            let remote_id_pair = concrete_pair
                 .into_inner()
                 .find(|p| p.as_rule() == Rule::string)
                 .ok_or_else(|| PestParseError::InvalidInput {
                     message: ":remote requires a string argument".to_string(),
-                    span: Some(target_span.clone()),
+                    span: Some(concrete_span.clone()),
                 })?;
 
             let remote_id = remote_id_pair.as_str().trim_matches('"').to_string();
@@ -1418,11 +1388,61 @@ fn parse_delegation_meta(meta_pair: Pair<Rule>) -> Result<DelegationHint, PestPa
         _ => Err(PestParseError::InvalidInput {
             message: format!(
                 "Expected concrete delegation variant, found {:?}",
-                target_pair.as_rule()
+                concrete_pair.as_rule()
             ),
-            span: Some(target_span),
+            span: Some(concrete_span),
         }),
     }
+}
+
+fn parse_general_meta(meta_pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>, PestParseError> {
+    // Extract span information before moving the pair
+    let meta_span = pair_to_source_span(&meta_pair);
+
+    // Parse the structured pest pairs from the grammar
+    let mut pairs = meta_pair.into_inner();
+
+    // Skip the "^" and "{" and any whitespace/comments
+    while let Some(p) = pairs.peek() {
+        match p.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+            }
+            _ => break,
+        }
+    }
+
+    // Get the general_meta rule content
+    let general_meta_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "general_meta requires map content".to_string(),
+        span: Some(meta_span),
+    })?;
+
+    // Parse the map entries
+    let mut metadata = HashMap::new();
+    let mut map_pairs = general_meta_pair.into_inner();
+
+    while let Some(entry_pair) = map_pairs.next() {
+        if entry_pair.as_rule() == Rule::map_entry {
+            let entry_span = pair_to_source_span(&entry_pair);
+            let mut entry_inner = entry_pair.into_inner();
+            let key_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "map_entry requires key".to_string(),
+                span: Some(entry_span.clone()),
+            })?;
+            let value_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "map_entry requires value".to_string(),
+                span: Some(entry_span),
+            })?;
+
+            let key = super::common::build_map_key(key_pair)?;
+            let value = build_expression(value_pair)?;
+
+            metadata.insert(key, value);
+        }
+    }
+
+    Ok(metadata)
 }
 
 /// Build a plan expression from parsed pairs

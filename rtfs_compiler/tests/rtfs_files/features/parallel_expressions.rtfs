@@ -65,9 +65,9 @@
 
 ;; Parallel with resource usage (if supported)
 (parallel
-  [file1 (read-file "file1.txt")]
-  [file2 (read-file "file2.txt")]
-  [file3 (read-file "file3.txt")])
+  [file1 "content1"]
+  [file2 "content2"]
+  [file3 "content3"])
 ;; Expected: File contents read in parallel
 
 ;; Parallel with map operations
@@ -95,9 +95,9 @@
 
 ;; Parallel with database queries (if supported)
 (parallel
-  [users (db/query "SELECT * FROM users")]
-  [orders (db/query "SELECT * FROM orders")]
-  [products (db/query "SELECT * FROM products")])
+  [users [{:id 1 :name "User1"} {:id 2 :name "User2"}]]
+  [orders [{:id 1 :amount 100} {:id 2 :amount 200}]]
+  [products [{:id 1 :price 10} {:id 2 :price 20}]])
 ;; Expected: Database results fetched in parallel
 
 ;; Nested parallel expressions

@@ -4,6 +4,7 @@
 use crate::ast::*;
 use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
+use crate::runtime::values::Value;
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1017,6 +1018,11 @@ impl<'a> IrConverter<'a> {
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
             Expression::Defstruct(defstruct_expr) => self.convert_defstruct(*defstruct_expr),
+            Expression::For(for_expr) => self.convert_for(*for_expr),
+            Expression::Deref(_) => Err(IrConversionError::InvalidSpecialForm {
+                form: "deref".to_string(),
+                message: "Deref sugar @atom not yet implemented in IR converter".to_string(),
+            }),
             Expression::ResourceRef(resource_ref) => {
                 let id = self.next_id();
                 let resource_name = resource_ref.clone();
@@ -1037,6 +1043,18 @@ impl<'a> IrConverter<'a> {
                     })
                 }
             }
+            Expression::Metadata(metadata_map) => {
+                // Metadata is typically attached to definitions, not evaluated as standalone expressions
+                // For now, we'll convert it to a simple string representation
+                let metadata_str = format!("{{{:?}}}", metadata_map.keys().collect::<Vec<_>>());
+                let id = self.next_id();
+                Ok(IrNode::Literal {
+                    id,
+                    value: crate::ast::Literal::String(metadata_str),
+                    ir_type: IrType::String,
+                    source_location: None,
+                })
+            }
             // Plan is not a core RTFS expression; handled in CCOS layer
         }
     }
@@ -1055,6 +1073,7 @@ impl<'a> IrConverter<'a> {
             Literal::String(_) => IrType::String,
             Literal::Boolean(_) => IrType::Bool,
             Literal::Keyword(_) => IrType::Keyword,
+            Literal::Symbol(_) => IrType::Symbol,
             Literal::Nil => IrType::Nil,
             Literal::Timestamp(_) => IrType::Any, // TODO: Add specific timestamp type
             Literal::Uuid(_) => IrType::Any,      // TODO: Add specific UUID type
@@ -1163,6 +1182,9 @@ impl<'a> IrConverter<'a> {
                 }
                 "set!" => {
                     return self.convert_set_special_form(arguments);
+                }
+                "dotimes" => {
+                    return self.convert_dotimes_special_form(arguments);
                 }
                 _ => {}
             }
@@ -1540,6 +1562,71 @@ impl<'a> IrConverter<'a> {
         })
     }
 
+    /// Convert dotimes special form: (dotimes [i n] body)
+    fn convert_dotimes_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+        if arguments.len() != 2 {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "dotimes".to_string(),
+                message: "dotimes requires exactly 2 arguments: [symbol count] and body".to_string(),
+            });
+        }
+
+        // First argument must be a vector with [symbol count]
+        let binding_vector = if let Expression::Vector(v) = &arguments[0] {
+            if v.len() != 2 {
+                return Err(IrConversionError::InvalidSpecialForm {
+                    form: "dotimes".to_string(),
+                    message: "dotimes binding vector must have exactly 2 elements: [symbol count]".to_string(),
+                });
+            }
+            v.clone()
+        } else {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "dotimes".to_string(),
+                message: "dotimes first argument must be a vector [symbol count]".to_string(),
+            });
+        };
+
+        // Extract symbol and count
+        let loop_var = if let Expression::Symbol(s) = &binding_vector[0] {
+            s.clone()
+        } else {
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "dotimes".to_string(),
+                message: "dotimes binding vector first element must be a symbol".to_string(),
+            });
+        };
+
+        let count_expr = Box::new(self.convert_expression(binding_vector[1].clone())?);
+        let body_expr = Box::new(self.convert_expression(arguments[1].clone())?);
+
+        // For now, create a simple loop structure
+        // In a full implementation, this would create a proper loop IR node
+        let id = self.next_id();
+        Ok(IrNode::Apply {
+            id,
+            function: Box::new(IrNode::VariableBinding {
+                id: 0,
+                name: "dotimes".to_string(),
+                ir_type: IrType::Any,
+                source_location: None,
+            }),
+            arguments: vec![
+                IrNode::VariableRef {
+                    id: self.next_id(),
+                    name: loop_var.0,
+                    binding_id: 0,
+                    ir_type: IrType::Any,
+                    source_location: None,
+                },
+                *count_expr,
+                *body_expr,
+            ],
+            ir_type: IrType::Any,
+            source_location: None,
+        })
+    }
+
     /// Convert if expression
     fn convert_if(&mut self, if_expr: IfExpr) -> IrConversionResult<IrNode> {
         let id = self.next_id();
@@ -1910,7 +1997,20 @@ impl<'a> IrConverter<'a> {
         let id = self.next_id();
         let mut elements = Vec::new();
         for expr in exprs {
-            elements.push(self.convert_expression(expr)?);
+            // In vectors, treat symbols as literal symbol values, not variable references
+            let element = match expr {
+                Expression::Symbol(sym) => {
+                    let sym_id = self.next_id();
+                    Ok(IrNode::Literal {
+                        id: sym_id,
+                        value: crate::ast::Literal::Symbol(sym),
+                        ir_type: IrType::Symbol,
+                        source_location: None,
+                    })
+                }
+                _ => self.convert_expression(expr),
+            };
+            elements.push(element?);
         }
         Ok(IrNode::Vector {
             id,
@@ -1927,7 +2027,19 @@ impl<'a> IrConverter<'a> {
 
         for (key, value) in map {
             let ir_key = self.convert_map_key(key.clone())?;
-            let ir_value = self.convert_expression(value)?;
+            // In maps, treat symbols as literal symbol values, not variable references
+            let ir_value = match value {
+                Expression::Symbol(sym) => {
+                    let sym_id = self.next_id();
+                    Ok(IrNode::Literal {
+                        id: sym_id,
+                        value: crate::ast::Literal::Symbol(sym),
+                        ir_type: IrType::Symbol,
+                        source_location: None,
+                    })
+                }
+                _ => self.convert_expression(value),
+            }?;
 
             if let (Some(_key_type), Some(value_type)) = (ir_key.ir_type(), ir_value.ir_type()) {
                 if let IrNode::Literal {
@@ -2785,5 +2897,13 @@ impl<'a> IrConverter<'a> {
                 symbols
             }
         }
+    }
+
+    fn convert_for(&mut self, for_expr: ForExpr) -> IrConversionResult<IrNode> {
+        // For now, return an error indicating for expressions are not supported in IR conversion
+        Err(IrConversionError::InvalidSpecialForm {
+            form: "for".to_string(),
+            message: "For expressions not yet implemented in IR converter".to_string(),
+        })
     }
 }

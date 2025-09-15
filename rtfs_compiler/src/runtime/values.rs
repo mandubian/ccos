@@ -265,6 +265,7 @@ impl Function {
     pub fn new_closure(
         params: Vec<Symbol>,
         param_patterns: Vec<crate::ast::Pattern>,
+        variadic_param: Option<Symbol>,
         body: Box<Expression>,
         env: Arc<Environment>,
         delegation_hint: Option<crate::ast::DelegationHint>,
@@ -272,6 +273,7 @@ impl Function {
         Function::Closure(Arc::new(Closure {
             params,
             param_patterns,
+            variadic_param,
             body,
             env,
             delegation_hint,
@@ -369,6 +371,8 @@ pub struct Closure {
     pub params: Vec<Symbol>,
     // Full parameter patterns to support destructuring during invocation
     pub param_patterns: Vec<crate::ast::Pattern>,
+    // Variadic parameter symbol for functions like [& rest]
+    pub variadic_param: Option<Symbol>,
     pub body: Box<Expression>,
     pub env: Arc<Environment>,
     pub delegation_hint: Option<crate::ast::DelegationHint>,
@@ -465,6 +469,24 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for defstruct expressions
                 Value::String("#<defstruct>".to_string())
             }
+            Expression::For(_for_expr) => {
+                // For now, return a placeholder for for expressions
+                Value::String("#<for>".to_string())
+            }
+            Expression::Deref(_expr) => {
+                // For now, return a placeholder for deref expressions
+                Value::String("#<deref>".to_string())
+            }
+            Expression::Metadata(metadata_map) => {
+                // Convert metadata map to a runtime value
+                let mut result_map = std::collections::HashMap::new();
+                for (key, value_expr) in metadata_map {
+                    // For now, just convert to string representation
+                    let value_str = format!("{:?}", value_expr);
+                    result_map.insert(key, Value::String(value_str));
+                }
+                Value::Map(result_map)
+            }
         }
     }
 }
@@ -477,6 +499,7 @@ impl From<Literal> for Value {
             Literal::String(s) => Value::String(s),
             Literal::Boolean(b) => Value::Boolean(b),
             Literal::Keyword(k) => Value::Keyword(k),
+            Literal::Symbol(s) => Value::Symbol(s),
             Literal::Nil => Value::Nil,
             Literal::Timestamp(ts) => Value::Timestamp(ts),
             Literal::Uuid(uuid) => Value::Uuid(uuid),
