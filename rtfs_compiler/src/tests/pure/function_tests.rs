@@ -5,7 +5,7 @@ mod function_tests {
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
-    use crate::ccos::delegation::{StaticDelegationEngine, ExecTarget};
+    use crate::runtime::delegation::{StaticDelegationEngine, ExecTarget};
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
@@ -163,7 +163,7 @@ mod function_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get map and other builtin functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
+        let de = Arc::new(StaticDelegationEngine::new_empty());
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -190,7 +190,7 @@ mod function_tests {
         evaluator.eval_toplevel(&parsed)
     }
 
-    fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> RuntimeResult<Value> {
+    fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::runtime::delegation::DelegationEngine>) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
