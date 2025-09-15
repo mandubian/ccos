@@ -99,6 +99,15 @@ Natural Language → Arbiter/DelegatingArbiter ──proposes plan──▶ Gove
 ```
 ArchNode: { id, label, group, present?: bool, metrics?: { key: number } }
 ArchEdge: { from, to, relation }
+
+New (post v1 incremental update):
+- Optional `user_goal` node (group: `input`) injected when at least one recent intent exists; label = truncated first recent intent goal (<=80 chars).
+- Delegation path nodes/edges: when delegation enabled and provider known: `delegating_arbiter` (present flag) plus dynamic LLM provider node (`llm_provider_<provider>`; group: `llm`) with edges:
+  - `arbiter -> delegating_arbiter` (relation: `delegates`)
+  - `delegating_arbiter -> llm_provider_<provider>` (relation: `llm_call`)
+  - `user_goal -> arbiter` (relation: `submits_goal`) when goal node present.
+
+Color / layout semantics updated in frontend (hierarchical LR layout) to visually separate input → arbitration → governance → orchestration → data stores.
 ```
 
 ### 4.7 Error / Degradation Handling
