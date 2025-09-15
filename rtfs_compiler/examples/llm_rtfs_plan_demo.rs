@@ -20,10 +20,10 @@ use rtfs_compiler::ccos::types::{Plan, ActionType};
 use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
+use rtfs_compiler::ccos::plan_archive::PlanArchive;
 use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::ccos::plan_archive::PlanArchive;
 
 use rtfs_compiler::ccos::arbiter::plan_generation::{
     PlanGenerationProvider,
@@ -139,12 +139,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     marketplace.bootstrap().await?;
     let marketplace = Arc::new(marketplace);
+    let plan_archive = Arc::new(PlanArchive::new());
 
     let orchestrator = Arc::new(Orchestrator::new(
         Arc::clone(&causal_chain),
         Arc::clone(&intent_graph),
         Arc::clone(&marketplace),
-        Arc::new(PlanArchive::new()),
+        Arc::clone(&plan_archive),
     ));
 
     // --- Generate Intent via Arbiter (LLM or Stub) ---

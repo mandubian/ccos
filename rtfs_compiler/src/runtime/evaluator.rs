@@ -1,7 +1,7 @@
 // RTFS Evaluator - Executes parsed AST nodes
 
 use crate::ccos::agent::{SimpleAgentCard, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr,
+use crate::ast::{CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr,
  IfExpr, Keyword, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel, TryCatchExpr,
     WithResourceExpr};
 use crate::runtime::environment::Environment;
@@ -65,18 +65,24 @@ impl Evaluator {
         special_forms.insert("step-if".to_string(), Self::eval_step_if_form);
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
-    special_forms.insert("set!".to_string(), Self::eval_set_form);
-    // Allow (get :key) as a special form that reads from the execution context
-    // with cross-plan fallback. For other usages (get collection key [default])
-    // fall back to the normal builtin function by delegating to the env lookup.
-    special_forms.insert("get".to_string(), Self::eval_get_form);
-    // Core iteration forms
-    special_forms.insert("dotimes".to_string(), Self::eval_dotimes_form);
-    special_forms.insert("for".to_string(), Self::eval_for_form);
+        special_forms.insert("set!".to_string(), Self::eval_set_form);
+        // Allow (get :key) as a special form that reads from the execution context
+        // with cross-plan fallback. For other usages (get collection key [default])
+        // fall back to the normal builtin function by delegating to the env lookup.
+        special_forms.insert("get".to_string(), Self::eval_get_form);
+        // Core iteration forms
+        special_forms.insert("dotimes".to_string(), Self::eval_dotimes_form);
+        special_forms.insert("for".to_string(), Self::eval_for_form);
         // Add other evaluator-level special forms here in the future
-        
+
         // LLM execution bridge (M1)
         special_forms.insert("llm-execute".to_string(), Self::eval_llm_execute_form);
+
+        // Resource management special form
+        special_forms.insert("with-resource".to_string(), Self::eval_with_resource_special_form);
+
+        // Match special form
+        special_forms.insert("match".to_string(), Self::eval_match_form);
 
         special_forms
     }
@@ -490,6 +496,15 @@ impl Evaluator {
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
             Expression::Defstruct(defstruct_expr) => self.eval_defstruct(defstruct_expr, env),
+            Expression::For(for_expr) => self.eval_for(for_expr, env),
+            Expression::Deref(expr) => {
+                // @atom-name desugars to (deref atom-name)
+                let deref_call = Expression::FunctionCall {
+                    callee: Box::new(Expression::Symbol(Symbol("deref".to_string()))),
+                    arguments: vec![*expr.clone()],
+                };
+                self.eval_expr(&deref_call, env)
+            }
             Expression::DiscoverAgents(discover_expr) => {
                 self.eval_discover_agents(discover_expr, env)
             }
@@ -500,6 +515,16 @@ impl Evaluator {
                 }
                 // Fallback: echo as symbolic reference string (keeps prior behavior for resource:ref)
                 Ok(Value::String(format!("@{}", s)))
+            }
+            Expression::Metadata(metadata_map) => {
+                // Metadata is typically attached to definitions, not evaluated as standalone expressions
+                // For now, we'll evaluate it to a map value
+                let mut result_map = std::collections::HashMap::new();
+                for (key, value_expr) in metadata_map {
+                    let value = self.eval_expr(value_expr, env)?;
+                    result_map.insert(key.clone(), value);
+                }
+                Ok(Value::Map(result_map))
             }
         }
     }
@@ -1267,6 +1292,7 @@ impl Evaluator {
             Literal::String(s) => Value::String(s.clone()),
             Literal::Boolean(b) => Value::Boolean(*b),
             Literal::Keyword(k) => Value::Keyword(k.clone()),
+            Literal::Symbol(s) => Value::Symbol(s.clone()),
             Literal::Nil => Value::Nil,
             Literal::Timestamp(ts) => Value::String(ts.clone()),
             Literal::Uuid(uuid) => Value::String(uuid.clone()),
@@ -1288,8 +1314,9 @@ impl Evaluator {
                 Literal::String(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::String),
                 Literal::Boolean(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Bool),
                 Literal::Keyword(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Keyword),
+                Literal::Symbol(_) => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Symbol),
                 Literal::Nil => crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::Nil),
-                Literal::Timestamp(_) | Literal::Uuid(_) | Literal::ResourceHandle(_) => 
+                Literal::Timestamp(_) | Literal::Uuid(_) | Literal::ResourceHandle(_) =>
                     crate::ast::TypeExpr::Primitive(crate::ast::PrimitiveType::String),
             };
 
@@ -1412,9 +1439,45 @@ impl Evaluator {
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
 
-                // Bind arguments to parameter patterns (supports destructuring)
-                for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
-                    self.bind_pattern(pat, arg, &mut func_env)?;
+                // Bind arguments to parameter patterns (supports destructuring and variadic)
+                if let Some(variadic_symbol) = &closure.variadic_param {
+                    // This closure has a variadic parameter
+                    let required_param_count = closure.param_patterns.len();
+                    
+                    // Check minimum argument count for required parameters
+                    if args.len() < required_param_count {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "user-defined function".to_string(),
+                            expected: format!("at least {}", required_param_count),
+                            actual: args.len(),
+                        });
+                    }
+                    
+                    // Bind required parameters normally 
+                    for (i, pat) in closure.param_patterns.iter().enumerate() {
+                        self.bind_pattern(pat, &args[i], &mut func_env)?;
+                    }
+                    
+                    // Bind variadic parameter - collect remaining args into a list
+                    let rest_args = if args.len() > required_param_count {
+                        args[required_param_count..].to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    func_env.define(variadic_symbol, Value::List(rest_args));
+                } else if !closure.param_patterns.is_empty() {
+                    // Normal parameter binding for non-variadic functions
+                    if closure.param_patterns.len() != args.len() {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "user-defined function".to_string(),
+                            expected: closure.param_patterns.len().to_string(),
+                            actual: args.len(),
+                        });
+                    }
+                    
+                    for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
+                        self.bind_pattern(pat, arg, &mut func_env)?;
+                    }
                 }
 
                 // Execute function body
@@ -1493,16 +1556,37 @@ impl Evaluator {
         }
     }
     fn eval_let(&self, let_expr: &LetExpr, env: &mut Environment) -> RuntimeResult<Value> {
-        // Only use recursion detection for function bindings
-        let all_bindings_are_functions = let_expr
-            .bindings
-            .iter()
-            .all(|binding| matches!(&*binding.value, Expression::Fn(_) | Expression::Defn(_)));
-        if all_bindings_are_functions && self.detect_recursion_in_let(&let_expr.bindings) {
+        // Check if we should use recursive evaluation
+        if self.should_use_recursive_evaluation(let_expr) {
             self.eval_let_with_recursion(let_expr, env)
         } else {
             self.eval_let_simple(let_expr, env)
         }
+    }
+
+    fn should_use_recursive_evaluation(&self, let_expr: &LetExpr) -> bool {
+        // First, check if all bindings are functions (original logic)
+        let all_bindings_are_functions = let_expr
+            .bindings
+            .iter()
+            .all(|binding| matches!(&*binding.value, Expression::Fn(_) | Expression::Defn(_)));
+
+        if all_bindings_are_functions {
+            return self.detect_recursion_in_let(&let_expr.bindings);
+        }
+
+        // Second, check for mixed cases where some bindings reference themselves
+        // even when there are nested non-function bindings
+        for binding in &let_expr.bindings {
+            if let crate::ast::Pattern::Symbol(symbol) = &binding.pattern {
+                let binding_names = std::collections::HashSet::from([symbol.0.as_str()]);
+                if self.expr_references_symbols(&binding.value, &binding_names) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     fn detect_recursion_in_let(&self, bindings: &[crate::ast::LetBinding]) -> bool {
@@ -1628,11 +1712,23 @@ impl Evaluator {
                 .any(|expr| self.expr_references_symbols(expr, symbols)),
             // These don't reference symbols
             Expression::Literal(_)
-            | Expression::Vector(_)
-            | Expression::Map(_)
             | Expression::List(_)
             | Expression::ResourceRef(_)
-            | Expression::Defstruct(_) => false,
+            | Expression::Defstruct(_)
+            | Expression::For(_) => false,
+            Expression::Vector(exprs) => {
+                // Check if any expression in the vector references the symbols
+                exprs.iter().any(|expr| self.expr_references_symbols(expr, symbols))
+            }
+            Expression::Map(map) => {
+                // Check if any value expression in the map references the symbols
+                map.values().any(|expr| self.expr_references_symbols(expr, symbols))
+            }
+            Expression::Deref(expr) => self.expr_references_symbols(expr, symbols),
+            Expression::Metadata(metadata_map) => {
+                // Check if any metadata values reference the symbols
+                metadata_map.values().any(|expr| self.expr_references_symbols(expr, symbols))
+            }
         }
     }
 
@@ -1824,6 +1920,12 @@ impl Evaluator {
     }
 
     fn eval_fn(&self, fn_expr: &FnExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Extract variadic parameter for anonymous functions if present
+        let variadic_param = fn_expr
+            .variadic_param
+            .as_ref()
+            .map(|p| self.extract_param_symbol(&p.pattern));
+
         Ok(Value::Function(Function::new_closure(
             fn_expr
                 .params
@@ -1831,6 +1933,7 @@ impl Evaluator {
                 .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
             fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+            variadic_param,
             Box::new(Expression::Do(DoExpr {
                 expressions: fn_expr.body.clone(),
             })),
@@ -1887,6 +1990,9 @@ impl Evaluator {
     }
 
     fn eval_defn(&self, defn_expr: &DefnExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Extract variadic parameter if present
+        let variadic_param = defn_expr.variadic_param.as_ref().map(|p| self.extract_param_symbol(&p.pattern));
+        
         let function = Value::Function(Function::new_closure(
             defn_expr
                 .params
@@ -1894,6 +2000,7 @@ impl Evaluator {
                 .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
             defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+            variadic_param,
             Box::new(Expression::Do(DoExpr {
                 expressions: defn_expr.body.clone(),
             })),
@@ -1973,21 +2080,31 @@ impl Evaluator {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch { function: "dotimes".into(), expected: "2".into(), actual: args.len() });
         }
-        // Evaluate binding vector
-        let binding_val = self.eval_expr(&args[0], env)?;
-        let (sym, count) = match binding_val {
-            Value::Vector(v) if v.len() == 2 => {
-                let sym = match &v[0] { Value::Symbol(s) => s.clone(), other => return Err(RuntimeError::TypeError{ expected: "symbol".into(), actual: other.type_name().into(), operation: "dotimes".into() }) };
-                let n = match &v[1] { Value::Integer(i) => *i, other => return Err(RuntimeError::TypeError{ expected: "integer".into(), actual: other.type_name().into(), operation: "dotimes".into() }) };
+        // Extract binding vector directly from AST (don't evaluate it)
+        let (sym, count) = match &args[0] {
+            Expression::Vector(v) if v.len() == 2 => {
+                let sym = match &v[0] { 
+                    Expression::Symbol(s) => s.clone(), 
+                    _ => return Err(RuntimeError::TypeError{ expected: "symbol".into(), actual: "non-symbol".into(), operation: "dotimes".into() }) 
+                };
+                // Evaluate the count expression
+                let count_val = self.eval_expr(&v[1], env)?;
+                let n = match count_val { 
+                    Value::Integer(i) => i, 
+                    other => return Err(RuntimeError::TypeError{ expected: "integer".into(), actual: other.type_name().into(), operation: "dotimes".into() }) 
+                };
                 (sym, n)
             }
-            other => return Err(RuntimeError::TypeError{ expected: "[symbol integer]".into(), actual: other.type_name().into(), operation: "dotimes".into() })
+            _ => return Err(RuntimeError::TypeError{ expected: "[symbol integer]".into(), actual: "non-vector".into(), operation: "dotimes".into() })
         };
         if count <= 0 { return Ok(Value::Nil); }
         let mut last = Value::Nil;
         for i in 0..count {
+            // Create a child environment that can access parent variables
             let mut loop_env = Environment::with_parent(Arc::new(env.clone()));
+            // Define the loop variable in the child environment
             loop_env.define(&sym, Value::Integer(i));
+            // Evaluate the loop body in the child environment
             last = self.eval_expr(&args[1], &mut loop_env)?;
         }
         Ok(last)
@@ -2025,6 +2142,48 @@ impl Evaluator {
         Ok(Value::Vector(out))
     }
 
+    fn eval_for(&self, for_expr: &ForExpr, env: &mut Environment) -> RuntimeResult<Value> {
+        // Evaluate the bindings vector to get the actual values
+        let mut bindings_vec = Vec::new();
+        for binding in &for_expr.bindings {
+            bindings_vec.push(self.eval_expr(binding, env)?);
+        }
+
+        // Convert to (Symbol, Vec<Value>) pairs
+        if bindings_vec.len() % 2 != 0 {
+            return Err(RuntimeError::Generic("for requires an even number of binding elements [sym coll ...]".into()));
+        }
+
+        let mut pairs: Vec<(Symbol, Vec<Value>)> = Vec::new();
+        let mut i = 0;
+        while i < bindings_vec.len() {
+            let sym = match &bindings_vec[i] {
+                Value::Symbol(s) => s.clone(),
+                other => return Err(RuntimeError::TypeError {
+                    expected: "symbol".into(),
+                    actual: other.type_name().into(),
+                    operation: "for binding symbol".into()
+                })
+            };
+            let coll_val = bindings_vec[i + 1].clone();
+            let items = match coll_val {
+                Value::Vector(v) => v,
+                other => return Err(RuntimeError::TypeError {
+                    expected: "vector".into(),
+                    actual: other.type_name().into(),
+                    operation: "for binding collection".into()
+                })
+            };
+            pairs.push((sym, items));
+            i += 2;
+        }
+
+        // Recursive nested iteration
+        let mut out: Vec<Value> = Vec::new();
+        self.for_nest(&pairs, 0, env, &for_expr.body, &mut out)?;
+        Ok(Value::Vector(out))
+    }
+
     fn for_nest(&self, pairs: &[(Symbol, Vec<Value>)], depth: usize, env: &Environment, body: &Expression, out: &mut Vec<Value>) -> RuntimeResult<()> {
         if depth == pairs.len() {
             // Evaluate body in current env clone
@@ -2040,6 +2199,120 @@ impl Evaluator {
             self.for_nest(pairs, depth + 1, &loop_env, body, out)?;
         }
         Ok(())
+    }
+
+    /// Evaluate with-resource special form: (with-resource [name type init] body)
+    fn eval_match_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        if args.len() < 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "match".into(),
+                expected: "at least 3".into(),
+                actual: args.len(),
+            });
+        }
+
+        // First argument is the value to match against
+        let value_to_match = self.eval_expr(&args[0], env)?;
+
+        // Remaining arguments are pattern-body pairs
+        let mut i = 1;
+        while i < args.len() {
+            if i + 1 >= args.len() {
+                return Err(RuntimeError::Generic("match: incomplete pattern-body pair".into()));
+            }
+
+            let pattern_expr = &args[i];
+            let body_expr = &args[i + 1];
+
+            // For now, we'll implement a simple pattern matching
+            // This is a simplified version - full pattern matching would be much more complex
+            match pattern_expr {
+                Expression::Symbol(sym) if sym.0 == "_" => {
+                    // Wildcard pattern - always matches
+                    return self.eval_expr(body_expr, env);
+                }
+                Expression::Literal(lit) => {
+                    // Literal pattern matching
+                    let pattern_value = self.eval_literal(lit)?;
+                    if value_to_match == pattern_value {
+                        return self.eval_expr(body_expr, env);
+                    }
+                }
+                Expression::Symbol(sym) => {
+                    // Variable binding pattern
+                    let mut clause_env = Environment::with_parent(Arc::new(env.clone()));
+                    clause_env.define(sym, value_to_match.clone());
+                    return self.eval_expr(body_expr, &mut clause_env);
+                }
+                _ => {
+                    // For now, treat complex patterns as non-matching
+                    // This would need to be expanded for full pattern matching support
+                }
+            }
+
+            i += 2;
+        }
+
+        Err(RuntimeError::MatchError("No matching clause".to_string()))
+    }
+
+    fn eval_with_resource_special_form(&self, args: &[Expression], env: &mut Environment) -> RuntimeResult<Value> {
+        // Expect (with-resource [binding-vector] body)
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "with-resource".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // Parse binding vector [name type init]
+        let binding_vec = match &args[0] {
+            Expression::Vector(elements) => elements,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector for binding".to_string(),
+                    actual: format!("{:?}", args[0]),
+                    operation: "with-resource".to_string(),
+                });
+            }
+        };
+
+
+        if binding_vec.len() != 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "with-resource binding".to_string(),
+                expected: "3 elements [name type init]".to_string(),
+                actual: binding_vec.len(),
+            });
+        }
+
+        // Extract variable name
+        let var_name = match &binding_vec[0] {
+            Expression::Symbol(s) => s.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "symbol for variable name".to_string(),
+                    actual: format!("{:?}", binding_vec[0]),
+                    operation: "with-resource binding name".to_string(),
+                });
+            }
+        };
+
+        // Evaluate the initialization expression
+        let init_value = self.eval_expr(&binding_vec[2], env)?;
+
+        // Create a new environment scope with the variable bound
+        let mut resource_env = Environment::with_parent(Arc::new(env.clone()));
+        resource_env.define(&var_name, init_value);
+
+        // Evaluate the body in the new scope
+        let result = self.eval_expr(&args[1], &mut resource_env)?;
+
+        // Note: In a real implementation, we would handle resource cleanup here
+        // For testing purposes, we just return the result
+
+        Ok(result)
     }
 
     fn match_catch_pattern(

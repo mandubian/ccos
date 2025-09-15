@@ -708,6 +708,7 @@ impl MCPDiscoveryProvider {
                 Literal::Float(f) => format!("{:?}", f),
                 Literal::Boolean(b) => format!("{}", b),
                 Literal::Keyword(k) => format!(":{}", k.0),
+                Literal::Symbol(s) => format!("{}", s.0),
                 Literal::Nil => "nil".to_string(),
                 Literal::Timestamp(ts) => format!("\"{}\"", ts),
                 Literal::Uuid(uuid) => format!("\"{}\"", uuid),

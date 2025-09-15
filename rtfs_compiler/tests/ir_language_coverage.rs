@@ -183,6 +183,7 @@ fn test_ir_conversion_def_and_defn() {
         body: vec![Expression::Symbol(Symbol::new("x"))],
         return_type: None,
         delegation_hint: None,
+        metadata: None,
     };
     let ast = Expression::Defn(Box::new(defn_expr));
     let ir = converter.convert_expression(ast).expect("Should convert defn expression");

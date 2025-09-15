@@ -381,6 +381,56 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // Contains? function - collection membership test
+        env.define(
+            &Symbol("contains?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "contains?".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::contains_p),
+            })),
+        );
+
+        // Even? function - number parity test
+        env.define(
+            &Symbol("even?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "even?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::even_p),
+            })),
+        );
+
+        // Odd? function - number parity test
+        env.define(
+            &Symbol("odd?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "odd?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::odd_p),
+            })),
+        );
+
+        // Sort function - collection sorting
+        env.define(
+            &Symbol("sort".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "sort".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::sort),
+            })),
+        );
+
+        // Merge function - map merging
+        env.define(
+            &Symbol("merge".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "merge".to_string(),
+                arity: Arity::Variadic(1),
+                func: Arc::new(Self::merge),
+            })),
+        );
+
         // Empty predicate
         env.define(
             &Symbol("empty?".to_string()),
@@ -529,6 +579,26 @@ impl SecureStandardLibrary {
                 name: "assoc".to_string(),
                 arity: Arity::Variadic(3),
                 func: Arc::new(Self::assoc),
+            })),
+        );
+
+        // Assoc! mutation function
+        env.define(
+            &Symbol("assoc!".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "assoc!".to_string(),
+                arity: Arity::Variadic(3),
+                func: Arc::new(Self::assoc_bang),
+            })),
+        );
+
+        // Reset! mutation function
+        env.define(
+            &Symbol("reset!".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "reset!".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::reset_bang),
             })),
         );
 
@@ -1636,9 +1706,11 @@ impl SecureStandardLibrary {
         let collection_val = &args[collection_arg_index];
         let collection = match collection_val {
             Value::Vector(v) => v.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::List(list) => list.clone(),
             _ => {
                 return Err(RuntimeError::new(
-                    "reduce expects a vector as its last argument",
+                    &format!("reduce expects a vector, string, or list as its last argument, got {}", collection_val.type_name()),
                 ))
             }
         };
@@ -1898,6 +1970,70 @@ impl SecureStandardLibrary {
             result.push(Value::Vector(chunk.to_vec()));
         }
         Ok(Value::Vector(result))
+    }
+
+    fn reset_bang(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "reset!".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Atom(atom_ref) => {
+                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                *atom_guard = args[1].clone();
+                Ok(Value::Nil)
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "atom".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "reset!".to_string(),
+            })
+        }
+    }
+
+    fn assoc_bang(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() < 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "assoc!".to_string(),
+                expected: "at least 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Atom(atom_ref) => {
+                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                match &*atom_guard {
+                    Value::Map(map) => {
+                        let mut new_map = map.clone();
+                        // Process key-value pairs
+                        for chunk in args[1..].chunks(2) {
+                            if chunk.len() == 2 {
+                                let key = Self::value_to_map_key(&chunk[0])?;
+                                let value = chunk[1].clone();
+                                new_map.insert(key, value);
+                            }
+                        }
+                        *atom_guard = Value::Map(new_map);
+                        Ok(Value::Nil)
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "atom containing map".to_string(),
+                        actual: atom_guard.type_name().to_string(),
+                        operation: "assoc!".to_string(),
+                    })
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "atom".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "assoc!".to_string(),
+            })
+        }
     }
 
     fn assoc(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2161,8 +2297,9 @@ impl SecureStandardLibrary {
         match value {
             Value::String(s) => Ok(MapKey::String(s.clone())),
             Value::Keyword(k) => Ok(MapKey::Keyword(k.clone())),
+            Value::Integer(i) => Ok(MapKey::Integer(*i)),
             _ => Err(RuntimeError::TypeError {
-                expected: "string or keyword".to_string(),
+                expected: "string, keyword, or integer".to_string(),
                 actual: value.type_name().to_string(),
                 operation: "map key".to_string(),
             }),
@@ -2773,5 +2910,141 @@ impl SecureStandardLibrary {
                 operation: "some?".to_string(),
             }),
         }
+    }
+
+    fn even_p(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "even?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let n = match &args[0] {
+            Value::Integer(i) => *i,
+            Value::Float(f) => *f as i64,
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "number".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "even?".to_string(),
+                });
+            }
+        };
+
+        Ok(Value::Boolean(n % 2 == 0))
+    }
+
+    fn odd_p(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "odd?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        
+        match &args[0] {
+            Value::Integer(n) => Ok(Value::Boolean(n % 2 == 1)),
+            Value::Float(f) => Ok(Value::Boolean((*f as i64) % 2 == 1)),
+            other => Err(RuntimeError::TypeError {
+                expected: "number".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "odd?".to_string(),
+            }),
+        }
+    }
+
+    fn contains_p(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "contains?".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let collection = &args[0];
+        let item = &args[1];
+
+        match collection {
+            Value::Vector(vec) => Ok(Value::Boolean(vec.contains(item))),
+            Value::String(s) => {
+                if let Value::String(item_str) = item {
+                    Ok(Value::Boolean(s.contains(item_str)))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            Value::List(list) => Ok(Value::Boolean(list.contains(item))),
+            Value::Map(map) => {
+                let key = match item {
+                    Value::Keyword(k) => Some(MapKey::Keyword(k.clone())),
+                    Value::String(s) => Some(MapKey::String(s.clone())),
+                    Value::Integer(i) => Some(MapKey::Integer(*i)),
+                    _ => None,
+                };
+                Ok(Value::Boolean(key.map_or(false, |k| map.contains_key(&k))))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "vector, string, list, or map".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "contains?".to_string(),
+            }),
+        }
+    }
+
+    fn sort(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "sort".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Vector(v) => {
+                let mut sorted = v.clone();
+                sorted.sort_by(|a, b| a.compare(b));
+                Ok(Value::Vector(sorted))
+            }
+            Value::String(s) => {
+                let mut chars: Vec<char> = s.chars().collect();
+                chars.sort();
+                Ok(Value::String(chars.iter().collect()))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "sort".to_string(),
+            }),
+        }
+    }
+
+    fn merge(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Ok(Value::Map(HashMap::new()));
+        }
+        
+        let mut out: HashMap<MapKey, Value> = HashMap::new();
+        for arg in args {
+            match arg {
+                Value::Map(m) => {
+                    for (k, v) in m {
+                        out.insert(k, v);
+                    }
+                }
+                other => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "map".into(),
+                        actual: other.type_name().into(),
+                        operation: "merge".into(),
+                    });
+                }
+            }
+        }
+        Ok(Value::Map(out))
     }
 }

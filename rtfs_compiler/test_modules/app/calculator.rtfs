@@ -6,9 +6,9 @@
   
   (defn calculate [operation x y]
     (match operation
-      :add (math/add x y)
-      :multiply (math/multiply x y)
-      :square (math/square x)
+      :add (math.add x y)
+      :multiply (math.multiply x y)
+      :square (math.square x)
       _ nil))
   
   (defn format-result [result]

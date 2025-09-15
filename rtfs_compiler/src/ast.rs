@@ -21,6 +21,7 @@ pub enum Literal {
     String(String),
     Boolean(bool),
     Keyword(Keyword),
+    Symbol(Symbol),
     Timestamp(String),      // Added
     Uuid(String),           // Added
     ResourceHandle(String), // Added
@@ -62,6 +63,17 @@ impl std::fmt::Display for MapKey {
             MapKey::Keyword(k) => write!(f, ":{}", k.0),
             MapKey::String(s) => write!(f, "\"{}\"", s),
             MapKey::Integer(i) => write!(f, "{}", i),
+        }
+    }
+}
+
+impl MapKey {
+    /// Convert MapKey to a string representation
+    pub fn to_string(&self) -> String {
+        match self {
+            MapKey::Keyword(k) => format!(":{}", k.0),
+            MapKey::String(s) => s.clone(),
+            MapKey::Integer(i) => i.to_string(),
         }
     }
 }
@@ -509,7 +521,10 @@ pub enum Expression {
     Parallel(#[validate] ParallelExpr),
     WithResource(#[validate] WithResourceExpr),
     Match(#[validate] MatchExpr),
+    For(#[validate] Box<ForExpr>),           // Added for for comprehension
+    Deref(#[validate] Box<Expression>),      // Added for @atom deref sugar
     ResourceRef(String),                      // Added
+    Metadata(HashMap<MapKey, Expression>),   // Added for ^{:doc "..."} syntax
 
 }
 
@@ -548,6 +563,8 @@ impl Validate for Expression {
             Expression::Parallel(expr) => expr.validate(),
             Expression::WithResource(expr) => expr.validate(),
             Expression::Match(expr) => expr.validate(),
+            Expression::For(expr) => expr.validate(),
+            Expression::Deref(expr) => expr.validate(),
             _ => Ok(()), // Literals, Symbols, etc. do not need validation
         }
     }
@@ -639,6 +656,7 @@ pub struct DefnExpr {
     #[validate(nested)]
     pub body: Vec<Expression>,
     pub delegation_hint: Option<DelegationHint>,
+    pub metadata: Option<HashMap<MapKey, Expression>>, // General metadata like ^{:doc "..."}
 }
 
 // Defstruct is syntactic sugar for (def name refined-map-type)
@@ -837,9 +855,20 @@ pub struct ImportDefinition {
     pub only: Option<Vec<Symbol>>, // :only [sym1 sym2]
 }
 
-/// Discover Agents Expression - for (discover-agents ...) special form
+/// For Expression - for (for ...) special form
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct ForExpr {
+    /// Vector of binding expressions [sym1 coll1 sym2 coll2 ...]
+    #[validate(nested)]
+    pub bindings: Vec<Expression>,
+    /// Body expression to evaluate for each combination
+    #[validate(nested)]
+    pub body: Box<Expression>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[serde(rename_all = "camelCase")]
 pub struct DiscoverAgentsExpr {
     /// Discovery criteria map (required)
     #[validate(nested)]

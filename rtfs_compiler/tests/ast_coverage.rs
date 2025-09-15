@@ -523,6 +523,7 @@ mod special_form_coverage {
                     ]
                 }],
                 delegation_hint: None,
+                metadata: None,
             }))
         );
     }
