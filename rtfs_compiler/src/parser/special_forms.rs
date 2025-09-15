@@ -454,18 +454,7 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         }
     }
 
-    let symbol_pair = pairs.next().ok_or_else(|| {
-        PestParseError::InvalidInput { message: "defn requires a symbol (function name)".to_string(), span: Some(defn_span.clone()) }
-    })?;
-    if symbol_pair.as_rule() != Rule::symbol {
-        return Err(PestParseError::InvalidInput { 
-            message: format!("Expected symbol for defn name, found {:?}", symbol_pair.as_rule()), 
-            span: Some(pair_to_source_span(&symbol_pair)) 
-        });
-    }
-    let name = build_symbol(symbol_pair.clone())?;
-
-    // Parse optional metadata after symbol name
+    // Parse optional metadata before symbol name (new grammar: metadata comes after defn and before symbol)
     let mut delegation_hint: Option<DelegationHint> = None;
     let mut metadata: Option<HashMap<MapKey, Expression>> = None;
     while let Some(peek_pair) = pairs.peek() {
@@ -493,6 +482,17 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
             _ => break,
         }
     }
+
+    let symbol_pair = pairs.next().ok_or_else(|| {
+        PestParseError::InvalidInput { message: "defn requires a symbol (function name)".to_string(), span: Some(defn_span.clone()) }
+    })?;
+    if symbol_pair.as_rule() != Rule::symbol {
+        return Err(PestParseError::InvalidInput { 
+            message: format!("Expected symbol for defn name, found {:?}", symbol_pair.as_rule()), 
+            span: Some(pair_to_source_span(&symbol_pair)) 
+        });
+    }
+    let name = build_symbol(symbol_pair.clone())?;
 
     // Skip whitespace/comments before parameter list
     while let Some(p) = pairs.peek() {

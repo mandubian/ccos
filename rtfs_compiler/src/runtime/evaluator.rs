@@ -427,23 +427,13 @@ impl Evaluator {
             }
             Expression::Vector(exprs) => {
                 let values: Result<Vec<Value>, RuntimeError> =
-                    exprs.iter().map(|e| match e {
-                        // In vectors, treat symbols as literal symbol values, not variable references
-                        Expression::Symbol(sym) => Ok(Value::Symbol(sym.clone())),
-                        // Evaluate all other expressions normally
-                        _ => self.eval_expr(e, env)
-                    }).collect();
+                    exprs.iter().map(|e| self.eval_expr(e, env)).collect();
                 Ok(Value::Vector(values?))
             }
             Expression::Map(map) => {
                 let mut result = HashMap::new();
                 for (key, value_expr) in map {
-                    let value = match value_expr {
-                        // In maps, treat symbols as literal symbol values, not variable references
-                        Expression::Symbol(sym) => Value::Symbol(sym.clone()),
-                        // Evaluate all other expressions normally
-                        _ => self.eval_expr(value_expr, env)?,
-                    };
+                    let value = self.eval_expr(value_expr, env)?;
                     result.insert(key.clone(), value);
                 }
                 Ok(Value::Map(result))
@@ -1722,12 +1712,18 @@ impl Evaluator {
                 .any(|expr| self.expr_references_symbols(expr, symbols)),
             // These don't reference symbols
             Expression::Literal(_)
-            | Expression::Vector(_)
-            | Expression::Map(_)
             | Expression::List(_)
             | Expression::ResourceRef(_)
             | Expression::Defstruct(_)
             | Expression::For(_) => false,
+            Expression::Vector(exprs) => {
+                // Check if any expression in the vector references the symbols
+                exprs.iter().any(|expr| self.expr_references_symbols(expr, symbols))
+            }
+            Expression::Map(map) => {
+                // Check if any value expression in the map references the symbols
+                map.values().any(|expr| self.expr_references_symbols(expr, symbols))
+            }
             Expression::Deref(expr) => self.expr_references_symbols(expr, symbols),
             Expression::Metadata(metadata_map) => {
                 // Check if any metadata values reference the symbols
