@@ -270,7 +270,7 @@ fn_expr   = { "(" ~ fn_keyword ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ fn_para
 param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 
 def_expr  = { "(" ~ def_keyword ~ symbol ~ (COLON ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
-defn_expr = { "(" ~ defn_keyword ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Fixed metadata position
+defn_expr = { "(" ~ defn_keyword ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Fixed metadata position - metadata comes after symbol
 
 // defstruct rule for ergonomic struct definitions
 defstruct_expr = { "(" ~ defstruct_keyword ~ symbol ~ defstruct_field* ~ ")" }

@@ -217,7 +217,15 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
         match peek_pair.as_rule() {
             Rule::metadata => {
                 let meta_pair = pairs.next().unwrap();
-                delegation_hint = Some(parse_delegation_meta(meta_pair)?);
+                let meta_span = pair_to_source_span(&meta_pair);
+                // Find the delegation_meta within metadata
+                let delegation_meta_pair = meta_pair.into_inner()
+                    .find(|p| p.as_rule() == Rule::delegation_meta)
+                    .ok_or_else(|| PestParseError::InvalidInput {
+                        message: "metadata must contain delegation_meta".to_string(),
+                        span: Some(meta_span),
+                    })?;
+                delegation_hint = Some(parse_delegation_meta(delegation_meta_pair)?);
                 continue;
             }
             Rule::fn_param_list => {
@@ -446,28 +454,6 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         }
     }
 
-    // Parse optional metadata before symbol name
-    let mut delegation_hint: Option<DelegationHint> = None;
-    let mut metadata: Option<HashMap<MapKey, Expression>> = None;
-    while let Some(peek_pair) = pairs.peek() {
-        match peek_pair.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT => {
-                pairs.next();
-            }
-            Rule::metadata => {
-                let meta_pair = pairs.next().unwrap();
-                // Determine if this is delegation metadata or general metadata
-                let inner_pairs: Vec<_> = meta_pair.clone().into_inner().collect();
-                if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::delegation_meta {
-                    delegation_hint = Some(parse_delegation_meta(meta_pair)?);
-                } else if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::general_meta {
-                    metadata = Some(parse_general_meta(meta_pair)?);
-                }
-            }
-            _ => break,
-        }
-    }
-
     let symbol_pair = pairs.next().ok_or_else(|| {
         PestParseError::InvalidInput { message: "defn requires a symbol (function name)".to_string(), span: Some(defn_span.clone()) }
     })?;
@@ -478,6 +464,35 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
         });
     }
     let name = build_symbol(symbol_pair.clone())?;
+
+    // Parse optional metadata after symbol name
+    let mut delegation_hint: Option<DelegationHint> = None;
+    let mut metadata: Option<HashMap<MapKey, Expression>> = None;
+    while let Some(peek_pair) = pairs.peek() {
+        match peek_pair.as_rule() {
+            Rule::WHITESPACE | Rule::COMMENT => {
+                pairs.next();
+            }
+            Rule::metadata => {
+                let meta_pair = pairs.next().unwrap();
+                let meta_span = pair_to_source_span(&meta_pair);
+                // Determine if this is delegation metadata or general metadata
+                let inner_pairs: Vec<_> = meta_pair.clone().into_inner().collect();
+                if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::delegation_meta {
+                    let delegation_meta_pair = meta_pair.into_inner()
+                        .find(|p| p.as_rule() == Rule::delegation_meta)
+                        .ok_or_else(|| PestParseError::InvalidInput {
+                            message: "metadata must contain delegation_meta".to_string(),
+                            span: Some(meta_span),
+                        })?;
+                    delegation_hint = Some(parse_delegation_meta(delegation_meta_pair)?);
+                } else if inner_pairs.len() == 1 && inner_pairs[0].as_rule() == Rule::general_meta {
+                    metadata = Some(parse_general_meta(meta_pair)?);
+                }
+            }
+            _ => break,
+        }
+    }
 
     // Skip whitespace/comments before parameter list
     while let Some(p) = pairs.peek() {
