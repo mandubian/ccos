@@ -4,8 +4,8 @@
 // Pure RTFS tests (no CCOS dependencies)
 pub mod pure;
 
-// CCOS integration tests (temporarily disabled due to API changes)
-// pub mod ccos;
+// CCOS integration tests
+pub mod ccos;
 
 // Legacy test utilities (to be phased out)
 pub mod test_utils;

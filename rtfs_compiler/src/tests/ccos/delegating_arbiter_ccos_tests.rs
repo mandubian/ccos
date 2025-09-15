@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::ccos::agent::{AgentDescriptor, TrustTier, CostModel, LatencyStats, SuccessStats};
+use crate::ccos::agent::registry::AgentRegistry;
 use crate::ccos::CCOS;
 use crate::runtime::security::{RuntimeContext, SecurityLevel};
 use crate::runtime::values::Value;
@@ -60,7 +61,13 @@ async fn test_agent_registry_delegation_short_circuit() {
             trust_tier: TrustTier::T1Trusted,
             cost: CostModel { cost_per_call: 0.05, tokens_per_second: 100.0 },
             latency: LatencyStats { p50_ms: 120.0, p95_ms: 250.0 },
-            success: SuccessStats { success_rate: 0.9, samples: 25 },
+            success: SuccessStats { 
+                success_rate: 0.9, 
+                samples: 25,
+                decay_weighted_rate: 0.9,
+                decay_factor: 0.95,
+                last_update: Some(std::time::SystemTime::now()),
+            },
             provenance: None,
         });
     }
@@ -104,7 +111,13 @@ async fn test_delegation_env_threshold_overrides_config() {
             trust_tier: TrustTier::T1Trusted,
             cost: CostModel { cost_per_call: 0.01, tokens_per_second: 100.0 },
             latency: LatencyStats { p50_ms: 50.0, p95_ms: 100.0 },
-            success: SuccessStats { success_rate: 0.9, samples: 40 },
+            success: SuccessStats { 
+                success_rate: 0.9, 
+                samples: 40,
+                decay_weighted_rate: 0.9,
+                decay_factor: 0.95,
+                last_update: Some(std::time::SystemTime::now()),
+            },
             provenance: None,
         });
     }
@@ -136,7 +149,13 @@ async fn test_delegation_min_skill_hits_enforced() {
             trust_tier: TrustTier::T1Trusted,
             cost: CostModel { cost_per_call: 0.02, tokens_per_second: 80.0 },
             latency: LatencyStats { p50_ms: 70.0, p95_ms: 140.0 },
-            success: SuccessStats { success_rate: 0.85, samples: 20 },
+            success: SuccessStats { 
+                success_rate: 0.85, 
+                samples: 20,
+                decay_weighted_rate: 0.85,
+                decay_factor: 0.95,
+                last_update: Some(std::time::SystemTime::now()),
+            },
             provenance: None,
         });
     }
@@ -166,7 +185,13 @@ async fn test_delegation_disabled_flag_blocks_delegation() {
             trust_tier: TrustTier::T2Privileged,
             cost: CostModel { cost_per_call: 0.01, tokens_per_second: 150.0 },
             latency: LatencyStats { p50_ms: 40.0, p95_ms: 90.0 },
-            success: SuccessStats { success_rate: 0.95, samples: 50 },
+            success: SuccessStats { 
+                success_rate: 0.95, 
+                samples: 50,
+                decay_weighted_rate: 0.95,
+                decay_factor: 0.95,
+                last_update: Some(std::time::SystemTime::now()),
+            },
             provenance: None,
         });
     }
@@ -197,7 +222,13 @@ async fn test_delegation_governance_rejection_records_event() {
             trust_tier: TrustTier::T1Trusted,
             cost: CostModel { cost_per_call: 0.02, tokens_per_second: 120.0 },
             latency: LatencyStats { p50_ms: 60.0, p95_ms: 140.0 },
-            success: SuccessStats { success_rate: 0.9, samples: 30 },
+            success: SuccessStats { 
+                success_rate: 0.9, 
+                samples: 30,
+                decay_weighted_rate: 0.9,
+                decay_factor: 0.95,
+                last_update: Some(std::time::SystemTime::now()),
+            },
             provenance: None,
         });
     }
@@ -235,7 +266,13 @@ async fn test_delegation_completed_event_emitted() {
             trust_tier: TrustTier::T2Privileged,
             cost: CostModel { cost_per_call: 0.01, tokens_per_second: 200.0 },
             latency: LatencyStats { p50_ms: 30.0, p95_ms: 70.0 },
-            success: SuccessStats { success_rate: 0.98, samples: 60 },
+            success: SuccessStats { 
+                success_rate: 0.98, 
+                samples: 60,
+                decay_weighted_rate: 0.98,
+                decay_factor: 0.95,
+                last_update: Some(std::time::SystemTime::now()),
+            },
             provenance: None,
         });
     }
