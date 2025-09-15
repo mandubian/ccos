@@ -596,7 +596,7 @@ impl Evaluator {
 
         // 3. Enter step context
         // Enforce isolation policy via RuntimeContext before entering
-        if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+        if !self.security_context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::Inherit) {
             return Err(RuntimeError::SecurityViolation {
                 operation: "step".to_string(),
                 capability: "isolation:inherit".to_string(),
@@ -738,7 +738,7 @@ impl Evaluator {
         let step_name = "step-if";
         {
             // Enforce isolation policy
-            if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+            if !self.security_context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::Inherit) {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "step-if".to_string(),
                     capability: "isolation:inherit".to_string(),
@@ -853,7 +853,7 @@ impl Evaluator {
         let step_name = "step-loop";
         {
             // Enforce isolation policy
-            if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+            if !self.security_context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::Inherit) {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "step-loop".to_string(),
                     capability: "isolation:inherit".to_string(),
@@ -1048,7 +1048,7 @@ impl Evaluator {
             // Begin isolated child context for this branch (also switches into it)
             let child_id = {
                 // Enforce isolation policy for isolated branch contexts
-                if !self.security_context.is_isolation_allowed(&IsolationLevel::Isolated) {
+                if !self.security_context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::Isolated) {
                     return Err(RuntimeError::SecurityViolation {
                         operation: "step-parallel".to_string(),
                         capability: "isolation:isolated".to_string(),

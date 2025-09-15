@@ -422,7 +422,7 @@ impl IrRuntime {
 
             IrNode::Step { name, expose_override, context_keys_override, params, body, .. } => {
                 // 1. Enforce isolation policy and enter step context (mirror AST evaluator)
-                if !self.security_context.is_isolation_allowed(&IsolationLevel::Inherit) {
+                if !self.security_context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::Inherit) {
                     return Err(RuntimeError::Generic(format!("Isolation level not permitted: Inherit under {:?}", self.security_context.security_level)));
                 }
                 let mut cm = self.context_manager.borrow_mut();
