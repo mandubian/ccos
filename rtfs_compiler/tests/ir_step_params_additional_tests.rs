@@ -7,7 +7,7 @@ use std::sync::Arc;
 // 1) Confirm %params binding behavior (duplicate of main test style)
 #[test]
 fn step_params_success_smoke() {
-    let mut runtime = IrRuntime::new_compat(delegation_engine);
+    let mut runtime = IrRuntime::new(host, security_context);
 
     // params: {:k 7}
     let map_node = IrNode::Map {
@@ -36,7 +36,7 @@ fn step_params_success_smoke() {
 // We simulate failure by using a map whose key expression evaluates to a non-string/non-keyword (e.g., a vector)
 #[test]
 fn step_params_eval_failure_cleanup() {
-    let mut runtime = IrRuntime::new_compat(delegation_engine);
+    let mut runtime = IrRuntime::new(host, security_context);
 
     // Build a map with a key that evaluates to a vector (invalid map key)
     let bad_key = IrNode::Vector { id: 201, elements: vec![IrNode::Literal { id: 202, value: rtfs_compiler::ast::Literal::Integer(1), ir_type: rtfs_compiler::ir::core::IrType::Int, source_location: None }], ir_type: rtfs_compiler::ir::core::IrType::Vector(Box::new(rtfs_compiler::ir::core::IrType::Int)), source_location: None };
@@ -62,7 +62,7 @@ fn step_params_eval_failure_cleanup() {
 // 3) If no :params provided, the step should execute body in the same env and return its value.
 #[test]
 fn step_no_params_executes_body() {
-    let mut runtime = IrRuntime::new_compat(delegation_engine);
+    let mut runtime = IrRuntime::new(host, security_context);
 
     let body = vec![IrNode::Literal { id: 310, value: rtfs_compiler::ast::Literal::Integer(55), ir_type: rtfs_compiler::ir::core::IrType::Int, source_location: None }];
     let step = IrNode::Step { id: 320, name: "s_no_params".to_string(), expose_override: None, context_keys_override: None, params: None, body, ir_type: rtfs_compiler::ir::core::IrType::Any, source_location: None };

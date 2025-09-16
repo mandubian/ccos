@@ -61,7 +61,7 @@ fn test_simple_factorial() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Expected: 120 (5!)

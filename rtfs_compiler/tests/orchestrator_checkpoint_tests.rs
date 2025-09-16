@@ -31,7 +31,6 @@ fn test_checkpoint_and_resume_helpers() {
         runtime_context.clone(),
     ));
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-    let delegation_engine: std::sync::Arc<dyn rtfs_compiler::ccos::delegation::DelegationEngine> =
         std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new()));
     let evaluator = rtfs_compiler::runtime::evaluator::Evaluator::new(
         module_registry,
