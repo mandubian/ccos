@@ -25,7 +25,6 @@ pub fn create_test_module_registry() -> ModuleRegistry {
 /// Creates a new AST evaluator with the standard library loaded.
 pub fn create_test_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
-    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -41,13 +40,12 @@ pub fn create_test_evaluator() -> Evaluator {
         vec!["test-intent".to_string()],
         "root-action".to_string(),
     );
-    Evaluator::new(std::sync::Arc::new(module_registry), de, security_context, host)
+    Evaluator::new(std::sync::Arc::new(module_registry), security_context, host)
 }
 
 /// Creates a new AST evaluator with a provided RuntimeContext.
 pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::RuntimeContext) -> Evaluator {
     let module_registry = ModuleRegistry::new();
-    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -62,7 +60,7 @@ pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::Runtime
         vec!["test-intent".to_string()],
         "root-action".to_string(),
     );
-    Evaluator::new(std::sync::Arc::new(module_registry), de, ctx, host)
+    Evaluator::new(std::sync::Arc::new(module_registry), ctx, host)
 }
 
 /// Creates a new AST evaluator with LLM capability enabled (Controlled context)
@@ -77,8 +75,15 @@ pub fn create_llm_test_evaluator() -> Evaluator {
 
 /// Creates a new IR runtime.
 pub fn create_test_ir_runtime() -> crate::runtime::ir_runtime::IrRuntime {
-    let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    crate::runtime::ir_runtime::IrRuntime::new_compat(delegation_engine)
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let host = std::sync::Arc::new(RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        crate::runtime::security::RuntimeContext::pure(),
+    ));
+    crate::runtime::ir_runtime::IrRuntime::new(host, crate::runtime::security::RuntimeContext::pure())
 }
 
 /// A helper to parse, convert to IR, and execute code using the IR runtime.
@@ -119,7 +124,9 @@ pub fn execute_ir_code(
     };
 
     // Execute the IR program
-    runtime
-        .execute_program(&program_node, module_registry)
-        .map_err(|e| format!("Runtime error: {:?}", e))
+    match runtime.execute_program(&program_node, module_registry) {
+        Ok(ExecutionOutcome::Complete(value)) => Ok(value),
+        Ok(ExecutionOutcome::RequiresHost(_)) => Err("Host call required - not supported in test context".to_string()),
+        Err(e) => Err(format!("Runtime error: {:?}", e)),
+    }
 }
