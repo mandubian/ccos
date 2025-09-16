@@ -18,10 +18,8 @@ pub mod type_validator;
 pub mod values;
 pub mod security;
 pub mod param_binding;
-pub mod delegation;
 pub mod execution_outcome;
 pub mod capabilities;
-pub mod capability_marketplace;
 
 #[cfg(test)]
 mod stdlib_tests;
@@ -36,14 +34,11 @@ pub use values::{Function, Value};
 pub use execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
 pub use security::RuntimeContext;
 pub use capabilities::*;
-pub use capability_marketplace::*;
 
 use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
 use crate::runtime::pure_host::create_pure_host;
-use crate::runtime::delegation::StaticDelegationEngine;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Trait for RTFS runtime operations needed by CCOS
@@ -112,11 +107,10 @@ impl Runtime {
     }
 
     pub fn new_with_tree_walking_strategy(module_registry: Arc<ModuleRegistry>) -> Self {
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let evaluator = Evaluator::new(module_registry.clone(), de, security_context, host);
+        let evaluator = Evaluator::new(module_registry.clone(), security_context, host);
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
     }
@@ -127,11 +121,10 @@ impl Runtime {
             Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {:?}", e))),
         };
         let module_registry = ModuleRegistry::new();
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
+        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
@@ -146,11 +139,10 @@ impl Runtime {
         };
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
+        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
@@ -169,11 +161,10 @@ pub struct IrWithFallbackStrategy {
 impl IrWithFallbackStrategy {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         let ir_strategy = IrStrategy::new(module_registry.clone());
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
+        let evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {

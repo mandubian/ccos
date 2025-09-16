@@ -14,9 +14,6 @@ use crate::runtime::security::RuntimeContext;
 use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, ValidationLevel, VerificationContext};
 use crate::ccos::types::ExecutionResult;
 use crate::ccos::execution_context::{ContextManager, IsolationLevel};
-use crate::runtime::delegation::{DelegationEngine, ExecTarget, CallContext, ModelRegistry};
-use crate::runtime::delegation::StaticDelegationEngine;
-use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -28,8 +25,6 @@ pub struct Evaluator {
     pub env: Environment,
     recursion_depth: usize,
     max_recursion_depth: usize,
-    pub delegation_engine: Arc<dyn DelegationEngine>,
-    pub model_registry: Arc<ModelRegistry>,
     /// Security context for capability execution
     pub security_context: RuntimeContext,
     /// Host interface for CCOS interactions
@@ -91,20 +86,15 @@ impl Evaluator {
     /// Create a new evaluator with secure environment and default security context
     pub fn new(
         module_registry: Arc<ModuleRegistry>, 
-        delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
     ) -> Self {
         let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
-        let model_registry = Arc::new(ModelRegistry::with_defaults());
-
         Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
             max_recursion_depth: 1000,
-            delegation_engine,
-            model_registry,
             security_context,
             host,
             special_forms: Self::default_special_forms(),
@@ -120,12 +110,10 @@ impl Evaluator {
     /// Create a new evaluator with default security context (pure)
     pub fn new_with_defaults(
         module_registry: Arc<ModuleRegistry>, 
-        delegation_engine: Arc<dyn DelegationEngine>,
         host: Arc<dyn HostInterface>,
     ) -> Self {
         Self::new(
             module_registry,
-            delegation_engine,
             RuntimeContext::pure(),
             host,
         )
@@ -146,11 +134,10 @@ impl Evaluator {
     /// Create evaluator with optimized type checking for production
     pub fn new_optimized(
         module_registry: Arc<ModuleRegistry>,
-        delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
     ) -> Self {
-        let mut evaluator = Self::new(module_registry, delegation_engine, security_context, host);
+        let mut evaluator = Self::new(module_registry, security_context, host);
         evaluator.type_config = TypeCheckingConfig {
             skip_compile_time_verified: true,
             enforce_capability_boundaries: true,
@@ -163,11 +150,10 @@ impl Evaluator {
     /// Create evaluator with strict type checking for development
     pub fn new_strict(
         module_registry: Arc<ModuleRegistry>,
-        delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
     ) -> Self {
-        let mut evaluator = Self::new(module_registry, delegation_engine, security_context, host);
+        let mut evaluator = Self::new(module_registry, security_context, host);
         evaluator.type_config = TypeCheckingConfig {
             skip_compile_time_verified: false,
             enforce_capability_boundaries: true,
@@ -305,6 +291,18 @@ impl Evaluator {
         // Only validate results in strict mode for demonstration
         self.type_config.validation_level == ValidationLevel::Strict 
             && !matches!(function_name, "print" | "println") // Skip output functions
+    }
+
+    /// Check if a function is non-pure (requires external execution)
+    /// This is a simplified heuristic - in a real implementation, this would be
+    /// based on function annotations, capability requirements, or other metadata
+    fn is_non_pure_function(&self, fn_name: &str) -> bool {
+        // Check for known non-pure functions that require external execution
+        matches!(fn_name, 
+            "call" | "llm-execute" | "model-call" | "capability-call" |
+            "http-request" | "database-query" | "file-read" | "file-write" |
+            "network-request" | "external-api" | "system-command"
+        )
     }
 
     pub fn eval_toplevel(&mut self, program: &[TopLevel]) -> Result<ExecutionOutcome, RuntimeError> {
@@ -1292,10 +1290,8 @@ impl Evaluator {
             prompt.clone()
         };
 
-        // Resolve provider and execute
-        let _provider = self.model_registry.get(&model_id).ok_or_else(|| {
-            RuntimeError::UnknownCapability(format!("Model provider not found: {}", model_id))
-        })?;
+        // Model execution is now handled by CCOS through yield-based control flow
+        // This method should not be called in the new architecture
 
         // TODO: Implement actual model inference
         // For now, return a placeholder response
@@ -1453,49 +1449,28 @@ impl Evaluator {
                             // Normal in-process execution (fall through)
                         }
                         DH::LocalModel(id) | DH::RemoteModel(id) => {
-                            return self.execute_model_call(id, args, env);
+                            // Yield control to CCOS for model execution
+                            let host_call = HostCall { 
+                                fn_symbol: format!("model-call:{}", id), 
+                                args: args.to_vec(), 
+                                metadata: Some(CallMetadata::new()) 
+                            };
+                            return Ok(ExecutionOutcome::RequiresHost(host_call));
                         }
                     }
                 } else {
-                    // No hint: consult DelegationEngine
-                    // Try to find the function name by looking up the function value in the environment
+                    // No hint: check if this is a non-pure function that requires delegation
                     let fn_symbol = env.find_function_name(&func_value).unwrap_or("unknown-function");
-                    let ctx = CallContext {
-                        fn_symbol,
-                        arg_type_fingerprint: 0, // TODO: hash argument types
-                        runtime_context_hash: 0, // TODO: hash runtime context
-                        semantic_hash: None,
-                        metadata: None,
-                    };
-                    match self.delegation_engine.decide(&ctx) {
-                        ExecTarget::LocalPure => {
-                            // Normal in-process execution (fall through)
-                        }
-                        ExecTarget::LocalModel(id) | ExecTarget::RemoteModel(id) => {
-                            // For evaluator-level calls we must yield a HostCall so CCOS can decide
-                            let host_call = HostCall { fn_symbol: fn_symbol.to_string(), args: args.to_vec(), metadata: Some(CallMetadata::new()) };
-                            return Ok(ExecutionOutcome::RequiresHost(host_call));
-                        }
-                        ExecTarget::CacheHit { storage_pointer, .. } => {
-                            if let Some(cache) = self.module_registry.l4_cache() {
-                                if let Some(_blob) = cache.get_blob(&storage_pointer) {
-                                    let executor = WasmExecutor::new();
-                                    // executor returns Result<Value, RuntimeError> - map to ExecutionOutcome
-                                    return executor.execute_module(&_blob, fn_symbol, args)
-                                        .map(|v| ExecutionOutcome::Complete(v));
-                                } else {
-                                    return Err(RuntimeError::Generic(format!(
-                                        "L4 cache blob '{}' not found",
-                                        storage_pointer
-                                    )));
-                                }
-                            } else {
-                                return Err(RuntimeError::Generic(
-                                    "Module registry has no attached L4 cache".to_string(),
-                                ));
-                            }
-                        }
+                    if self.is_non_pure_function(fn_symbol) {
+                        // Yield control to CCOS for non-pure operations
+                        let host_call = HostCall { 
+                            fn_symbol: fn_symbol.to_string(), 
+                            args: args.to_vec(), 
+                            metadata: Some(CallMetadata::new()) 
+                        };
+                        return Ok(ExecutionOutcome::RequiresHost(host_call));
                     }
+                    // Pure functions continue with normal execution (fall through)
                 }
                 // Create new environment for function execution, parented by the captured closure
                 let mut func_env = Environment::with_parent(closure.env.clone());
@@ -3077,65 +3052,6 @@ impl Evaluator {
 
 
 
-    fn execute_model_call(
-        &self,
-        model_id: &str,
-        args: &[Value],
-        _env: &mut Environment,
-    ) -> Result<ExecutionOutcome, RuntimeError> {
-        // Convert arguments to a prompt string
-        let prompt = self.args_to_prompt(args)?;
-        
-        // Look up the model provider
-        let _provider = self.model_registry.get(model_id)
-            .ok_or_else(|| RuntimeError::NotImplemented(
-                format!("Model provider '{}' not found", model_id)
-            ))?;
-        
-        // Call the model (placeholder implementation)
-        let response = format!("[Model inference placeholder for {}]", model_id);
-        // TODO: Replace with actual model inference
-        /*
-        let response = provider.infer(&prompt)
-            .map_err(|e| RuntimeError::NotImplemented(
-                format!("Model inference failed: {}", e)
-            ))?;
-        */
-        
-        // Convert response back to RTFS value
-        Ok(ExecutionOutcome::Complete(Value::String(response)))
-    }
-
-    fn args_to_prompt(&self, args: &[Value]) -> RuntimeResult<String> {
-        let mut prompt_parts = Vec::new();
-        
-        for (i, arg) in args.iter().enumerate() {
-            let arg_str = match arg {
-                Value::String(s) => s.clone(),
-                Value::Integer(n) => n.to_string(),
-                Value::Float(f) => f.to_string(),
-                Value::Boolean(b) => b.to_string(),
-                Value::Nil => "nil".to_string(),
-                Value::Vector(v) => {
-                    let elements: Vec<String> = v.iter()
-                        .map(|v| match v {
-                            Value::String(s) => s.clone(),
-                            Value::Integer(n) => n.to_string(),
-                            Value::Float(f) => f.to_string(),
-                            Value::Boolean(b) => b.to_string(),
-                            Value::Nil => "nil".to_string(),
-                            _ => format!("{:?}", v),
-                        })
-                        .collect();
-                    format!("[{}]", elements.join(" "))
-                }
-                _ => format!("{:?}", arg),
-            };
-            prompt_parts.push(format!("arg{}: {}", i, arg_str));
-        }
-        
-        Ok(prompt_parts.join("; "))
-    }
 
     fn handle_map_with_user_functions(
         &self,
@@ -3247,9 +3163,6 @@ impl Evaluator {
             env: self.env.clone(),
             recursion_depth: 0,
             max_recursion_depth: self.max_recursion_depth,
-
-            delegation_engine: self.delegation_engine.clone(),
-            model_registry: self.model_registry.clone(),
             security_context,
             host: self.host.clone(),
             special_forms: Self::default_special_forms(),
@@ -3262,7 +3175,6 @@ impl Evaluator {
     pub fn with_environment(
         module_registry: Arc<ModuleRegistry>,
         env: Environment,
-        delegation_engine: Arc<dyn DelegationEngine>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
     ) -> Self {
@@ -3271,9 +3183,6 @@ impl Evaluator {
             env,
             recursion_depth: 0,
             max_recursion_depth: 1000,
-
-            delegation_engine,
-            model_registry: Arc::new(ModelRegistry::with_defaults()),
             security_context,
             host,
             special_forms: Self::default_special_forms(),
@@ -3286,16 +3195,14 @@ impl Evaluator {
 
 impl Default for Evaluator {
     fn default() -> Self {
-    let module_registry = Arc::new(ModuleRegistry::new());
-        let static_map = std::collections::HashMap::new();
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
+        let module_registry = Arc::new(ModuleRegistry::new());
         let security_context = RuntimeContext::pure();
         
         // Create a minimal host interface for default case
         // This should be replaced with a proper host in production
         use crate::ccos::host::RuntimeHost;
         use crate::ccos::capability_marketplace::CapabilityMarketplace;
-    use crate::ccos::capabilities::registry::CapabilityRegistry;
+        use crate::ccos::capabilities::registry::CapabilityRegistry;
         use crate::ccos::causal_chain::CausalChain;
         use std::sync::Arc;
         use tokio::sync::RwLock;
@@ -3311,7 +3218,6 @@ impl Default for Evaluator {
 
         Self::new(
             module_registry,
-            delegation_engine,
             security_context,
             host,
         )

@@ -5,7 +5,7 @@ mod function_tests {
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
-    use crate::runtime::delegation::{StaticDelegationEngine, ExecTarget};
+    use crate::ccos::delegation::{StaticDelegationEngine, ExecTarget};
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
@@ -190,7 +190,7 @@ mod function_tests {
         evaluator.eval_toplevel(&parsed)
     }
 
-    fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::runtime::delegation::DelegationEngine>) -> RuntimeResult<Value> {
+    fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");

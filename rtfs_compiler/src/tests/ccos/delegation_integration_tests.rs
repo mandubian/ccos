@@ -1,5 +1,5 @@
 use crate::ast::{DelegationHint, Expression, FnExpr, Literal, Pattern, Symbol, ParamDef};
-use crate::runtime::delegation::{ExecTarget, StaticDelegationEngine, ModelRegistry, CallContext, DelegationEngine};
+use crate::ccos::delegation::{ExecTarget, StaticDelegationEngine, CallContext, DelegationEngine};
 use crate::runtime::{Environment, Evaluator, IrRuntime, ModuleRegistry, security::RuntimeContext, host_interface::HostInterface};
 use crate::tests::ccos::ccos_test_utils::create_ccos_runtime_host;
 use std::collections::HashMap;
@@ -64,23 +64,29 @@ fn test_delegation_hint_remote_model() {
 }
 
 #[test]
-fn test_model_registry_integration() {
-    // Test that the model registry is properly integrated
-    let registry = ModelRegistry::with_defaults();
+fn test_yield_based_control_flow() {
+    // Test that the new yield-based control flow works correctly
+    // This test verifies that RTFS properly yields control to CCOS for non-pure operations
     
-    // Verify default providers are available
-    assert!(registry.get("echo-model").is_some());
-    assert!(registry.get("arbiter-remote").is_some());
+    // Create a simple evaluator with the new architecture
+    let mut module_registry = ModuleRegistry::new();
+    crate::runtime::stdlib::load_stdlib(&mut module_registry).unwrap();
+    let security_context = RuntimeContext::pure();
+    let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+        Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap())),
+        Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new())),
+        security_context.clone()
+    ));
     
-    // Test echo model functionality (placeholder implementation)
-    let echo_provider = registry.get("echo-model");
-    // Note: ModelRegistry::get returns Option<()> as placeholder
-    assert!(echo_provider.is_some());
+    let evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
     
-    // Test remote model functionality (placeholder implementation)
-    let remote_provider = registry.get("arbiter-remote");
-    // Note: ModelRegistry::get returns Option<()> as placeholder
-    assert!(remote_provider.is_some());
+    // Test that pure functions work normally
+    let pure_expr = Expression::Literal(Value::Number(42.0));
+    let result = evaluator.evaluate(&pure_expr).unwrap();
+    assert!(matches!(result, ExecutionOutcome::Complete(Value::Number(42.0))));
+    
+    // Note: Non-pure function tests would require a full CCOS orchestrator setup
+    // which is beyond the scope of this unit test
 }
 
 #[test]

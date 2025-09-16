@@ -5,7 +5,7 @@ mod control_flow_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
     
-    use crate::runtime::delegation::StaticDelegationEngine;
+    use crate::ccos::delegation::StaticDelegationEngine;
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
