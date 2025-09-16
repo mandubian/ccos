@@ -57,13 +57,18 @@ mod control_flow_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);
+    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
 
         // Evaluate all top-level forms in sequence using the evaluator's environment
         let result = evaluator.eval_toplevel(&parsed);
         if let Err(ref e) = result {
             println!("Evaluation error: {:?}", e);
         }
-        result
+        match result? {
+            crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+            crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+            }
+        }
     }
 }

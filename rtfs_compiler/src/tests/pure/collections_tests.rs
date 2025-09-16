@@ -70,10 +70,17 @@ mod collections_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-        let evaluator = Evaluator::new(module_registry, Arc::new(StaticDelegationEngine::new(HashMap::new())), security_context, host);
+        let evaluator = Evaluator::new(module_registry, security_context, host);
         if let Some(last_item) = parsed.last() {
             match last_item {
-                TopLevel::Expression(expr) => evaluator.evaluate(expr),
+                TopLevel::Expression(expr) => {
+                    match evaluator.evaluate(expr)? {
+                        crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                        crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                            Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+                        }
+                    }
+                },
                 _ => Ok(Value::String("object_defined".to_string())),
             }
         } else {
