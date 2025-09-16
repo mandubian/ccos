@@ -19,6 +19,9 @@ pub mod values;
 pub mod security;
 pub mod param_binding;
 pub mod delegation;
+pub mod execution_outcome;
+pub mod capabilities;
+pub mod capability_marketplace;
 
 #[cfg(test)]
 mod stdlib_tests;
@@ -30,8 +33,10 @@ pub use ir_runtime::IrRuntime;
 pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
-// CCOSEnvironment moved to ccos::environment
+pub use execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
 pub use security::RuntimeContext;
+pub use capabilities::*;
+pub use capability_marketplace::*;
 
 use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
@@ -49,7 +54,7 @@ pub trait RTFSRuntime {
 }
 
 pub trait RuntimeStrategy: std::fmt::Debug + 'static {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError>;
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError>;
     fn clone_box(&self) -> Box<dyn RuntimeStrategy>;
 }
 
@@ -71,7 +76,8 @@ impl TreeWalkingStrategy {
 }
 
 impl RuntimeStrategy for TreeWalkingStrategy {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
+        // Evaluator.evaluate now returns Result<ExecutionOutcome, RuntimeError>
         self.evaluator.evaluate(program)
     }
 
@@ -97,7 +103,12 @@ impl Runtime {
     }
 
     pub fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
-        self.strategy.run(program)
+        match self.strategy.run(program)? {
+            ExecutionOutcome::Complete(value) => Ok(value),
+            ExecutionOutcome::RequiresHost(host_call) => {
+                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.fn_symbol)))
+            }
+        }
     }
 
     pub fn new_with_tree_walking_strategy(module_registry: Arc<ModuleRegistry>) -> Self {
@@ -121,7 +132,11 @@ impl Runtime {
         let host = create_pure_host();
 
         let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
-        evaluator.eval_toplevel(&parsed)
+        match evaluator.eval_toplevel(&parsed) {
+            Ok(ExecutionOutcome::Complete(v)) => Ok(v),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn evaluate_with_stdlib(&self, input: &str) -> Result<Value, RuntimeError> {
@@ -136,7 +151,11 @@ impl Runtime {
         let host = create_pure_host();
 
         let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
-        evaluator.eval_toplevel(&parsed)
+        match evaluator.eval_toplevel(&parsed) {
+            Ok(ExecutionOutcome::Complete(v)) => Ok(v),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -165,7 +184,7 @@ impl IrWithFallbackStrategy {
 }
 
 impl RuntimeStrategy for IrWithFallbackStrategy {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
         match self.ir_strategy.run(program) {
             Ok(result) => Ok(result),
             Err(ir_error) => match self.ast_strategy.run(program) {

@@ -34,7 +34,7 @@ impl RuntimeStrategy for IrStrategy {
     fn run(
         &mut self,
         _program: &crate::ast::Expression,
-    ) -> Result<crate::runtime::Value, crate::runtime::RuntimeError> {
+    ) -> Result<crate::runtime::ExecutionOutcome, crate::runtime::RuntimeError> {
         // Delegate to execute method foErr(crate::runtime::RuntimeError::NotImplemented("IrStrategy execution not yet implemented".to_string()))self.execute(program)
         Err(crate::runtime::RuntimeError::NotImplemented(
             "IrStrategy execution not yet implemented".to_string(),

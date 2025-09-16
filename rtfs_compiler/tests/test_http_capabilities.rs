@@ -22,7 +22,7 @@ mod http_capability_tests {
 
         // Test the capability
         let inputs = Value::List(vec![]);
-        let result = marketplace.execute_capability("http.get", &inputs).await;
+    let result = marketplace.execute_capability_single("http.get", &inputs).await;
         
         match result {
             Ok(Value::Map(response)) => {
@@ -75,7 +75,7 @@ mod http_capability_tests {
             Value::String(r#"{"test": "data", "number": 42}"#.to_string()), // Body
         ]);
 
-        let result = marketplace.execute_capability("http.post", &inputs).await;
+    let result = marketplace.execute_capability_single("http.post", &inputs).await;
         
         match result {
             Ok(Value::Map(response)) => {
@@ -109,7 +109,7 @@ mod http_capability_tests {
 
         // Test authenticated request
         let inputs = Value::List(vec![]);
-        let result = marketplace.execute_capability("http.auth", &inputs).await;
+    let result = marketplace.execute_capability_single("http.auth", &inputs).await;
         
         match result {
             Ok(Value::Map(response)) => {

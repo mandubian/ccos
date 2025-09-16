@@ -19,6 +19,7 @@ use crate::runtime::evaluator::Evaluator;
 use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::ExecutionOutcome;
 use std::sync::{Arc, RwLock};
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
@@ -1456,7 +1457,10 @@ impl StandardLibrary {
                 let mut args_for_call = Vec::with_capacity(1 + extra_args.len());
                 args_for_call.push(current.clone());
                 args_for_call.extend(extra_args.clone());
-                evaluator.call_function(f_to_call, &args_for_call, env)?
+                match evaluator.call_function(f_to_call, &args_for_call, env)? {
+                    ExecutionOutcome::Complete(v) => v,
+                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.fn_symbol))),
+                }
             };
             new_map.insert(map_key, new_value);
             return Ok(Value::Map(new_map));
@@ -1517,7 +1521,10 @@ impl StandardLibrary {
                 let mut args_for_call = Vec::with_capacity(1 + extra_args.len());
                 args_for_call.push(current.clone());
                 args_for_call.extend(extra_args.clone());
-                evaluator.call_function(f_to_call, &args_for_call, env)?
+                match evaluator.call_function(f_to_call, &args_for_call, env)? {
+                    ExecutionOutcome::Complete(v) => v,
+                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.fn_symbol))),
+                }
             };
             new_vec[index] = new_value;
             return Ok(Value::Vector(new_vec));
@@ -1637,7 +1644,10 @@ impl StandardLibrary {
             let mapped_value = match f {
                 Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
                     let args_for_call = vec![Value::Integer(index as i64), element.clone()];
-                    evaluator.call_function(f.clone(), &args_for_call, env)?
+                    match evaluator.call_function(f.clone(), &args_for_call, env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map-indexed': {}", hc.fn_symbol))),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -1695,7 +1705,10 @@ impl StandardLibrary {
             let should_keep = match pred {
                 Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
                     let args_for_call = vec![element.clone()];
-                    let pred_result = evaluator.call_function(pred.clone(), &args_for_call, env)?;
+                    let pred_result = match evaluator.call_function(pred.clone(), &args_for_call, env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'remove': {}", hc.fn_symbol))),
+                    };
                     match pred_result {
                         Value::Boolean(b) => !b, // Keep elements where predicate returns false
                         _ => true, // Keep if predicate doesn't return boolean
@@ -1755,23 +1768,26 @@ impl StandardLibrary {
         };
 
         for element in elements {
-            let result = match pred {
-                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
-                    let args_for_call = vec![element.clone()];
-                    evaluator.call_function(pred.clone(), &args_for_call, env)?
-                }
-                _ => {
-                    return Err(RuntimeError::TypeError {
-                        expected: "function".to_string(),
-                        actual: pred.type_name().to_string(),
-                        operation: "some?".to_string(),
-                    })
-                }
-            };
-            match result {
-                Value::Boolean(true) => return Ok(Value::Boolean(true)),
-                _ => continue,
-            }
+                    let result = match pred {
+                        Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
+                            let args_for_call = vec![element.clone()];
+                            match evaluator.call_function(pred.clone(), &args_for_call, env)? {
+                                ExecutionOutcome::Complete(v) => v,
+                                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'some?': {}", hc.fn_symbol))),
+                            }
+                        }
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "function".to_string(),
+                                actual: pred.type_name().to_string(),
+                                operation: "some?".to_string(),
+                            })
+                        }
+                    };
+                    match result {
+                        Value::Boolean(true) => return Ok(Value::Boolean(true)),
+                        _ => continue,
+                    }
         }
 
         Ok(Value::Boolean(false))
@@ -1813,7 +1829,10 @@ impl StandardLibrary {
             let result = match pred {
                 Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
                     let args_for_call = vec![element.clone()];
-                    evaluator.call_function(pred.clone(), &args_for_call, env)?
+                    match evaluator.call_function(pred.clone(), &args_for_call, env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'every?': {}", hc.fn_symbol))),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -2121,8 +2140,10 @@ impl StandardLibrary {
 
         let mut result = Vec::new();
         for element in elements {
-            let mapped = evaluator.call_function(function.clone(), &[element], env)?;
-            result.push(mapped);
+            match evaluator.call_function(function.clone(), &[element], env)? {
+                ExecutionOutcome::Complete(v) => result.push(v),
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map': {}", hc.fn_symbol))),
+            }
         }
 
         // Return the same type as the input collection
@@ -2181,7 +2202,10 @@ impl StandardLibrary {
 
         let mut result = Vec::new();
         for element in elements {
-            let should_include = evaluator.call_function(predicate.clone(), &[element.clone()], env)?;
+            let should_include = match evaluator.call_function(predicate.clone(), &[element.clone()], env)? {
+                ExecutionOutcome::Complete(v) => v,
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'filter': {}", hc.fn_symbol))),
+            };
             match should_include {
                 Value::Boolean(true) => result.push(element),
                 Value::Boolean(false) => {}
@@ -2268,7 +2292,10 @@ impl StandardLibrary {
         };
 
         for value in rest {
-            accumulator = evaluator.call_function(function.clone(), &[accumulator.clone(), value.clone()], env)?;
+            accumulator = match evaluator.call_function(function.clone(), &[accumulator.clone(), value.clone()], env)? {
+                ExecutionOutcome::Complete(v) => v,
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'reduce': {}", hc.fn_symbol))),
+            };
         }
 
         Ok(accumulator)
@@ -2370,7 +2397,10 @@ impl StandardLibrary {
         // Create pairs of (element, key) for sorting
         let mut pairs = Vec::new();
         for element in elements {
-            let key = evaluator.call_function(key_fn.clone(), &[element.clone()], env)?;
+            let key = match evaluator.call_function(key_fn.clone(), &[element.clone()], env)? {
+                ExecutionOutcome::Complete(v) => v,
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'sort-by': {}", hc.fn_symbol))),
+            };
             pairs.push((element, key));
         }
 
@@ -2577,7 +2607,10 @@ impl StandardLibrary {
         let mut call_args = Vec::with_capacity(1 + rest.len());
         call_args.push(current);
         call_args.extend_from_slice(rest);
-        let new_val = evaluator.call_function(f_val.clone(), &call_args, env)?;
+        let new_val = match evaluator.call_function(f_val.clone(), &call_args, env)? {
+            ExecutionOutcome::Complete(v) => v,
+            ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'atom_swap': {}", hc.fn_symbol))),
+        };
     *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = new_val.clone();
         Ok(new_val)
     }

@@ -10,6 +10,7 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::{BuiltinFunction, Arity, Function, BuiltinFunctionWithContext};
 use crate::runtime::environment::Environment;
 use crate::runtime::evaluator::Evaluator;
+use crate::runtime::execution_outcome::ExecutionOutcome;
 use crate::ast::Symbol;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1620,8 +1621,10 @@ impl SecureStandardLibrary {
                     // Handle user-defined functions with full evaluator access
                     let mut func_env = Environment::with_parent(closure.env.clone());
                     func_env.define(&closure.params[0], item);
-                    let mapped_value = evaluator.eval_expr(&closure.body, &mut func_env)?;
-                    result.push(mapped_value);
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => result.push(v),
+                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in map closure".into())),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -1675,8 +1678,10 @@ impl SecureStandardLibrary {
                 Value::Function(Function::Closure(closure)) => {
                     let mut func_env = Environment::with_parent(closure.env.clone());
                     func_env.define(&closure.params[0], item.clone());
-                    let v = evaluator.eval_expr(&closure.body, &mut func_env)?;
-                    v.is_truthy()
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => v.is_truthy(),
+                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in filter closure".into())),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -1739,7 +1744,10 @@ impl SecureStandardLibrary {
                     let mut func_env = Environment::with_parent(closure.env.clone());
                     func_env.define(&closure.params[0], accumulator.clone());
                     func_env.define(&closure.params[1], value.clone());
-                    evaluator.eval_expr(&closure.body, &mut func_env)?
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in reduce closure".into())),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -2787,12 +2795,21 @@ impl SecureStandardLibrary {
         match collection {
             Value::Vector(v) => {
                 for item in v {
-                    let result = evaluator.evaluate(
+                    let outcome = evaluator.evaluate(
                         &crate::ast::Expression::FunctionCall {
                             callee: Box::new(Expression::try_from(predicate.clone())?),
                             arguments: vec![Expression::try_from(item.clone())?],
                         },
                     )?;
+
+                    // Unwrap ExecutionOutcome produced by evaluator. If a host-call was requested
+                    // from inside a secure stdlib predicate, treat it as an error for now (short-term shim).
+                    let result = match outcome {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc)));
+                        }
+                    };
 
                     match result {
                         Value::Boolean(false) => return Ok(Value::Boolean(false)),
@@ -2811,12 +2828,17 @@ impl SecureStandardLibrary {
             Value::String(s) => {
                 for c in s.chars() {
                     let char_value = Value::String(c.to_string());
-                    let result = evaluator.evaluate(
+                    let outcome = evaluator.evaluate(
                         &crate::ast::Expression::FunctionCall {
                             callee: Box::new(Expression::try_from(predicate.clone())?),
                             arguments: vec![Expression::try_from(char_value)?],
                         },
                     )?;
+
+                    let result = match outcome {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc))),
+                    };
 
                     match result {
                         Value::Boolean(false) => return Ok(Value::Boolean(false)),
@@ -2859,12 +2881,19 @@ impl SecureStandardLibrary {
         match collection {
             Value::Vector(v) => {
                 for item in v {
-                    let result = evaluator.evaluate(
+                    let outcome = evaluator.evaluate(
                         &crate::ast::Expression::FunctionCall {
                             callee: Box::new(Expression::try_from(predicate.clone())?),
                             arguments: vec![Expression::try_from(item.clone())?],
                         },
                     )?;
+
+                    let result = match outcome {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc)));
+                        }
+                    };
 
                     match result {
                         Value::Boolean(true) => return Ok(Value::Boolean(true)),
@@ -2883,12 +2912,17 @@ impl SecureStandardLibrary {
             Value::String(s) => {
                 for c in s.chars() {
                     let char_value = Value::String(c.to_string());
-                    let result = evaluator.evaluate(
+                    let outcome = evaluator.evaluate(
                         &crate::ast::Expression::FunctionCall {
                             callee: Box::new(Expression::try_from(predicate.clone())?),
                             arguments: vec![Expression::try_from(char_value)?],
                         },
                     )?;
+
+                    let result = match outcome {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc))),
+                    };
 
                     match result {
                         Value::Boolean(true) => return Ok(Value::Boolean(true)),
