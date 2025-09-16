@@ -46,20 +46,18 @@ pub fn create_ccos_runtime_host() -> Arc<RuntimeHost> {
 /// Creates a new AST evaluator with CCOS components for integration testing.
 pub fn create_ccos_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
-    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
     
-    Evaluator::new(Arc::new(module_registry), de, security_context, host)
+    Evaluator::new(Arc::new(module_registry), security_context, host)
 }
 
 /// Creates a new AST evaluator with a provided RuntimeContext for CCOS testing.
 pub fn create_ccos_evaluator_with_context(ctx: RuntimeContext) -> Evaluator {
     let module_registry = ModuleRegistry::new();
-    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let host = create_ccos_runtime_host();
     
-    Evaluator::new(Arc::new(module_registry), de, ctx, host)
+    Evaluator::new(Arc::new(module_registry), ctx, host)
 }
 
 /// Creates a new AST evaluator with stdlib loaded for CCOS testing.
@@ -68,21 +66,19 @@ pub fn create_ccos_evaluator_with_stdlib() -> Evaluator {
     crate::runtime::stdlib::load_stdlib(&mut module_registry)
         .expect("Failed to load stdlib");
     
-    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
     
-    Evaluator::new(Arc::new(module_registry), de, security_context, host)
+    Evaluator::new(Arc::new(module_registry), security_context, host)
 }
 
 /// Creates a new IR runtime with CCOS components for integration testing.
 pub fn create_ccos_ir_runtime() -> IrRuntime {
     let module_registry = Arc::new(ModuleRegistry::new());
-    let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
     
-    IrRuntime::new(de, host, security_context)
+    IrRuntime::new(host, security_context)
 }
 
 /// Parses and evaluates RTFS code using CCOS evaluator (with capabilities available).
@@ -92,7 +88,14 @@ pub fn parse_and_evaluate_ccos(input: &str) -> crate::runtime::error::RuntimeRes
     
     if let Some(last_item) = parsed.last() {
         match last_item {
-            crate::ast::TopLevel::Expression(expr) => evaluator.evaluate(expr),
+            crate::ast::TopLevel::Expression(expr) => {
+                match evaluator.evaluate(expr)? {
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                        Err(crate::runtime::error::RuntimeError::Generic("Host call required in CCOS test".to_string()))
+                    }
+                }
+            },
             _ => Ok(Value::String("object_defined".to_string())),
         }
     } else {
@@ -107,7 +110,14 @@ pub fn parse_and_evaluate_ccos_with_stdlib(input: &str) -> crate::runtime::error
     
     if let Some(last_item) = parsed.last() {
         match last_item {
-            crate::ast::TopLevel::Expression(expr) => evaluator.evaluate(expr),
+            crate::ast::TopLevel::Expression(expr) => {
+                match evaluator.evaluate(expr)? {
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                        Err(crate::runtime::error::RuntimeError::Generic("Host call required in CCOS test".to_string()))
+                    }
+                }
+            },
             _ => Ok(Value::String("object_defined".to_string())),
         }
     } else {

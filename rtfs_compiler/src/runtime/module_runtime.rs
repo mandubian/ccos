@@ -1009,8 +1009,33 @@ mod tests {
     fn test_module_loading_from_file() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        ));
+        let security_context = crate::runtime::security::RuntimeContext {
+            security_level: crate::runtime::security::SecurityLevel::Controlled,
+            max_execution_time: Some(30000), // 30 seconds in milliseconds
+            max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
+            allowed_capabilities: std::collections::HashSet::new(),
+            use_microvm: false,
+            log_capability_calls: false,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: std::collections::HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: std::collections::HashSet::new(),
+            microvm_config_override: None,
+            cross_plan_params: std::collections::HashMap::new(),
+        };
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
 
         // Test loading the math.utils module
         let module = registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -1031,8 +1056,33 @@ mod tests {
     fn test_qualified_symbol_resolution() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        ));
+        let security_context = crate::runtime::security::RuntimeContext {
+            security_level: crate::runtime::security::SecurityLevel::Controlled,
+            max_execution_time: Some(30000), // 30 seconds in milliseconds
+            max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
+            allowed_capabilities: std::collections::HashSet::new(),
+            use_microvm: false,
+            log_capability_calls: false,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: std::collections::HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: std::collections::HashSet::new(),
+            microvm_config_override: None,
+            cross_plan_params: std::collections::HashMap::new(),
+        };
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
 
         // Load math.utils module from file
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -1053,8 +1103,33 @@ mod tests {
             .unwrap()
             .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        ));
+        let security_context = crate::runtime::security::RuntimeContext {
+            security_level: crate::runtime::security::SecurityLevel::Controlled,
+            max_execution_time: Some(30000), // 30 seconds in milliseconds
+            max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
+            allowed_capabilities: std::collections::HashSet::new(),
+            use_microvm: false,
+            log_capability_calls: false,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: std::collections::HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: std::collections::HashSet::new(),
+            microvm_config_override: None,
+            cross_plan_params: std::collections::HashMap::new(),
+        };
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
         let result = registry.load_module("module-a", &mut ir_runtime);
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();
