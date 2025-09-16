@@ -139,6 +139,93 @@ pub trait DelegationEngine: Send + Sync + std::fmt::Debug {
     fn decide(&self, ctx: &CallContext) -> ExecTarget;
 }
 
+/// Adapter allowing an RTFS runtime `DelegationEngine` to be used where
+/// the CCOS `DelegationEngine` trait object is expected. This avoids large
+/// code changes in tests and during migration by translating between the
+/// two similar but distinct types.
+#[derive(Debug)]
+pub struct RuntimeDelegationAdapter(pub Arc<dyn crate::runtime::delegation::DelegationEngine>);
+
+impl DelegationEngine for RuntimeDelegationAdapter {
+    fn decide(&self, ctx: &CallContext) -> ExecTarget {
+        // Map CCOS CallContext -> runtime CallContext, borrowing the string
+        // references directly from the provided ctx.
+        let rt_ctx = crate::runtime::delegation::CallContext {
+            fn_symbol: ctx.fn_symbol,
+            arg_type_fingerprint: ctx.arg_type_fingerprint,
+            runtime_context_hash: ctx.runtime_context_hash,
+            semantic_hash: ctx.semantic_hash.clone(),
+            metadata: ctx.metadata.as_ref().map(|m| {
+                let mut md = crate::runtime::delegation::DelegationMetadata::new();
+                md.confidence = m.confidence;
+                md.reasoning = m.reasoning.clone();
+                md.context = m.context.clone();
+                md.source = m.source.clone();
+                md
+            }),
+        };
+
+        // Delegate to the wrapped runtime engine and translate the result.
+        match (self.0).decide(&rt_ctx) {
+            crate::runtime::delegation::ExecTarget::LocalPure => ExecTarget::LocalPure,
+            crate::runtime::delegation::ExecTarget::LocalModel(s) => ExecTarget::LocalModel(s),
+            crate::runtime::delegation::ExecTarget::RemoteModel(s) => ExecTarget::RemoteModel(s),
+            crate::runtime::delegation::ExecTarget::CacheHit { storage_pointer, signature } => {
+                ExecTarget::L4CacheHit { storage_pointer, signature }
+            }
+        }
+    }
+}
+
+/// Helper to wrap a runtime delegation engine into a CCOS trait object.
+pub fn wrap_runtime_engine(engine: Arc<dyn crate::runtime::delegation::DelegationEngine>) -> Arc<dyn DelegationEngine> {
+    Arc::new(RuntimeDelegationAdapter(engine))
+}
+
+/// Adapter allowing a CCOS `DelegationEngine` trait object to be used where
+/// the RTFS runtime expects a `crate::runtime::delegation::DelegationEngine`.
+/// This is the inverse of `RuntimeDelegationAdapter` and is used by
+/// compatibility constructors that need to accept CCOS engines in places
+/// where the runtime trait is required.
+#[derive(Debug)]
+pub struct CcosToRuntimeAdapter(pub Arc<dyn DelegationEngine>);
+
+impl crate::runtime::delegation::DelegationEngine for CcosToRuntimeAdapter {
+    fn decide(&self, ctx: &crate::runtime::delegation::CallContext) -> crate::runtime::delegation::ExecTarget {
+        // Map runtime CallContext -> CCOS CallContext by borrowing string slices
+        let cc_ctx = crate::ccos::delegation::CallContext {
+            fn_symbol: ctx.fn_symbol,
+            arg_type_fingerprint: ctx.arg_type_fingerprint,
+            runtime_context_hash: ctx.runtime_context_hash,
+            semantic_hash: ctx.semantic_hash.clone(),
+            metadata: ctx.metadata.as_ref().map(|m| {
+                let mut md = DelegationMetadata::new();
+                md.confidence = m.confidence;
+                md.reasoning = m.reasoning.clone();
+                md.context = m.context.clone();
+                md.source = m.source.clone();
+                md
+            }),
+        };
+
+        // Call the CCOS engine and map the result back to the runtime ExecTarget
+        match (self.0).decide(&cc_ctx) {
+            ExecTarget::LocalPure => crate::runtime::delegation::ExecTarget::LocalPure,
+            ExecTarget::LocalModel(s) => crate::runtime::delegation::ExecTarget::LocalModel(s),
+            ExecTarget::RemoteModel(s) => crate::runtime::delegation::ExecTarget::RemoteModel(s),
+            ExecTarget::L4CacheHit { storage_pointer, signature } => {
+                crate::runtime::delegation::ExecTarget::CacheHit { storage_pointer, signature }
+            }
+        }
+    }
+}
+
+/// Helper to wrap a CCOS engine into a trait object implementing the
+/// runtime delegation trait.
+pub fn wrap_ccos_engine(engine: Arc<dyn DelegationEngine>) -> Arc<dyn crate::runtime::delegation::DelegationEngine> {
+    Arc::new(CcosToRuntimeAdapter(engine))
+}
+
 /// Simple static mapping + cache implementation.
 #[derive(Debug)]
 pub struct StaticDelegationEngine {
@@ -260,6 +347,42 @@ impl DelegationEngine for StaticDelegationEngine {
         }
 
         decision
+    }
+}
+
+// Implement the runtime::delegation::DelegationEngine for the CCOS
+// StaticDelegationEngine so that code which expects an
+// Arc<dyn crate::runtime::delegation::DelegationEngine> can accept a
+// CCOS StaticDelegationEngine without additional wrapping. This is a
+// small compatibility shim used during migration.
+impl crate::runtime::delegation::DelegationEngine for StaticDelegationEngine {
+    fn decide(&self, ctx: &crate::runtime::delegation::CallContext) -> crate::runtime::delegation::ExecTarget {
+        // Map runtime CallContext -> CCOS CallContext by borrowing string slices
+        let cc_ctx = crate::ccos::delegation::CallContext {
+            fn_symbol: ctx.fn_symbol,
+            arg_type_fingerprint: ctx.arg_type_fingerprint,
+            runtime_context_hash: ctx.runtime_context_hash,
+            semantic_hash: ctx.semantic_hash.clone(),
+            metadata: ctx.metadata.as_ref().map(|m| {
+                let mut md = DelegationMetadata::new();
+                md.confidence = m.confidence;
+                md.reasoning = m.reasoning.clone();
+                md.context = m.context.clone();
+                md.source = m.source.clone();
+                md
+            }),
+        };
+
+        // Call the CCOS implementation and translate result back to runtime ExecTarget
+        let result = <StaticDelegationEngine as DelegationEngine>::decide(self, &cc_ctx);
+        match result {
+            ExecTarget::LocalPure => crate::runtime::delegation::ExecTarget::LocalPure,
+            ExecTarget::LocalModel(s) => crate::runtime::delegation::ExecTarget::LocalModel(s),
+            ExecTarget::RemoteModel(s) => crate::runtime::delegation::ExecTarget::RemoteModel(s),
+            ExecTarget::L4CacheHit { storage_pointer, signature } => {
+                crate::runtime::delegation::ExecTarget::CacheHit { storage_pointer, signature }
+            }
+        }
     }
 }
 

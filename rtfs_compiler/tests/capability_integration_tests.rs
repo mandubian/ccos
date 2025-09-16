@@ -71,7 +71,7 @@ async fn test_capability_execution_with_validation() {
     
     // Test valid input
     let valid_input = Value::String("hello".to_string());
-    let result = marketplace.execute_capability("reverse_string", &valid_input).await;
+    let result = marketplace.execute_capability_single("reverse_string", &valid_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(reversed)) = result {
@@ -82,7 +82,7 @@ async fn test_capability_execution_with_validation() {
     
     // Test invalid input (number instead of string)
     let invalid_input = Value::Float(42.0);
-    let result = marketplace.execute_capability("reverse_string", &invalid_input).await;
+    let result = marketplace.execute_capability_single("reverse_string", &invalid_input).await;
     
     // Should fail due to type validation
     assert!(result.is_err());
@@ -134,7 +134,7 @@ async fn test_refined_type_with_predicate() {
     
     // Test valid input
     let valid_input = Value::String("hello".to_string());
-    let result = marketplace.execute_capability("uppercase_min3", &valid_input).await;
+    let result = marketplace.execute_capability_single("uppercase_min3", &valid_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(upper)) = result {
@@ -145,7 +145,7 @@ async fn test_refined_type_with_predicate() {
     
     // Test invalid input (too short)
     let invalid_input = Value::String("hi".to_string());
-    let result = marketplace.execute_capability("uppercase_min3", &invalid_input).await;
+    let result = marketplace.execute_capability_single("uppercase_min3", &invalid_input).await;
     
     // Should fail due to predicate validation
     assert!(result.is_err());
@@ -196,7 +196,7 @@ async fn test_vector_type_validation() {
         Value::String("test".to_string()),
     ]);
     
-    let result = marketplace.execute_capability("join_strings", &valid_input).await;
+    let result = marketplace.execute_capability_single("join_strings", &valid_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(joined)) = result {
@@ -270,7 +270,7 @@ async fn test_map_type_validation() {
     input_map.insert(rtfs_compiler::ast::MapKey::Keyword(Keyword::new("count")), Value::Integer(5));
     let valid_input = Value::Map(input_map);
     
-    let result = marketplace.execute_capability("format_item", &valid_input).await;
+    let result = marketplace.execute_capability_single("format_item", &valid_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(formatted)) = result {
@@ -311,7 +311,7 @@ async fn test_optional_type_validation() {
     
     // Test with string value
     let string_input = Value::String("hello".to_string());
-    let result = marketplace.execute_capability("optional_string", &string_input).await;
+    let result = marketplace.execute_capability_single("optional_string", &string_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(output)) = result {
@@ -322,7 +322,7 @@ async fn test_optional_type_validation() {
     
     // Test with nil value
     let nil_input = Value::Nil;
-    let result = marketplace.execute_capability("optional_string", &nil_input).await;
+    let result = marketplace.execute_capability_single("optional_string", &nil_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(output)) = result {
@@ -366,7 +366,7 @@ async fn test_union_type_validation() {
     
     // Test with string
     let string_input = Value::String("test".to_string());
-    let result = marketplace.execute_capability("union_handler", &string_input).await;
+    let result = marketplace.execute_capability_single("union_handler", &string_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(output)) = result {
@@ -377,7 +377,7 @@ async fn test_union_type_validation() {
     
     // Test with integer
     let int_input = Value::Integer(42);
-    let result = marketplace.execute_capability("union_handler", &int_input).await;
+    let result = marketplace.execute_capability_single("union_handler", &int_input).await;
     assert!(result.is_ok());
     
     if let Ok(Value::String(output)) = result {
@@ -388,7 +388,7 @@ async fn test_union_type_validation() {
     
     // Test with invalid type (float)
     let invalid_input = Value::Float(3.14);
-    let result = marketplace.execute_capability("union_handler", &invalid_input).await;
+    let result = marketplace.execute_capability_single("union_handler", &invalid_input).await;
     
     // Should fail due to type validation
     assert!(result.is_err());

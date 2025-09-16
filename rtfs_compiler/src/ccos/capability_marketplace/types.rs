@@ -648,6 +648,16 @@ impl CapabilityMarketplace {
         }
     }
 
+    /// Convenience constructor kept for backward compatibility with older
+    /// call sites. Forwards to `with_causal_chain_and_debug_callback` with
+    /// a `None` debug callback.
+    pub fn with_causal_chain(
+        registry: Arc<RwLock<CapabilityRegistry>>,
+        causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
+    ) -> Self {
+        Self::with_causal_chain_and_debug_callback(registry, causal_chain, None)
+    }
+
     /// Bootstrap the marketplace by discovering capabilities
     pub async fn bootstrap(&self) -> RuntimeResult<()> {
         // For now, just return Ok - this would normally run discovery agents
@@ -660,6 +670,12 @@ impl CapabilityMarketplace {
         capabilities.get(capability_id).cloned()
     }
 
+    /// List all registered capabilities (keeps older API callers working)
+    pub async fn list_capabilities(&self) -> Vec<CapabilityManifest> {
+        let capabilities = self.capabilities.read().await;
+        capabilities.values().cloned().collect()
+    }
+
     /// Execute a capability
     pub async fn execute_capability(&self, capability_id: &str, args: &[Value]) -> RuntimeResult<Value> {
         // For now, return a simple echo for testing
@@ -670,11 +686,46 @@ impl CapabilityMarketplace {
         }
     }
 
+    /// Convenience wrapper that accepts a single Value as input and forwards
+    /// to the canonical slice-based `execute_capability` implementation.
+    pub async fn execute_capability_single(&self, capability_id: &str, input: &Value) -> RuntimeResult<Value> {
+        let args: Vec<Value> = vec![input.clone()];
+        self.execute_capability(capability_id, &args).await
+    }
+
     /// Register a local capability
     pub async fn register_local_capability(&self, _capability_id: &str, _manifest: CapabilityManifest) -> RuntimeResult<()> {
         // For now, just return Ok - this would normally register the capability
         Ok(())
     }
+
+    // Legacy compatibility wrappers for multi-arg registration are provided
+    // by the runtime compatibility shim (`src/runtime/capability_marketplace/mod.rs`)
+    // to avoid duplicate method definitions across impl blocks. Keep the
+    // canonical `register_local_capability(&str, CapabilityManifest)` here.
+
+    /// Return the number of registered capabilities
+    pub async fn capability_count(&self) -> usize {
+        let caps = self.capabilities.read().await;
+        caps.len()
+    }
+
+    /// Check whether a capability exists
+    pub async fn has_capability(&self, id: &str) -> bool {
+        let caps = self.capabilities.read().await;
+        caps.contains_key(id)
+    }
+
+    /// Remove a capability by id
+    pub async fn remove_capability(&self, id: &str) -> RuntimeResult<()> {
+        let mut caps = self.capabilities.write().await;
+        caps.remove(id);
+        Ok(())
+    }
+
+    // Note: `with_resource_monitoring` convenience constructor is implemented
+    // in `marketplace.rs` (the richer implementation). We avoid redefining it
+    // here to prevent duplicate method definitions across impl blocks.
 
     /// Register a streaming capability
     pub async fn register_streaming_capability(&self, _capability_id: &str, _manifest: CapabilityManifest) -> RuntimeResult<()> {

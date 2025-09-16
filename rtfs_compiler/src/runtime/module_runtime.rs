@@ -778,9 +778,14 @@ impl ModuleAwareRuntime {
 
                 Ok(last_value)
             }
-            _ => self
-                .ir_runtime
-                .execute_program(program, &mut self.module_registry),
+            _ => {
+                // IrRuntime now returns ExecutionOutcome; unwrap Complete or map RequiresHost to error
+                match self.ir_runtime.execute_program(program, &mut self.module_registry) {
+                    Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_host_call)) => Err(RuntimeError::Generic("Host call required during module-level program execution".to_string())),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 
@@ -792,8 +797,11 @@ impl ModuleAwareRuntime {
             _ => {
                 // Regular IR node execution
                 let mut env = IrEnvironment::new();
-                self.ir_runtime
-                    .execute_node(form, &mut env, false, &mut self.module_registry)
+                match self.ir_runtime.execute_node(form, &mut env, false, &mut self.module_registry) {
+                    Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required during module top-level form execution".to_string())),
+                    Err(e) => Err(e),
+                }
             }
         }
     }
@@ -845,7 +853,11 @@ impl ModuleAwareRuntime {
                     } => {
                         {
                             let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            let func_value = self.ir_runtime.execute_node(lambda, &mut *guard, false, &mut self.module_registry)?;
+                            let func_outcome = self.ir_runtime.execute_node(lambda, &mut *guard, false, &mut self.module_registry)?;
+                            let func_value = match func_outcome {
+                                super::execution_outcome::ExecutionOutcome::Complete(v) => v,
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module function definition".to_string())),
+                            };
                             guard.define(func_name.clone(), func_value.clone());
                         }
                     }
@@ -856,7 +868,11 @@ impl ModuleAwareRuntime {
                     } => {
                         {
                             let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            let var_value = self.ir_runtime.execute_node(init_expr, &mut *guard, false, &mut self.module_registry)?;
+                            let var_outcome = self.ir_runtime.execute_node(init_expr, &mut *guard, false, &mut self.module_registry)?;
+                            let var_value = match var_outcome {
+                                super::execution_outcome::ExecutionOutcome::Complete(v) => v,
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module variable definition".to_string())),
+                            };
                             guard.define(var_name.clone(), var_value.clone());
                         }
                     }

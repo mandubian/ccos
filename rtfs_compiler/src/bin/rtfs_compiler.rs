@@ -332,7 +332,7 @@ fn main() {
                             if args.verbose {
                                 println!("📊 Result: {:?}", value);
                             }
-                            all_results.push(value);
+                            all_results.push(rtfs_compiler::runtime::ExecutionOutcome::Complete(value));
                         }
                         Err(e) => {
                             eprintln!("❌ Runtime error for expression {}: {:?}", i + 1, e);

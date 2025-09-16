@@ -7,9 +7,10 @@
 //! - Resource management
 
 use crate::runtime::{
-    Evaluator, RuntimeContext, 
+    Evaluator, RuntimeContext,
     values::Value,
     error::{RuntimeError, RuntimeResult},
+    execution_outcome::ExecutionOutcome,
 };
 use crate::ccos::{
     host::RuntimeHost,
@@ -381,7 +382,10 @@ impl CCOSEnvironment {
     }
     
     /// Execute a single RTFS expression
-    pub fn execute_expression(&self, expr: &Expression) -> RuntimeResult<Value> {
+    ///
+    /// Note: this now returns an ExecutionOutcome so callers (the orchestrator / CCOS)
+    /// can observe host invocation descriptors (RequiresHost) and decide delegation/resume.
+    pub fn execute_expression(&self, expr: &Expression) -> RuntimeResult<ExecutionOutcome> {
         // Set up execution context for CCOS integration
         self.host.set_execution_context(
             "repl-session".to_string(),
@@ -397,22 +401,24 @@ impl CCOSEnvironment {
             }
         }
         
-        // Execute the expression
+        // Execute the expression and propagate the ExecutionOutcome upward.
         let result = self.evaluator.evaluate(expr);
-        
+
         // Clean up execution context
         self.host.clear_execution_context();
-        
+
         result
     }
     
     /// Execute RTFS code from a string
-    pub fn execute_code(&self, code: &str) -> RuntimeResult<Value> {
+    ///
+    /// Returns an ExecutionOutcome describing either a completed Value or a host-call request.
+    pub fn execute_code(&self, code: &str) -> RuntimeResult<ExecutionOutcome> {
         // Parse the code
         let parsed = parser::parse(code)
             .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
         
-        let mut last_result = Value::Nil;
+    let mut last_result: ExecutionOutcome = ExecutionOutcome::Complete(Value::Nil);
         
         // Set up execution context for CCOS integration
         self.host.set_execution_context(
@@ -430,11 +436,15 @@ impl CCOSEnvironment {
         }
         
         // Execute each top-level item
-        let execution_result = (|| -> RuntimeResult<Value> {
+        let execution_result = (|| -> RuntimeResult<ExecutionOutcome> {
             for item in parsed {
                 match item {
                     TopLevel::Expression(expr) => {
+                        // Evaluate and propagate any RequiresHost upward immediately
                         last_result = self.evaluator.evaluate(&expr)?;
+                        if let ExecutionOutcome::RequiresHost(_) = last_result {
+                            return Ok(last_result);
+                        }
                     }
                     _ => {
                         // For other top-level items, we could extend this to handle them
@@ -454,7 +464,7 @@ impl CCOSEnvironment {
     }
     
     /// Execute RTFS code from a file
-    pub fn execute_file(&self, file_path: &str) -> RuntimeResult<Value> {
+    pub fn execute_file(&self, file_path: &str) -> RuntimeResult<ExecutionOutcome> {
         let code = std::fs::read_to_string(file_path)
             .map_err(|e| RuntimeError::Generic(format!("Failed to read file '{}': {}", file_path, e)))?;
         

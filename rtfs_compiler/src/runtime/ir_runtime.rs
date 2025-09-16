@@ -1,6 +1,7 @@
 // IR Runtime - Efficient execution engine for typed RTFS IR
 // This runtime leverages type information and pre-resolved bindings for performance
 
+use super::execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
 use super::environment::IrEnvironment;
 use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
@@ -30,14 +31,12 @@ use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 pub struct IrStrategy {
     runtime: IrRuntime,
     module_registry: ModuleRegistry,
-    delegation_engine: Arc<dyn DelegationEngine>,
 }
 
 impl IrStrategy {
     pub fn new(mut module_registry: ModuleRegistry) -> Self {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
-        let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new_empty());
         // Build a minimal host for IR runtime so it can notify the CCOS host about steps
     let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
@@ -46,13 +45,12 @@ impl IrStrategy {
         let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
 
         Self {
-            runtime: IrRuntime::new(delegation_engine.clone(), host, security_context.clone()),
+            runtime: IrRuntime::new(host, security_context.clone()),
             module_registry,
-            delegation_engine,
         }
     }
 
-    pub fn with_delegation_engine(mut module_registry: ModuleRegistry, delegation_engine: Arc<dyn DelegationEngine>) -> Self {
+    pub fn with_delegation_engine(mut module_registry: ModuleRegistry, _delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
     let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
@@ -62,15 +60,14 @@ impl IrStrategy {
         let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
 
         Self {
-            runtime: IrRuntime::new(delegation_engine.clone(), host, security_context.clone()),
+            runtime: IrRuntime::new(host, security_context.clone()),
             module_registry,
-            delegation_engine,
         }
     }
 }
 
 impl RuntimeStrategy for IrStrategy {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
         let mut converter = IrConverter::with_module_registry(&self.module_registry);
         let ir_node = converter
             .convert_expression(program.clone())
@@ -97,7 +94,6 @@ impl RuntimeStrategy for IrStrategy {
 /// Executes a program represented in IR form.
 #[derive(Clone, Debug)]
 pub struct IrRuntime {
-    delegation_engine: Arc<dyn DelegationEngine>,
     model_registry: Arc<ModelRegistry>,
     // Host for CCOS interactions (notify step start/complete/fail, set overrides, etc.)
     host: Arc<dyn HostInterface>,
@@ -108,10 +104,9 @@ pub struct IrRuntime {
 
 impl IrRuntime {
     /// Creates a new IR runtime.
-    pub fn new(delegation_engine: Arc<dyn DelegationEngine>, host: Arc<dyn HostInterface>, security_context: RuntimeContext) -> Self {
+    pub fn new(host: Arc<dyn HostInterface>, security_context: RuntimeContext) -> Self {
         let model_registry = Arc::new(ModelRegistry::with_defaults());
         IrRuntime { 
-            delegation_engine,
             model_registry,
             host,
             security_context,
@@ -119,23 +114,43 @@ impl IrRuntime {
         }
     }
 
-    /// Compatibility constructor for callers that only have a delegation engine.
+    /// Compatibility constructor for callers that only have a runtime delegation engine.
     /// Constructs a default host and security context and forwards to `new`.
-    pub fn new_compat(delegation_engine: Arc<dyn DelegationEngine>) -> Self {
+    pub fn new_compat(_delegation_engine: Arc<dyn DelegationEngine>) -> Self {
         let model_registry = Arc::new(ModelRegistry::with_defaults());
         // Build defaults matching IrStrategy construction
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
         let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
         let security_context = RuntimeContext::pure();
         let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
 
-    // Ensure the default host has a minimal execution context so that
-    // notify_step_started / notify_step_completed can be called from
-    // IR runtime tests that use `new_compat`.
-    host.set_execution_context("ir-runtime-default-plan".to_string(), vec![], "root-action".to_string());
+        // Ensure the default host has a minimal execution context so that
+        // notify_step_started / notify_step_completed can be called from
+        // IR runtime tests that use `new_compat`.
+        host.set_execution_context("ir-runtime-default-plan".to_string(), vec![], "root-action".to_string());
 
-    IrRuntime::new(delegation_engine, host, security_context)
+        IrRuntime::new(host, security_context)
+    }
+
+    /// Compatibility constructor for callers that have a CCOS delegation engine.
+    /// This wraps the CCOS engine into the runtime delegation trait and forwards
+    /// to the standard constructor.
+    pub fn new_compat_from_ccos(_delegation_engine: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> Self {
+        let model_registry = Arc::new(ModelRegistry::with_defaults());
+        // Build defaults matching IrStrategy construction
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
+        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let security_context = RuntimeContext::pure();
+        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+
+        // Ensure the default host has a minimal execution context so that
+        // notify_step_started / notify_step_completed can be called from
+        // IR runtime tests that use `new_compat`.
+        host.set_execution_context("ir-runtime-default-plan".to_string(), vec![], "root-action".to_string());
+
+        IrRuntime::new(host, security_context)
     }
 
     /// Executes a program by running its top-level forms.
@@ -143,7 +158,7 @@ impl IrRuntime {
         &mut self,
         program_node: &IrNode,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         let forms = match program_node {
             IrNode::Program { forms, .. } => forms,
             _ => return Err(RuntimeError::new("Expected Program node")),
@@ -162,10 +177,17 @@ impl IrRuntime {
         let mut result = Value::Nil;
 
         for node in forms {
-            result = self.execute_node(node, &mut env, false, module_registry)?;
+            match self.execute_node(node, &mut env, false, module_registry)? {
+                ExecutionOutcome::Complete(value) => {
+                    result = value;
+                }
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call));
+                }
+            }
         }
 
-        Ok(result)
+        Ok(ExecutionOutcome::Complete(result))
     }
 
     /// Executes a single node in the IR graph.
@@ -175,18 +197,25 @@ impl IrRuntime {
         env: &mut IrEnvironment,
         is_tail_call: bool,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         match node {
-            IrNode::Literal { value, .. } => Ok(value.clone().into()),
-            IrNode::VariableRef { name, .. } => env
-                .get(name)
-                .ok_or_else(|| RuntimeError::Generic(format!("Undefined variable: {}", name))),
+            IrNode::Literal { value, .. } => Ok(ExecutionOutcome::Complete(value.clone().into())),
+            IrNode::VariableRef { name, .. } => {
+                let val = env
+                    .get(name)
+                    .ok_or_else(|| RuntimeError::Generic(format!("Undefined variable: {}", name)))?;
+                Ok(ExecutionOutcome::Complete(val))
+            }
             IrNode::VariableDef {
                 name, init_expr, ..
             } => {
-                let value_to_assign = self.execute_node(init_expr, env, false, module_registry)?;
-                env.define(name.clone(), value_to_assign);
-                Ok(Value::Nil)
+                match self.execute_node(init_expr, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(value_to_assign) => {
+                        env.define(name.clone(), value_to_assign);
+                        Ok(ExecutionOutcome::Complete(Value::Nil))
+                    }
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                }
             }
             IrNode::Lambda {
                 params,
@@ -200,12 +229,16 @@ impl IrRuntime {
                     body.clone(),
                     Box::new(env.clone()),
                 ));
-                Ok(function)
+                Ok(ExecutionOutcome::Complete(function))
             }
             IrNode::FunctionDef { name, lambda, .. } => {
-                let function_val = self.execute_node(lambda, env, false, module_registry)?;
-                env.define(name.clone(), function_val.clone());
-                Ok(function_val)
+                match self.execute_node(lambda, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(function_val) => {
+                        env.define(name.clone(), function_val.clone());
+                        Ok(ExecutionOutcome::Complete(function_val))
+                    }
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                }
             }
             IrNode::Apply {
                 function,
@@ -214,7 +247,7 @@ impl IrRuntime {
             } => self.execute_call(function, arguments, env, is_tail_call, module_registry),
             IrNode::QualifiedSymbolRef { module, symbol, .. } => {
                 let qualified_name = format!("{}/{}", module, symbol);
-                module_registry.resolve_qualified_symbol(&qualified_name)
+                Ok(ExecutionOutcome::Complete(module_registry.resolve_qualified_symbol(&qualified_name)?))
             }
             IrNode::If {
                 condition,
@@ -222,31 +255,43 @@ impl IrRuntime {
                 else_branch,
                 ..
             } => {
-                let cond_value = self.execute_node(condition, env, false, module_registry)?;
-
-                if cond_value.is_truthy() {
-                    self.execute_node(then_branch, env, is_tail_call, module_registry)
-                } else if let Some(alternative) = else_branch {
-                    self.execute_node(alternative, env, is_tail_call, module_registry)
-                } else {
-                    Ok(Value::Nil)
+                match self.execute_node(condition, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(cond_value) => {
+                        if cond_value.is_truthy() {
+                            self.execute_node(then_branch, env, is_tail_call, module_registry)
+                        } else if let Some(alternative) = else_branch {
+                            self.execute_node(alternative, env, is_tail_call, module_registry)
+                        } else {
+                            Ok(ExecutionOutcome::Complete(Value::Nil))
+                        }
+                    }
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             IrNode::Import { module_name, .. } => {
-                self.execute_import(module_name, env, module_registry)
+                match self.execute_import(module_name, env, module_registry) {
+                    Ok(value) => Ok(ExecutionOutcome::Complete(value)),
+                    Err(e) => Err(e),
+                }
             }
             IrNode::Module { definitions, .. } => {
                 for def in definitions {
-                    self.execute_node(def, env, false, module_registry)?;
+                    match self.execute_node(def, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(_) => {}
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
-                Ok(Value::Nil)
+                Ok(ExecutionOutcome::Complete(Value::Nil))
             }
             IrNode::Do { expressions, .. } => {
                 let mut result = Value::Nil;
                 for expr in expressions {
-                    result = self.execute_node(expr, env, false, module_registry)?;
+                    match self.execute_node(expr, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(value) => result = value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
-                Ok(result)
+                Ok(ExecutionOutcome::Complete(result))
             }
             IrNode::Let { bindings, body, .. } => {
                 // Two-pass letrec logic: first insert placeholders for function bindings
@@ -266,63 +311,88 @@ impl IrRuntime {
                 }
                 // Second pass: evaluate all function bindings and update placeholders
                 for (name, lambda_node, placeholder_cell) in &placeholders {
-                        let value = self.execute_node(lambda_node, env, false, module_registry)?;
-                    if matches!(value, Value::Function(_)) {
-                        let mut guard = placeholder_cell.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                        *guard = value;
-                    } else {
-                        return Err(RuntimeError::Generic(format!(
-                            "letrec: expected function for {}",
-                            name
-                        )));
-                    }
+                        match self.execute_node(lambda_node, env, false, module_registry)? {
+                            ExecutionOutcome::Complete(value) => {
+                                if matches!(value, Value::Function(_)) {
+                                    let mut guard = placeholder_cell.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                                    *guard = value;
+                                } else {
+                                    return Err(RuntimeError::Generic(format!(
+                                        "letrec: expected function for {}",
+                                        name
+                                    )));
+                                }
+                            }
+                            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        }
                 }
                 // Now handle non-function bindings as usual
                 for binding in bindings {
                     match &binding.pattern {
                         IrNode::VariableBinding { name, .. } => {
                             if !placeholders.iter().any(|(n, _, _)| n == name) {
-                                let value = self.execute_node(
+                                match self.execute_node(
                                     &binding.init_expr,
                                     env,
                                     false,
                                     module_registry,
-                                )?;
-                                env.define(name.clone(), value);
+                                )? {
+                                    ExecutionOutcome::Complete(value) => env.define(name.clone(), value),
+                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                }
                             }
                         }
                         IrNode::Destructure { pattern, .. } => {
-                            let value =
-                                self.execute_node(&binding.init_expr, env, false, module_registry)?;
-                            self.execute_destructure(pattern, &value, env, module_registry)?;
+                            match self.execute_node(&binding.init_expr, env, false, module_registry)? {
+                                ExecutionOutcome::Complete(value) => {
+                                    self.execute_destructure(pattern, &value, env, module_registry)?;
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         _ => {
                             // For other pattern types, just evaluate the init_expr
-                            let value =
-                                self.execute_node(&binding.init_expr, env, false, module_registry)?;
-                            // Could add more specific handling here if needed
+                            match self.execute_node(&binding.init_expr, env, false, module_registry)? {
+                                ExecutionOutcome::Complete(value) => {
+                                    // Could add more specific handling here if needed
+                                    let _ = value;
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                     }
                 }
                 // Execute body
                 let mut result = Value::Nil;
                 for expr in body {
-                    result = self.execute_node(expr, env, is_tail_call, module_registry)?;
+                    match self.execute_node(expr, env, is_tail_call, module_registry)? {
+                        ExecutionOutcome::Complete(value) => result = value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
-                Ok(result)
+                Ok(ExecutionOutcome::Complete(result))
             }
             IrNode::Vector { elements, .. } => {
-                let values: Result<Vec<Value>, RuntimeError> = elements
-                    .iter()
-                    .map(|elem| self.execute_node(elem, env, false, module_registry))
-                    .collect();
-                Ok(Value::Vector(values?))
+                let mut values = Vec::new();
+                for elem in elements {
+                    match self.execute_node(elem, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(val) => values.push(val),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
+                }
+                Ok(ExecutionOutcome::Complete(Value::Vector(values)))
             }
             IrNode::Map { entries, .. } => {
                 let mut map = HashMap::new();
                 for entry in entries {
-                    let key = self.execute_node(&entry.key, env, false, module_registry)?;
-                    let value = self.execute_node(&entry.value, env, false, module_registry)?;
+                    let key = match self.execute_node(&entry.key, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(val) => val,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    };
+                    let value = match self.execute_node(&entry.value, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(val) => val,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    };
                     // Convert key to MapKey format
                     let map_key = match key {
                         Value::Keyword(k) => MapKey::Keyword(k),
@@ -332,21 +402,26 @@ impl IrRuntime {
                     };
                     map.insert(map_key, value);
                 }
-                Ok(Value::Map(map))
+                Ok(ExecutionOutcome::Complete(Value::Map(map)))
             }
             IrNode::Match {
                 expression,
                 clauses,
                 ..
             } => {
-                let value = self.execute_node(expression, env, false, module_registry)?;
+                let value = match self.execute_node(expression, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(val) => val,
+                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                };
                 // For now, implement basic pattern matching
                 for clause in clauses {
                     // Simple implementation - just check if pattern matches
                     if self.pattern_matches(&clause.pattern, &value)? {
                         if let Some(guard) = &clause.guard {
-                            let guard_result =
-                                self.execute_node(guard, env, false, module_registry)?;
+                            let guard_result = match self.execute_node(guard, env, false, module_registry)? {
+                                ExecutionOutcome::Complete(val) => val,
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            };
                             if !guard_result.is_truthy() {
                                 continue;
                             }
@@ -367,30 +442,39 @@ impl IrRuntime {
                 // Execute try body
                 let mut result = Value::Nil;
                 for expr in try_body {
-                    result = self.execute_node(expr, env, false, module_registry)?;
+                    match self.execute_node(expr, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(value) => result = value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
 
                 // If no exception, execute finally and return result
                 if let Some(finally) = finally_body {
                     for expr in finally {
-                        self.execute_node(expr, env, false, module_registry)?;
+                        match self.execute_node(expr, env, false, module_registry)? {
+                            ExecutionOutcome::Complete(_) => {},
+                            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        }
                     }
                 }
 
-                Ok(result)
+                Ok(ExecutionOutcome::Complete(result))
                 // Note: Exception handling would be implemented here
             }
             IrNode::Parallel { bindings, .. } => {
                 // For now, execute bindings sequentially
                 let mut results = HashMap::new();
                 for binding in bindings {
-                    let value =
-                        self.execute_node(&binding.init_expr, env, false, module_registry)?;
-                    if let IrNode::VariableBinding { name, .. } = &binding.binding {
-                        results.insert(MapKey::Keyword(Keyword(name.clone())), value);
+                    match self.execute_node(&binding.init_expr, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(value) => {
+                            if let IrNode::VariableBinding { name, .. } = &binding.binding {
+                                results.insert(MapKey::Keyword(Keyword(name.clone())), value);
+                            }
+                        },
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
-                Ok(Value::Map(results))
+                Ok(ExecutionOutcome::Complete(Value::Map(results)))
             }
             IrNode::WithResource {
                 
@@ -398,23 +482,32 @@ impl IrRuntime {
                 body,
                 ..
             } => {
-                let resource = self.execute_node(init_expr, env, false, module_registry)?;
-                // For now, just execute body (resource cleanup would be implemented here)
-                let mut result = Value::Nil;
-                for expr in body {
-                    result = self.execute_node(expr, env, false, module_registry)?;
+                match self.execute_node(init_expr, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(resource) => {
+                        // For now, just execute body (resource cleanup would be implemented here)
+                        let mut result = Value::Nil;
+                        for expr in body {
+                            match self.execute_node(expr, env, false, module_registry)? {
+                                ExecutionOutcome::Complete(value) => result = value,
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
+                        }
+                        Ok(ExecutionOutcome::Complete(result))
+                    },
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
-                Ok(result)
             }
             IrNode::LogStep {  values, .. } => {
                 // Execute values and log them
                 let mut log_values = Vec::new();
                 for value_expr in values {
-                    let value = self.execute_node(value_expr, env, false, module_registry)?;
-                    log_values.push(value);
+                    match self.execute_node(value_expr, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(value) => log_values.push(value),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 // For now, just return the last value
-                Ok(log_values.last().cloned().unwrap_or(Value::Nil))
+                Ok(ExecutionOutcome::Complete(log_values.last().cloned().unwrap_or(Value::Nil)))
             }
 
             IrNode::Step { name, expose_override, context_keys_override, params, body, .. } => {
@@ -443,13 +536,19 @@ impl IrRuntime {
                         },
                         other => {
                             // Evaluate non-literal expression to a value and coerce to bool
-                            let v = self.execute_node(other, env, false, module_registry)?;
-                            match v {
-                                Value::Boolean(b) => b,
-                                _ => {
+                            match self.execute_node(other, env, false, module_registry)? {
+                                ExecutionOutcome::Complete(v) => match v {
+                                    Value::Boolean(b) => b,
+                                    _ => {
+                                        let mut cm = self.context_manager.borrow_mut();
+                                        let _ = cm.exit_step();
+                                        return Err(RuntimeError::Generic(":expose override must evaluate to a boolean".to_string()));
+                                    }
+                                },
+                                ExecutionOutcome::RequiresHost(host_call) => {
                                     let mut cm = self.context_manager.borrow_mut();
                                     let _ = cm.exit_step();
-                                    return Err(RuntimeError::Generic(":expose override must evaluate to a boolean".to_string()));
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call));
                                 }
                             }
                         }
@@ -462,11 +561,21 @@ impl IrRuntime {
                             IrNode::Vector { elements, .. } => {
                                 let mut keys = Vec::new();
                                 for e in elements {
-                                    let v = self.execute_node(e, env, false, module_registry)?;
-                                    if let Value::String(s) = v { keys.push(s); } else {
-                                        let mut cm = self.context_manager.borrow_mut();
-                                        let _ = cm.exit_step();
-                                        return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string()));
+                                    match self.execute_node(e, env, false, module_registry)? {
+                                        ExecutionOutcome::Complete(v) => {
+                                            if let Value::String(s) = v { 
+                                                keys.push(s); 
+                                            } else {
+                                                let mut cm = self.context_manager.borrow_mut();
+                                                let _ = cm.exit_step();
+                                                return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string()));
+                                            }
+                                        },
+                                        ExecutionOutcome::RequiresHost(host_call) => {
+                                            let mut cm = self.context_manager.borrow_mut();
+                                            let _ = cm.exit_step();
+                                            return Ok(ExecutionOutcome::RequiresHost(host_call));
+                                        }
                                     }
                                 }
                                 context_keys = Some(keys);
@@ -483,14 +592,32 @@ impl IrRuntime {
                             }
                             other => {
                                 // Evaluate expression that should produce a sequence/vector
-                                let v = self.execute_node(other, env, false, module_registry)?;
-                                match v {
-                                    Value::Vector(vec) => {
-                                        let mut keys = Vec::new();
-                                        for item in vec { if let Value::String(s) = item { keys.push(s); } else { let mut cm = self.context_manager.borrow_mut(); let _ = cm.exit_step(); return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string())); } }
-                                        context_keys = Some(keys);
+                                match self.execute_node(other, env, false, module_registry)? {
+                                    ExecutionOutcome::Complete(v) => match v {
+                                        Value::Vector(vec) => {
+                                            let mut keys = Vec::new();
+                                            for item in vec { 
+                                                if let Value::String(s) = item { 
+                                                    keys.push(s); 
+                                                } else { 
+                                                    let mut cm = self.context_manager.borrow_mut(); 
+                                                    let _ = cm.exit_step(); 
+                                                    return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string())); 
+                                                } 
+                                            }
+                                            context_keys = Some(keys);
+                                        }
+                                        _ => { 
+                                            let mut cm = self.context_manager.borrow_mut(); 
+                                            let _ = cm.exit_step(); 
+                                            return Err(RuntimeError::Generic(":context-keys override must evaluate to a vector of strings".to_string())); 
+                                        }
+                                    },
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        let mut cm = self.context_manager.borrow_mut();
+                                        let _ = cm.exit_step();
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call));
                                     }
-                                    _ => { let mut cm = self.context_manager.borrow_mut(); let _ = cm.exit_step(); return Err(RuntimeError::Generic(":context-keys override must evaluate to a vector of strings".to_string())); }
                                 }
                             }
                         }
@@ -520,8 +647,11 @@ impl IrRuntime {
                             let mut map = HashMap::new();
                             for entry in entries {
                                 // keys and values are IR nodes; evaluate both
-                                match (self.execute_node(&entry.key, env, false, module_registry), self.execute_node(&entry.value, env, false, module_registry)) {
-                                    (Ok(key_val), Ok(value_val)) => {
+                                let key_result = self.execute_node(&entry.key, env, false, module_registry);
+                                let value_result = self.execute_node(&entry.value, env, false, module_registry);
+                                
+                                match (key_result, value_result) {
+                                    (Ok(ExecutionOutcome::Complete(key_val)), Ok(ExecutionOutcome::Complete(value_val))) => {
                                         // Allow string or keyword keys for :params to be flexible
                                         let map_key = match key_val {
                                             Value::String(s) => crate::ast::MapKey::String(s),
@@ -535,6 +665,13 @@ impl IrRuntime {
                                             }
                                         };
                                         map.insert(map_key, value_val);
+                                    }
+                                    (Ok(ExecutionOutcome::RequiresHost(host_call)), _) | (_, Ok(ExecutionOutcome::RequiresHost(host_call))) => {
+                                        let _ = self.host.notify_step_failed(&step_action_id, "Host call required during params evaluation");
+                                        let mut cm = self.context_manager.borrow_mut();
+                                        let _ = cm.exit_step();
+                                        self.host.clear_step_exposure_override();
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call));
                                     }
                                     (Err(e), _) | (_, Err(e)) => {
                                         let _ = self.host.notify_step_failed(&step_action_id, &e.to_string());
@@ -584,7 +721,15 @@ impl IrRuntime {
                 let mut last_result = Value::Nil;
                 for expr in body {
                     match self.execute_node(expr, target_env, false, module_registry) {
-                        Ok(v) => last_result = v,
+                        Ok(ExecutionOutcome::Complete(v)) => last_result = v,
+                        Ok(ExecutionOutcome::RequiresHost(host_call)) => {
+                            // Notify host of interruption, exit step context and clear override
+                            let _ = self.host.notify_step_failed(&step_action_id, "Host call required during step execution");
+                            let mut cm = self.context_manager.borrow_mut();
+                            let _ = cm.exit_step();
+                            self.host.clear_step_exposure_override();
+                            return Ok(ExecutionOutcome::RequiresHost(host_call));
+                        }
                         Err(e) => {
                             // Notify host of failure, exit step context and clear override
                             let _ = self.host.notify_step_failed(&step_action_id, &e.to_string());
@@ -605,54 +750,63 @@ impl IrRuntime {
                 let _ = cm.exit_step();
                 self.host.clear_step_exposure_override();
 
-                Ok(last_result)
+                Ok(ExecutionOutcome::Complete(last_result))
             }
 
             IrNode::DiscoverAgents { criteria, .. } => {
                 // Execute criteria and return empty vector for now
-                self.execute_node(criteria, env, false, module_registry)?;
-                Ok(Value::Vector(vec![]))
+                match self.execute_node(criteria, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(vec![]))),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                }
             }
             IrNode::ResourceRef { name, .. } => {
                 // Resolve resource references from the host's execution context
                 match self.host.get_context_value(name) {
-                    Some(value) => Ok(value),
+                    Some(value) => Ok(ExecutionOutcome::Complete(value)),
                     None => {
                         // If not found in context, return the resource name as a string for backward compatibility
-                        Ok(Value::String(format!("@{}", name)))
+                        Ok(ExecutionOutcome::Complete(Value::String(format!("@{}", name))))
                     }
                 }
             }
             IrNode::Task { .. } => {
                 // Task execution is complex - for now return Nil
-                Ok(Value::Nil)
+                Ok(ExecutionOutcome::Complete(Value::Nil))
             }
             IrNode::Destructure { pattern, value, .. } => {
-                let value = self.execute_node(value, env, false, module_registry)?;
-                self.execute_destructure(pattern, &value, env, module_registry)?;
-                Ok(Value::Nil)
+                match self.execute_node(value, env, false, module_registry)? {
+                    ExecutionOutcome::Complete(val) => {
+                        self.execute_destructure(pattern, &val, env, module_registry)?;
+                        Ok(ExecutionOutcome::Complete(Value::Nil))
+                    },
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                }
             }
             IrNode::Program { forms, .. } => {
                 // Execute contained forms in the provided environment
                 let mut result = Value::Nil;
                 for form in forms {
-                    result = self.execute_node(form, env, false, module_registry)?;
+                    match self.execute_node(form, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(value) => result = value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
-                Ok(result)
+                Ok(ExecutionOutcome::Complete(result))
             }
             IrNode::VariableBinding { name, .. } => {
                 // VariableBinding nodes are patterns used in let/param lists and
                 // should not be executed directly. Return Nil to allow higher-level
                 // constructs to handle bindings.
                 let _ = name; // silence unused
-                Ok(Value::Nil)
+                Ok(ExecutionOutcome::Complete(Value::Nil))
             }
             IrNode::Param { binding, .. } => {
                 // Params are structural; evaluating a Param alone yields Nil.
                 // The binding sub-node will be processed by the function/closure
                 // construction logic elsewhere.
                 let _ = binding;
-                Ok(Value::Nil)
+                Ok(ExecutionOutcome::Complete(Value::Nil))
             }
             _ => Err(RuntimeError::Generic(format!(
                 "Execution for IR node {:?} is not yet implemented",
@@ -683,13 +837,19 @@ impl IrRuntime {
         env: &mut IrEnvironment,
         is_tail_call: bool,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
-        let callee_val = self.execute_node(callee_node, env, false, module_registry)?;
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        let callee_val = match self.execute_node(callee_node, env, false, module_registry)? {
+            ExecutionOutcome::Complete(val) => val,
+            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+        };
 
-        let args: Vec<Value> = arg_nodes
-            .iter()
-            .map(|arg_node| self.execute_node(arg_node, env, false, module_registry))
-            .collect::<Result<_, _>>()?;
+        let mut args = Vec::new();
+        for arg_node in arg_nodes {
+            match self.execute_node(arg_node, env, false, module_registry)? {
+                ExecutionOutcome::Complete(val) => args.push(val),
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+            }
+        }
 
         self.apply_function(callee_val, &args, env, is_tail_call, module_registry)
     }
@@ -701,7 +861,7 @@ impl IrRuntime {
         env: &mut IrEnvironment,
         _is_tail_call: bool,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         match function {
             Value::FunctionPlaceholder(cell) => {
                 let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
@@ -709,90 +869,41 @@ impl IrRuntime {
                 self.apply_function(actual, args, env, _is_tail_call, module_registry)
             }
             Value::Function(ref f) => {
-                // Check delegation for IR functions
+                // For RTFS (IR) functions, yield to CCOS for delegation decisions
                 if let Function::Ir(_) = f {
-                    // Try to find the function name by looking up the function value in the environment
-                    let fn_symbol = env.find_function_name(&function).unwrap_or("unknown-function");
-                    let ctx = CallContext {
+                    let fn_symbol = env.find_function_name(&function).unwrap_or("unknown-function").to_string();
+                    let host_call = HostCall {
                         fn_symbol,
-                        arg_type_fingerprint: 0, // TODO: hash argument types
-                        runtime_context_hash: 0, // TODO: hash runtime context
-                        semantic_hash: None,
-                        metadata: None,
+                        args: args.to_vec(),
+                        metadata: Some(CallMetadata::new()),
                     };
-                    match self.delegation_engine.decide(&ctx) {
-                        ExecTarget::LocalPure => {
-                            // Normal in-process execution (fall through)
-                        }
-                        ExecTarget::LocalModel(id) | ExecTarget::RemoteModel(id) => {
-                            return self.execute_model_call(&id, args, env);
-                        }
-                        ExecTarget::CacheHit { storage_pointer, .. } => {
-                            if let Some(cache) = module_registry.l4_cache() {
-                                if let Some(_blob) = cache.get_blob(&storage_pointer) {
-                                    let executor = WasmExecutor::new();
-                                    return executor.execute_module(&_blob, fn_symbol, args);
-                                } else {
-                                    return Err(RuntimeError::Generic(format!(
-                                        "L4 cache blob '{}' not found",
-                                        storage_pointer
-                                    )));
-                                }
-                            } else {
-                                return Err(RuntimeError::Generic(
-                                    "Module registry has no attached L4 cache".to_string(),
-                                ));
-                            }
-                        }
-                    }
+                    return Ok(ExecutionOutcome::RequiresHost(host_call));
                 }
 
+                // For built-in functions, execute locally
                 match f {
-                    Function::Native(native_fn) => (native_fn.func)(args.to_vec()),
+                    Function::Native(native_fn) => Ok(ExecutionOutcome::Complete((native_fn.func)(args.to_vec())?)),
                     Function::Builtin(builtin_fn) => {
                         // Special handling for map function to support user-defined functions
                         if builtin_fn.name == "map" && args.len() == 2 {
-                            return self.handle_map_with_user_functions(
+                            self.handle_map_with_user_functions(
                                 &args[0],
                                 &args[1],
                                 env,
                                 module_registry,
-                            );
+                            )
+                        } else {
+                            Ok(ExecutionOutcome::Complete((builtin_fn.func)(args.to_vec())?))
                         }
-                        (builtin_fn.func)(args.to_vec())
                     }
                     Function::BuiltinWithContext(builtin_fn) => {
                         // Implement BuiltinWithContext functions in IR runtime
                         // These functions need access to the execution context to handle user-defined functions
                         self.execute_builtin_with_context(builtin_fn, args.to_vec(), env, module_registry)
                     }
-                    Function::Ir(ir_fn) => {
-                        let param_names: Vec<String> = ir_fn
-                            .params
-                            .iter()
-                            .map(|p| match p {
-                                IrNode::VariableBinding { name, .. } => Ok(name.clone()),
-                                IrNode::Param { binding, .. } => {
-                                    if let IrNode::VariableBinding { name, .. } = binding.as_ref() {
-                                        Ok(name.clone())
-                                    } else {
-                                        Err(RuntimeError::new("Expected VariableBinding inside Param"))
-                                    }
-                                }
-                                _ => Err(RuntimeError::new("Expected symbol in lambda parameters")),
-                            })
-                            .collect::<Result<Vec<String>, RuntimeError>>()?;
-
-                        let mut new_env = ir_fn.closure_env.new_child_for_ir(
-                            &param_names,
-                            args,
-                            ir_fn.variadic_param.is_some(),
-                        )?;
-                        let mut result = Value::Nil;
-                        for node in &ir_fn.body {
-                            result = self.execute_node(node, &mut new_env, false, module_registry)?;
-                        }
-                        Ok(result)
+                    Function::Ir(_) => {
+                        // This should never be reached since we yield for IR functions above
+                        unreachable!("IR functions should be handled by yielding to host")
                     }
                     _ => Err(RuntimeError::new(
                         "Calling this type of function from the IR runtime is not currently supported.",
@@ -807,10 +918,10 @@ impl IrRuntime {
                             // Try keyword key first, then fall back to string key for compatibility
                             let map_key_kw = crate::ast::MapKey::Keyword(keyword.clone());
                             if let Some(v) = map.get(&map_key_kw) {
-                                Ok(v.clone())
+                                Ok(ExecutionOutcome::Complete(v.clone()))
                             } else {
                                 let map_key_str = crate::ast::MapKey::String(keyword.0.clone());
-                                Ok(map.get(&map_key_str).cloned().unwrap_or(Value::Nil))
+                                Ok(ExecutionOutcome::Complete(map.get(&map_key_str).cloned().unwrap_or(Value::Nil)))
                             }
                         }
                         _ => Err(RuntimeError::TypeError {
@@ -825,10 +936,10 @@ impl IrRuntime {
                         Value::Map(map) => {
                             let map_key_kw = crate::ast::MapKey::Keyword(keyword.clone());
                             if let Some(v) = map.get(&map_key_kw) {
-                                Ok(v.clone())
+                                Ok(ExecutionOutcome::Complete(v.clone()))
                             } else {
                                 let map_key_str = crate::ast::MapKey::String(keyword.0.clone());
-                                Ok(map.get(&map_key_str).cloned().unwrap_or(args[1].clone()))
+                                Ok(ExecutionOutcome::Complete(map.get(&map_key_str).cloned().unwrap_or(args[1].clone())))
                             }
                         }
                         _ => Err(RuntimeError::TypeError {
@@ -857,7 +968,7 @@ impl IrRuntime {
         model_id: &str,
         args: &[Value],
         _env: &mut IrEnvironment,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         // Convert arguments to a prompt string
         let prompt = self.args_to_prompt(args)?;
         
@@ -878,7 +989,7 @@ impl IrRuntime {
         */
         
         // Convert response back to RTFS value
-        Ok(Value::String(response))
+        Ok(ExecutionOutcome::Complete(Value::String(response)))
     }
 
     fn args_to_prompt(&self, args: &[Value]) -> Result<String, RuntimeError> {
@@ -918,7 +1029,7 @@ impl IrRuntime {
         collection: &Value,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         let collection_vec = match collection {
             Value::Vector(v) => v.clone(),
             _ => {
@@ -942,14 +1053,16 @@ impl IrRuntime {
                 Value::Function(Function::Closure(closure)) => {
                     // Call user-defined functions using the IR runtime
                     let func_args = vec![item];
-                    let mapped_value = self.apply_function(
+                    match self.apply_function(
                         Value::Function(Function::Closure(closure.clone())),
                         &func_args,
                         env,
                         false,
                         module_registry,
-                    )?;
-                    result.push(mapped_value);
+                    )? {
+                        ExecutionOutcome::Complete(value) => result.push(value),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 Value::Function(Function::Native(native_func)) => {
                     // Call native functions
@@ -960,14 +1073,16 @@ impl IrRuntime {
                 Value::Function(Function::Ir(ir_func)) => {
                     // Call IR functions
                     let func_args = vec![item];
-                    let mapped_value = self.apply_function(
+                    match self.apply_function(
                         Value::Function(Function::Ir(ir_func.clone())),
                         &func_args,
                         env,
                         false,
                         module_registry,
-                    )?;
-                    result.push(mapped_value);
+                    )? {
+                        ExecutionOutcome::Complete(value) => result.push(value),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -978,7 +1093,7 @@ impl IrRuntime {
                 }
             }
         }
-        Ok(Value::Vector(result))
+        Ok(ExecutionOutcome::Complete(Value::Vector(result)))
     }
 
     /// Execute BuiltinWithContext functions in IR runtime
@@ -989,7 +1104,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         match builtin_fn.name.as_str() {
             "map" => self.ir_map_with_context(args, env, module_registry),
             "filter" => self.ir_filter_with_context(args, env, module_registry),
@@ -1040,9 +1155,15 @@ impl IrRuntime {
                         let new_val = match updater {
                             Value::Function(Function::Builtin(b)) => (b.func)(vec![current.clone()])?,
                             Value::Function(Function::BuiltinWithContext(b)) => {
-                                self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)?
+                                match self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)? {
+                                    ExecutionOutcome::Complete(v) => v,
+                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                }
                             }
-                            Value::Function(_) => self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)?,
+                            Value::Function(_) => match self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)? {
+                                ExecutionOutcome::Complete(v) => v,
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            },
                             _ => return Err(RuntimeError::TypeError {
                                 expected: "function".to_string(),
                                 actual: updater.type_name().to_string(),
@@ -1053,7 +1174,7 @@ impl IrRuntime {
                         // Build new map
                         let mut new_map = map.clone();
                         new_map.insert(map_key, new_val);
-                        Ok(Value::Map(new_map))
+                        Ok(ExecutionOutcome::Complete(Value::Map(new_map)))
                     }
                     Value::Vector(vec) => {
                         // Expect integer index
@@ -1076,9 +1197,15 @@ impl IrRuntime {
                         let new_val = match updater {
                             Value::Function(Function::Builtin(b)) => (b.func)(vec![current.clone()])?,
                             Value::Function(Function::BuiltinWithContext(b)) => {
-                                self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)?
+                                match self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)? {
+                                    ExecutionOutcome::Complete(v) => v,
+                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                }
                             }
-                            Value::Function(_) => self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)?,
+                            Value::Function(_) => match self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)? {
+                                ExecutionOutcome::Complete(v) => v,
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            },
                             _ => return Err(RuntimeError::TypeError {
                                 expected: "function".to_string(),
                                 actual: updater.type_name().to_string(),
@@ -1088,7 +1215,7 @@ impl IrRuntime {
 
                         let mut new_vec = vec.clone();
                         new_vec[idx] = new_val;
-                        Ok(Value::Vector(new_vec))
+                        Ok(ExecutionOutcome::Complete(Value::Vector(new_vec)))
                     }
                     _ => Err(RuntimeError::TypeError {
                         expected: "map or vector".to_string(),
@@ -1114,15 +1241,15 @@ impl IrRuntime {
                     Value::Vector(vec) => {
                         // For IR tests, just return the original vector
                         // In a full implementation, we'd filter based on predicate
-                        Ok(Value::Vector(vec.clone()))
+                        Ok(ExecutionOutcome::Complete(Value::Vector(vec.clone())))
                     }
                     Value::String(s) => {
                         // For IR tests, just return the original string
-                        Ok(Value::String(s.clone()))
+                        Ok(ExecutionOutcome::Complete(Value::String(s.clone())))
                     }
                     Value::List(list) => {
                         // For IR tests, just return the original list
-                        Ok(Value::List(list.clone()))
+                        Ok(ExecutionOutcome::Complete(Value::List(list.clone())))
                     }
                     other => {
                         return Err(RuntimeError::TypeError {
@@ -1158,7 +1285,7 @@ impl IrRuntime {
                                 element.clone(),
                             ]));
                         }
-                        Ok(Value::Vector(result))
+                        Ok(ExecutionOutcome::Complete(Value::Vector(result)))
                     }
                     Value::String(s) => {
                         // For IR tests, create indexed character mapping
@@ -1169,7 +1296,7 @@ impl IrRuntime {
                                 Value::String(ch.to_string()),
                             ]));
                         }
-                        Ok(Value::Vector(result))
+                        Ok(ExecutionOutcome::Complete(Value::Vector(result)))
                     }
                     Value::List(list) => {
                         // For IR tests, create indexed list mapping
@@ -1180,7 +1307,7 @@ impl IrRuntime {
                                 element.clone(),
                             ]));
                         }
-                        Ok(Value::List(result))
+                        Ok(ExecutionOutcome::Complete(Value::List(result)))
                     }
                     other => {
                         return Err(RuntimeError::TypeError {
@@ -1208,7 +1335,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "map".to_string(),
@@ -1239,17 +1366,23 @@ impl IrRuntime {
                 }
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     let func_args = vec![item];
-                    self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                    match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                        ExecutionOutcome::Complete(value) => value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 Value::Function(func) => {
                     let func_args = vec![item];
-                    self.apply_function(
+                    match self.apply_function(
                         Value::Function(func.clone()),
                         &func_args,
                         env,
                         false,
                         module_registry,
-                    )?
+                    )? {
+                        ExecutionOutcome::Complete(value) => value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -1261,7 +1394,7 @@ impl IrRuntime {
             };
             result.push(mapped_value);
         }
-        Ok(Value::Vector(result))
+        Ok(ExecutionOutcome::Complete(Value::Vector(result)))
     }
 
     /// IR runtime implementation of filter with context
@@ -1270,7 +1403,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "filter".to_string(),
@@ -1302,19 +1435,23 @@ impl IrRuntime {
                 }
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     let func_args = vec![item.clone()];
-                    let v = self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?;
-                    v.is_truthy()
+                    match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                        ExecutionOutcome::Complete(v) => v.is_truthy(),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 Value::Function(func) => {
                     let func_args = vec![item.clone()];
-                    let v = self.apply_function(
+                    match self.apply_function(
                         Value::Function(func.clone()),
                         &func_args,
                         env,
                         false,
                         module_registry,
-                    )?;
-                    v.is_truthy()
+                    )? {
+                        ExecutionOutcome::Complete(v) => v.is_truthy(),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -1328,7 +1465,7 @@ impl IrRuntime {
                 result.push(item);
             }
         }
-        Ok(Value::Vector(result))
+        Ok(ExecutionOutcome::Complete(Value::Vector(result)))
     }
 
     /// IR runtime implementation of reduce with context
@@ -1337,7 +1474,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         if args.len() < 2 || args.len() > 3 {
             return Err(RuntimeError::ArityMismatch {
                 function: "reduce".to_string(),
@@ -1363,7 +1500,7 @@ impl IrRuntime {
 
         if collection_vec.is_empty() {
             return if let Some(init) = init_value {
-                Ok(init.clone())
+                Ok(ExecutionOutcome::Complete(init.clone()))
             } else {
                 Err(RuntimeError::Generic(
                     "reduce on empty collection with no initial value".to_string()
@@ -1385,17 +1522,23 @@ impl IrRuntime {
                 }
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     let func_args = vec![accumulator, item.clone()];
-                    self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                    match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                        ExecutionOutcome::Complete(value) => value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 Value::Function(func) => {
                     let func_args = vec![accumulator, item.clone()];
-                    self.apply_function(
+                    match self.apply_function(
                         Value::Function(func.clone()),
                         &func_args,
                         env,
                         false,
                         module_registry,
-                    )?
+                    )? {
+                        ExecutionOutcome::Complete(value) => value,
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
                 }
                 _ => {
                     return Err(RuntimeError::TypeError {
@@ -1406,7 +1549,7 @@ impl IrRuntime {
                 }
             };
         }
-        Ok(accumulator)
+        Ok(ExecutionOutcome::Complete(accumulator))
     }
 
     /// IR runtime implementation of every? with context
@@ -1415,7 +1558,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "every?".to_string(),
@@ -1429,24 +1572,42 @@ impl IrRuntime {
         match collection {
             Value::Vector(vec) => {
                 for item in vec {
-                    let result = match predicate {
+                    // Evaluate predicate and handle ExecutionOutcome
+                    match predicate {
                         Value::Function(Function::Builtin(builtin_func)) => {
                             let func_args = vec![item.clone()];
-                            (builtin_func.func)(func_args)?
+                            let result = (builtin_func.func)(func_args)?;
+                            if let Value::Boolean(false) = result {
+                                return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                            }
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![item.clone()];
-                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(false) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         Value::Function(func) => {
                             let func_args = vec![item.clone()];
-                            self.apply_function(
+                            match self.apply_function(
                                 Value::Function(func.clone()),
                                 &func_args,
                                 env,
                                 false,
                                 module_registry,
-                            )?
+                            )? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(false) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -1455,35 +1616,48 @@ impl IrRuntime {
                                 operation: "every?".to_string(),
                             });
                         }
-                    };
-                    
-                    if let Value::Boolean(false) = result {
-                        return Ok(Value::Boolean(false));
                     }
                 }
-                Ok(Value::Boolean(true))
+                Ok(ExecutionOutcome::Complete(Value::Boolean(true)))
             }
             Value::String(s) => {
                 for ch in s.chars() {
                     let char_value = Value::String(ch.to_string());
-                    let result = match predicate {
+                    match predicate {
                         Value::Function(Function::Builtin(builtin_func)) => {
                             let func_args = vec![char_value];
-                            (builtin_func.func)(func_args)?
+                            let result = (builtin_func.func)(func_args)?;
+                            if let Value::Boolean(false) = result {
+                                return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                            }
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![char_value];
-                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(false) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         Value::Function(func) => {
                             let func_args = vec![char_value];
-                            self.apply_function(
+                            match self.apply_function(
                                 Value::Function(func.clone()),
                                 &func_args,
                                 env,
                                 false,
                                 module_registry,
-                            )?
+                            )? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(false) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -1492,13 +1666,9 @@ impl IrRuntime {
                                 operation: "every?".to_string(),
                             });
                         }
-                    };
-                    
-                    if let Value::Boolean(false) = result {
-                        return Ok(Value::Boolean(false));
                     }
                 }
-                Ok(Value::Boolean(true))
+                Ok(ExecutionOutcome::Complete(Value::Boolean(true)))
             }
             _ => {
                 Err(RuntimeError::TypeError {
@@ -1516,7 +1686,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "some?".to_string(),
@@ -1530,24 +1700,41 @@ impl IrRuntime {
         match collection {
             Value::Vector(vec) => {
                 for item in vec {
-                    let result = match predicate {
+                    match predicate {
                         Value::Function(Function::Builtin(builtin_func)) => {
                             let func_args = vec![item.clone()];
-                            (builtin_func.func)(func_args)?
+                            let result = (builtin_func.func)(func_args)?;
+                            if let Value::Boolean(true) = result {
+                                return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                            }
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![item.clone()];
-                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(true) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         Value::Function(func) => {
                             let func_args = vec![item.clone()];
-                            self.apply_function(
+                            match self.apply_function(
                                 Value::Function(func.clone()),
                                 &func_args,
                                 env,
                                 false,
                                 module_registry,
-                            )?
+                            )? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(true) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -1556,35 +1743,48 @@ impl IrRuntime {
                                 operation: "some?".to_string(),
                             });
                         }
-                    };
-                    
-                    if let Value::Boolean(true) = result {
-                        return Ok(Value::Boolean(true));
                     }
                 }
-                Ok(Value::Boolean(false))
+                Ok(ExecutionOutcome::Complete(Value::Boolean(false)))
             }
             Value::String(s) => {
                 for ch in s.chars() {
                     let char_value = Value::String(ch.to_string());
-                    let result = match predicate {
+                    match predicate {
                         Value::Function(Function::Builtin(builtin_func)) => {
                             let func_args = vec![char_value];
-                            (builtin_func.func)(func_args)?
+                            let result = (builtin_func.func)(func_args)?;
+                            if let Value::Boolean(true) = result {
+                                return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                            }
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![char_value];
-                            self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)?
+                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(true) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         Value::Function(func) => {
                             let func_args = vec![char_value];
-                            self.apply_function(
+                            match self.apply_function(
                                 Value::Function(func.clone()),
                                 &func_args,
                                 env,
                                 false,
                                 module_registry,
-                            )?
+                            )? {
+                                ExecutionOutcome::Complete(v) => {
+                                    if let Value::Boolean(true) = v {
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                    }
+                                }
+                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                            }
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -1593,13 +1793,9 @@ impl IrRuntime {
                                 operation: "some?".to_string(),
                             });
                         }
-                    };
-                    
-                    if let Value::Boolean(true) = result {
-                        return Ok(Value::Boolean(true));
                     }
                 }
-                Ok(Value::Boolean(false))
+                Ok(ExecutionOutcome::Complete(Value::Boolean(false)))
             }
             _ => {
                 Err(RuntimeError::TypeError {
@@ -1760,7 +1956,7 @@ impl IrRuntime {
         args: Vec<Value>,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<ExecutionOutcome, RuntimeError> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "sort-by".to_string(),
@@ -1790,7 +1986,10 @@ impl IrRuntime {
         // Create pairs of (element, key) for sorting
         let mut pairs = Vec::new();
         for element in elements {
-            let key = self.apply_function(key_fn.clone(), &[element.clone()], env, false, module_registry)?;
+            let key = match self.apply_function(key_fn.clone(), &[element.clone()], env, false, module_registry)? {
+                ExecutionOutcome::Complete(value) => value,
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+            };
             pairs.push((element, key));
         }
 
@@ -1802,9 +2001,9 @@ impl IrRuntime {
 
         // Return the same type as the input collection
         match collection {
-            Value::Vector(_) => Ok(Value::Vector(result)),
-            Value::String(_) => Ok(Value::Vector(result)),
-            Value::List(_) => Ok(Value::List(result)),
+            Value::Vector(_) => Ok(ExecutionOutcome::Complete(Value::Vector(result))),
+            Value::String(_) => Ok(ExecutionOutcome::Complete(Value::Vector(result))),
+            Value::List(_) => Ok(ExecutionOutcome::Complete(Value::List(result))),
             _ => unreachable!(),
         }
     }

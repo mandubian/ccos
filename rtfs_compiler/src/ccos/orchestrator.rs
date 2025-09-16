@@ -24,6 +24,7 @@ use crate::runtime::values::Value;
 use crate::ast::MapKey;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::evaluator::Evaluator;
+use crate::runtime::execution_outcome::ExecutionOutcome;
 use crate::ccos::host::RuntimeHost;
 use crate::runtime::error::{RuntimeResult, RuntimeError};
 use crate::parser::parse_expression;
@@ -635,8 +636,12 @@ impl Orchestrator {
 
         // --- 4. Log Final Plan Status ---
         // Construct execution_result while ensuring we still update the IntentGraph on failure.
+        // Note: evaluator.evaluate now returns Result<ExecutionOutcome, RuntimeError>.
+        // We must unwrap ExecutionOutcome::Complete(value) here. If the evaluator
+        // yields ExecutionOutcome::RequiresHost(host_call) we'll log a PlanPaused
+        // action and return an error for now (orchestrator resumption to be implemented).
         let (execution_result, error_opt) = match final_result {
-            Ok(value) => {
+            Ok(ExecutionOutcome::Complete(value)) => {
                 let res = ExecutionResult { success: true, value, metadata: Default::default() };
                 self.log_action(
                     Action::new(
@@ -648,6 +653,24 @@ impl Orchestrator {
                     .with_result(res.clone())
                 )?;
                 (res, None)
+            },
+            Ok(ExecutionOutcome::RequiresHost(host_call)) => {
+                // Log that the plan is paused and include host_call metadata for debugging
+                let _ = self.log_action(
+                    Action::new(
+                        ActionType::PlanPaused,
+                        plan_id.clone(),
+                        primary_intent_id.clone(),
+                    )
+                    .with_parent(Some(plan_action_id.clone()))
+                    .with_name("paused_on_host_call")
+                    .with_args(vec![RtfsValue::String(format!("host_call: {}", host_call.fn_symbol))])
+                );
+
+                let err = RuntimeError::Generic(format!("Execution yielded a HostCall: {}", host_call.fn_symbol));
+                let failure_value = RtfsValue::String(format!("paused: host_call: {}", host_call.fn_symbol));
+                let res = ExecutionResult { success: false, value: failure_value, metadata: Default::default() };
+                (res, Some(err))
             },
             Err(e) => {
                 // Log aborted action first
