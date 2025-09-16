@@ -11,7 +11,10 @@ mod llm_execute_tests {
         let evaluator = crate::tests::test_utils::create_llm_test_evaluator();
         for form in parsed {
             if let crate::ast::TopLevel::Expression(expr) = form {
-                last = evaluator.evaluate(&expr).expect("eval");
+                match evaluator.evaluate(&expr).expect("eval") {
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => last = value,
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call in test"),
+                }
             }
         }
         match last { Value::String(s) => assert!(s.contains("Hello")), _ => panic!("unexpected") }
@@ -25,7 +28,10 @@ mod llm_execute_tests {
         let evaluator = crate::tests::test_utils::create_llm_test_evaluator();
         for form in parsed {
             if let crate::ast::TopLevel::Expression(expr) = form {
-                last = evaluator.evaluate(&expr).expect("eval");
+                match evaluator.evaluate(&expr).expect("eval") {
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => last = value,
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call in test"),
+                }
             }
         }
         match last { Value::String(s) => assert!(s.contains("Ping")), _ => panic!("unexpected") }

@@ -84,7 +84,6 @@ pub fn create_evaluator(security_context: RuntimeContext) -> Evaluator {
     Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     )
@@ -103,7 +102,6 @@ pub fn create_evaluator_with_marketplace(
     Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     )

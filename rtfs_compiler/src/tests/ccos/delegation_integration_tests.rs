@@ -15,7 +15,7 @@ fn test_delegation_hint_local_model() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    let mut evaluator = Evaluator::new(module_registry, delegation_engine, security_context, host);
+    let mut evaluator = Evaluator::new(module_registry, security_context, host);
     
     // Create a function with delegation hint
     let fn_expr = FnExpr {
@@ -44,7 +44,7 @@ fn test_delegation_hint_remote_model() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    let mut evaluator = Evaluator::new(module_registry, delegation_engine, security_context, host);
+    let mut evaluator = Evaluator::new(module_registry, security_context, host);
     
     // Create a function with delegation hint
     let fn_expr = FnExpr {
@@ -74,16 +74,18 @@ fn test_yield_based_control_flow() {
     let security_context = RuntimeContext::pure();
     let host = Arc::new(crate::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap())),
-        Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new())),
+        Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        )),
         security_context.clone()
     ));
     
     let evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
     
     // Test that pure functions work normally
-    let pure_expr = Expression::Literal(Value::Number(42.0));
+    let pure_expr = Expression::Literal(crate::ast::Literal::Float(42.0));
     let result = evaluator.evaluate(&pure_expr).unwrap();
-    assert!(matches!(result, ExecutionOutcome::Complete(Value::Number(42.0))));
+    assert!(matches!(result, ExecutionOutcome::Complete(Value::Float(42.0))));
     
     // Note: Non-pure function tests would require a full CCOS orchestrator setup
     // which is beyond the scope of this unit test
@@ -96,7 +98,16 @@ fn test_ir_runtime_delegation() {
     map.insert("test-fn".to_string(), ExecTarget::LocalModel("echo-model".to_string()));
     let delegation_engine = Arc::new(StaticDelegationEngine::new(map));
     
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+    let registry_cap = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+    let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry_cap));
+    let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let security_context = crate::runtime::security::RuntimeContext::pure();
+    let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
+    ));
+    let mut ir_runtime = IrRuntime::new(host, security_context);
     
     // The IR runtime should have the model registry available
     // This test verifies that the delegation engine integration is complete
