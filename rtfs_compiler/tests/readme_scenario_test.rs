@@ -25,7 +25,6 @@ async fn test_readme_scenario() {
     use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
   use std::sync::Arc as StdArc;
     use rtfs_compiler::runtime::security::RuntimeContext;
-    use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
     use rtfs_compiler::ccos::host::RuntimeHost;
     use rtfs_compiler::ccos::causal_chain::CausalChain;
     use std::sync::Mutex;
@@ -46,7 +45,6 @@ async fn test_readme_scenario() {
     // Create evaluator
     let evaluator = Evaluator::new(
         module_registry,
-        delegation_engine,
         security_context,
         host
     );
@@ -112,7 +110,7 @@ async fn test_readme_scenario() {
     let result_value = result.unwrap();
 
     match result_value {
-        Value::Map(map) => {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Map(map)) => {
             assert!(map.contains_key(&MapKey::Keyword(Keyword("analysis-document".to_string()))));
             assert!(map.contains_key(&MapKey::Keyword(Keyword("press-release-draft".to_string()))));
             assert!(map.contains_key(&MapKey::Keyword(Keyword("notification-status".to_string()))));
@@ -124,6 +122,6 @@ async fn test_readme_scenario() {
                 *notification_status == Value::Keyword(Keyword(":email-fallback-success".to_string()))
             );
         }
-        _ => panic!("Expected a map as the final result"),
+        _ => panic!("Expected Complete(Map) as the final result"),
     }
 }
