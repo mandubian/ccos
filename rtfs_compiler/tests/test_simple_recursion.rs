@@ -31,7 +31,6 @@ fn test_simple_mutual_recursion() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
@@ -70,12 +69,14 @@ fn test_simple_factorial() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
     let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
     
     // Expected: 120 (5!)
-    assert_eq!(result, runtime::values::Value::Integer(120));
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(runtime::values::Value::Integer(120)) => {},
+        _ => panic!("Expected Complete(Integer(120)) result"),
+    }
 }

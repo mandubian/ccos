@@ -18,20 +18,20 @@ fn test_missing_stdlib_functions() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Boolean(true));
 
     let expr = parse_expression("(empty? [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Boolean(false));
 
     // Test cons
     let expr = parse_expression("(cons 1 [2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(v) = result {
         assert_eq!(v.len(), 3);
         assert_eq!(v[0], Value::Integer(1));
@@ -43,16 +43,16 @@ fn test_missing_stdlib_functions() {
 
     // Test first
     let expr = parse_expression("(first [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(1));
 
     let expr = parse_expression("(first [])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
-    assert_eq!(result, Value::Nil);
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
+    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_missing_stdlib_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
 
     // Test rest
     let expr = parse_expression("(rest [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(v) = result {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0], Value::Integer(2));
@@ -62,7 +62,7 @@ fn test_missing_stdlib_functions() {
     }
 
     let expr = parse_expression("(rest [])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(v) = result {
         assert_eq!(v.len(), 0);
     } else {

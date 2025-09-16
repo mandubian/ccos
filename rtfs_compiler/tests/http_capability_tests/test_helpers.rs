@@ -3,7 +3,7 @@
 //! This module provides reusable functions for initializing capability registry,
 //! marketplace, runtime host, and evaluators with consistent patterns across tests.
 
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
@@ -42,7 +42,7 @@ pub fn create_causal_chain() -> Rc<RefCell<CausalChain>> {
 
 /// Creates a new delegation engine with empty configuration
 pub fn create_delegation_engine() -> Arc<StaticDelegationEngine> {
-    Arc::new(StaticDelegationEngine::new_empty())
+    Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()))
 }
 
 /// Creates a new module registry wrapped in Rc<>
@@ -79,14 +79,12 @@ pub fn create_runtime_host_with_marketplace(
 /// Creates a complete evaluator with the specified security context
 pub fn create_evaluator(security_context: RuntimeContext) -> Evaluator {
     let module_registry = create_module_registry();
-    let delegation_engine = create_delegation_engine();
     let stdlib_env = StandardLibrary::create_global_environment();
     let host = create_runtime_host(security_context.clone());
     
     Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     )
@@ -98,14 +96,12 @@ pub fn create_evaluator_with_marketplace(
     security_context: RuntimeContext,
 ) -> Evaluator {
     let module_registry = create_module_registry();
-    let delegation_engine = create_delegation_engine();
     let stdlib_env = StandardLibrary::create_global_environment();
     let host = create_runtime_host_with_marketplace(marketplace, security_context.clone());
     
     Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     )

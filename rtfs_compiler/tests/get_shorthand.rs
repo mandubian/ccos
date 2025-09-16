@@ -3,7 +3,7 @@ use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::host_interface::HostInterface;
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -26,9 +26,8 @@ impl HostInterface for StubHost {
 fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs_compiler::runtime::error::RuntimeError> {
     // prepare evaluator
     let module_registry = Arc::new(ModuleRegistry::new());
-    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let host = Arc::new(StubHost);
-    let mut ev = Evaluator::new_with_defaults(module_registry, delegation_engine, host);
+    let mut ev = Evaluator::new_with_defaults(module_registry, host);
 
     // Test shorthand get after set!
     let set_prog = "(do (step \"set\" (set! :k \"v\")))";

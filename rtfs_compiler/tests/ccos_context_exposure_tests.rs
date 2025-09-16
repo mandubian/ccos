@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use tokio::runtime::Runtime;
 use rtfs_compiler::runtime::stdlib::register_default_capabilities;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::runtime::values::Value;
 
 // Verify that when context exposure is allowed for ccos.echo,
@@ -36,7 +36,7 @@ fn test_context_exposure_with_step_overrides() {
 
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, ctx));
   let module_registry = Arc::new(ModuleRegistry::new());
-    let de = Arc::new(StaticDelegationEngine::new_empty());
+    let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let mut evaluator = Evaluator::new(module_registry, de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host.clone());
 
     // Set execution context to enable snapshot
@@ -49,7 +49,12 @@ fn test_context_exposure_with_step_overrides() {
     "#;
     let expr = parser::parse(rtfs).expect("parse");
     let result = evaluator.eval_toplevel(&expr).expect("eval");
-    assert_eq!(result, Value::String("hello".to_string()));
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::String(s)) => {
+            assert_eq!(s, "hello");
+        },
+        _ => panic!("Expected Complete(String) result"),
+    }
 
     // Now disable exposure via override and ensure call still works
     let rtfs2 = r#"
@@ -58,7 +63,12 @@ fn test_context_exposure_with_step_overrides() {
     "#;
     let expr2 = parser::parse(rtfs2).expect("parse2");
     let result2 = evaluator.eval_toplevel(&expr2).expect("eval2");
-    assert_eq!(result2, Value::String("world".to_string()));
+    match result2 {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::String(s)) => {
+            assert_eq!(s, "world");
+        },
+        _ => panic!("Expected Complete(String) result"),
+    }
 
     host.clear_execution_context();
 }

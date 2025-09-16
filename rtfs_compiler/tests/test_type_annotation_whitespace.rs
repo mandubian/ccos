@@ -20,7 +20,7 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
     let ast_result = match evaluator.evaluate(&parsed) {
         Ok(value) => {
             println!("   ✓ AST runtime executed: {:?}", value);

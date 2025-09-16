@@ -2,13 +2,12 @@ use rtfs_compiler::runtime::ir_runtime::IrRuntime;
 use rtfs_compiler::ir::core::{IrNode, IrMapEntry};
 use rtfs_compiler::ir::core::IrNode::*;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use std::sync::Arc;
 
 // Simple smoke test for :params handling in IR Step nodes.
 #[test]
 fn step_params_bind_as_percent_params() {
-    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let mut runtime = IrRuntime::new_compat(delegation_engine);
 
     // Construct a params map: {"k": 123}

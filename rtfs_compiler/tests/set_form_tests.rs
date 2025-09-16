@@ -9,10 +9,9 @@ use std::collections::HashMap;
 fn test_set_with_symbol() {
     // Build required runtime collaborators using available constructors
     let module_registry = Arc::new(rtfs_compiler::runtime::module_runtime::ModuleRegistry::new());
-    let delegation_engine = Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     // Simple DummyHost defined below implements HostInterface for tests
     let host: Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> = Arc::new(DummyHost::new());
-    let ev = Evaluator::new_with_defaults(module_registry, delegation_engine, host);
+    let ev = Evaluator::new_with_defaults(module_registry, host);
 
     let mut env = Environment::new();
 
@@ -31,9 +30,8 @@ fn test_set_with_symbol() {
 #[test]
 fn test_set_with_keyword() {
     let module_registry = Arc::new(rtfs_compiler::runtime::module_runtime::ModuleRegistry::new());
-    let delegation_engine = Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let host: Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> = Arc::new(DummyHost::new());
-    let ev = Evaluator::new_with_defaults(module_registry, delegation_engine, host);
+    let ev = Evaluator::new_with_defaults(module_registry, host);
 
     let mut env = Environment::new();
 
@@ -52,9 +50,8 @@ fn test_set_with_keyword() {
 #[test]
 fn test_set_invalid_first_arg() {
     let module_registry = Arc::new(rtfs_compiler::runtime::module_runtime::ModuleRegistry::new());
-    let delegation_engine = Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let host: Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> = Arc::new(DummyHost::new());
-    let ev = Evaluator::new_with_defaults(module_registry, delegation_engine, host);
+    let ev = Evaluator::new_with_defaults(module_registry, host);
 
     let mut env = Environment::new();
 

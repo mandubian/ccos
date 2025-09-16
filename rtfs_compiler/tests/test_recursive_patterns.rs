@@ -25,7 +25,7 @@ fn test_mutual_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
@@ -66,7 +66,7 @@ fn test_nested_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
@@ -95,7 +95,7 @@ fn test_higher_order_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
@@ -124,7 +124,7 @@ fn test_three_way_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
+        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
