@@ -5,7 +5,7 @@ use crate::ir::converter::IrConverter;
 use crate::parser;
 use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
-    values::Value,
+    values::Value, execution_outcome::ExecutionOutcome,
 };
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::ccos::capabilities::registry::CapabilityRegistry;
