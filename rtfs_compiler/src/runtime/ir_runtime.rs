@@ -7,7 +7,6 @@ use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
 use super::values::{Function, Value, BuiltinFunctionWithContext};
 use crate::ast::{Expression, Keyword, MapKey};
-use crate::runtime::delegation::{CallContext, DelegationEngine, ExecTarget, ModelRegistry, StaticDelegationEngine};
 use crate::ir::converter::IrConverter;
 use crate::ir::core::{IrNode, IrPattern};
 use crate::runtime::RuntimeStrategy;
@@ -22,8 +21,6 @@ use crate::runtime::security::RuntimeContext;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::causal_chain::CausalChain;
 // L4AwareDelegationEngine is CCOS-specific, not used in pure RTFS
-use crate::ccos::caching::l4_content_addressable::L4CacheClient;
-use crate::bytecode::{WasmExecutor, BytecodeExecutor};
 
 /// A `RuntimeStrategy` that uses the `IrRuntime`.
 /// It owns both the runtime and the module registry, breaking the dependency cycle.
@@ -50,20 +47,6 @@ impl IrStrategy {
         }
     }
 
-    pub fn with_delegation_engine(mut module_registry: ModuleRegistry, _delegation_engine: Arc<dyn DelegationEngine>) -> Self {
-        // Load stdlib into the module registry if not already loaded
-        let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-        let security_context = RuntimeContext::pure();
-        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
-
-        Self {
-            runtime: IrRuntime::new(host, security_context.clone()),
-            module_registry,
-        }
-    }
 }
 
 impl RuntimeStrategy for IrStrategy {
@@ -94,7 +77,6 @@ impl RuntimeStrategy for IrStrategy {
 /// Executes a program represented in IR form.
 #[derive(Clone, Debug)]
 pub struct IrRuntime {
-    model_registry: Arc<ModelRegistry>,
     // Host for CCOS interactions (notify step start/complete/fail, set overrides, etc.)
     host: Arc<dyn HostInterface>,
     // Security context and context manager for step scoping
@@ -105,53 +87,14 @@ pub struct IrRuntime {
 impl IrRuntime {
     /// Creates a new IR runtime.
     pub fn new(host: Arc<dyn HostInterface>, security_context: RuntimeContext) -> Self {
-        let model_registry = Arc::new(ModelRegistry::with_defaults());
         IrRuntime { 
-            model_registry,
             host,
             security_context,
             context_manager: RefCell::new(ContextManager::new()),
         }
     }
 
-    /// Compatibility constructor for callers that only have a runtime delegation engine.
-    /// Constructs a default host and security context and forwards to `new`.
-    pub fn new_compat(_delegation_engine: Arc<dyn DelegationEngine>) -> Self {
-        let model_registry = Arc::new(ModelRegistry::with_defaults());
-        // Build defaults matching IrStrategy construction
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-        let security_context = RuntimeContext::pure();
-        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
 
-        // Ensure the default host has a minimal execution context so that
-        // notify_step_started / notify_step_completed can be called from
-        // IR runtime tests that use `new_compat`.
-        host.set_execution_context("ir-runtime-default-plan".to_string(), vec![], "root-action".to_string());
-
-        IrRuntime::new(host, security_context)
-    }
-
-    /// Compatibility constructor for callers that have a CCOS delegation engine.
-    /// This wraps the CCOS engine into the runtime delegation trait and forwards
-    /// to the standard constructor.
-    pub fn new_compat_from_ccos(_delegation_engine: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> Self {
-        let model_registry = Arc::new(ModelRegistry::with_defaults());
-        // Build defaults matching IrStrategy construction
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-        let security_context = RuntimeContext::pure();
-        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
-
-        // Ensure the default host has a minimal execution context so that
-        // notify_step_started / notify_step_completed can be called from
-        // IR runtime tests that use `new_compat`.
-        host.set_execution_context("ir-runtime-default-plan".to_string(), vec![], "root-action".to_string());
-
-        IrRuntime::new(host, security_context)
-    }
 
     /// Executes a program by running its top-level forms.
     pub fn execute_program(
@@ -972,11 +915,8 @@ impl IrRuntime {
         // Convert arguments to a prompt string
         let prompt = self.args_to_prompt(args)?;
         
-        // Look up the model provider
-        let _provider = self.model_registry.get(model_id)
-            .ok_or_else(|| RuntimeError::NotImplemented(
-                format!("Model provider '{}' not found", model_id)
-            ))?;
+        // Model execution is now handled by CCOS through yield-based control flow
+        // This method should not be called in the new architecture
         
         // Call the model (placeholder implementation)
         let response = format!("[Model inference placeholder for {}]", model_id);

@@ -7,7 +7,7 @@ use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value,
 };
-use crate::runtime::delegation::StaticDelegationEngine;
+use crate::ccos::delegation::StaticDelegationEngine;
 use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::host::RuntimeHost;

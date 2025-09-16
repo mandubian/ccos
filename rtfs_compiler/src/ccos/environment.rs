@@ -20,7 +20,6 @@ use crate::runtime::host_interface::HostInterface;
 use crate::ccos::{
     causal_chain::CausalChain,
 };
-use crate::runtime::delegation::StaticDelegationEngine;
 use crate::ast::{Expression, TopLevel};
 use crate::parser;
 use std::sync::Arc;
@@ -167,11 +166,9 @@ impl CCOSEnvironment {
         let mut module_registry = crate::runtime::ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
         // Create delegation engine
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         // Create evaluator
         let evaluator = Evaluator::new(
             std::sync::Arc::new(module_registry),
-            delegation_engine,
             runtime_context,
             host.clone(),
         );

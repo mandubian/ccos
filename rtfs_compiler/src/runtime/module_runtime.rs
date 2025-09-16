@@ -634,8 +634,13 @@ impl ModuleRegistry {
             }
         } else {
             // Before failing, try to load the module
-            let delegation_engine = Arc::new(crate::runtime::delegation::StaticDelegationEngine::new_empty());
-            let mut ir_runtime = IrRuntime::new_compat(delegation_engine); // Temporary runtime
+            // Create a temporary runtime with default host and security context
+            let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+            let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(capability_registry.clone()));
+            let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().expect("Failed to create causal chain")));
+            let security_context = crate::runtime::security::RuntimeContext::pure();
+            let host: Arc<dyn crate::runtime::host_interface::HostInterface> = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+            let mut ir_runtime = IrRuntime::new(host, security_context); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
                     if let Some(export) = module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(symbol_name) {
@@ -760,7 +765,15 @@ impl ModuleAwareRuntime {
     pub fn new() -> Self {
         let module_registry = ModuleRegistry::new();
         ModuleAwareRuntime {
-            ir_runtime: IrRuntime::new_compat(Arc::new(crate::runtime::delegation::StaticDelegationEngine::new_empty())),
+            ir_runtime: {
+                // Create a default runtime with minimal host
+                let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+                let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(capability_registry.clone()));
+                let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().expect("Failed to create causal chain")));
+                let security_context = crate::runtime::security::RuntimeContext::pure();
+                let host: Arc<dyn crate::runtime::host_interface::HostInterface> = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+                IrRuntime::new(host, security_context)
+            },
             module_registry,
         }
     }
@@ -985,7 +998,7 @@ impl ModuleAwareRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::StaticDelegationEngine;
+    use crate::ccos::delegation::StaticDelegationEngine;
 
     #[test]
     fn test_module_registry_creation() {

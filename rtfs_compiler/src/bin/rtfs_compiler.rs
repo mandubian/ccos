@@ -129,7 +129,6 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 let evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::sync::Arc::new(module_registry),
-                        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
                         rtfs_compiler::runtime::security::RuntimeContext::full(),
                         host,
                     );
@@ -292,7 +291,6 @@ fn main() {
                 let mut evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::sync::Arc::new(module_registry),
-                        std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()),
                         rtfs_compiler::runtime::security::RuntimeContext::full(),
                         host.clone(),
                     );

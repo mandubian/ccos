@@ -2,7 +2,7 @@
 mod tests {
     use crate::runtime::module_runtime::ModuleRegistry;
     use crate::runtime::ir_runtime::IrRuntime;
-    use crate::runtime::delegation::StaticDelegationEngine;
+    use crate::ccos::delegation::StaticDelegationEngine;
     use std::path::PathBuf;
     use std::collections::HashMap;
     use std::sync::Arc;

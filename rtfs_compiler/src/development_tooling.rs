@@ -9,11 +9,10 @@ use crate::runtime::{
 };
 use crate::ccos::host::RuntimeHost;
 use crate::ccos::causal_chain::CausalChain;
-use crate::runtime::delegation::StaticDelegationEngine;
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::collections::HashMap;
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]
@@ -23,10 +22,14 @@ struct IrStrategy {
 
 impl IrStrategy {
     fn new() -> Self {
-        let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
-        // Use compatibility constructor which builds a default host + security context
+        // Create default host and security context for development tooling
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::types::CapabilityMarketplace::new(capability_registry));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain, capability_marketplace, security_context.clone()));
         Self {
-            ir_runtime: IrRuntime::new_compat(delegation_engine),
+            ir_runtime: IrRuntime::new(host, security_context),
         }
     }
 }
@@ -84,7 +87,6 @@ impl Default for ReplContext {
 
 impl RtfsRepl {
     pub fn new(module_registry: ModuleRegistry) -> Self {
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
@@ -99,7 +101,6 @@ impl RtfsRepl {
         Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 std::sync::Arc::new(module_registry.clone()),
-                delegation_engine,
                 security_context,
                 host.clone(),
             )))),
@@ -115,7 +116,6 @@ impl RtfsRepl {
     ) -> Self {
         let runtime_strategy: Box<dyn RuntimeStrategy> = match strategy {
             RuntimeStrategyValue::Ast => {
-                let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
                 let capability_marketplace = std::sync::Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
                 let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
@@ -129,7 +129,6 @@ impl RtfsRepl {
                 
                 Box::new(TreeWalkingStrategy::new(Evaluator::new(
                     std::sync::Arc::new(module_registry.clone()),
-                    delegation_engine,
                     security_context,
                     host.clone(),
                 )))
@@ -239,7 +238,6 @@ impl RtfsRepl {
             }
             ":runtime-ast" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::Ast;
-                let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
                 let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
                 let capability_marketplace = std::sync::Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
                 let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
@@ -253,7 +251,6 @@ impl RtfsRepl {
                 
                 self.runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                     Arc::new(self.module_registry.clone()),
-                    delegation_engine,
                     security_context,
                     host.clone(),
                 ))));
@@ -525,7 +522,6 @@ pub enum TestExpectation {
 
 impl RtfsTestFramework {
     pub fn new(module_registry: ModuleRegistry) -> Self {
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
         let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
@@ -541,7 +537,6 @@ impl RtfsTestFramework {
             tests: Vec::new(),
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Arc::new(module_registry.clone()),
-                delegation_engine,
                 security_context,
                 host.clone(),
             )))),
