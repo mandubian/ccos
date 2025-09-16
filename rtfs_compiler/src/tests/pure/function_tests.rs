@@ -163,7 +163,7 @@ mod function_tests {
         let mut module_registry = ModuleRegistry::new();
         // Load stdlib to get map and other builtin functions
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-        let de = Arc::new(StaticDelegationEngine::new_empty());
+        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
         let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
@@ -173,7 +173,7 @@ mod function_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), de, crate::runtime::security::RuntimeContext::pure(), host);
+    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), crate::runtime::security::RuntimeContext::pure(), host);
         println!("Symbols in environment: {:?}", evaluator.env.symbol_names());
         println!(
             "Map lookupable: {:?}",
@@ -187,7 +187,12 @@ mod function_tests {
         }
 
         // Evaluate all top-level forms in sequence
-        evaluator.eval_toplevel(&parsed)
+        match evaluator.eval_toplevel(&parsed)? {
+            crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+            crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+            }
+        }
     }
 
     fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> RuntimeResult<Value> {
@@ -203,7 +208,12 @@ mod function_tests {
             capability_marketplace,
             security_context.clone(),
         ));
-    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), de, security_context, host);
-        evaluator.eval_toplevel(&parsed)
+    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
+        match evaluator.eval_toplevel(&parsed)? {
+            crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+            crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+            }
+        }
     }
 }

@@ -3,6 +3,9 @@ mod tests {
     use crate::runtime::module_runtime::ModuleRegistry;
     use crate::runtime::ir_runtime::IrRuntime;
     use crate::ccos::delegation::StaticDelegationEngine;
+    use crate::ccos::capabilities::registry::CapabilityRegistry;
+    use crate::ccos::capability_marketplace::CapabilityMarketplace;
+    use crate::ccos::host::RuntimeHost;
     use std::path::PathBuf;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -15,8 +18,16 @@ mod tests {
         let test_modules_path = PathBuf::from("test_modules");
         registry.add_module_path(test_modules_path);
         
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let registry_cap = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+        let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry_cap));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let host = std::sync::Arc::new(RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
         
         // Test loading math.utils module
         let result = registry.load_module("math.utils", &mut ir_runtime);
@@ -77,8 +88,16 @@ mod tests {
         // The actual path resolution is internal, so we test indirectly
         // by trying to load a non-existent module and checking the error message
         let mut test_registry = ModuleRegistry::new();
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let registry_cap = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+        let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry_cap));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let host = std::sync::Arc::new(RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
         
         let result = test_registry.load_module("non.existent.module", &mut ir_runtime);
         assert!(result.is_err());
@@ -94,8 +113,16 @@ mod tests {
     #[test]
     fn test_circular_dependency_detection() {
         let mut registry = ModuleRegistry::new();
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let registry_cap = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
+        let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry_cap));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let security_context = crate::runtime::security::RuntimeContext::pure();
+        let host = std::sync::Arc::new(RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
         
         // Since loading_stack is private, we can't directly test circular dependency detection.
         // Instead, we test that loading a non-existent module fails appropriately.
