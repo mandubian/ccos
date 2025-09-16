@@ -30,7 +30,6 @@ impl StdlibTestRunner {
             capability_marketplace,
             security_context.clone(),
         ));
-        let delegation_engine = Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new(
             std::collections::HashMap::new()
         ));
         let evaluator = Evaluator::new(

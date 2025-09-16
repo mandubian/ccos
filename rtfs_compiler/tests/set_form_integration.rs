@@ -1,7 +1,7 @@
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::runtime::host_interface::HostInterface;
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::runtime::error::RuntimeResult;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::Symbol;
@@ -55,10 +55,9 @@ async fn test_set_keyword_coercion() -> RuntimeResult<()> {
     // Create minimal dependencies for evaluator
     let module_registry = Arc::new(ModuleRegistry::new());
     // Use the built-in static delegation engine with empty policy
-    let delegation_engine = Arc::new(StaticDelegationEngine::new_empty());
     let host = Arc::new(StubHost);
 
-    let mut ev = Evaluator::new_with_defaults(module_registry, delegation_engine, host);
+    let mut ev = Evaluator::new_with_defaults(module_registry, host);
 
     // Program: (do (set! :k "v"))
     let program = r#"(do (set! :k "v"))"#;

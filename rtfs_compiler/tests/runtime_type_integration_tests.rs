@@ -19,7 +19,7 @@ use rtfs_compiler::runtime::type_validator::{
     TypeCheckingConfig, ValidationLevel
 };
 use rtfs_compiler::runtime::error::RuntimeError;
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::types::ExecutionResult;
 
 /// Mock host interface for testing
@@ -72,21 +72,19 @@ mod hybrid_runtime_integration_tests {
     fn create_test_evaluator_optimized() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
         let static_map = HashMap::new();
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();
         let host = Arc::new(MockHost);
         
-        Evaluator::new_optimized(module_registry, delegation_engine, security_context, host)
+        Evaluator::new_optimized(module_registry, security_context, host)
     }
 
     fn create_test_evaluator_strict() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
         let static_map = HashMap::new();
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(static_map));
         let security_context = RuntimeContext::pure();
         let host = Arc::new(MockHost);
         
-        Evaluator::new_strict(module_registry, delegation_engine, security_context, host)
+        Evaluator::new_strict(module_registry, security_context, host)
     }
 
     /// Test that optimized evaluator skips validation for compile-time verified literals

@@ -19,26 +19,26 @@ fn test_factorial() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test factorial of 0
     let expr = parse_expression("(factorial 0)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(1));
 
     // Test factorial of 1
     let expr = parse_expression("(factorial 1)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(1));
 
     // Test factorial of 5
     let expr = parse_expression("(factorial 5)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(120));
 
     // Test factorial of 7
     let expr = parse_expression("(factorial 7)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(5040));
 
     // Test error case - negative number
@@ -65,31 +65,31 @@ fn test_length_value() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test length of empty vector
     let expr = parse_expression("(length [])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(0));
 
     // Test length of vector
     let expr = parse_expression("(length [1 2 3 4])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(4));
 
     // Test length of string
     let expr = parse_expression("(length \"hello\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(5));
 
     // Test length of empty string
     let expr = parse_expression("(length \"\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(0));
 
     // Test length of map
     let expr = parse_expression("(length {:a 1 :b 2})").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(2));
 
     // Test length of nil
@@ -117,11 +117,11 @@ fn test_current_time() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test current-time returns a string
     let expr = parse_expression("(current-time)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::String(time_str) = result {
         // Should be a valid RFC3339 timestamp
         assert!(time_str.contains("T"));
@@ -150,11 +150,11 @@ fn test_json_functions() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test parse-json with simple object
     let expr = parse_expression("(parse-json \"{\\\"name\\\": \\\"John\\\", \\\"age\\\": 30}\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Map(map) = result {
         assert_eq!(map.len(), 2);
         assert_eq!(map.get(&MapKey::String("name".to_string())), Some(&Value::String("John".to_string())));
@@ -165,7 +165,7 @@ fn test_json_functions() {
 
     // Test parse-json with array
     let expr = parse_expression("(parse-json \"[1, 2, 3]\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(vec) = result {
         assert_eq!(vec.len(), 3);
         assert_eq!(vec[0], Value::Integer(1));
@@ -177,16 +177,16 @@ fn test_json_functions() {
 
     // Test parse-json with primitives
     let expr = parse_expression("(parse-json \"true\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Boolean(true));
 
     let expr = parse_expression("(parse-json \"null\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
-    assert_eq!(result, Value::Nil);
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
+    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_implemented_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
 
     // Test serialize-json with map
     let expr = parse_expression("(serialize-json {:name \"Alice\" :age 25})").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::String(json_str) = result {
         // Should be valid JSON containing the key-value pairs
         assert!(json_str.contains("name"));
@@ -199,7 +199,7 @@ fn test_json_functions() {
 
     // Test serialize-json with vector
     let expr = parse_expression("(serialize-json [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::String(json_str) = result {
         assert_eq!(json_str, "[1,2,3]");
     } else {
@@ -230,16 +230,16 @@ fn test_file_exists() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test file-exists? with existing file (Cargo.toml should exist)
     let expr = parse_expression("(file-exists? \"Cargo.toml\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Boolean(true));
 
     // Test file-exists? with non-existing file
     let expr = parse_expression("(file-exists? \"nonexistent_file_12345.txt\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Boolean(false));
 
     // Test error case - wrong type
@@ -261,20 +261,20 @@ fn test_get_env() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Set an environment variable for testing
     std::env::set_var("RTFS_TEST_VAR", "test_value");
 
     // Test get-env with existing variable
     let expr = parse_expression("(get-env \"RTFS_TEST_VAR\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::String("test_value".to_string()));
 
     // Test get-env with non-existing variable
     let expr = parse_expression("(get-env \"NON_EXISTENT_VAR_12345\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
-    assert_eq!(result, Value::Nil);
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
+    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_implemented_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
 
     // Test error case - wrong type
     let expr = parse_expression("(get-env 123)").expect("Parse failed");
@@ -298,22 +298,22 @@ fn test_log_function() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test log function (just ensure it doesn't crash)
     let expr = parse_expression("(log \"test message\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
-    assert_eq!(result, Value::Nil);
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
+    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_implemented_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
 
     // Test log with multiple arguments
     let expr = parse_expression("(log \"Hello\" \"world\" 123)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
-    assert_eq!(result, Value::Nil);
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
+    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_implemented_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
 
     // Test log with no arguments
     let expr = parse_expression("(log)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
-    assert_eq!(result, Value::Nil);
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
+    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_implemented_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
 }
 
 #[test]
@@ -330,11 +330,11 @@ fn test_agent_functions() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test discover-agents
     let expr = parse_expression("(discover-agents)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Vector(vec![]));
 
     // Test discover-agents with wrong arity
@@ -344,7 +344,7 @@ fn test_agent_functions() {
 
     // Test task-coordination
     let expr = parse_expression("(task-coordination \"task1\")").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Map(map) = result {
         assert!(map.contains_key(&MapKey::Keyword(rtfs_compiler::ast::Keyword("status".to_string()))));
         assert!(map.contains_key(&MapKey::Keyword(rtfs_compiler::ast::Keyword("task-count".to_string()))));
@@ -354,7 +354,7 @@ fn test_agent_functions() {
 
     // Test discover-and-assess-agents
     let expr = parse_expression("(discover-and-assess-agents)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Map(map) = result {
         assert!(map.contains_key(&MapKey::Keyword(rtfs_compiler::ast::Keyword("discovered".to_string()))));
         assert!(map.contains_key(&MapKey::Keyword(rtfs_compiler::ast::Keyword("assessed".to_string()))));
@@ -365,7 +365,7 @@ fn test_agent_functions() {
 
     // Test establish-system-baseline
     let expr = parse_expression("(establish-system-baseline)").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Map(map) = result {
         assert!(map.contains_key(&MapKey::Keyword(rtfs_compiler::ast::Keyword("baseline-established".to_string()))));
         assert!(map.contains_key(&MapKey::Keyword(rtfs_compiler::ast::Keyword("timestamp".to_string()))));
@@ -388,11 +388,11 @@ fn test_map_filter_functions() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test map function
     let expr = parse_expression("(map (fn [x] (* x 2)) [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(vec) = result {
         assert_eq!(vec.len(), 3);
         assert_eq!(vec[0], Value::Integer(2));
@@ -404,7 +404,7 @@ fn test_map_filter_functions() {
 
     // Test filter function
     let expr = parse_expression("(filter (fn [x] (> x 2)) [1 2 3 4 5])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(vec) = result {
         assert_eq!(vec.len(), 3);
         assert_eq!(vec[0], Value::Integer(3));
@@ -416,7 +416,7 @@ fn test_map_filter_functions() {
 
     // Test filter with boolean filter
     let expr = parse_expression("(filter (fn [x] (= x 3)) [1 2 3 4 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     if let Value::Vector(vec) = result {
         assert_eq!(vec.len(), 2);
         assert_eq!(vec[0], Value::Integer(3));
@@ -439,21 +439,21 @@ fn test_reduce_function() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty()), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(module_registry, Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
 
     // Test reduce with initial value
     let expr = parse_expression("(reduce + 0 [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(6));
 
     // Test reduce without initial value
     let expr = parse_expression("(reduce + [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(6));
 
     // Test reduce with empty collection and initial value
     let expr = parse_expression("(reduce + 42 [])").expect("Parse failed");
-    let result = evaluator.evaluate_with_env(&expr, &mut env).expect("Evaluation failed");
+    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
     assert_eq!(result, Value::Integer(42));
 
     // Test error case - empty collection without initial value

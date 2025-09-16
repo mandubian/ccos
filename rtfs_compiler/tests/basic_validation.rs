@@ -4,7 +4,7 @@ use rtfs_compiler::parser;
 use rtfs_compiler::runtime::Evaluator;
 use rtfs_compiler::runtime::RuntimeResult;
 use rtfs_compiler::runtime::Value;
-use rtfs_compiler::runtime::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
 // use std::rc::Rc; // legacy
@@ -14,7 +14,7 @@ fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
     let mut module_registry = ModuleRegistry::new();
     // Load stdlib to get basic functions
     rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-    let de = Arc::new(StaticDelegationEngine::new_empty());
+    let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
     let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));

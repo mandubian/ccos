@@ -15,7 +15,6 @@ use tokio::sync::RwLock;
 #[test]
 fn step_params_evaluation_error_prevents_body() -> Result<(), String> {
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-    let delegation_engine = std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();
 
@@ -27,7 +26,6 @@ fn step_params_evaluation_error_prevents_body() -> Result<(), String> {
     let mut evaluator = Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     );
@@ -61,7 +59,6 @@ fn step_params_evaluation_error_prevents_body() -> Result<(), String> {
 #[test]
 fn step_params_non_string_key_rejected() -> Result<(), String> {
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-    let delegation_engine = std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();
 
@@ -73,7 +70,6 @@ fn step_params_non_string_key_rejected() -> Result<(), String> {
     let mut evaluator = Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     );
@@ -107,7 +103,6 @@ fn step_params_non_string_key_rejected() -> Result<(), String> {
 #[test]
 fn step_params_shadowing_for_nested_steps() -> Result<(), String> {
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-    let delegation_engine = std::sync::Arc::new(rtfs_compiler::runtime::delegation::StaticDelegationEngine::new_empty());
     let stdlib_env = StandardLibrary::create_global_environment();
     let security_context = RuntimeContext::pure();
 
@@ -119,7 +114,6 @@ fn step_params_shadowing_for_nested_steps() -> Result<(), String> {
     let mut evaluator = Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     );
