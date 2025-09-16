@@ -37,7 +37,7 @@ fn test_context_exposure_with_step_overrides() {
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, ctx));
   let module_registry = Arc::new(ModuleRegistry::new());
     let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
-    let mut evaluator = Evaluator::new(module_registry, de, rtfs_compiler::runtime::security::RuntimeContext::pure(), host.clone());
+    let mut evaluator = Evaluator::new(module_registry, rtfs_compiler::runtime::security::RuntimeContext::pure(), host.clone());
 
     // Set execution context to enable snapshot
     host.set_execution_context("plan-1".into(), vec!["intent-1".into()], "root".into());

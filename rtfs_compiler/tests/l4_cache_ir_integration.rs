@@ -65,7 +65,7 @@ fn test_ir_cached_execution() {
     // Execute through IR runtime
     let de_inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(de_inner);
-    let mut ir_runtime = IrRuntime::new_compat(de);
+    let mut ir_runtime = IrRuntime::new(host, security_context);
     let mut env = IrEnvironment::with_stdlib(&module_registry).expect("env");
 
     // Inject simple builtin '+' into environment

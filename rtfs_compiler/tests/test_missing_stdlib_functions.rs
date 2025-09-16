@@ -22,51 +22,66 @@ fn test_missing_stdlib_functions() {
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    assert_eq!(result, Value::Boolean(true));
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Boolean(true)) => {},
+        _ => panic!("Expected Complete(Boolean(true)) result"),
+    }
 
     let expr = parse_expression("(empty? [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    assert_eq!(result, Value::Boolean(false));
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Boolean(false)) => {},
+        _ => panic!("Expected Complete(Boolean(false)) result"),
+    }
 
     // Test cons
     let expr = parse_expression("(cons 1 [2 3])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    if let Value::Vector(v) = result {
-        assert_eq!(v.len(), 3);
-        assert_eq!(v[0], Value::Integer(1));
-        assert_eq!(v[1], Value::Integer(2));
-        assert_eq!(v[2], Value::Integer(3));
-    } else {
-        panic!("Expected vector result from cons");
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Vector(v)) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::Integer(1));
+            assert_eq!(v[1], Value::Integer(2));
+            assert_eq!(v[2], Value::Integer(3));
+        },
+        _ => panic!("Expected Complete(Vector) result from cons"),
     }
 
     // Test first
     let expr = parse_expression("(first [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    assert_eq!(result, Value::Integer(1));
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Integer(1)) => {},
+        _ => panic!("Expected Complete(Integer(1)) result"),
+    }
 
     let expr = parse_expression("(first [])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    match result { rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => tests/test_missing_stdlib_functions.rs, rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call") };
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => {},
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call"),
+    }
 
     // Test rest
     let expr = parse_expression("(rest [1 2 3])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    if let Value::Vector(v) = result {
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[0], Value::Integer(2));
-        assert_eq!(v[1], Value::Integer(3));
-    } else {
-        panic!("Expected vector result from rest");
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Vector(v)) => {
+            assert_eq!(v.len(), 2);
+            assert_eq!(v[0], Value::Integer(2));
+            assert_eq!(v[1], Value::Integer(3));
+        },
+        _ => panic!("Expected Complete(Vector) result from rest"),
     }
 
     let expr = parse_expression("(rest [])").expect("Parse failed");
-    let result = evaluator.evaluate(.evaluate_with_env(&expr, &mut env).expectexpr).expect("Evaluation failed");
-    if let Value::Vector(v) = result {
-        assert_eq!(v.len(), 0);
-    } else {
-        panic!("Expected empty vector result from rest");
+    let result = evaluator.evaluate(&expr).expect("Evaluation failed");
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Vector(v)) => {
+            assert_eq!(v.len(), 0);
+        },
+        _ => panic!("Expected Complete(Vector) result from rest"),
     }
 
     println!("All missing stdlib functions are working correctly!");

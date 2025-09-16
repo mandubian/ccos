@@ -20,7 +20,7 @@ fn test_checkpoint_store_and_resume_from_disk() {
     let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
     let module_registry = Arc::new(ModuleRegistry::new());
     let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
-    let evaluator = Evaluator::new(module_registry, de, RuntimeContext::pure(), host.clone());
+    let evaluator = Evaluator::new(module_registry, RuntimeContext::pure(), host.clone());
 
     // Initialize context and set a value
     {
@@ -53,7 +53,7 @@ fn test_checkpoint_store_and_resume_from_disk() {
     let host2 = Arc::new(RuntimeHost::new(causal_chain2, capability_marketplace2, RuntimeContext::pure()));
     let module_registry2 = Arc::new(ModuleRegistry::new());
     let de2 = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
-    let evaluator2 = Evaluator::new(module_registry2, de2, RuntimeContext::pure(), host2);
+    let evaluator2 = Evaluator::new(module_registry2, RuntimeContext::pure(), host2);
 
     {
         let mut cm = evaluator2.context_manager.borrow_mut();

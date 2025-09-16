@@ -8,7 +8,7 @@ use std::sync::Arc;
 // Simple smoke test for :params handling in IR Step nodes.
 #[test]
 fn step_params_bind_as_percent_params() {
-    let mut runtime = IrRuntime::new_compat(delegation_engine);
+    let mut runtime = IrRuntime::new(host, security_context);
 
     // Construct a params map: {"k": 123}
     let map_node = IrNode::Map {
