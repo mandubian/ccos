@@ -13,6 +13,7 @@ mod ch_working_memory_integration;
 mod execution_context_tests;
 mod firecracker_enhanced_tests;
 mod http_capability_tests;
+mod l4_cache_ir_integration;
 mod test_helpers; // Re-exports from shared
 mod intent_graph_dependency_tests;
 mod intent_lifecycle_audit_tests;

@@ -10,7 +10,6 @@ mod ir_language_coverage;
 mod ir_optimization;
 mod ir_step_params_additional_tests;
 mod ir_step_params_tests;
-mod l4_cache_ir_integration;
 mod parser;
 mod realistic_model_tests;
 mod secure_stdlib_comprehensive_tests;
