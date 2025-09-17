@@ -30,11 +30,8 @@ impl StdlibTestRunner {
             capability_marketplace,
             security_context.clone(),
         ));
-            std::collections::HashMap::new()
-        ));
         let evaluator = Evaluator::new(
             module_registry,
-            delegation_engine,
             security_context,
             host
         );

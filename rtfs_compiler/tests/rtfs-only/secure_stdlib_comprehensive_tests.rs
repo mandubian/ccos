@@ -17,7 +17,7 @@ struct SecureStdlibTestRunner {
 impl SecureStdlibTestRunner {
     fn new() -> Self {
         let env = SecureStandardLibrary::create_secure_environment();
-    let module_registry = Arc::new(ModuleRegistry::new());
+        let module_registry = Arc::new(ModuleRegistry::new());
         let registry = Arc::new(RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(
             rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry)
@@ -31,11 +31,8 @@ impl SecureStdlibTestRunner {
             capability_marketplace,
             security_context.clone(),
         ));
-            std::collections::HashMap::new()
-        ));
         let evaluator = Evaluator::new(
             module_registry,
-            delegation_engine,
             security_context,
             host
         );

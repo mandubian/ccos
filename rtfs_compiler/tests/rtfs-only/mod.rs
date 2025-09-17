@@ -18,7 +18,7 @@ mod set_form_tests;
 mod simple_secure_stdlib_test;
 mod stdlib_e2e_tests;
 mod test_comment_preprocessing;
-mod test_helpers;
+mod test_helpers; // Re-exports from shared
 mod test_implemented_functions;
 mod test_missing_stdlib_functions;
 mod test_qualified_symbols;
