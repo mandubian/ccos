@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
-mod test_helpers;
+use crate::test_helpers::*;
 
 /// Feature test configuration for each grammar rule
 #[derive(Debug, Clone)]
@@ -91,7 +91,7 @@ impl FeatureTestConfig {
 /// Helper function to read and preprocess feature test files
 fn read_feature_file(feature_name: &str) -> Result<String, String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let test_file_path = format!("{}/tests/rtfs_files/features/{}.rtfs", manifest_dir, feature_name);
+    let test_file_path = format!("{}/tests/shared/rtfs_files/features/{}.rtfs", manifest_dir, feature_name);
 
     if !Path::new(&test_file_path).exists() {
         return Err(format!("Feature test file not found: {}", test_file_path));
@@ -160,10 +160,10 @@ fn run_test_case(
     case_index: usize,
 ) -> Result<String, String> {
     // Create evaluator with proper host setup
-    let evaluator = test_helpers::create_full_evaluator();
+    let evaluator = create_full_evaluator();
     
     // Set up execution context for host method calls
-    test_helpers::setup_execution_context(&*evaluator.host);
+    // setup_execution_context is no longer needed in the new architecture
 
     // Try to parse the expression
     let expr = parse_expression(test_code)
@@ -171,7 +171,8 @@ fn run_test_case(
 
     // Try to run the expression using the evaluator
     match evaluator.eval_expr(&expr, &mut evaluator.env.clone()) {
-        Ok(result) => Ok(result.to_string()),
+        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(result)) => Ok(result.to_string()),
+        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(format!("Host call required in {}[{}]", feature_name, case_index)),
         Err(e) => Err(format!("Runtime error in {}[{}]: {:?}", feature_name, case_index, e)),
     }
 }

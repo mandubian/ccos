@@ -6,15 +6,12 @@
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
-use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::ccos::host::RuntimeHost;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capability_registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
-use std::cell::RefCell;
 use tokio::sync::RwLock;
 
 /// Creates a new capability registry wrapped in Arc<RwLock<>>
@@ -35,9 +32,9 @@ pub fn create_capability_marketplace_with_registry(
     CapabilityMarketplace::new(registry)
 }
 
-/// Creates a new causal chain wrapped in Rc<RefCell<>>
-pub fn create_causal_chain() -> Rc<RefCell<CausalChain>> {
-    Rc::new(RefCell::new(CausalChain::new().unwrap()))
+/// Creates a new causal chain wrapped in Arc<Mutex<>>
+pub fn create_causal_chain() -> Arc<std::sync::Mutex<CausalChain>> {
+    Arc::new(std::sync::Mutex::new(CausalChain::new().unwrap()))
 }
 
 /// Creates a new delegation engine with empty configuration
@@ -56,8 +53,8 @@ pub fn create_runtime_host(security_context: RuntimeContext) -> std::sync::Arc<R
     let causal_chain = create_causal_chain();
     
     std::sync::Arc::new(RuntimeHost::new(
-        marketplace,
         causal_chain,
+        marketplace,
         security_context,
     ))
 }
@@ -70,8 +67,8 @@ pub fn create_runtime_host_with_marketplace(
     let causal_chain = create_causal_chain();
     
     std::sync::Arc::new(RuntimeHost::new(
-        marketplace,
         causal_chain,
+        marketplace,
         security_context,
     ))
 }
@@ -79,12 +76,10 @@ pub fn create_runtime_host_with_marketplace(
 /// Creates a complete evaluator with the specified security context
 pub fn create_evaluator(security_context: RuntimeContext) -> Evaluator {
     let module_registry = create_module_registry();
-    let stdlib_env = StandardLibrary::create_global_environment();
     let host = create_runtime_host(security_context.clone());
     
-    Evaluator::with_environment(
+    Evaluator::new(
         module_registry,
-        stdlib_env,
         security_context,
         host,
     )
@@ -96,12 +91,10 @@ pub fn create_evaluator_with_marketplace(
     security_context: RuntimeContext,
 ) -> Evaluator {
     let module_registry = create_module_registry();
-    let stdlib_env = StandardLibrary::create_global_environment();
     let host = create_runtime_host_with_marketplace(marketplace, security_context.clone());
     
-    Evaluator::with_environment(
+    Evaluator::new(
         module_registry,
-        stdlib_env,
         security_context,
         host,
     )

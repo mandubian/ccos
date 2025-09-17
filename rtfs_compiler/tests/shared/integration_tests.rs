@@ -12,7 +12,7 @@ use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityIsolationPolicy;
 use rtfs_compiler::runtime::values::Value;
 
-mod test_helpers;
+use crate::test_helpers::*;
 
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
@@ -123,7 +123,7 @@ fn preprocess_test_content(content: &str) -> String {
 /// Run a single test file with the given runtime
 fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let test_file_path = format!("{}/tests/rtfs_files/{}.rtfs", manifest_dir, config.name);
+    let test_file_path = format!("{}/tests/shared/rtfs_files/{}.rtfs", manifest_dir, config.name);
 
     // Check if file exists
     if !Path::new(&test_file_path).exists() {
@@ -140,6 +140,19 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     // Create module registry and load stdlib
     let mut module_registry = ModuleRegistry::new();
     let _ = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry);
+    
+    // Debug: Check if stdlib module exists
+    if let Some(stdlib_module) = module_registry.get_module("stdlib") {
+        println!("DEBUG: stdlib module found with {} exports", stdlib_module.exports.read().unwrap().len());
+        for (name, export) in stdlib_module.exports.read().unwrap().iter() {
+            if name == "*" {
+                println!("DEBUG: * function found: {:?}", export.value);
+            }
+        }
+    } else {
+        println!("DEBUG: stdlib module not found!");
+    }
+    
     let module_registry = std::sync::Arc::new(module_registry);
 
     // Create runtime based on strategy
@@ -147,6 +160,36 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
         "ir" => {
             let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
+            
+            // Debug: Check if the environment has the * function
+            let mut debug_env = rtfs_compiler::runtime::environment::IrEnvironment::with_stdlib(&module_registry).unwrap();
+            if let Some(value) = debug_env.get("*") {
+                println!("DEBUG: * function found in environment: {:?}", value);
+                match &value {
+                    rtfs_compiler::runtime::values::Value::Function(func) => {
+                        match func {
+                            rtfs_compiler::runtime::values::Function::Builtin(builtin) => {
+                                println!("DEBUG: * function is a Builtin function: {}", builtin.name);
+                            },
+                            rtfs_compiler::runtime::values::Function::Ir(_) => {
+                                println!("DEBUG: * function is an IR function (this is the problem!)");
+                            },
+                            _ => {
+                                println!("DEBUG: * function is some other type: {:?}", func);
+                            }
+                        }
+                    },
+                    _ => {
+                        println!("DEBUG: * function is not a function: {:?}", value);
+                    }
+                }
+            } else {
+                println!("DEBUG: * function NOT found in environment!");
+            }
+            
+            // Debug: Check what functions are available in the environment
+            println!("DEBUG: Available functions in environment: {:?}", debug_env.binding_names());
+            
             runtime::Runtime::new(Box::new(ir_strategy))
         }
         _ => unreachable!(),
@@ -724,7 +767,7 @@ fn test_rtfs2_binaries() {
 fn test_orchestration_primitives() {
     // Orchestration primitives require CCOS integration
     // Use CCOS environment instead of basic runtime
-    use rtfs_compiler::runtime::{CCOSEnvironment, CCOSBuilder, SecurityLevel};
+    use rtfs_compiler::ccos::environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel};
     
     let env = CCOSBuilder::new()
         .security_level(SecurityLevel::Standard)
@@ -732,7 +775,7 @@ fn test_orchestration_primitives() {
         .expect("Failed to create CCOS environment");
     
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let test_file_path = format!("{}/tests/rtfs_files/orchestration_primitives_test.rtfs", manifest_dir);
+    let test_file_path = format!("{}/tests/shared/rtfs_files/orchestration_primitives_test.rtfs", manifest_dir);
     
     let result = env.execute_file(&test_file_path)
         .expect("Failed to execute orchestration primitives test");
@@ -1128,7 +1171,7 @@ async fn test_capability_marketplace_audit_integration() {
 #[tokio::test]
 async fn test_capability_marketplace_discovery_providers() {
     use rtfs_compiler::ccos::capability_marketplace::{
-        CapabilityMarketplace, StaticDiscoveryProvider
+        CapabilityMarketplace, discovery::StaticDiscoveryProvider
     };
     use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
     use rtfs_compiler::runtime::values::Value;
@@ -1230,13 +1273,13 @@ async fn test_capability_marketplace_causal_chain_integration() {
 
 #[tokio::test]
 async fn test_capability_marketplace_resource_monitoring() {
-    use crate::ccos::capability_marketplace::{
-        CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
-        ResourceType, EnforcementLevel
+    use rtfs_compiler::ccos::capability_marketplace::{
+        CapabilityMarketplace, ResourceConstraints, types::ResourceMonitoringConfig,
+        ResourceType, types::EnforcementLevel
     };
-    use crate::ccos::capabilities::registry::CapabilityRegistry;
-    use crate::ccos::capability_marketplace::CapabilityIsolationPolicy;
-    use crate::runtime::values::Value;
+    use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+    use rtfs_compiler::ccos::capability_marketplace::CapabilityIsolationPolicy;
+    use rtfs_compiler::runtime::values::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1287,13 +1330,13 @@ async fn test_capability_marketplace_resource_monitoring() {
 
 #[tokio::test]
 async fn test_capability_marketplace_gpu_resource_limits() {
-    use crate::ccos::capability_marketplace::{
-        CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
-        ResourceType, EnforcementLevel
+    use rtfs_compiler::ccos::capability_marketplace::{
+        CapabilityMarketplace, ResourceConstraints, types::ResourceMonitoringConfig,
+        ResourceType, types::EnforcementLevel
     };
-    use crate::ccos::capabilities::registry::CapabilityRegistry;
-    use crate::ccos::capability_marketplace::CapabilityIsolationPolicy;
-    use crate::runtime::values::Value;
+    use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+    use rtfs_compiler::ccos::capability_marketplace::CapabilityIsolationPolicy;
+    use rtfs_compiler::runtime::values::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1340,13 +1383,13 @@ async fn test_capability_marketplace_gpu_resource_limits() {
 
 #[tokio::test]
 async fn test_capability_marketplace_environmental_limits() {
-    use crate::ccos::capability_marketplace::{
-        CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
-        ResourceType, EnforcementLevel
+    use rtfs_compiler::ccos::capability_marketplace::{
+        CapabilityMarketplace, ResourceConstraints, types::ResourceMonitoringConfig,
+        ResourceType, types::EnforcementLevel
     };
-    use crate::ccos::capabilities::registry::CapabilityRegistry;
-    use crate::ccos::capability_marketplace::CapabilityIsolationPolicy;
-    use crate::runtime::values::Value;
+    use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+    use rtfs_compiler::ccos::capability_marketplace::CapabilityIsolationPolicy;
+    use rtfs_compiler::runtime::values::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1393,9 +1436,9 @@ async fn test_capability_marketplace_environmental_limits() {
 
 #[tokio::test]
 async fn test_capability_marketplace_custom_resource_limits() {
-    use crate::ccos::capability_marketplace::{
-        CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
-        ResourceType, EnforcementLevel
+    use rtfs_compiler::ccos::capability_marketplace::{
+        CapabilityMarketplace, ResourceConstraints, types::ResourceMonitoringConfig,
+        ResourceType, types::EnforcementLevel
     };
     
     // Create constraints with custom resource limits
@@ -1451,9 +1494,9 @@ async fn test_capability_marketplace_custom_resource_limits() {
 
 #[tokio::test]
 async fn test_capability_marketplace_resource_violation_handling() {
-    use crate::ccos::capability_marketplace::{
-        CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
-        ResourceType, EnforcementLevel
+    use rtfs_compiler::ccos::capability_marketplace::{
+        CapabilityMarketplace, ResourceConstraints, types::ResourceMonitoringConfig,
+        ResourceType, types::EnforcementLevel
     };
     
     // Create very restrictive constraints
@@ -1507,9 +1550,9 @@ async fn test_capability_marketplace_resource_violation_handling() {
 
 #[tokio::test]
 async fn test_capability_marketplace_resource_monitoring_disabled() {
-    use crate::ccos::capability_marketplace::{
-        CapabilityMarketplace, ResourceConstraints, ResourceMonitoringConfig,
-        ResourceType, EnforcementLevel
+    use rtfs_compiler::ccos::capability_marketplace::{
+        CapabilityMarketplace, ResourceConstraints, types::ResourceMonitoringConfig,
+        ResourceType, types::EnforcementLevel
     };
     
     // Create marketplace without resource monitoring

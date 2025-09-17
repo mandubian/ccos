@@ -10,7 +10,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use rtfs_compiler::ccos::capability_marketplace::{
     CapabilityMarketplace, CapabilityManifest, CapabilityAttestation, CapabilityProvenance,
-    LocalCapability, ProviderType
+    types::LocalCapability, ProviderType
 };
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;

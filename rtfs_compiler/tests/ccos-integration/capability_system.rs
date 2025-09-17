@@ -6,8 +6,7 @@ use rtfs_compiler::parser;
 use rtfs_compiler::ast::TopLevel;
 
 // Import the test helpers
-mod test_helpers;
-use test_helpers::*;
+use crate::test_helpers::*;
 
 #[test]
 fn test_pure_context() {
