@@ -204,13 +204,43 @@ impl StandardLibrary {
             })),
         );
 
-    // Alias expected by tests: (current-time-millis)
+        // Alias expected by tests: (current-time-millis)
         env.define(
             &Symbol("current-time-millis".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "current-time-millis".to_string(),
                 arity: Arity::Fixed(0),
                 func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
+            })),
+        );
+
+        // File existence check
+        env.define(
+            &Symbol("file-exists?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "file-exists?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(|args: Vec<Value>| Self::file_exists(args)),
+            })),
+        );
+
+        // Environment variable access
+        env.define(
+            &Symbol("get-env".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "get-env".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(|args: Vec<Value>| Self::get_env(args)),
+            })),
+        );
+
+        // Simple log function (alias for tool/log)
+        env.define(
+            &Symbol("log".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "log".to_string(),
+                arity: Arity::Variadic(0),
+                func: Arc::new(|args: Vec<Value>| Self::tool_log(args)),
             })),
         );
 
@@ -1157,6 +1187,62 @@ impl StandardLibrary {
 
         std::thread::sleep(std::time::Duration::from_millis(milliseconds));
         Ok(Value::Nil)
+    }
+
+    /// `(file-exists? filename)`
+    /// 
+    /// Checks if a file exists and returns a boolean.
+    fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "file-exists?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let filename = match &args[0] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "file-exists?".to_string(),
+                });
+            }
+        };
+
+        let exists = std::path::Path::new(filename).exists();
+        Ok(Value::Boolean(exists))
+    }
+
+    /// `(get-env variable-name)`
+    /// 
+    /// Gets an environment variable and returns its value as a string, or nil if not found.
+    fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "get-env".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let var_name = match &args[0] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "get-env".to_string(),
+                });
+            }
+        };
+
+        match std::env::var(var_name) {
+            Ok(value) => Ok(Value::String(value)),
+            Err(_) => Ok(Value::Nil),
+        }
     }
 
     /// `(read-lines filename)`

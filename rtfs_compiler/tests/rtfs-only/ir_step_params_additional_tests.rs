@@ -27,6 +27,8 @@ fn create_test_runtime() -> (Arc<dyn rtfs_compiler::runtime::host_interface::Hos
 // 1) Confirm %params binding behavior (duplicate of main test style)
 #[test]
 fn step_params_success_smoke() {
+    // Set fallback context for tests
+    std::env::set_var("CCOS_TEST_FALLBACK_CONTEXT", "true");
     let (host, security_context) = create_test_runtime();
     let mut runtime = IrRuntime::new(host, security_context);
 
@@ -90,6 +92,8 @@ fn step_params_eval_failure_cleanup() {
 // 3) If no :params provided, the step should execute body in the same env and return its value.
 #[test]
 fn step_no_params_executes_body() {
+    // Set fallback context for tests
+    std::env::set_var("CCOS_TEST_FALLBACK_CONTEXT", "true");
     let (host, security_context) = create_test_runtime();
     let mut runtime = IrRuntime::new(host, security_context);
 

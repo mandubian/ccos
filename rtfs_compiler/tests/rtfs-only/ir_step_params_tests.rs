@@ -28,6 +28,8 @@ fn create_test_runtime() -> (Arc<dyn rtfs_compiler::runtime::host_interface::Hos
 // Simple smoke test for :params handling in IR Step nodes.
 #[test]
 fn step_params_bind_as_percent_params() {
+    // Set fallback context for tests
+    std::env::set_var("CCOS_TEST_FALLBACK_CONTEXT", "true");
     let (host, security_context) = create_test_runtime();
     let mut runtime = IrRuntime::new(host, security_context);
 
