@@ -34,7 +34,14 @@ fn test_simple_mutual_recursion() {
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    let result = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
+    let outcome = evaluator.evaluate(&parsed).expect("Should evaluate successfully");
+    
+    let result = match outcome {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    };
     
     // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
     if let runtime::values::Value::Vector(vec) = result {

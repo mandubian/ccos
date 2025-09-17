@@ -10,7 +10,7 @@ use rtfs_compiler::*;
 
 #[test]
 fn test_mutual_recursion_pattern() {
-    let code = include_str!("rtfs_files/test_mutual_recursion.rtfs");
+    let code = include_str!("../shared/rtfs_files/test_mutual_recursion.rtfs");
 
     let parsed = parser::parse(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
@@ -25,16 +25,22 @@ fn test_mutual_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    let result = if let TopLevel::Expression(expr) = &parsed[0] {
+    let outcome = if let TopLevel::Expression(expr) = &parsed[0] {
         evaluator
             .evaluate(expr)
             .expect("Should evaluate successfully")
     } else {
         panic!("Expected a top-level expression");
+    };
+    
+    let result = match outcome {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
     };
 
     // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
@@ -51,7 +57,7 @@ fn test_mutual_recursion_pattern() {
 
 #[test]
 fn test_nested_recursion_pattern() {
-    let code = include_str!("rtfs_files/test_nested_recursion.rtfs");
+    let code = include_str!("../shared/rtfs_files/test_nested_recursion.rtfs");
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
@@ -66,21 +72,27 @@ fn test_nested_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    let result = evaluator
+    let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
+    
+    let result = match outcome {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    };
 
     // Should return a countdown vector [5, 4, 3, 2, 1]
-    println!("Nested recursion result: {}", result);
+    println!("Nested recursion result: {:?}", result);
 }
 
 #[test]
 fn test_higher_order_recursion_pattern() {
-    let code = include_str!("rtfs_files/test_higher_order_recursion.rtfs");
+    let code = include_str!("../shared/rtfs_files/test_higher_order_recursion.rtfs");
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
@@ -95,21 +107,27 @@ fn test_higher_order_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    let result = evaluator
+    let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
+    
+    let result = match outcome {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    };
 
     // Should return squares: [1, 4, 9, 16, 25]
-    println!("Higher-order recursion result: {}", result);
+    println!("Higher-order recursion result: {:?}", result);
 }
 
 #[test]
 fn test_three_way_recursion_pattern() {
-    let code = include_str!("rtfs_files/test_three_way_recursion.rtfs");
+    let code = include_str!("../shared/rtfs_files/test_three_way_recursion.rtfs");
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
@@ -124,14 +142,20 @@ fn test_three_way_recursion_pattern() {
     ));
     let evaluator = Evaluator::new(
         module_registry,
-        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    let result = evaluator
+    let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
+    
+    let result = match outcome {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    };
 
     // Should return cycle results
-    println!("Three-way recursion result: {}", result);
+    println!("Three-way recursion result: {:?}", result);
 }

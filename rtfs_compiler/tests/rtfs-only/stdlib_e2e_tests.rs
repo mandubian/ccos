@@ -43,8 +43,15 @@ impl StdlibTestRunner {
         let ast = parse_expression(source)
             .map_err(|e| format!("Parse error: {:?}", e))?;
         
-        let result = self.evaluator.evaluate(&ast)
+        let outcome = self.evaluator.evaluate(&ast)
             .map_err(|e| format!("Evaluation error: {:?}", e))?;
+        
+        let result = match outcome {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                return Err("Host call required in pure test".to_string());
+            }
+        };
         
         if result == expected {
             Ok(())
@@ -356,9 +363,15 @@ impl StdlibTestRunner {
         self.run_test("(tool.log [1 2 3])", Value::Nil)?;
         
         // Tool time-ms tests - this should return a number
-        let time_result = self.evaluator.evaluate(
+        let time_outcome = self.evaluator.evaluate(
             &parse_expression("(tool.time-ms)").unwrap()
         ).unwrap();
+        let time_result = match time_outcome {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                return Err("Host call required in pure test".to_string());
+            }
+        };
         assert!(matches!(time_result, Value::Integer(_) | Value::Float(_)), "time-ms should return a number");
         
         println!("✅ All tool function tests passed!");

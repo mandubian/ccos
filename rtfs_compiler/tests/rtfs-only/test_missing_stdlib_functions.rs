@@ -61,6 +61,7 @@ fn test_missing_stdlib_functions() {
     match result {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Nil) => {},
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call"),
+        _ => panic!("Unexpected result: {:?}", result),
     }
 
     // Test rest

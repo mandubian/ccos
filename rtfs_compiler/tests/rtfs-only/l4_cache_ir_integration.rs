@@ -1,11 +1,18 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use tokio::sync::RwLock;
 
 use bincode;
 use rtfs_compiler::{
     ccos::{
         caching::l4_content_addressable::L4CacheClient,
         delegation::{DelegationEngine, StaticDelegationEngine},
+        host::RuntimeHost,
+        capability_marketplace::CapabilityMarketplace,
+        capabilities::registry::CapabilityRegistry,
+        causal_chain::CausalChain,
     },
+    runtime::security::RuntimeContext,
     ir::{core::IrNode, converter::IrConverter},
     parser::parse_expression,
     runtime::{
@@ -65,6 +72,18 @@ fn test_ir_cached_execution() {
     // Execute through IR runtime
     let de_inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(de_inner);
+    
+    // Create host and security context
+    let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
+    let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
+    let security_context = RuntimeContext::pure();
+    let host = Arc::new(RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
+    ));
+    
     let mut ir_runtime = IrRuntime::new(host, security_context);
     let mut env = IrEnvironment::with_stdlib(&module_registry).expect("env");
 
@@ -91,5 +110,12 @@ fn test_ir_cached_execution() {
         .execute_node(&apply_node, &mut env, false, &mut ModuleRegistry::new())
         .expect("run IR");
 
-    assert_eq!(result, Value::Integer(9));
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+            assert_eq!(value, Value::Integer(9));
+        },
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    }
 } 
