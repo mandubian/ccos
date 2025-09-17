@@ -2,12 +2,33 @@ use rtfs_compiler::runtime::ir_runtime::IrRuntime;
 use rtfs_compiler::ir::core::{IrNode, IrMapEntry};
 use rtfs_compiler::ir::core::IrNode::*;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::causal_chain::CausalChain;
 use std::sync::Arc;
+use std::sync::Mutex;
+use tokio::sync::RwLock;
+
+// Helper function to create test runtime components
+fn create_test_runtime() -> (Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface>, RuntimeContext) {
+    let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+    let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
+    let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
+    let security_context = RuntimeContext::pure();
+    let host = Arc::new(RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        security_context.clone(),
+    ));
+    (host, security_context)
+}
 
 // Simple smoke test for :params handling in IR Step nodes.
 #[test]
 fn step_params_bind_as_percent_params() {
+    let (host, security_context) = create_test_runtime();
     let mut runtime = IrRuntime::new(host, security_context);
 
     // Construct a params map: {"k": 123}
@@ -48,7 +69,13 @@ fn step_params_bind_as_percent_params() {
         eprintln!("Runtime execute_program returned error: {:?}", e);
     }
     assert!(res.is_ok());
-    let v = res.unwrap();
+    let outcome = res.unwrap();
+    let v = match outcome {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    };
     // Expect the result to be Integer(123) when reading %params :k
     match v {
         Value::Integer(n) => assert_eq!(n, 123),

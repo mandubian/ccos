@@ -44,8 +44,15 @@ impl SecureStdlibTestRunner {
         let ast = parse_expression(source)
             .map_err(|e| format!("Parse error: {:?}", e))?;
         
-        let result = self.evaluator.evaluate(&ast)
+        let outcome = self.evaluator.evaluate(&ast)
             .map_err(|e| format!("Evaluation error: {:?}", e))?;
+        
+        let result = match outcome {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                return Err("Host call required in pure test".to_string());
+            }
+        };
         
         if result == expected {
             Ok(())

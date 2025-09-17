@@ -32,11 +32,22 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs_compiler::runtime::er
     // Test shorthand get after set!
     let set_prog = "(do (step \"set\" (set! :k \"v\")))";
     let set_items = parser::parse(set_prog).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
-    let _ = ev.eval_toplevel(&set_items)?;
+    let _ = match ev.eval_toplevel(&set_items)? {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(_) => {},
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            return Err(rtfs_compiler::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()));
+        }
+    };
 
     let get_prog = "(do (step \"get\" (get :k)))";
     let get_items = parser::parse(get_prog).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
-    let val = ev.eval_toplevel(&get_items)?;
+    let result = ev.eval_toplevel(&get_items)?;
+    let val = match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            return Err(rtfs_compiler::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()));
+        }
+    };
     println!("DEBUG val = {:?}", val);
     // last evaluation should be the value of (get :k)
     assert!(matches!(val, Value::String(ref s) if s == "v"));
@@ -44,7 +55,13 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs_compiler::runtime::er
     // Test builtin get on a map
     let program2 = "(do (step \"mkt\" (set! :m (hash-map :a 1))) (step \"read\" (get (get :m) :a)))";
     let items2 = parser::parse(program2).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
-    let val2 = ev.eval_toplevel(&items2)?;
+    let result2 = ev.eval_toplevel(&items2)?;
+    let val2 = match result2 {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            return Err(rtfs_compiler::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()));
+        }
+    };
     println!("DEBUG val2 = {:?}", val2);
     assert!(matches!(val2, Value::Integer(1)));
 
