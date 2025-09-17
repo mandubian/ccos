@@ -114,27 +114,105 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::for_expr => Ok(Expression::For(Box::new(build_for_expr(pair)?))),
         // Plan is not a core special form; handled as FunctionCall/Map at CCOS layer
         Rule::list => {
-            let _list_pair_span = pair_to_source_span(&pair);
-            let mut inner_pairs = pair.into_inner().peekable();
+            let list_pair_span = pair_to_source_span(&pair);
+            let inner_pairs: Vec<_> = pair.into_inner().collect();
 
-            if inner_pairs.peek().is_none() {
+            if inner_pairs.is_empty() {
                 // Empty list: ()
                 Ok(Expression::List(vec![]))
             } else {
                 // Non-empty list, potentially a function call or a data list
-                let first_element_pair = inner_pairs.next().unwrap(); // We know it's not empty
+                let first_element_pair = &inner_pairs[0];
 
                 // Attempt to parse the first element.
-                // We need to clone `first_element_pair` if we might need to re-parse all elements later for a data list.
                 let callee_ast = build_expression(first_element_pair.clone())?;
+
+                // Check for invalid special form syntax before treating as function call
+                if let Expression::Symbol(symbol) = &callee_ast {
+                    let symbol_name = &symbol.0;
+                    // Check if this looks like an invalid special form
+                    match symbol_name.as_str() {
+                        "fn" | "if" | "def" | "let" | "do" | "defn" | "defstruct" | "parallel" | "with-resource" | "try" | "match" | "log-step" | "discover-agents" | "for" => {
+                            // This looks like a special form but was parsed as a list
+                            // Check if it has the required arguments for the special form
+                            let remaining_args = &inner_pairs[1..];
+                            
+                            // For fn, if, def, let - these require specific syntax
+                            match symbol_name.as_str() {
+                                "fn" => {
+                                    if remaining_args.is_empty() {
+                                        return Err(PestParseError::InvalidInput {
+                                            message: "fn requires parameter list and body expressions".to_string(),
+                                            span: Some(list_pair_span),
+                                        });
+                                    }
+                                },
+                                "if" => {
+                                    if remaining_args.len() < 2 {
+                                        return Err(PestParseError::InvalidInput {
+                                            message: "if requires condition and at least one branch".to_string(),
+                                            span: Some(list_pair_span),
+                                        });
+                                    }
+                                },
+                                "def" => {
+                                    if remaining_args.len() < 2 {
+                                        return Err(PestParseError::InvalidInput {
+                                            message: "def requires symbol and value".to_string(),
+                                            span: Some(list_pair_span),
+                                        });
+                                    }
+                                },
+                                "let" => {
+                                    if remaining_args.is_empty() {
+                                        return Err(PestParseError::InvalidInput {
+                                            message: "let requires binding vector and body expressions".to_string(),
+                                            span: Some(list_pair_span),
+                                        });
+                                    }
+                                    // let requires a binding vector as the first argument
+                                    if remaining_args.len() < 2 {
+                                        return Err(PestParseError::InvalidInput {
+                                            message: "let requires binding vector and at least one body expression".to_string(),
+                                            span: Some(list_pair_span),
+                                        });
+                                    }
+                                    // Check if first argument is a vector (binding vector)
+                                    if let Some(first_arg_pair) = remaining_args.first() {
+                                        let first_arg_expr = build_expression(first_arg_pair.clone())?;
+                                        if !matches!(first_arg_expr, Expression::Vector(_)) {
+                                            return Err(PestParseError::InvalidInput {
+                                                message: "let requires binding vector as first argument".to_string(),
+                                                span: Some(list_pair_span),
+                                            });
+                                        }
+                                    }
+                                },
+                                _ => {
+                                    // For other special forms, just check if they have any arguments
+                                    if remaining_args.is_empty() {
+                                        return Err(PestParseError::InvalidInput {
+                                            message: format!("{} requires arguments", symbol_name),
+                                            span: Some(list_pair_span),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            // Not a special form, continue with normal processing
+                        }
+                    }
+                }
 
                 // Heuristic: if the first element is a Symbol, or an Fn expression,
                 // or another FunctionCall, treat it as a function call.
                 match callee_ast {
                     Expression::Symbol(_) | Expression::Fn(_) | Expression::FunctionCall { .. } => {
                         // It's likely a function call. Parse remaining as arguments.
-                        let arguments = inner_pairs
-                            .map(build_expression) // build_expression for each subsequent pair
+                        let arguments = inner_pairs[1..]
+                            .iter()
+                            .map(|p| build_expression(p.clone()))
                             .collect::<Result<Vec<_>, _>>()?;
                         Ok(Expression::FunctionCall {
                             callee: Box::new(callee_ast),

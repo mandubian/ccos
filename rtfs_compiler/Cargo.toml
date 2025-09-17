@@ -146,11 +146,11 @@ async-trait = "0.1"
 name = "rtfs_only_tests"
 path = "tests/rtfs-only/mod.rs"
 
-# Temporarily comment out other test configurations to focus on RTFS-only tests
-# [[test]]
-# name = "ccos_integration_tests"
-# path = "tests/ccos-integration/mod.rs"
+# Test configurations for organized test structure
+[[test]]
+name = "ccos_integration_tests"
+path = "tests/ccos-integration/mod.rs"
 
-# [[test]]
-# name = "shared_tests"
-# path = "tests/shared/mod.rs"
+[[test]]
+name = "shared_tests"
+path = "tests/shared/mod.rs"

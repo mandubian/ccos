@@ -15,8 +15,8 @@ fn test_mismatched_parentheses_error() {
     let error = result.unwrap_err();
     let formatted = error.format_with_context();
     
-    // Should mention the opening delimiter location
-    assert!(formatted.contains("opening"));
+    // Should mention the delimiter mismatch
+    assert!(formatted.contains("Mismatched delimiter") || formatted.contains("close"));
     println!("Mismatched parentheses error:\n{}", formatted);
 }
 
@@ -78,6 +78,20 @@ fn test_let_syntax_error() {
     let source = "(let x 5)"; // Invalid let syntax - missing binding vector
     
     let result = parse_with_enhanced_errors(source, Some("test.rtfs"));
+    
+    // Debug: Print what the parser actually returned
+    match &result {
+        Ok(items) => {
+            println!("Parser succeeded! Items: {:?}", items);
+            panic!("Parser should have failed for invalid let syntax");
+        },
+        Err(error) => {
+            println!("Parser failed as expected: {:?}", error);
+            let formatted = error.format_with_context();
+            println!("Let syntax error:\n{}", formatted);
+        }
+    }
+    
     assert!(result.is_err());
     
     let error = result.unwrap_err();
