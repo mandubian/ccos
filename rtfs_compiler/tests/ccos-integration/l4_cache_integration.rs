@@ -65,7 +65,14 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     let code = "(add 1 2)";
     let expr = parse_expression(code).expect("failed to parse expression");
     let result = evaluator.evaluate(&expr)?;
-    assert_eq!(result, Value::Integer(3));
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+            assert_eq!(value, Value::Integer(3));
+        },
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    }
     Ok(())
 }
 
@@ -101,6 +108,13 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
     let code = "(do (defn add [x y] nil) (add 1 2))";
     let expr = parse_expression(code).unwrap();
     let result = evaluator.evaluate(&expr)?;
-    assert_eq!(result, Value::Integer(3));
+    match result {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+            assert_eq!(value, Value::Integer(3));
+        },
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            panic!("Unexpected host call in pure test");
+        }
+    }
     Ok(())
 } 

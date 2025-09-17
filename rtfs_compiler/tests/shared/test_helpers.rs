@@ -3,6 +3,7 @@
 
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ccos::host::RuntimeHost;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
@@ -30,12 +31,38 @@ pub fn create_pure_evaluator() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_minimal_host();
-    Evaluator::new(module_registry, security_context, host)
+    let mut evaluator = Evaluator::new(module_registry, security_context, host);
+    
+    // Load the standard library
+    let stdlib_env = StandardLibrary::create_global_environment();
+    evaluator.env = stdlib_env;
+    
+    evaluator
 }
 
 /// Creates a pure RTFS evaluator with custom security context
 pub fn create_pure_evaluator_with_context(security_context: RuntimeContext) -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
     let host = create_minimal_host();
-    Evaluator::new(module_registry, security_context, host)
+    let mut evaluator = Evaluator::new(module_registry, security_context, host);
+    
+    // Load the standard library
+    let stdlib_env = StandardLibrary::create_global_environment();
+    evaluator.env = stdlib_env;
+    
+    evaluator
+}
+
+/// Creates a full RTFS evaluator with all capabilities allowed
+pub fn create_full_evaluator() -> Evaluator {
+    let module_registry = Arc::new(ModuleRegistry::new());
+    let security_context = RuntimeContext::full();
+    let host = create_minimal_host();
+    let mut evaluator = Evaluator::new(module_registry, security_context, host);
+    
+    // Load the standard library
+    let stdlib_env = StandardLibrary::create_global_environment();
+    evaluator.env = stdlib_env;
+    
+    evaluator
 }

@@ -71,7 +71,7 @@ mod hybrid_runtime_integration_tests {
 
     fn create_test_evaluator_optimized() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
-        let static_map = HashMap::new();
+        let static_map: HashMap<String, String> = HashMap::new();
         let security_context = RuntimeContext::pure();
         let host = Arc::new(MockHost);
         
@@ -80,7 +80,7 @@ mod hybrid_runtime_integration_tests {
 
     fn create_test_evaluator_strict() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
-        let static_map = HashMap::new();
+        let static_map: HashMap<String, String> = HashMap::new();
         let security_context = RuntimeContext::pure();
         let host = Arc::new(MockHost);
         
@@ -100,7 +100,14 @@ mod hybrid_runtime_integration_tests {
         let result = evaluator.eval_expr(&parsed, &mut env);
         
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Value::String("hello world".to_string()));
+        match result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                assert_eq!(value, Value::String("hello world".to_string()));
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
+        }
     }
 
     /// Test that strict evaluator validates everything, even compile-time verified types
@@ -116,7 +123,14 @@ mod hybrid_runtime_integration_tests {
         let result = evaluator.eval_expr(&parsed, &mut env);
         
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Value::String("hello world".to_string()));
+        match result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                assert_eq!(value, Value::String("hello world".to_string()));
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
+        }
     }
 
     /// Test arithmetic operations with different validation levels
@@ -136,7 +150,14 @@ mod hybrid_runtime_integration_tests {
             eprintln!("Error in arithmetic test: {:?}", e);
         }
         assert!(result.is_ok(), "Expected successful evaluation, got: {:?}", result);
-        assert_eq!(result.unwrap(), Value::Integer(6));
+        match result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                assert_eq!(value, Value::Integer(6));
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
+        }
     }
 
     /// Test function definition and call with type checking
@@ -164,7 +185,14 @@ mod hybrid_runtime_integration_tests {
             eprintln!("Error in function call: {:?}", e);
         }
         assert!(call_result.is_ok(), "Expected successful function call, got: {:?}", call_result);
-        assert_eq!(call_result.unwrap(), Value::Integer(10));
+        match call_result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                assert_eq!(value, Value::Integer(10));
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
+        }
     }
 
     /// Test vector operations with type validation
@@ -180,12 +208,18 @@ mod hybrid_runtime_integration_tests {
         let result = evaluator.eval_expr(&parsed, &mut env);
         
         assert!(result.is_ok());
-        if let Value::Vector(vec) = result.unwrap() {
-            assert_eq!(vec.len(), 5);
-            assert_eq!(vec[0], Value::Integer(1));
-            assert_eq!(vec[4], Value::Integer(5));
-        } else {
-            panic!("Expected vector result");
+        match result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Vector(vec)) => {
+                assert_eq!(vec.len(), 5);
+                assert_eq!(vec[0], Value::Integer(1));
+                assert_eq!(vec[4], Value::Integer(5));
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(_) => {
+                panic!("Expected vector result");
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
         }
     }
 
@@ -202,10 +236,16 @@ mod hybrid_runtime_integration_tests {
         let result = evaluator.eval_expr(&parsed, &mut env);
         
         assert!(result.is_ok());
-        if let Value::Map(map) = result.unwrap() {
-            assert_eq!(map.len(), 2);
-        } else {
-            panic!("Expected map result");
+        match result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Map(map)) => {
+                assert_eq!(map.len(), 2);
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(_) => {
+                panic!("Expected map result");
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
         }
     }
 
@@ -311,7 +351,14 @@ mod hybrid_runtime_integration_tests {
             eprintln!("Error in complex expression: {:?}", e);
         }
         assert!(result.is_ok(), "Expected successful complex evaluation, got: {:?}", result);
-        assert_eq!(result.unwrap(), Value::Integer(11)); // (2*3) + (10-5) = 6 + 5 = 11
+        match result.unwrap() {
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                assert_eq!(value, Value::Integer(11)); // (2*3) + (10-5) = 6 + 5 = 11
+            },
+            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                panic!("Unexpected host call in pure test");
+            }
+        }
     }
 
     /// Test that the hybrid architecture preserves performance optimizations
@@ -337,7 +384,14 @@ mod hybrid_runtime_integration_tests {
         
         assert!(result1.is_ok());
         assert!(result2.is_ok());
-        assert_eq!(result1.unwrap(), result2.unwrap());
+        
+        match (result1.unwrap(), result2.unwrap()) {
+            (rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value1), 
+             rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value2)) => {
+                assert_eq!(value1, value2);
+            },
+            _ => panic!("Unexpected host call in pure test"),
+        }
         
         // Optimized should generally be faster or at least not significantly slower
         // Note: In practice the difference might be very small for simple expressions

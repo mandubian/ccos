@@ -155,10 +155,11 @@ fn step_params_shadowing_for_nested_steps() -> Result<(), String> {
 
     let result = evaluator.eval_toplevel(&program).map_err(|e| format!("eval error: {:?}", e))?;
     match result {
-        rtfs_compiler::runtime::Value::String(s) => {
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(rtfs_compiler::runtime::Value::String(s)) => {
             assert_eq!(s, "outer", "outer %params should be visible after inner step returned");
             Ok(())
         }
-        other => Err(format!("unexpected result: {:?}", other)),
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(other) => Err(format!("unexpected result: {:?}", other)),
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => Err("Unexpected host call in pure test".to_string()),
     }
 }
