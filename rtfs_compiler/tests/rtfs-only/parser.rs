@@ -91,12 +91,9 @@ fn test_parse_simple_literals() {
         Expression::Literal(Literal::String("hello".to_string()))
     );
     assert_expr_parses_to!(
-        r#""hello\world
-""#,
+        r#""hello\\world\n""#,
         Expression::Literal(Literal::String(
-            "hello\\world
-"
-            .to_string()
+            "hello\\world\n".to_string()
         ))
     );
     assert_expr_parses_to!("true", Expression::Literal(Literal::Boolean(true)));
@@ -119,7 +116,7 @@ fn test_parse_symbol_keyword() {
     assert_expr_parses_to!(
         ":my-keyword",
         Expression::Literal(Literal::Keyword(rtfs_compiler::ast::Keyword(
-            ":my-keyword".to_string()
+            "my-keyword".to_string()
         )))
     );
 }

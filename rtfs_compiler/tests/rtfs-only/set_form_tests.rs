@@ -44,7 +44,7 @@ fn test_set_with_keyword() {
     assert!(res.is_ok());
     // After set!, symbol "k" should be present
     let val = env.lookup(&Symbol("k".to_string())).expect("k not found");
-    assert_eq!(format!("{}", val), "v");
+    assert_eq!(format!("{}", val), "\"v\"");
 }
 
 #[test]
