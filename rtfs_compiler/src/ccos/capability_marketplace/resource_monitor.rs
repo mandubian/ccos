@@ -1,5 +1,5 @@
 use crate::runtime::error::RuntimeResult;
-use crate::runtime::capability_marketplace::types::{
+use crate::ccos::capability_marketplace::types::{
     ResourceConstraints, ResourceUsage, ResourceMeasurement, ResourceType, 
     ResourceViolation, ResourceMonitoringConfig
 };

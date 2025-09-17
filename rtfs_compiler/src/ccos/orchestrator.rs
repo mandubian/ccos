@@ -604,7 +604,9 @@ impl Orchestrator {
         if host_call.fn_symbol.starts_with("call:") {
             // Capability call
             let capability_id = host_call.fn_symbol.strip_prefix("call:").unwrap_or(&host_call.fn_symbol);
-            self.capability_marketplace.execute_capability(capability_id, &host_call.args).await
+            // Convert Vec<Value> to Value::Vector for capability execution
+            let args_value = Value::Vector(host_call.args.clone());
+            self.capability_marketplace.execute_capability(capability_id, &args_value).await
         } else if host_call.fn_symbol.starts_with("model-call:") {
             // Model call - delegate to CCOS model execution
             let model_id = host_call.fn_symbol.strip_prefix("model-call:").unwrap_or(&host_call.fn_symbol);

@@ -68,7 +68,7 @@ impl CapabilityMarketplace {
         monitoring_config: ResourceMonitoringConfig,
     ) -> Self {
         let mut marketplace = Self::with_causal_chain(capability_registry, causal_chain);
-        marketplace.resource_monitor = Some(ResourceMonitor::new(monitoring_config));
+        marketplace.resource_monitor = Some(Arc::new(ResourceMonitor::new(monitoring_config)));
         marketplace
     }
 

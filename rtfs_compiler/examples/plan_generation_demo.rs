@@ -144,8 +144,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let pure_context = RuntimeContext::pure();
     let stdlib_env = StandardLibrary::create_global_environment();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         pure_context.clone(),
@@ -153,7 +153,6 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
-        delegation.clone(),
         pure_context,
         host.clone(),
     );
@@ -182,8 +181,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let controlled_context = SecurityPolicies::data_processing();
     let stdlib_env = StandardLibrary::create_global_environment();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         controlled_context.clone(),
@@ -192,7 +191,6 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
-        delegation.clone(),
         controlled_context,
         host.clone(),
     );
@@ -221,8 +219,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let full_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         full_context.clone(),
@@ -231,7 +229,6 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
-        delegation.clone(),
         full_context,
         host.clone(),
     );
@@ -268,8 +265,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let math_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         math_context.clone(),
@@ -278,7 +275,6 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
-        delegation.clone(),
         math_context,
         host.clone(),
     );
@@ -319,8 +315,8 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let plan_context = RuntimeContext::full();
     let stdlib_env = StandardLibrary::create_global_environment();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         plan_context.clone(),
@@ -328,7 +324,6 @@ fn test_capability_system() -> Result<(), Box<dyn std::error::Error>> {
     let mut evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
-        delegation.clone(),
         plan_context,
         host.clone(),
     );
@@ -515,8 +510,8 @@ GENERATED RTFS PLAN:
     let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
     let stdlib_env = StandardLibrary::create_global_environment();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::full(),
@@ -525,14 +520,11 @@ GENERATED RTFS PLAN:
     let mut evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
-        delegation,
         RuntimeContext::full(),
         host,
     );
-    evaluator.model_registry = Arc::new(model_registry);
 
-    let provider = evaluator
-        .model_registry
+    let provider = model_registry
         .get(model_id)
         .expect("provider registered");
 
