@@ -444,13 +444,14 @@ impl RtfsStreamingSyntaxExecutor {
         let params = Value::Map(HashMap::new());
         let handle_id = self.marketplace.start_stream_with_config(
             &capability_id,
-            final_config,
+            &params,
+            &final_config,
         ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         
         // Create a proper StreamHandle from the returned string
         let (stop_tx, _stop_rx) = mpsc::channel(1);
         let handle = StreamHandle {
-            stream_id: handle_id,
+            stream_id: handle_id.stream_id,
             stop_tx,
         };
         self.active_streams.insert(handle_name.clone(), handle);
@@ -472,13 +473,14 @@ impl RtfsStreamingSyntaxExecutor {
         let params = Value::Map(HashMap::new());
         let handle_id = self.marketplace.start_stream_with_config(
             &capability_id,
-            final_config,
+            &params,
+            &final_config,
         ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         
         // Create a proper StreamHandle from the returned string
         let (stop_tx, _stop_rx) = mpsc::channel(1);
         let handle = StreamHandle {
-            stream_id: handle_id,
+            stream_id: handle_id.stream_id,
             stop_tx,
         };
         self.active_streams.insert(handle_name.clone(), handle);
@@ -514,7 +516,8 @@ impl RtfsStreamingSyntaxExecutor {
         let params = Value::Map(HashMap::new());
         let _transform_handle = self.marketplace.start_stream_with_config(
             &transform_id,
-            final_config,
+            &params,
+            &final_config,
         ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         Ok(ExecutionResult::Success(format!("Created stream transform: {}", transform_id)))
     }
@@ -537,15 +540,22 @@ impl RtfsStreamingSyntaxExecutor {
             server_channel: "server".to_string(),
             buffer_size: 1024,
         };
+        let stream_config = StreamConfig {
+            callbacks: None,
+            auto_reconnect: false,
+            max_retries: 0,
+        };
+        let params = Value::Map(HashMap::new());
         let handle_id = self.marketplace.start_bidirectional_stream_with_config(
             &capability_id,
-            bidirectional_config,
+            &params,
+            &stream_config,
         ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         
         // Create a proper StreamHandle from the returned string
         let (stop_tx, _stop_rx) = mpsc::channel(1);
         let handle = StreamHandle {
-            stream_id: handle_id,
+            stream_id: handle_id.stream_id,
             stop_tx,
         };
         self.active_streams.insert(handle_name.clone(), handle);
@@ -699,19 +709,22 @@ impl RtfsStreamingSyntaxExecutor {
             input_handles.push(handle);
         }
 
+          let params = Value::Map(HashMap::new());
+          let stream_config = StreamConfig {
+              callbacks: None,
+              auto_reconnect: false,
+              max_retries: 0,
+          };
           let multiplex_handle_id = self.marketplace.start_bidirectional_stream_with_config(
               "multiplex",
-              BidirectionalConfig {
-                  client_channel: "client".to_string(),
-                  server_channel: "server".to_string(),
-                  buffer_size: 1024,
-              }
+              &params,
+              &stream_config
           ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         
         // Create a proper StreamHandle from the returned string
         let (stop_tx, _stop_rx) = mpsc::channel(1);
         let multiplex_handle = StreamHandle {
-            stream_id: multiplex_handle_id,
+            stream_id: multiplex_handle_id.stream_id,
             stop_tx,
         };
         
@@ -738,13 +751,16 @@ impl RtfsStreamingSyntaxExecutor {
             output_handles.insert(key, handle);
         }
 
+          let params = Value::Map(HashMap::new());
+          let stream_config = StreamConfig {
+              callbacks: None,
+              auto_reconnect: false,
+              max_retries: 0,
+          };
           let _demultiplex_handle = self.marketplace.start_bidirectional_stream_with_config(
               "demultiplex",
-              BidirectionalConfig {
-                  client_channel: "client".to_string(),
-                  server_channel: "server".to_string(),
-                  buffer_size: 1024,
-              }
+              &params,
+              &stream_config
           ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
 
         Ok(ExecutionResult::Success("Created demultiplexed stream".to_string()))
@@ -762,36 +778,42 @@ impl RtfsStreamingSyntaxExecutor {
                     .ok_or_else(|| StreamingError::ResourceNotFound(resource_path.clone()))?;
                 
                 // Create stream from resolved resource using start_stream_with_config
+                let params = Value::Map(HashMap::new());
+                let stream_config = StreamConfig {
+                    callbacks: None,
+                    auto_reconnect: false,
+                    max_retries: 0,
+                };
                 let handle_id = self.marketplace.start_stream_with_config(
                     resolved_path,
-                    StreamConfig {
-                        callbacks: None,
-                        auto_reconnect: false,
-                        max_retries: 0,
-                    }
+                    &params,
+                    &stream_config
                 ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
                 
                 // Create a proper StreamHandle from the returned string
                 let (stop_tx, _stop_rx) = mpsc::channel(1);
                 Ok(StreamHandle {
-                    stream_id: handle_id,
+                    stream_id: handle_id.stream_id,
                     stop_tx,
                 })
             },
             StreamReference::CapabilityId(capability_id) => {
+                let params = Value::Map(HashMap::new());
+                let stream_config = StreamConfig {
+                    callbacks: None,
+                    auto_reconnect: false,
+                    max_retries: 0,
+                };
                 let handle_id = self.marketplace.start_stream_with_config(
                     &capability_id,
-                    StreamConfig {
-                        callbacks: None,
-                        auto_reconnect: false,
-                        max_retries: 0,
-                    }
+                    &params,
+                    &stream_config
                 ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
                 
                 // Create a proper StreamHandle from the returned string
                 let (stop_tx, _stop_rx) = mpsc::channel(1);
                 Ok(StreamHandle {
-                    stream_id: handle_id,
+                    stream_id: handle_id.stream_id,
                     stop_tx,
                 })
             },

@@ -10,9 +10,9 @@
 //!   cargo run --example rtfs_capability_demo -- --rtfs-file capabilities.json --tool-name my_tool
 
 use clap::Parser;
-use rtfs_compiler::runtime::capability_marketplace::{CapabilityMarketplace, CapabilityIsolationPolicy};
+use rtfs_compiler::ccos::capability_marketplace::{CapabilityMarketplace, CapabilityIsolationPolicy};
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
-use rtfs_compiler::runtime::ccos_environment::{CCOSEnvironment, CCOSConfig, SecurityLevel};
+use rtfs_compiler::ccos::environment::{CCOSEnvironment, CCOSConfig, SecurityLevel};
 use rtfs_compiler::runtime::values::Value;
 use std::collections::HashMap;
 

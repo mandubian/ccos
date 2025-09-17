@@ -436,21 +436,19 @@ COMMON PATTERNS:
     );
     let delegation = Arc::new(StaticDelegationEngine::new(static_map));
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
 
     // Evaluator (we won't actually evaluate the generated intent here, but set up for future)
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
     let mut evaluator = Evaluator::new(
         std::sync::Arc::new(ModuleRegistry::new()),
-        delegation,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
-    evaluator.model_registry = Arc::new(model_registry);
 
     // ---------------------------------------------------------------------
     // Ask user for a request (or use default)
@@ -472,8 +470,7 @@ COMMON PATTERNS:
     }
 
     // Directly call the provider for simplicity
-    let provider = evaluator
-        .model_registry
+    let provider = model_registry
         .get("openrouter-hunyuan-a13b-instruct")
         .expect("provider registered");
 

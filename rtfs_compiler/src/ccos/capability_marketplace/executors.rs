@@ -52,8 +52,8 @@ impl CapabilityExecutor for MCPExecutor {
                 .map_err(|e| RuntimeError::Generic(format!("Failed to parse tool response: {}", e)))?;
             if let Some(error) = tool_response.get("error") { return Err(RuntimeError::Generic(format!("MCP tool execution failed: {:?}", error))); }
             if let Some(result) = tool_response.get("result") {
-                if let Some(content) = result.get("content") { CapabilityMarketplace::json_to_rtfs_value(content.clone()) }
-                else { CapabilityMarketplace::json_to_rtfs_value(result.clone()) }
+                if let Some(content) = result.get("content") { CapabilityMarketplace::json_to_rtfs_value(content) }
+                else { CapabilityMarketplace::json_to_rtfs_value(result) }
             } else { Err(RuntimeError::Generic("No result in MCP tool response".to_string())) }
         } else { Err(RuntimeError::Generic("Invalid provider type for MCP executor".to_string())) }
     }
@@ -121,8 +121,8 @@ impl A2AExecutor {
             serde_json::Value::String(s) => Ok(Value::String(s.clone())),
             serde_json::Value::Number(n) => { if let Some(i)=n.as_i64(){Ok(Value::Integer(i))} else if let Some(f)=n.as_f64(){Ok(Value::Float(f))} else {Err(RuntimeError::Generic("Invalid number format".to_string()))} }
             serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
-            serde_json::Value::Array(arr) => Ok(Value::Vector(arr.iter().map(|json| CapabilityMarketplace::json_to_rtfs_value(json.clone())).collect::<Result<Vec<_>,_>>()?)),
-            serde_json::Value::Object(obj) => { let mut map = HashMap::new(); for (k,v) in obj { map.insert(crate::ast::MapKey::String(k.clone()), CapabilityMarketplace::json_to_rtfs_value(v.clone())?); } Ok(Value::Map(map)) }
+            serde_json::Value::Array(arr) => Ok(Value::Vector(arr.iter().map(|json| CapabilityMarketplace::json_to_rtfs_value(json)).collect::<Result<Vec<_>,_>>()?)),
+            serde_json::Value::Object(obj) => { let mut map = HashMap::new(); for (k,v) in obj { map.insert(crate::ast::MapKey::String(k.clone()), CapabilityMarketplace::json_to_rtfs_value(v)?); } Ok(Value::Map(map)) }
             serde_json::Value::Null => Ok(Value::Nil),
         }
     }
