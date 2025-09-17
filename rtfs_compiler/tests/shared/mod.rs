@@ -15,4 +15,5 @@ mod step_parallel_merge_tests;
 mod step_params_additional;
 mod step_params_integration;
 mod test_execution_context_fix;
+mod test_helpers;
 mod test_issue_43_completion;
