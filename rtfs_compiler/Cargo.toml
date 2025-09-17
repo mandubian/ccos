@@ -140,3 +140,16 @@ path = "examples/mcp_introspection_demo.rs"
 [build-dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
+
+# Test configurations for organized test structure
+[[test]]
+name = "rtfs_only_tests"
+path = "tests/rtfs-only/mod.rs"
+
+[[test]]
+name = "ccos_integration_tests"
+path = "tests/ccos-integration/mod.rs"
+
+[[test]]
+name = "shared_tests"
+path = "tests/shared/mod.rs"
