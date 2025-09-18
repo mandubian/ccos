@@ -17,5 +17,5 @@
 ;; (tool.open-file "nonexistent.txt") ; Should return error
 
 ;; Tool http-fetch tests (these may fail if network is unavailable)
-;; (tool.http-fetch "https://httpbin.org/get") ; Should fetch HTTP response
+;; (tool.http-fetch "http://localhost:9999/mock") ; Should fetch HTTP response
 ;; (tool.http-fetch "https://invalid-url.com") ; Should return error 
