@@ -119,8 +119,8 @@ fn test_central_authorization_system() {
     let mut registry = CapabilityRegistry::new();
     registry.set_microvm_provider("mock").expect("Should set mock provider");
     
-    // Test authorized execution
-    let args = vec![Value::String("https://httpbin.org/get".to_string())];
+    // Test authorized execution with mock endpoint
+    let args = vec![Value::String("http://localhost:9999/mock".to_string())];
     let result = registry.execute_capability_with_microvm(
         "ccos.network.http-fetch",
         args,

@@ -13,8 +13,8 @@ fn test_microvm_http_fetch() {
         "ccos.network.http-fetch".to_string(),
     ]);
 
-    // Simulate a plan step: HTTP fetch
-    let url = "https://httpbin.org/get";
+    // Simulate a plan step: HTTP fetch with mock endpoint
+    let url = "http://localhost:9999/mock";
     let args = vec![Value::String(url.to_string())];
     let result = registry.execute_capability_with_microvm("ccos.network.http-fetch", args, Some(&runtime_context));
 
