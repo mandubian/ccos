@@ -564,6 +564,7 @@ fn test_if_map_return() {
     });
 }
 
+
 #[test]
 fn test_simple_if_keyword() {
     run_all_tests_for_file(&TestConfig {

@@ -205,10 +205,10 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                     }
                 }
 
-                // Heuristic: if the first element is a Symbol, or an Fn expression,
+                // Heuristic: if the first element is a Symbol, Keyword, or an Fn expression,
                 // or another FunctionCall, treat it as a function call.
                 match callee_ast {
-                    Expression::Symbol(_) | Expression::Fn(_) | Expression::FunctionCall { .. } => {
+                    Expression::Symbol(_) | Expression::Literal(Literal::Keyword(_)) | Expression::Fn(_) | Expression::FunctionCall { .. } => {
                         // It's likely a function call. Parse remaining as arguments.
                         let arguments = inner_pairs[1..]
                             .iter()
