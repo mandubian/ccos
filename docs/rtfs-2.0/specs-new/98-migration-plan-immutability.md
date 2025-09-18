@@ -12,6 +12,7 @@ The successful completion of this plan will:
 -   **Simplify the Language Core**: Remove the complexity of managing mutable state, making the runtime easier to verify and maintain.
 -   **Enhance Security and Predictability**: Eliminate a class of bugs related to state corruption and make the language a safer, more predictable target for AI code generation.
 -   **Enforce the Architectural Vision**: Solidify the clean separation between the pure RTFS engine and the stateful Host environment.
+-   **Enable Safe Continuations**: Provide the foundation for the continuation-passing and yield mechanism. A pure, immutable state is essential for creating serializable, re-entrant continuations that can be safely managed by the Host.
 
 ## 2. Scope of Removal
 
