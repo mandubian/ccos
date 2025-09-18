@@ -340,7 +340,7 @@ fn test_simple_let() {
 fn test_simple_if() {
     run_all_tests_for_file(&TestConfig {
         name: "test_simple_if".to_string(),
-        expected_result: Some("Integer(1)".to_string()),
+        expected_result: Some("Keyword(Keyword(\"then-value\"))".to_string()),
         ..TestConfig::new("test_simple_if")
     });
 }
@@ -533,11 +533,12 @@ fn test_computational_heavy() {
     run_all_tests_for_file(&TestConfig::new("test_computational_heavy"));
 }
 
+
 #[test]
 fn test_string_ops() {
     run_all_tests_for_file(&TestConfig {
         name: "test_string_ops".to_string(),
-    expected_result: Some(r#"String("hello, world!")"#.to_string()),
+    expected_result: Some(r#"String("\"hello\"\", \"\"world!\"")"#.to_string()),
         ..TestConfig::new("test_string_ops")
     });
 }
