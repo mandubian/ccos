@@ -546,9 +546,17 @@ fn test_string_ops() {
 
 #[test]
 fn test_map_creation() {
+    use rtfs_compiler::ast::{Keyword, MapKey};
+    use rtfs_compiler::runtime::Value;
+    use std::collections::HashMap;
+    
+    let mut expected_map = HashMap::new();
+    expected_map.insert(MapKey::Keyword(Keyword::new("category")), Value::Keyword(Keyword::new("medium")));
+    expected_map.insert(MapKey::Keyword(Keyword::new("sum")), Value::Integer(60));
+    
     run_all_tests_for_file(&TestConfig {
         name: "test_map_creation".to_string(),
-        expected_result: Some("Map({Keyword(Keyword(\"category\")): Keyword(Keyword(\"medium\")), Keyword(Keyword(\"sum\")): Integer(60)})".to_string()),
+        expected_value: Some(Value::Map(expected_map)),
         ..TestConfig::new("test_map_creation")
     });
 }
