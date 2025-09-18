@@ -420,12 +420,15 @@ impl RtfsStreamingSyntaxExecutor {
             .unwrap_or(&format!("RTFS streaming capability for {}", capability_id))
             .clone();
 
-        // TODO: Implement proper CapabilityManifest for streaming capabilities
-        // For now, we'll skip registration as it requires proper manifest structure
-        // self.marketplace.register_streaming_capability(
-        //     &capability_id,
-        //     CapabilityManifest::new(...),
-        // ).await.map_err(|e| StreamingError::MarketplaceError(e.to_string()))?;
+        // Register the streaming capability with the marketplace
+        self.marketplace.register_streaming_capability(
+            capability_id.clone(),
+            name,
+            description,
+            stream_type,
+            provider,
+        ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
+        
         Ok(ExecutionResult::Success(format!("Registered streaming capability: {}", capability_id)))
     }
 
