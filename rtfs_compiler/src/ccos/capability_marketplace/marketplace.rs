@@ -371,10 +371,10 @@ impl CapabilityMarketplace {
         handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
     ) -> RuntimeResult<()> {
         let provenance = CapabilityProvenance {
-            source: "dynamic_registration".to_string(),
+            source: "local".to_string(),
             version: Some("1.0.0".to_string()),
             content_hash: self.compute_content_hash(&id),
-            custody_chain: vec!["dynamic_registration".to_string()],
+            custody_chain: vec!["local_registration".to_string()],
             registered_at: Utc::now(),
         };
 
