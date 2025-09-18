@@ -1508,7 +1508,7 @@ mod tests {
 
     #[test]
     fn test_defn_with_delegation_hint() {
-        let input = "(defn add ^:delegation :remote \"gpt4o\" [x y] (+ x y))";
+        let input = "(defn ^:delegation :remote \"gpt4o\" add [x y] (+ x y))";
         let mut pairs = RTFSParser::parse(crate::parser::Rule::defn_expr, input).unwrap();
         let result = build_defn_expr(pairs.next().unwrap());
         assert!(result.is_ok());
