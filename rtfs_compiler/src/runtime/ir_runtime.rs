@@ -851,7 +851,6 @@ impl IrRuntime {
             Value::Keyword(keyword) => {
                 // Keywords act as functions: (:key map) is equivalent to (get map :key)
                 if args.len() == 1 {
-                    eprintln!("DEBUG IR: Keyword function call - keyword: {:?}, args[0]: {:?}, args[0] type: {}", keyword, args[0], args[0].type_name());
                     match &args[0] {
                         Value::Map(map) => {
                             // Try keyword key first, then fall back to string key for compatibility

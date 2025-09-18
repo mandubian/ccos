@@ -1524,8 +1524,7 @@ impl Evaluator {
             }
             Value::Keyword(keyword) => {
                 // Keywords act as functions: (:key map) is equivalent to (get map :key)
-                        if args.len() == 1 {
-                    eprintln!("DEBUG: Keyword function call - keyword: {:?}, args[0]: {:?}, args[0] type: {}", keyword, args[0], args[0].type_name());
+                if args.len() == 1 {
                     match &args[0] {
                         Value::Map(map) => {
                             let map_key = crate::ast::MapKey::Keyword(keyword);
