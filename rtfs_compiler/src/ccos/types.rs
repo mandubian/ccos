@@ -303,6 +303,40 @@ impl Intent {
         self.name = Some(name);
         self
     }
+
+    /// Convert a StorableIntent to a runtime Intent
+    pub fn from_storable(storable: StorableIntent) -> Result<Self, RuntimeError> {
+        // Convert string metadata to Value metadata
+        let metadata = storable.metadata.into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+
+        // For now, convert string constraints/preferences to Value::String
+        // In a full implementation, these would be parsed as RTFS expressions
+        let constraints = storable.constraints.into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+
+        let preferences = storable.preferences.into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+
+        let success_criteria = storable.success_criteria.map(Value::String);
+
+        Ok(Self {
+            intent_id: storable.intent_id,
+            name: storable.name,
+            original_request: storable.original_request,
+            goal: storable.goal,
+            constraints,
+            preferences,
+            success_criteria,
+            status: storable.status,
+            created_at: storable.created_at,
+            updated_at: storable.updated_at,
+            metadata,
+        })
+    }
 }
 
 impl Plan {

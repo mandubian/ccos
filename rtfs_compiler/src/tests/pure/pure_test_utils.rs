@@ -116,7 +116,9 @@ mod tests {
     fn test_create_pure_evaluator() {
         let evaluator = create_pure_evaluator();
         // Should be able to create evaluator without CCOS dependencies
-        assert!(evaluator.env.symbol_names().is_empty());
+        // Pure evaluators still have standard library functions loaded
+        let symbols = evaluator.env.symbol_names();
+        assert!(symbols.len() > 0, "Pure evaluator should have standard library functions available");
     }
 
     #[test]

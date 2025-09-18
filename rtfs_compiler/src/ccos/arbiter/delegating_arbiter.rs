@@ -284,20 +284,25 @@ impl DelegatingArbiter {
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
-        let prompt = self.create_intent_prompt(natural_language, context.clone());
+        // Convert context from Value to String for LlmProvider interface
+        let string_context = context.as_ref().map(|ctx| {
+            ctx.iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect::<HashMap<String, String>>()
+        });
         
-        let response = self.llm_provider.generate_text(&prompt).await?;
+        let storable_intent = self.llm_provider.generate_intent(natural_language, string_context).await?;
         
-        // Log provider, prompt, and response (best-effort, non-fatal)
+        // Log provider and result (best-effort, non-fatal)
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
-            let entry = json!({"event":"llm_intent_generation","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
+            let entry = json!({"event":"llm_intent_generation","provider": format!("{:?}", self.llm_config.provider_type), "request": natural_language, "intent_id": storable_intent.intent_id});
             writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
             Ok(())
         })();
 
-        // Parse LLM response into intent structure
-        let mut intent = self.parse_llm_intent_response(&response, natural_language, context)?;
+        // Convert StorableIntent to Intent 
+        let mut intent = Intent::from_storable(storable_intent)?;
 
         // Mark how this intent was generated so downstream code/tests can inspect it
         intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
@@ -420,20 +425,56 @@ impl DelegatingArbiter {
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> Result<Plan, RuntimeError> {
-        let prompt = self.create_direct_plan_prompt(intent, context);
-        
-        let response = self.llm_provider.generate_text(&prompt).await?;
+        // Convert Intent to StorableIntent for LlmProvider interface
+        let storable_intent = StorableIntent {
+            intent_id: intent.intent_id.clone(),
+            name: intent.name.clone(),
+            original_request: intent.original_request.clone(),
+            rtfs_intent_source: "".to_string(), // Not used by LlmProvider
+            goal: intent.goal.clone(),
+            constraints: intent.constraints.iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            preferences: intent.preferences.iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+            parent_intent: None,
+            child_intents: vec![],
+            triggered_by: crate::ccos::types::TriggerSource::ArbiterInference,
+            generation_context: crate::ccos::types::GenerationContext {
+                arbiter_version: "delegating-1.0".to_string(),
+                generation_timestamp: intent.created_at,
+                input_context: HashMap::new(),
+                reasoning_trace: None,
+            },
+            status: intent.status.clone(),
+            priority: 0,
+            created_at: intent.created_at,
+            updated_at: intent.updated_at,
+            metadata: intent.metadata.iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+        };
 
-        // Log provider, prompt and response
+        // Convert context from Value to String for LlmProvider interface
+        let string_context = context.as_ref().map(|ctx| {
+            ctx.iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect::<HashMap<String, String>>()
+        });
+        
+        let plan = self.llm_provider.generate_plan(&storable_intent, string_context).await?;
+
+        // Log provider and result
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
-            let entry = json!({"event":"llm_direct_plan","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
+            let entry = json!({"event":"llm_direct_plan","provider": format!("{:?}", self.llm_config.provider_type), "intent_id": intent.intent_id, "plan_id": plan.plan_id});
             writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
             Ok(())
         })();
 
-    // Parse direct plan
-    let plan = self.parse_direct_plan(&response, intent)?;
+    // Plan generated directly by LLM provider
     // Log parsed plan for debugging
     self.log_parsed_plan(&plan);
     Ok(plan)
