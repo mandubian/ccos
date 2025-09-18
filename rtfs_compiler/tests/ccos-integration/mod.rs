@@ -4,6 +4,7 @@
 // Include all CCOS integration test files
 mod arbiter_plan_generation_integration;
 mod capability_integration_tests;
+mod capability_marketplace_tests;
 mod capability_system;
 mod capability_type_validation_tests;
 mod capability_type_validation_tests_fixed;

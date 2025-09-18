@@ -1,0 +1,13 @@
+; Test if expression returning a map
+(let [result (if true
+               {
+                 :category :medium
+                 :sum 60
+                 :product 6000
+               }
+               {
+                 :category :low
+                 :sum 30
+                 :product 3000
+               })]
+  (:sum result))

@@ -1673,11 +1673,8 @@ impl StandardLibrary {
         for arg in args {
             match arg {
                 Value::String(s) => {
-                    // Include surrounding quotes for string values to match `str`'s
-                    // expected output in tests (e.g. "hello" -> "\"hello\"").
-                    // Escape backslashes and quotes inside the string.
-                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                    result.push_str(&format!("\"{}\"", escaped));
+                    // For string concatenation, just append the string directly
+                    result.push_str(&s);
                 }
                 Value::Integer(n) => result.push_str(&n.to_string()),
                 Value::Float(f) => result.push_str(&f.to_string()),
