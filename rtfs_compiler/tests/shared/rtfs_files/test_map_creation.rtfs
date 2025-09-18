@@ -1,0 +1,5 @@
+; Test just map creation
+{
+  :category :medium
+  :sum 60
+}

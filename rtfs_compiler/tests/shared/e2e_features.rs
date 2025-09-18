@@ -323,11 +323,8 @@ fn test_map_operations_feature() {
 
 // MARK: - RTFS 2.0 Specific Tests
 
-#[test]
-fn test_rtfs2_special_forms_feature() {
-    let config = FeatureTestConfig::new("rtfs2_special_forms", FeatureCategory::Rtfs2Features);
-    run_feature_tests(&config).expect("rtfs2_special_forms feature tests failed");
-}
+// REMOVED: test_rtfs2_special_forms_feature - moved to CCOS integration tests 
+// as it requires CCOS execution context for special forms like step, @plan-id, etc.
 
 // MARK: - Mutation & State Tests
 
@@ -371,7 +368,7 @@ fn test_all_features_integration() {
     FeatureTestConfig::new("mutation_and_state", FeatureCategory::SpecialForms),
         
         // RTFS 2.0 Features
-        FeatureTestConfig::new("rtfs2_special_forms", FeatureCategory::Rtfs2Features),
+        // REMOVED: rtfs2_special_forms - moved to CCOS integration tests
         
         // Type System
         FeatureTestConfig::new("type_system", FeatureCategory::TypeSystem),
