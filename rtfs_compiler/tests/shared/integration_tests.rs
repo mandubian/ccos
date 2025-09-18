@@ -538,7 +538,7 @@ fn test_computational_heavy() {
 fn test_string_ops() {
     run_all_tests_for_file(&TestConfig {
         name: "test_string_ops".to_string(),
-    expected_result: Some(r#"String("\"hello\"\", \"\"world!\"")"#.to_string()),
+        expected_result: Some(r#"String("hello, world!")"#.to_string()),
         ..TestConfig::new("test_string_ops")
     });
 }
@@ -552,6 +552,8 @@ fn test_map_creation() {
         ..TestConfig::new("test_map_creation")
     });
 }
+
+
 
 #[test]
 fn test_if_map_return() {

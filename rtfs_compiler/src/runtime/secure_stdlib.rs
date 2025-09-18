@@ -1196,12 +1196,24 @@ impl SecureStandardLibrary {
     }
     
     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
-        let args = args.as_slice();
-        let result = args
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<String>>()
-            .join("");
+        let mut result = String::new();
+        for arg in args {
+            match arg {
+                Value::String(s) => {
+                    // For string concatenation, just append the string directly
+                    result.push_str(&s);
+                }
+                Value::Integer(n) => result.push_str(&n.to_string()),
+                Value::Float(f) => result.push_str(&f.to_string()),
+                Value::Boolean(b) => result.push_str(&b.to_string()),
+                Value::Keyword(k) => result.push_str(&format!(":{}", k.0)),
+                Value::Nil => result.push_str("nil"),
+                Value::Vector(v) => result.push_str(&format!("{:?}", v)),
+                Value::List(l) => result.push_str(&format!("{:?}", l)),
+                Value::Map(m) => result.push_str(&format!("{:?}", m)),
+                _ => result.push_str(&format!("{:?}", arg)),
+            }
+        }
         Ok(Value::String(result))
     }
     
