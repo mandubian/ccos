@@ -307,6 +307,48 @@ impl DelegatingArbiter {
         // Mark how this intent was generated so downstream code/tests can inspect it
         intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
 
+        // Analyze delegation need and set delegation metadata
+        let delegation_analysis = self.analyze_delegation_need(&intent, context.clone()).await?;
+        
+        // Debug: Log delegation analysis
+        println!("DEBUG: Delegation analysis: should_delegate={}, confidence={}, required_capabilities={:?}", 
+                 delegation_analysis.should_delegate, 
+                 delegation_analysis.delegation_confidence,
+                 delegation_analysis.required_capabilities);
+        
+        if delegation_analysis.should_delegate {
+            // Find candidate agents
+            let candidate_agents = self.agent_registry.find_agents_for_capabilities(&delegation_analysis.required_capabilities);
+            
+            println!("DEBUG: Found {} candidate agents", candidate_agents.len());
+            for agent in &candidate_agents {
+                println!("DEBUG: Agent: {} with capabilities: {:?}", agent.agent_id, agent.capabilities);
+            }
+            
+            if !candidate_agents.is_empty() {
+                // Select the best agent (first one for now)
+                let selected_agent = &candidate_agents[0];
+                
+                // Set delegation metadata
+                intent.metadata.insert("delegation.selected_agent".to_string(), Value::String(selected_agent.agent_id.clone()));
+                intent.metadata.insert("delegation.candidates".to_string(), Value::String(
+                    candidate_agents.iter()
+                        .map(|a| a.agent_id.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                
+                // Set intent name to match the selected agent
+                intent.name = Some(selected_agent.agent_id.clone());
+                
+                println!("DEBUG: Selected agent: {}", selected_agent.agent_id);
+            } else {
+                println!("DEBUG: No candidate agents found for capabilities: {:?}", delegation_analysis.required_capabilities);
+            }
+        } else {
+            println!("DEBUG: Delegation not recommended, confidence: {}", delegation_analysis.delegation_confidence);
+        }
+
         // Append a compact JSONL entry with the generated intent for debugging
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;

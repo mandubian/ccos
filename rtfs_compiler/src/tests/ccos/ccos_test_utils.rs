@@ -178,6 +178,7 @@ mod tests {
         let (marketplace, evaluator) = create_ccos_capability_test_setup().await;
         // Should be able to create CCOS test setup
         assert!(marketplace.get_capability("nonexistent").await.is_none());
-        assert!(evaluator.env.symbol_names().is_empty());
+        // The evaluator environment is not empty because it loads the standard library
+        assert!(!evaluator.env.symbol_names().is_empty());
     }
 }

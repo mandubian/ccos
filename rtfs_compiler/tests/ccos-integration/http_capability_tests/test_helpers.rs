@@ -119,12 +119,13 @@ pub fn create_full_evaluator() -> Evaluator {
 pub async fn create_http_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
     let marketplace = Arc::new(create_capability_marketplace());
     
-    // Register basic HTTP capability
+    // Register basic HTTP capability with a mock endpoint that won't make real requests
+    // Use a non-existent local endpoint to avoid real network calls
     marketplace.register_http_capability(
         "http.get".to_string(),
         "HTTP GET Request".to_string(),
         "Performs HTTP GET request".to_string(),
-        "https://httpbin.org/get".to_string(),
+        "http://localhost:9999/mock".to_string(), // Non-existent local endpoint
         None,
     ).await.expect("Failed to register HTTP capability");
     
