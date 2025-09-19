@@ -249,6 +249,13 @@ pub enum TypeExpr {
 impl TypeExpr {
     /// Parse a TypeExpr from a string using the RTFS parser
     pub fn from_str(s: &str) -> Result<Self, String> {
+        // Handle optional types (T?) first, before trying the full parser
+        if s.ends_with("?") {
+            let base_type_str = &s[..s.len()-1];
+            let base_type = Self::from_str(base_type_str)?;
+            return Ok(TypeExpr::Optional(Box::new(base_type)));
+        }
+        
         // Try to use the full parser first
         match crate::parser::parse_type_expression(s) {
             Ok(type_expr) => Ok(type_expr),
@@ -265,13 +272,6 @@ impl TypeExpr {
                     ":any" => Ok(TypeExpr::Any),
                     ":never" => Ok(TypeExpr::Never),
                     _ => {
-                        // Handle optional types (T?)
-                        if s.ends_with("?") {
-                            let base_type_str = &s[..s.len()-1];
-                            let base_type = Self::from_str(base_type_str)?;
-                            return Ok(TypeExpr::Optional(Box::new(base_type)));
-                        }
-                        
                         // For other types, treat as alias
                         Ok(TypeExpr::Alias(Symbol(s.to_string())))
                     }

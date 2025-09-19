@@ -1,0 +1,56 @@
+;; Test HTTP functions
+;; This tests basic HTTP GET requests to public APIs
+
+(println "Testing HTTP functions...")
+
+;; Test 1: Simple GET request to a mock API
+(println "\n1. Testing GET request to mock endpoint...")
+(let [response (http-fetch "http://localhost:9999/mock")]
+  (println "Response status:" (:status response))
+  (println "Response body length:" (string-length (:body response)))
+  (println "Content-Type header:" (:content-type (:headers response))))
+
+;; Test 2: GET request with explicit method
+(println "\n2. Testing GET request with explicit method...")
+(let [response (http-fetch "http://localhost:9999/mock" "GET")]
+  (println "Response status:" (:status response))
+  (println "Response is JSON:" (string-contains (substring (:body response) 0 1) "{")))
+
+;; Test 3: Test with keyword method
+(println "\n3. Testing GET request with keyword method...")
+(let [response (http-fetch "http://localhost:9999/mock/headers" :get)]
+  (println "Response status:" (:status response))
+  (println "Response contains headers:" (string-contains (substring (:body response) 0 20) "headers")))
+
+;; Test 4: Test error handling with invalid URL
+(println "\n4. Testing error handling with invalid URL...")
+(let [result (try (http-fetch "https://invalid-domain-that-does-not-exist-12345.com")
+                  (catch _ err "Error caught: Invalid URL"))]
+  (println "Result:" result))
+
+;; Test 5: Test HEAD request
+(println "\n5. Testing HEAD request...")
+(let [response (http-fetch "http://localhost:9999/mock/headers" "HEAD")]
+  (println "Response status:" (:status response))
+  (println "Response body length:" (string-length (:body response)))
+  (println "Server header:" (:server (:headers response))))
+
+;; Test 6: Parse JSON response
+(println "\n6. Testing JSON response parsing...")
+(let [response (http-fetch "http://localhost:9999/mock/json")]
+  (let [json-data (parse-json (:body response))]
+    (println "Parsed JSON:" json-data)
+    (println "JSON type:" (type-name json-data))))
+
+;; Test 7: Test with different HTTP methods (should work with httpbin)
+(println "\n7. Testing different HTTP methods...")
+(let [post-response (http-fetch "http://localhost:9999/mock/post" "POST")]
+  (println "POST response status:" (:status post-response)))
+
+(let [put-response (http-fetch "http://localhost:9999/mock/put" "PUT")]
+  (println "PUT response status:" (:status put-response)))
+
+(let [delete-response (http-fetch "http://localhost:9999/mock/delete" "DELETE")]
+  (println "DELETE response status:" (:status delete-response)))
+
+(println "\nHTTP functions test completed!") 

@@ -1,0 +1,7 @@
+; Simple test to debug map creation
+(let [test-map {
+  :category :medium
+  :sum 60
+  :product 6000
+}]
+  (:sum test-map))

@@ -5,8 +5,9 @@
 //! 2. CCOSEnvironment - Complete runtime environment
 //! 3. ExecutionContext - Hierarchical data management
 
-use rtfs_compiler::runtime::{
-    CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory, RuntimeContext
+use rtfs_compiler::runtime::RuntimeContext;
+use rtfs_compiler::ccos::environment::{
+    CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory
 };
 use rtfs_compiler::ccos::execution_context::{ContextManager, IsolationLevel};
 use rtfs_compiler::runtime::values::Value;

@@ -20,7 +20,7 @@ use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::plan_archive::PlanArchive;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Subgoal: fetch
-    let mut fetch = StorableIntent::new("Fetch data from https://httpbin.org/get".to_string());
+    let mut fetch = StorableIntent::new("Fetch data from http://localhost:9999/mock".to_string());
     fetch.name = Some("fetch-data".to_string());
     fetch.parent_intent = Some(root.intent_id.clone());
 
@@ -165,7 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: Some("fetch-http".to_string()),
         intent_ids: vec![fetch.intent_id.clone()],
         language: PlanLanguage::Rtfs20,
-        body: PlanBody::Rtfs("(do (step \"Fetch\" (call :ccos.network.http-fetch \"https://httpbin.org/get\")))".to_string()),
+        body: PlanBody::Rtfs("(do (step \"Fetch\" (call :ccos.network.http-fetch \"http://localhost:9999/mock\")))".to_string()),
         status: PlanStatus::Draft,
         created_at: chrono::Utc::now().timestamp() as u64,
         metadata: Default::default(),

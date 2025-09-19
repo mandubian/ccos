@@ -1,0 +1,5 @@
+;; Test accept-language with different string value
+(let [headers {:content-type "application/json" :accept-language "simple"}
+      result (try (tool/http-fetch "http://localhost:9999/mock")
+                  (catch _ err "Connection refused as expected"))]
+  (println "Accept-language test complete - HTTP call handled gracefully")) 

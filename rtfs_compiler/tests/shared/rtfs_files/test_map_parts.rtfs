@@ -1,0 +1,26 @@
+;; Test map parts to isolate the issue
+
+;; Test 1: Just the first part
+(let [headers {:content-type "application/json"}
+      response (tool/http-fetch "http://localhost:9999/mock")]
+  (println "Part 1 complete"))
+
+;; Test 2: Add accept-language
+(let [headers {:content-type "application/json" :accept-language "en-US,en;q=0.9"}
+      response (tool/http-fetch "http://localhost:9999/mock")]
+  (println "Part 2 complete"))
+
+;; Test 3: Add cache-control
+(let [headers {:content-type "application/json" :accept-language "en-US,en;q=0.9" :cache-control "no-cache"}
+      response (tool/http-fetch "http://localhost:9999/mock")]
+  (println "Part 3 complete"))
+
+;; Test 4: Add numeric header
+(let [headers {:content-type "application/json" :accept-language "en-US,en;q=0.9" :cache-control "no-cache" :x-numeric-header 42}
+      response (tool/http-fetch "http://localhost:9999/mock")]
+  (println "Part 4 complete"))
+
+;; Test 5: Add boolean header (this should fail)
+(let [headers {:content-type "application/json" :accept-language "en-US,en;q=0.9" :cache-control "no-cache" :x-numeric-header 42 :x-boolean-header true}
+      response (tool/http-fetch "http://localhost:9999/mock")]
+  (println "Part 5 complete")) 

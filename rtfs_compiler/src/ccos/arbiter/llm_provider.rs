@@ -1186,7 +1186,7 @@ impl StubLlmProvider {
                 name: Some("general_assistance".to_string()),
                 original_request: nl.to_string(),
                 rtfs_intent_source: "".to_string(),
-                goal: "Provide general assistance".to_string(),
+                goal: "Perform a small delegated task".to_string(),
                 constraints: HashMap::new(),
                 preferences: HashMap::from([("helpfulness".to_string(), "\"high\"".to_string())]),
                 success_criteria: Some("\"assistance_provided\"".to_string()),
@@ -1229,7 +1229,7 @@ impl StubLlmProvider {
                 r#"
 (do
     (step "Process Request" (call :ccos.echo "processing your request"))
-    (step "Provide Response" (call :ccos.echo "response provided"))
+    (step "Complete Task" (call :ccos.echo "stub done"))
 )
 "#
             }
@@ -1309,7 +1309,7 @@ impl LlmProvider for StubLlmProvider {
 )"#.to_string());
     }
         
-        if lower_prompt.contains("delegation analysis") || lower_prompt.contains("should_delegate") || lower_prompt.contains("delegate") {
+        if lower_prompt.contains("delegation analysis") || lower_prompt.contains("should_delegate") {
             // This is a delegation analysis request - return JSON
             if lower_prompt.contains("sentiment") || lower_prompt.contains("analyze") {
                 Ok(r#"{
@@ -1493,7 +1493,7 @@ mod tests {
         
         // The stub provider uses a fixed pattern, so we check for the general assistance pattern
         assert_eq!(intent.name, Some("general_assistance".to_string()));
-        assert!(intent.goal.contains("assistance"));
+        assert!(intent.goal.contains("delegated task"));
     }
     
     #[tokio::test]

@@ -54,16 +54,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create evaluator
     let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
 
     let mut evaluator = Evaluator::new(
-    module_registry,
-        de,
+        module_registry,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
@@ -104,7 +103,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(parsed) => {
                 match evaluator.eval_toplevel(&parsed) {
                     Ok(result) => {
-                        println!("✅ Result: {}", result);
+                        match result {
+                            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                                println!("✅ Result: {}", value);
+                            }
+                            rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(host_call) => {
+                                println!("⚠️  Host call required: {}", host_call.fn_symbol);
+                            }
+                        }
                     }
                     Err(e) => {
                         println!("❌ Error: {}", e);

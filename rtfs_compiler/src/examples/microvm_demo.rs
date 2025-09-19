@@ -46,7 +46,7 @@ fn main() -> RuntimeResult<()> {
     
     // Test network capability
     println!("1. Testing network capability (ccos.network.http-fetch):");
-    let args = vec![Value::String("https://httpbin.org/get".to_string())];
+    let args = vec![Value::String("http://localhost:9999/mock".to_string())];
     match registry.execute_capability_with_microvm("ccos.network.http-fetch", args, Some(&runtime_context)) {
         Ok(result) => println!("   Result: {:?}", result),
         Err(e) => println!("   Error: {}", e),

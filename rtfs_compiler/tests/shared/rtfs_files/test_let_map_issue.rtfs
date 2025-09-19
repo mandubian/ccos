@@ -1,0 +1,4 @@
+;; Test let binding with map
+(let [headers {:a 1 :b 2}
+      response (tool/http-fetch "http://localhost:9999/mock")]
+  (println "Test complete")) 

@@ -5,12 +5,12 @@
 
 use crate::ccos::delegation::StaticDelegationEngine;
 use crate::ccos::causal_chain::CausalChain;
+use crate::ccos::host::RuntimeHost;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::runtime::{Evaluator, ModuleRegistry};
 use crate::runtime::stdlib::StandardLibrary;
 use crate::runtime::security::RuntimeContext;
-use crate::runtime::host::RuntimeHost;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::capabilities::registry::CapabilityRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -84,7 +84,6 @@ pub fn create_evaluator(security_context: RuntimeContext) -> Evaluator {
     Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     )
@@ -103,7 +102,6 @@ pub fn create_evaluator_with_marketplace(
     Evaluator::with_environment(
         module_registry,
         stdlib_env,
-        delegation_engine,
         security_context,
         host,
     )
@@ -133,14 +131,15 @@ pub fn create_sandboxed_evaluator() -> Evaluator {
 pub async fn create_http_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
     let marketplace = Arc::new(create_capability_marketplace());
     
+    // TODO: Fix capability registration - need proper CapabilityManifest
     // Register basic HTTP capability
-    marketplace.register_http_capability(
-        "http.get".to_string(),
-        "HTTP GET Request".to_string(),
-        "Performs HTTP GET request".to_string(),
-        "https://httpbin.org/get".to_string(),
-        None,
-    ).await.expect("Failed to register HTTP capability");
+    // marketplace.register_http_capability(
+    //     "http.get".to_string(),
+    //     "HTTP GET Request".to_string(),
+    //     "Performs HTTP GET request".to_string(),
+    //     "http://localhost:9999/mock".to_string(),
+    //     None,
+    // ).await.expect("Failed to register HTTP capability");
     
     let security_context = RuntimeContext::controlled(vec!["http.get".to_string()]);
     let evaluator = create_evaluator_with_marketplace(marketplace.clone(), security_context);

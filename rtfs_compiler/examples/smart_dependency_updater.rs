@@ -119,8 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let module_registry = Arc::new(ModuleRegistry::new());
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-    let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
@@ -128,7 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut evaluator = Evaluator::new(
         module_registry,
-        de,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
     );
@@ -173,7 +172,10 @@ rand = "0.8.0"
     let analysis_result = evaluator.eval_toplevel(&parsed_plan1)?;
 
     let llm_output = match analysis_result {
-        Value::String(s) => s,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::String(s)) => s,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+            return Err("Host call required but not supported in this example.".into());
+        }
         _ => return Err("LLM did not return a string.".into()),
     };
 

@@ -1,0 +1,4 @@
+;; Test the specific map that's causing issues
+(let [headers {:content-type "application/json"}
+      response (http-fetch "http://localhost:9999/mock")]
+  (println "Specific map test complete"))

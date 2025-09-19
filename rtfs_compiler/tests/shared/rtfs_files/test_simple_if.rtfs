@@ -1,0 +1,4 @@
+; Test simple if expression
+(if true
+  :then-value
+  :else-value)

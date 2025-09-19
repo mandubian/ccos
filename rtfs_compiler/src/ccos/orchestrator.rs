@@ -19,12 +19,13 @@
 
 use std::sync::{Arc, Mutex};
 use serde_json::{self, Value as JsonValue};
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::values::Value;
 use crate::ast::MapKey;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::evaluator::Evaluator;
-use crate::runtime::host::RuntimeHost;
+use crate::runtime::execution_outcome::ExecutionOutcome;
+use crate::ccos::host::RuntimeHost;
 use crate::runtime::error::{RuntimeResult, RuntimeError};
 use crate::parser::parse_expression;
 use crate::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
@@ -36,7 +37,6 @@ use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, Plan
 use crate::ast::{Expression, Literal};
 
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
 use crate::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
 use sha2::{Digest, Sha256};
@@ -357,7 +357,7 @@ impl StepProfileDeriver {
             profile.resource_limits.max_memory_bytes
         );
         // If runtime context doesn't allow the derived isolation level, downgrade
-        if !context.is_isolation_allowed(&profile.isolation_level) {
+        if !context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::from_ccos(&profile.isolation_level)) {
             match profile.isolation_level {
                 IsolationLevel::Sandboxed => {
                     if context.allow_isolated_isolation {
@@ -561,6 +561,64 @@ impl Orchestrator {
         }
     }
 
+    /// Execute RTFS expression with yield-based control flow handling.
+    /// This implements the top-level execution loop that handles RequiresHost outcomes.
+    async fn execute_with_yield_handling(
+        &self,
+        evaluator: &Evaluator,
+        expr: &Expression,
+    ) -> RuntimeResult<ExecutionOutcome> {
+        let mut current_expr = expr.clone();
+        let mut max_iterations = 1000; // Prevent infinite loops
+        
+        loop {
+            if max_iterations == 0 {
+                return Err(RuntimeError::Generic("Maximum execution iterations reached".to_string()));
+            }
+            max_iterations -= 1;
+            
+            // Execute the current expression
+            let result = evaluator.evaluate(&current_expr)?;
+            
+            match result {
+                ExecutionOutcome::Complete(value) => {
+                    // Execution completed successfully
+                    return Ok(ExecutionOutcome::Complete(value));
+                }
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    // Handle the host call through CCOS delegation
+                    let result = self.handle_host_call(&host_call).await?;
+                    
+                    // For now, we'll return the result directly.
+                    // In a more sophisticated implementation, we might resume execution
+                    // with the result substituted back into the expression.
+                    return Ok(ExecutionOutcome::Complete(result));
+                }
+            }
+        }
+    }
+
+    /// Handle a host call by delegating to the appropriate CCOS component.
+    async fn handle_host_call(&self, host_call: &crate::runtime::execution_outcome::HostCall) -> RuntimeResult<Value> {
+        // Parse the function symbol to determine the type of call
+        if host_call.fn_symbol.starts_with("call:") {
+            // Capability call
+            let capability_id = host_call.fn_symbol.strip_prefix("call:").unwrap_or(&host_call.fn_symbol);
+            // Convert Vec<Value> to Value::Vector for capability execution
+            let args_value = Value::Vector(host_call.args.clone());
+            self.capability_marketplace.execute_capability(capability_id, &args_value).await
+        } else if host_call.fn_symbol.starts_with("model-call:") {
+            // Model call - delegate to CCOS model execution
+            let model_id = host_call.fn_symbol.strip_prefix("model-call:").unwrap_or(&host_call.fn_symbol);
+            // For now, return a placeholder response
+            // TODO: Implement actual model execution through CCOS
+            Ok(Value::String(format!("[Model {} response placeholder]", model_id)))
+        } else {
+            // Unknown function - return error
+            Err(RuntimeError::Generic(format!("Unknown host call: {}", host_call.fn_symbol)))
+        }
+    }
+
     /// Executes a given `Plan` within a specified `RuntimeContext`.
     /// This is the main entry point for the Orchestrator.
     pub async fn execute_plan(
@@ -600,9 +658,8 @@ impl Orchestrator {
         ));
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), plan_action_id.clone());
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-        let delegation_engine: Arc<dyn DelegationEngine> = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let host_iface: Arc<dyn HostInterface> = host.clone();
-        let evaluator = Evaluator::new(module_registry, delegation_engine, context.clone(), host_iface);
+        let evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
         
         // Initialize context manager for the plan execution
         {
@@ -610,7 +667,7 @@ impl Orchestrator {
             context_manager.initialize(Some(format!("plan-{}", plan_id)));
         }
 
-        // --- 3. Parse and Execute the Plan Body ---
+        // --- 3. Parse and Execute the Plan Body with Yield-Based Control Flow ---
         let final_result = match &plan.language {
             PlanLanguage::Rtfs20 => {
                 match &plan.body {
@@ -620,7 +677,7 @@ impl Orchestrator {
                             Err(RuntimeError::Generic("Empty RTFS plan body after trimming".to_string()))
                         } else {
                             match parse_expression(code) {
-                                Ok(expr) => evaluator.evaluate(&expr),
+                                Ok(expr) => self.execute_with_yield_handling(&evaluator, &expr).await,
                                 Err(e) => Err(RuntimeError::Generic(format!("Failed to parse RTFS plan body: {:?}", e))),
                             }
                         }
@@ -634,9 +691,9 @@ impl Orchestrator {
         host.clear_execution_context();
 
         // --- 4. Log Final Plan Status ---
-        // Construct execution_result while ensuring we still update the IntentGraph on failure.
+        // The execution loop now handles all RequiresHost outcomes, so we only get Complete results here.
         let (execution_result, error_opt) = match final_result {
-            Ok(value) => {
+            Ok(ExecutionOutcome::Complete(value)) => {
                 let res = ExecutionResult { success: true, value, metadata: Default::default() };
                 self.log_action(
                     Action::new(
@@ -648,6 +705,12 @@ impl Orchestrator {
                     .with_result(res.clone())
                 )?;
                 (res, None)
+            },
+            Ok(ExecutionOutcome::RequiresHost(_)) => {
+                // This should not happen as we handle RequiresHost in the loop
+                let error = RuntimeError::Generic("Unexpected RequiresHost in final result".to_string());
+                let res = ExecutionResult { success: false, value: RtfsValue::String("error: Unexpected RequiresHost".to_string()), metadata: Default::default() };
+                (res, Some(error))
             },
             Err(e) => {
                 // Log aborted action first

@@ -133,3 +133,19 @@ The Orchestrator is responsible for enforcing the policies and limits of the `Ru
 4.  **During Execution**: The runtime continuously monitors resource usage (time, memory) and will halt execution if any limit is exceeded.
 
 By separating the "how" (the Plan) from the "what is allowed" (the Runtime Context), CCOS can safely execute complex, AI-generated logic in a secure and controlled environment.
+
+## 7. RTFS–CCOS Interface (Boundary)
+
+CCOS integrates with the RTFS runtime through a minimal, explicit boundary:
+
+- RTFS provides:
+  - `HostInterface` trait for external effects: capability execution and step lifecycle notifications
+  - `SecurityAuthorizer` and `RuntimeContext` for central authorization and policy surfaces
+- CCOS implements:
+  - A concrete `HostInterface` (host) that routes `(call ...)` to capability providers, logs to Causal Chain, and enforces policy
+  - Orchestrator that sets/clears execution context, manages steps, and applies resource limits
+
+Operational rules:
+1. Before each `(call ...)`, CCOS must: (a) authorize via `SecurityAuthorizer::authorize_capability`, (b) enforce conditional policies from `RuntimeContext`, (c) execute via marketplace/provider, (d) append audit actions to the Causal Chain.
+2. Step lifecycle uses `HostInterface::{notify_step_started, notify_step_completed, notify_step_failed}` for immutable audit.
+3. Streaming and delegation are expressed as RTFS metadata/macros and lowered to `(call ...)`; CCOS provides the concrete capabilities and policy enforcement.

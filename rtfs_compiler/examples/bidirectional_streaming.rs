@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 // Import marketplace and streaming types
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::streaming::{StreamType, StreamingProvider, StreamingCapability, StreamConfig, StreamHandle};
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
