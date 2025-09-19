@@ -713,6 +713,10 @@ fn test_comma_string() {
 
 #[test]
 fn test_specific_map() {
+    // Start mock HTTP server for this test
+    let _server = crate::test_helpers::MockHttpServer::start()
+        .expect("Failed to start mock HTTP server");
+    
     run_all_tests_for_file(&TestConfig::new("test_specific_map"));
 }
 
