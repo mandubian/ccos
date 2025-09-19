@@ -1,12 +1,10 @@
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::runtime::host_interface::HostInterface;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::runtime::error::RuntimeResult;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::Symbol;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 // Minimal HostInterface stub
 struct StubHost;

@@ -6,7 +6,6 @@ use rtfs_compiler::parser::parse;
 // Import the AST nodes we need to check against
 use rtfs_compiler::ast::{Expression, Literal, MapKey, ResourceDefinition, Symbol, TopLevel};
 use rtfs_compiler::error_reporting::SourceSpan;
-use rtfs_compiler::runtime::Evaluator;
 
 // A helper to create a dummy span for tests where we don't care about the exact location.
 fn dummy_span() -> SourceSpan {

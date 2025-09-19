@@ -4,7 +4,6 @@
 use crate::ast::*;
 use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::values::Value;
 
 use std::collections::HashMap;
 use std::rc::Rc;

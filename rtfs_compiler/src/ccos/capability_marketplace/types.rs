@@ -1,7 +1,7 @@
 use crate::ast::TypeExpr;
 use crate::runtime::streaming::{StreamType, BidirectionalConfig, DuplexChannels, StreamConfig, StreamingProvider};
 use crate::ccos::capabilities::registry::CapabilityRegistry;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::error::RuntimeResult;
 use crate::runtime::values::Value;
 use crate::runtime::security::RuntimeContext;
 use chrono::{DateTime, Utc, Timelike, Datelike};
@@ -628,7 +628,7 @@ pub trait CapabilityDiscovery: Send + Sync {
 /// Trait for capability executors
 pub trait CapabilityExecutor: Send + Sync {
     /// Execute a capability with the given input
-    async fn execute(&self, input: Value, context: RuntimeContext) -> RuntimeResult<Value>;
+    fn execute(&self, input: Value, context: RuntimeContext) -> impl std::future::Future<Output = RuntimeResult<Value>> + Send;
     
     /// Get the capability ID this executor handles
     fn capability_id(&self) -> &str;

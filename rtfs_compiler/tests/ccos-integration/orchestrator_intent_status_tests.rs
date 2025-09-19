@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::types::{StorableIntent, IntentStatus, Plan};
 use rtfs_compiler::runtime::security::RuntimeContext;

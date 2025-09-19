@@ -568,7 +568,7 @@ impl Orchestrator {
         evaluator: &Evaluator,
         expr: &Expression,
     ) -> RuntimeResult<ExecutionOutcome> {
-        let mut current_expr = expr.clone();
+        let current_expr = expr.clone();
         let mut max_iterations = 1000; // Prevent infinite loops
         
         loop {

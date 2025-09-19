@@ -7,12 +7,9 @@ use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value, execution_outcome::ExecutionOutcome,
 };
-use crate::ccos::delegation::StaticDelegationEngine;
 use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::host::RuntimeHost;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Creates a standard module registry for testing.
 pub fn create_test_module_registry() -> ModuleRegistry {

@@ -6,7 +6,7 @@ use rtfs_compiler::ccos::arbiter::{
     LlmProvider, LlmProviderConfig, LlmProviderType, StubLlmProvider
 };
 use rtfs_compiler::ccos::arbiter::llm_provider::ValidationResult;
-use rtfs_compiler::ccos::types::{Plan, PlanBody, PlanLanguage, StorableIntent, IntentStatus, TriggerSource, GenerationContext};
+use rtfs_compiler::ccos::types::{Plan, PlanBody, StorableIntent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

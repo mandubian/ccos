@@ -209,8 +209,8 @@ mod tests {
     use crate::ccos::host::RuntimeHost;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::runtime::security::RuntimeContext;
-    use crate::runtime::host_interface::HostInterface;
-    use crate::runtime::values::Value;
+    
+    
 
     #[test]
     fn test_render_and_server_smoke() {

@@ -179,12 +179,22 @@ impl CCOS {
         // Allow enabling delegation via environment variable for examples / dev runs
         // If the AgentConfig doesn't explicitly enable delegation, allow an env override.
         let enable_delegation = if let Some(v) = agent_config.delegation.enabled { v } else {
-            std::env::var("CCOS_ENABLE_DELEGATION").ok()
-                .or_else(|| std::env::var("CCOS_DELEGATION_ENABLED").ok())
-                .or_else(|| std::env::var("CCOS_USE_DELEGATING_ARBITER").ok())
-                .map(|s| {
-                    matches!(s.as_str(), "1" | "true" | "yes" | "on")
-                }).unwrap_or(false)
+            // Check for explicit disable first
+            if let Ok(s) = std::env::var("CCOS_DELEGATION_ENABLED") {
+                match s.as_str() {
+                    "0" | "false" | "no" | "off" => false,
+                    "1" | "true" | "yes" | "on" => true,
+                    _ => false,
+                }
+            } else {
+                // No explicit disable, check for enable flags
+                std::env::var("CCOS_ENABLE_DELEGATION").ok()
+                    .or_else(|| std::env::var("CCOS_USE_DELEGATING_ARBITER").ok())
+                    .map(|s| {
+                        let s = s.as_str();
+                        matches!(s, "1" | "true" | "yes" | "on")
+                    }).unwrap_or(false)
+            }
         };
 
         // Initialize delegating arbiter if delegation is enabled in agent config (or via env)

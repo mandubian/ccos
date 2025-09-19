@@ -7,7 +7,7 @@
 
 use rtfs_compiler::runtime::RuntimeContext;
 use rtfs_compiler::ccos::environment::{
-    CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory
+    CCOSBuilder, SecurityLevel, CapabilityCategory
 };
 use rtfs_compiler::ccos::execution_context::{ContextManager, IsolationLevel};
 use rtfs_compiler::runtime::values::Value;

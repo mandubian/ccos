@@ -998,7 +998,7 @@ impl ModuleAwareRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::delegation::StaticDelegationEngine;
+    
 
     #[test]
     fn test_module_registry_creation() {

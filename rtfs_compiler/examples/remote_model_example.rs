@@ -6,7 +6,7 @@
 
 use rtfs_compiler::ccos::delegation::{ExecTarget, ModelRegistry, StaticDelegationEngine, ModelProvider};
 use rtfs_compiler::ccos::remote_models::{
-    RemoteModelFactory, OpenAIModel, GeminiModel, ClaudeModel, OpenRouterModel, RemoteModelConfig
+    RemoteModelFactory, RemoteModelConfig
 };
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
