@@ -11,6 +11,7 @@ use rtfs_compiler::ccos::causal_chain::CausalChain;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
+use std::net::SocketAddr;
 
 /// Creates a minimal host for pure RTFS tests
 fn create_minimal_host() -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
@@ -65,4 +66,42 @@ pub fn create_full_evaluator() -> Evaluator {
     evaluator.env = stdlib_env;
     
     evaluator
+}
+
+/// Mock HTTP server for testing HTTP capabilities
+/// This is a simple mock that doesn't actually start a server,
+/// but provides mock responses for testing
+pub struct MockHttpServer {
+    _addr: SocketAddr,
+}
+
+impl MockHttpServer {
+    /// Create a mock HTTP server (no actual server started)
+    pub async fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 9999));
+        
+        // For now, just return a mock server struct
+        // In a real implementation, this would start an actual HTTP server
+        Ok(MockHttpServer { _addr: addr })
+    }
+    
+    pub fn addr(&self) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 9999))
+    }
+}
+
+/// Mock HTTP response generator for testing
+pub fn get_mock_response(path: &str, method: &str) -> String {
+    match (method, path) {
+        ("GET", "/mock") => r#"{"message": "Mock GET response", "status": "ok"}"#.to_string(),
+        ("GET", "/mock/get") => r#"{"method": "GET", "url": "/mock/get", "status": "success"}"#.to_string(),
+        ("GET", "/mock/headers") => r#"{"headers": "received", "method": "GET", "status": "success"}"#.to_string(),
+        ("POST", "/mock/post") => r#"{"method": "POST", "status": "success", "data": "received"}"#.to_string(),
+        ("PUT", "/mock/put") => r#"{"method": "PUT", "status": "success", "data": "updated"}"#.to_string(),
+        ("DELETE", "/mock/delete") => r#"{"method": "DELETE", "status": "success", "data": "deleted"}"#.to_string(),
+        ("PATCH", "/mock/patch") => r#"{"method": "PATCH", "status": "success", "data": "patched"}"#.to_string(),
+        ("HEAD", "/mock/headers") => r#"{"headers": "received", "method": "HEAD", "status": "success"}"#.to_string(),
+        ("GET", "/mock/json") => r#"{"name": "test", "value": 42, "active": true}"#.to_string(),
+        _ => format!(r#"{{"error": "Not found", "path": "{}", "method": "{}"}}"#, path, method),
+    }
 }
