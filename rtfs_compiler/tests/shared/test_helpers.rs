@@ -11,7 +11,9 @@ use rtfs_compiler::ccos::causal_chain::CausalChain;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{Read, Write};
+use std::thread;
 
 /// Creates a minimal host for pure RTFS tests
 fn create_minimal_host() -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
@@ -69,25 +71,88 @@ pub fn create_full_evaluator() -> Evaluator {
 }
 
 /// Mock HTTP server for testing HTTP capabilities
-/// This is a simple mock that doesn't actually start a server,
-/// but provides mock responses for testing
 pub struct MockHttpServer {
-    _addr: SocketAddr,
+    addr: SocketAddr,
+    _handle: thread::JoinHandle<()>,
 }
 
 impl MockHttpServer {
-    /// Create a mock HTTP server (no actual server started)
-    pub async fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    /// Start a real mock HTTP server on localhost:9999
+    pub fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let addr = SocketAddr::from(([127, 0, 0, 1], 9999));
+        let listener = TcpListener::bind(addr)?;
         
-        // For now, just return a mock server struct
-        // In a real implementation, this would start an actual HTTP server
-        Ok(MockHttpServer { _addr: addr })
+        // Start the server in a background thread
+        let handle = thread::spawn(move || {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        // Handle each connection in a separate thread
+                        thread::spawn(move || {
+                            handle_connection(stream);
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("Error accepting connection: {}", e);
+                    }
+                }
+            }
+        });
+        
+        // Give the server a moment to start
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        Ok(MockHttpServer { 
+            addr, 
+            _handle: handle 
+        })
     }
     
     pub fn addr(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 9999))
+        self.addr
     }
+}
+
+/// Handle a single HTTP connection
+fn handle_connection(mut stream: TcpStream) {
+    let mut buffer = [0; 1024];
+    
+    if let Ok(size) = stream.read(&mut buffer) {
+        let request = String::from_utf8_lossy(&buffer[..size]);
+        
+        // Parse the request to extract method and path
+        let (method, path) = parse_request(&request);
+        let response_body = get_mock_response(&path, &method);
+        
+        // Create HTTP response
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n\
+             {}",
+            response_body.len(),
+            response_body
+        );
+        
+        if let Err(e) = stream.write_all(response.as_bytes()) {
+            eprintln!("Error writing response: {}", e);
+        }
+    }
+}
+
+/// Parse HTTP request to extract method and path
+fn parse_request(request: &str) -> (String, String) {
+    let lines: Vec<&str> = request.lines().collect();
+    if let Some(first_line) = lines.first() {
+        let parts: Vec<&str> = first_line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let method = parts[0].to_string();
+            let path = parts[1].to_string();
+            return (method, path);
+        }
+    }
+    ("GET".to_string(), "/mock".to_string())
 }
 
 /// Mock HTTP response generator for testing
