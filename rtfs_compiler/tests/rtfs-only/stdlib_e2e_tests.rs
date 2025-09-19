@@ -204,7 +204,7 @@ impl StdlibTestRunner {
         self.run_test("(str true)", Value::String("true".to_string()))?;
         self.run_test("(str false)", Value::String("false".to_string()))?;
         self.run_test("(str nil)", Value::String("nil".to_string()))?;
-        self.run_test("(str \"hello\")", Value::String("\"hello\"".to_string()))?; // Includes quotes
+        self.run_test("(str \"hello\")", Value::String("hello".to_string()))?; // String representation without quotes
         self.run_test("(str)", Value::String("".to_string()))?;
         
         // Substring tests

@@ -137,7 +137,7 @@ pub async fn create_http_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator)
     //     "http.get".to_string(),
     //     "HTTP GET Request".to_string(),
     //     "Performs HTTP GET request".to_string(),
-    //     "https://httpbin.org/get".to_string(),
+    //     "http://localhost:9999/mock".to_string(),
     //     None,
     // ).await.expect("Failed to register HTTP capability");
     

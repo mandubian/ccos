@@ -10,6 +10,20 @@ use std::sync::Arc;
 
 use crate::test_helpers::*;
 
+/// Initialize global mock server for all tests
+fn init_global_mock_server() {
+    ensure_mock_server();
+}
+
+/// Global initialization - this will be called when the module is loaded
+static INIT: std::sync::Once = std::sync::Once::new();
+
+fn ensure_global_init() {
+    INIT.call_once(|| {
+        init_global_mock_server();
+    });
+}
+
 /// Test configuration for each RTFS test file
 #[derive(Debug, Clone)]
 struct TestConfig {
@@ -683,81 +697,63 @@ fn test_map_multiple_vectors() {
 // --- AUTO-GENERATED TESTS FOR MOVED RTFS FILES ---
 #[test]
 fn test_http_enhanced() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_http_enhanced"));
 }
 
 #[test]
 fn test_http_functions() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_http_functions"));
 }
 
 #[test]
 fn test_accept_language() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_accept_language"));
 }
 
 #[test]
 fn test_hyphen_keyword() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_hyphen_keyword"));
 }
 
 #[test]
 fn test_map_parts() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_map_parts"));
 }
 
 #[test]
 fn test_comma_string() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_comma_string"));
 }
 
 #[test]
 fn test_specific_map() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_specific_map"));
 }
 
 #[test]
 fn test_boolean_map() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_boolean_map"));
 }
 
 #[test]
 fn test_let_map_issue() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_let_map_issue"));
 }
@@ -769,9 +765,7 @@ fn test_map_simple() {
 
 #[test]
 fn test_http_simple() {
-    // Start mock HTTP server for this test
-    let _server = crate::test_helpers::MockHttpServer::start()
-        .expect("Failed to start mock HTTP server");
+    ensure_global_init();
     
     run_all_tests_for_file(&TestConfig::new("test_http_simple"));
 }
