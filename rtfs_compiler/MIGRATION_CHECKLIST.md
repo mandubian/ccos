@@ -21,3 +21,12 @@ Risks & notes
 - Behavioral parity must be verified for migrated tests; I ensured outputs are unchanged for the cases migrated here.
 - For parallel tests, deterministic assertions are important; consider replacing timing-based concurrency checks with controlled concurrency helpers.
 
+
+## Local verification
+
+- Date: 2025-09-19
+- Commit: 4e62267
+- Action: Ran full feature test matrix from `rtfs_compiler/` with `--no-default-features --features "pest regex"` (i.e. `legacy-atoms` disabled). All features passed locally (106 passed, 0 failed).
+
+Next: create migration branch and open PR (awaiting user signal).
+
