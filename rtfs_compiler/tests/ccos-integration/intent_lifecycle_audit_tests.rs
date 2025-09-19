@@ -23,7 +23,7 @@ fn complete_and_fail_emit_audit() {
     let (chain, mut graph) = mk_graph_with_chain();
 
     // Completed case
-    let mut intent = StorableIntent::new("emit audit success".into());
+    let intent = StorableIntent::new("emit audit success".into());
     let id1 = intent.intent_id.clone();
     graph.store_intent(intent).unwrap();
     let exec_ok = ExecutionResult { success: true, value: Value::String("ok".into()), metadata: Default::default() };
@@ -36,7 +36,7 @@ fn complete_and_fail_emit_audit() {
     }
 
     // Failed case (complete_intent will map success=false to Failed)
-    let mut intent2 = StorableIntent::new("emit audit fail".into());
+    let intent2 = StorableIntent::new("emit audit fail".into());
     let id2 = intent2.intent_id.clone();
     graph.store_intent(intent2).unwrap();
     let exec_fail = ExecutionResult { success: false, value: Value::String("err".into()), metadata: Default::default() };
@@ -50,7 +50,7 @@ fn complete_and_fail_emit_audit() {
 #[test]
 fn suspend_and_resume_emit_audit() {
     let (chain, mut graph) = mk_graph_with_chain();
-    let mut intent = StorableIntent::new("suspend resume audit".into());
+    let intent = StorableIntent::new("suspend resume audit".into());
     let id = intent.intent_id.clone();
     graph.store_intent(intent).unwrap();
     graph.suspend_intent(&id, "pause".into()).unwrap();
@@ -66,7 +66,7 @@ fn suspend_and_resume_emit_audit() {
 #[test]
 fn archive_and_reactivate_emit_audit() {
     let (chain, mut graph) = mk_graph_with_chain();
-    let mut intent = StorableIntent::new("archive reactivate audit".into());
+    let intent = StorableIntent::new("archive reactivate audit".into());
     let id = intent.intent_id.clone();
     graph.store_intent(intent).unwrap();
     graph.archive_intent(&id, "done".to_string()).unwrap();
@@ -83,10 +83,10 @@ fn archive_and_reactivate_emit_audit() {
 fn archive_completed_intents_emits_audit() {
     let (chain, mut graph) = mk_graph_with_chain();
     // create and complete two intents
-    let mut intent1 = StorableIntent::new("to archive 1".into());
+    let intent1 = StorableIntent::new("to archive 1".into());
     let id1 = intent1.intent_id.clone();
     graph.store_intent(intent1).unwrap();
-    let mut intent2 = StorableIntent::new("to archive 2".into());
+    let intent2 = StorableIntent::new("to archive 2".into());
     let id2 = intent2.intent_id.clone();
     graph.store_intent(intent2).unwrap();
     let exec_ok = ExecutionResult { success: true, value: Value::String("ok".into()), metadata: Default::default() };

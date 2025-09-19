@@ -37,61 +37,36 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 - Avoid needless clones in tight loops (ledger hashing / indexing). Pass references where possible.
 - Pre‑reserve collections if size known.
 - Use `log` crate for logging; avoid `println!()`.
-
+- Error & Result Conventions
+    - Return `Result<T, RuntimeError>`; avoid `.unwrap()` / `.expect()` (cursor rules enforce warning).
+    - Deterministic, contextual error messages (mention offending capability / rule where safe).
+    - Surface governance denials early with explicit reason for audit chain.
+- Concurrency & Locks
+    - Use `Arc<Mutex<...>>` for CausalChain & IntentGraph; acquire, mutate, release quickly – no `.await` inside locked region.
+    - AgentRegistry uses `RwLock` (read‑heavy). Prefer read lock for scoring; write only for registration / feedback update.
 
 ---
+
 ## 4. git and documentation
-- commit: commit as soon as a feature is implemented, don't wait for the end of worktree. Use present tense, imperative mood, reference issues/PRs when relevant.
+- commit: commit as soon as a big-enough feature is implemented, don't wait for the end of worktree or staging area. Use present tense, imperative mood, reference issues/PRs when relevant.
 - PR: includea summary of changes, test results, known issues, and next steps.
 - docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. Link to these docs in your PR description.
 
 ---
-Need deeper drill‑down (grammar, delegation governance hook, capability example)? Create an issue or ask specifying the subsection number above.
 
----
+## 5. IMPORTANT DOCS TO READ
+- CCOS Specs Index: `docs/ccos/specs/` (arbiter, governance, delegation, capability marketplace, causal chain design docs).
+- Newer RTFS Language Specs: `docs/rtfs-2.0/specs/` (philosophy, grammar, types, runtime).
+- Before migration RTFS Language Specs: `docs/rtfs-2.0/specs-before-migration/`
 
-## 5. IMPORTANT DOCS TO READ (10–15 min Boot Sequence)
-- CCOS Specs Index: `docs/ccos/specs/` (governance, delegation, capability marketplace, causal chain design docs).
-- RTFS Language Specs: `docs/rtfs-2.0/specs/` (grammar, types, evaluation semantics, special forms, intent/plan/action object schemas).
-2. `rtfs_compiler/src/ccos/mod.rs` (system assembly + `process_request` pipeline)
-3. Standard Lib with secure functions: `rtfs_compiler/src/runtime/secure_stdlib.rs` and insecure ones `rtfs_compiler/src/runtime/stdlib.rs`
-
-
-When adding or changing semantics: update appropriate spec file + reference commit hash in PR description.
-
----
-## 6. Separation of Powers (Never Break This Boundary)
-| Component | Privilege | File | Responsibility |
-|-----------|-----------|------|----------------|
-| Arbiter | Low | `arbiter.rs` | NL → Intent & baseline Plan proposal only |
-| DelegatingArbiter | Low (augmented) | `delegating_arbiter.rs` | Heuristic agent delegation + LLM fallback |
-| GovernanceKernel | High | `governance_kernel.rs` | Sanitize → Scaffold → Constitutional validate |
-| Orchestrator | Medium | `orchestrator.rs` | Deterministic Plan execution via marketplace |
-| CapabilityMarketplace | Broker | `runtime/capability_marketplace.rs` | Capability discovery + invocation indirection |
-| CausalChain | Immutable Ledger | `causal_chain.rs` | Signed Action append + provenance + metrics + delegation events |
-| IntentGraph | Store | `intent_graph.rs` | Intent lifecycle persistence + search |
-| AgentRegistry (M4) | Advisory | `agent_registry.rs` | Candidate scoring & metadata for delegation |
-
-Never allow Arbiter/DelegatingArbiter to execute side effects directly; all side effects travel Plan → GovernanceKernel → Orchestrator → CapabilityMarketplace.
-
----
-## 7. RTFS Language Operational Subset (What You Can Safely Generate Now)
-- Root form for executable plan body: `(do ...)` only.
-- Side effects exclusively via `(call :cap.namespace:vN.op { ... })` – no hidden helpers.
-- Wrap auditable operations with `(step "description" <expr>)` (even if currently partially implemented) to future‑proof ledger semantics.
-- Avoid introducing unsupported special forms without updating parser + specs.
-- Use descriptive intent goal strings; attach constraints via metadata or explicit constraint keys when specs allow.
-- Keep plan simple & pure except for `(call ...)` forms. No direct I/O primitives exist in core language.
-
-Reference: RTFS grammar & semantics specs under `docs/rtfs-2.0/specs/` (start with grammar overview + evaluation model documents).
-
----
-## 8. Error & Result Conventions
-- Return `Result<T, RuntimeError>`; avoid `.unwrap()` / `.expect()` (cursor rules enforce warning).
-- Deterministic, contextual error messages (mention offending capability / rule where safe).
-- Surface governance denials early with explicit reason for audit chain.
-
----
-## 9. Concurrency & Locks
-- Use `Arc<Mutex<...>>` for CausalChain & IntentGraph; acquire, mutate, release quickly – no `.await` inside locked region.
-- AgentRegistry uses `RwLock` (read‑heavy). Prefer read lock for scoring; write only for registration / feedback update.
+## 6. IMPORTANT CODE TO READ
+1. `rtfs_compiler/src/ccos/mod.rs` (system assembly + `process_request` pipeline)
+2. Standard Lib with secure functions: grammar `rtfs_compiler/src/rtfs.pest` and secure stdlib `rtfs_compiler/src/runtime/secure_stdlib.rs` and insecure stdlib `rtfs_compiler/src/runtime/stdlib.rs`
+3. Governance Kernel: `rtfs_compiler/src/ccos/governance_kernel.rs`
+4. Arbiter: `rtfs_compiler/src/ccos/arbiter.rs`
+5. Delegating Arbiter: `rtfs_compiler/src/ccos/delegating_arbiter.rs`
+6. Orchestrator: `rtfs_compiler/src/ccos/orchestrator.rs`
+7. Capability Marketplace: `rtfs_compiler/src/runtime/capability_marketplace.rs`
+8. Causal Chain: `rtfs_compiler/src/ccos/causal_chain.rs`
+9. Intent Graph: `rtfs_compiler/src/ccos/intent_graph.rs`
+10. Agent Registry: `rtfs_compiler/src/ccos/agent_registry.rs`

@@ -1,17 +1,10 @@
 // RTFS End-to-End Grammar Feature Test Matrix
 // This is the most critical test for stabilization - systematic testing of every language feature
 
-use rtfs_compiler::ast::{Keyword, MapKey};
 use rtfs_compiler::parser::parse_expression;
-use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use rtfs_compiler::runtime::Value;
-use rtfs_compiler::*;
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::rc::Rc;
-use std::sync::Arc;
 use crate::test_helpers::*;
 
 /// Feature test configuration for each grammar rule

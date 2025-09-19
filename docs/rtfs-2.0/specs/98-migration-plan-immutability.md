@@ -1,85 +1,95 @@
-# Migration Plan: Achieving Full Immutability in RTFS 2.0
 
-Status: Proposed
-Audience: RTFS compiler/runtime owners
+# Conservative staged migration plan: remove atoms via feature-gated, reversible steps
+
+Status: Proposed — conservative/staged
+Audience: RTFS compiler/runtime owners, maintainers, release managers
 Related: `docs/rtfs-2.0/specs-new/07-immutability-and-state.md`
 
-## 1. Goals
+Goal
 
-The primary goal of this migration is to align the RTFS codebase with the principle of **absolute immutability** as defined in the RTFS 2.0 specifications. This is a critical step to fully realize the new architecture.
+Remove mutation primitives from the RTFS core while minimizing risk to CI, review friction, and downstream consumers. Prefer a feature-gated, deprecation-first approach that is fully reversible at each step.
 
-The successful completion of this plan will:
--   **Simplify the Language Core**: Remove the complexity of managing mutable state, making the runtime easier to verify and maintain.
--   **Enhance Security and Predictability**: Eliminate a class of bugs related to state corruption and make the language a safer, more predictable target for AI code generation.
--   **Enforce the Architectural Vision**: Solidify the clean separation between the pure RTFS engine and the stateful Host environment.
--   **Enable Safe Continuations**: Provide the foundation for the continuation-passing and yield mechanism. A pure, immutable state is essential for creating serializable, re-entrant continuations that can be safely managed by the Host.
+Rationale
 
-## 2. Scope of Removal
+The previous aggressive removal plan reduces time-to-completion but increases review and rollback complexity. This staged plan trades elapsed time for safety: each step is reviewable, reversible, and keeps the tree usable.
 
-This migration will completely remove the following constructs and their underlying implementations from the `rtfs_compiler` crate:
+Plan overview (high level)
 
--   **Special Form**: `set!`
--   **Functions**: `atom`, `deref`, `reset!`, `swap!`
--   **Reader Macro**: The `@` reader macro, if any part of it was implemented for `deref`.
--   **Value Type**: The `Value::Atom` variant in the core value enum.
+1. Discovery & inventory — find every use of `atom`, `set!`, `deref`, `reset!`, `swap!`, `Value::Atom` and reader-macro `@`.
+2. Add a `legacy-atoms` cargo feature behind which the current implementations remain. Tests and CI continue to exercise the non-gated code while we iterate.
+3. Deprecation pass — mark stdlib functions and docs as deprecated and add runtime warnings (when feature enabled) to steer consumers.
+4. Gradual removal — disable feature in CI on a migration branch, fix compile errors, and progressively remove code paths.
+5. Final removal & docs cleanup — delete code and update specs and examples; run full CI and performance checks.
 
-## 3. Migration Steps
+Phases and concrete actions
 
-This plan is broken down into phases to ensure a structured and verifiable transition.
+Phase 0 — Prep: branch + communication (0.25–0.5 day)
 
-### Phase 1: Static Analysis and Identification
+- Create branch: `migration/remove-atoms-immutability`.
+- Open an issue/PR that contains this plan and the migration checklist; tag owners and ask for reviewers.
 
-1.  **[ ] Grep for all usages**: Perform a workspace-wide search for the following keywords to identify all affected files:
-    -   `set!`
-    -   `atom`
-    -   `deref`
-    -   `reset!`
-    -   `swap!`
-    -   `Value::Atom`
-2.  **[ ] Categorize Usages**: Review the search results and categorize them:
-    -   **Core Implementation**: Code in the evaluator/runtime that implements the primitives.
-    -   **Standard Library**: Any stdlib functions that might use these primitives.
-    -   **Internal Tests**: Unit and integration tests that verify the behavior of the mutation primitives.
-    -   **Application-level Code (if any)**: Any higher-level logic within the compiler or related tools that might use atoms or set! for its own state management.
+Phase 1 — Discovery & inventory (0.25–1 day)
 
-### Phase 2: Code Removal and Refactoring
+- Run a workspace search for the keywords and produce an inventory (CSV or markdown table) with file, lines, category (core, stdlib, tests, tools), and recommended action (deprecate, gate, refactor, remove).
+- Add inventory to `docs/migration-notes/inventory-immutability.md`.
 
-1.  **[ ] Remove `Value::Atom`**:
-    -   Delete the `Atom` variant from the `Value` enum (likely in `rtfs_compiler/src/value.rs` or similar).
-    -   This will cause a cascade of compilation errors. Use these errors as a guide for the next steps.
+Phase 2 — Feature gate + compatibility shim (0.5–1 day)
 
-2.  **[ ] Delete Core Implementations**:
-    -   Remove the code blocks from the evaluator (e.g., in `evaluator.rs` or `ir_runtime.rs`) that handle the `set!` special form.
-    -   Delete the function implementations for `atom`, `deref`, `reset!`, and `swap!` from the standard library (e.g., in `stdlib.rs`).
+- Add a cargo feature `legacy-atoms` (default = on initially on main; migration branch will flip it off in CI).
+- Move all atom-related code paths (Value::Atom variant, stdlib functions, evaluator branches) behind `#[cfg(feature = "legacy-atoms")]` where practical.
+- Provide compatibility shims when feature is off: these shims should either return a clear compile-time error, or a runtime error with an actionable message.
 
-3.  **[ ] Delete All Related Tests**:
-    -   Remove all test files and test cases that were specifically designed to validate the behavior of `set!` and atoms. These tests are now obsolete.
+Acceptance criteria for Phase 2
 
-4.  **[ ] Refactor Affected Internal Code**:
-    -   This is the most critical step. Any internal code identified in Phase 1 that used atoms or `set!` for its own state management must be refactored to use a pure, functional style.
-    -   This typically involves changing functions that mutated a shared atom to instead take state as a parameter and return a new state.
-    -   **Example**: A test helper that used an atom as a counter must be changed to a function that takes the current count and returns the next count.
+- `cargo build` with `--features legacy-atoms` and without the feature both compile (the latter may fail only where shims exist but should fail with clear messages). CI can be configured to test both modes.
 
-### Phase 3: Validation and Cleanup
+Phase 3 — Deprecation & docs (0.5 day)
 
-1.  **[ ] Full Compilation**: Ensure the entire `rtfs_compiler` crate compiles without errors or warnings related to the removed primitives.
-2.  **[ ] Run Full Test Suite**: Execute all remaining tests (`cargo test`). The goal is to ensure that the removal of mutation has not caused any regressions in other, unrelated parts of the language.
-    -   Expect some tests to fail if they indirectly relied on mutable behavior. These tests must be updated to reflect the new immutable paradigm.
-3.  **[ ] Update Documentation**:
-    -   Remove the `16-mutation-and-state.md` spec file.
-    -   Ensure all other documentation (READMEs, examples, etc.) no longer references `set!` or atoms.
-    -   Ensure the new `07-immutability-and-state.md` spec is correctly referenced.
+- Mark stdlib functions `#[deprecated(note = "RTFS 2.0 removes atoms — use X instead")]` when feature enabled.
+- Add deprecation notes in `docs/rtfs-2.0/specs/` and examples.
 
-## 4. Potential Risks and Challenges
+Phase 4 — Disable feature in CI on migration branch + fix (iterative)
 
--   **Hidden Dependencies**: There may be subtle, indirect dependencies on the mutation model in complex parts of the system or in integration tests. The compiler errors will catch most, but runtime failures in tests may reveal others.
--   **Refactoring Complexity**: Refactoring internal tooling that relied on atoms may be non-trivial and require careful redesign to manage state in an immutable way.
--   **Mindset Shift**: The development team will need to fully embrace the immutable-by-default paradigm for all future work on the RTFS core.
+- On migration branch, run CI with `--no-default-features --features ""` or explicitly with `--no-default-features` to simulate removal.
+- Fix compile errors iteratively, preferring small commits that either refactor user code to the immutable model or implement adapter patterns.
 
-## 5. Success Criteria
+Guidance for fixes
 
-The migration will be considered complete when:
--   All code related to `set!` and atoms has been removed from the codebase.
--   The entire project compiles successfully.
--   The full test suite passes with no regressions (after necessary test updates).
--   The official documentation reflects that RTFS is a purely functional and immutable language.
+- Replace atom-backed counters with pure functions that accept and return state.
+- For code expecting shared mutation for identity or handles, replace with host-managed handles (opaque tokens) or use interned IDs.
+
+Phase 5 — Tests & tooling
+
+- Update test helpers that used atoms to accept initial state and return new state.
+- For tests that depend on shared mutation for concurrency semantics, replace with mocked Host state or explicit synchronization primitives provided by the test harness.
+
+Phase 6 — Final removal & cleanup
+
+- Remove the `legacy-atoms` feature and delete gated code.
+- Remove `Value::Atom` and associated stdlib and evaluator code entirely.
+- Update `docs/` and remove the `16-mutation-and-state.md` spec or mark archived.
+
+Phase 7 — CI, perf, PR, release
+
+- Ensure `cargo test --all` passes in CI.
+- Run benchmarks / spot checks on hot paths.
+- Prepare the PR (small per-commit changes, clear description, rollback instructions).
+
+Rollback strategy
+
+- Because changes were gated and incremental, the migration branch can be reverted easily. If merged prematurely, use `git revert` on the PR merge commit and reopen the migration branch for fixes.
+
+Developer guidelines & best practices
+
+- Small commits and per-file changes ease review.
+- Prefer compile-time errors with helpful messages over runtime surprises.
+- Keep a living inventory and annotate each item with status.
+
+Immediate next step (per your choice)
+
+- I can run the workspace search for mutation symbols and create the inventory file, or
+- I can create the migration branch and push it to origin, or
+- I can do both.
+
+I will not change code beyond updating docs/branch metadata until you confirm which immediate action(s) to take.
+

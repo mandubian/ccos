@@ -3,7 +3,6 @@ use rtfs_compiler::runtime::environment::Environment;
 use rtfs_compiler::ast::{Expression, Literal, Symbol};
 use rtfs_compiler::runtime::error::RuntimeError;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 #[test]
 fn test_set_with_symbol() {

@@ -1,12 +1,9 @@
 use rtfs_compiler::parser::parse_expression;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::*;
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::rc::Rc;
-use std::sync::Arc;
 
 use crate::test_helpers::*;
 
@@ -172,7 +169,7 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
             let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
             
             // Debug: Check if the environment has the * function
-            let mut debug_env = rtfs_compiler::runtime::environment::IrEnvironment::with_stdlib(&module_registry).unwrap();
+            let debug_env = rtfs_compiler::runtime::environment::IrEnvironment::with_stdlib(&module_registry).unwrap();
             if let Some(value) = debug_env.get("*") {
                 println!("DEBUG: * function found in environment: {:?}", value);
                 match &value {
@@ -837,7 +834,7 @@ fn test_rtfs2_binaries() {
 fn test_orchestration_primitives() {
     // Orchestration primitives require CCOS integration
     // Use CCOS environment instead of basic runtime
-    use rtfs_compiler::ccos::environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel};
+    use rtfs_compiler::ccos::environment::{CCOSBuilder, SecurityLevel};
     
     let env = CCOSBuilder::new()
         .security_level(SecurityLevel::Standard)
@@ -937,7 +934,7 @@ fn test_defstruct_evaluation_basic() {
 
 #[test]
 fn test_defstruct_evaluation_empty() {
-    use rtfs_compiler::ast::{DefstructExpr, Symbol, MapKey};
+    use rtfs_compiler::ast::{DefstructExpr, Symbol};
     use rtfs_compiler::runtime::{Environment};
     use rtfs_compiler::runtime::values::{Value};
     use std::collections::HashMap;

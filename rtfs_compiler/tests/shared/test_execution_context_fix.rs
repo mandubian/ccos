@@ -8,10 +8,8 @@ use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::host_interface::HostInterface;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::parser::parse;
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 #[test]

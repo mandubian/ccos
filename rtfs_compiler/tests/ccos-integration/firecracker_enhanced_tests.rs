@@ -118,7 +118,7 @@ fn test_enhanced_firecracker_provider_lifecycle() -> RuntimeResult<()> {
     // Note: We can't test real initialization without Firecracker installed
     // But we can test the configuration validation logic
     
-    let mut provider = FirecrackerMicroVMProvider::new();
+    let provider = FirecrackerMicroVMProvider::new();
     
     // Test availability check (will likely fail without Firecracker)
     let is_available = provider.is_available();
@@ -163,7 +163,7 @@ fn test_enhanced_firecracker_security_features() -> RuntimeResult<()> {
 
     // Test 1: Security features configuration
     println!("1. Testing security features configuration:");
-    let mut security_features = SecurityFeatures::default();
+    let security_features = SecurityFeatures::default();
     
     assert_eq!(security_features.seccomp_enabled, true);
     assert_eq!(security_features.jailer_enabled, true);

@@ -4,8 +4,6 @@ use rtfs_compiler::parser;
 use rtfs_compiler::runtime::Evaluator;
 use rtfs_compiler::runtime::RuntimeResult;
 use rtfs_compiler::runtime::Value;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
-use std::collections::HashMap;
 use std::sync::Arc;
 // use std::rc::Rc; // legacy
 

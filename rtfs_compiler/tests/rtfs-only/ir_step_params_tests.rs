@@ -1,6 +1,5 @@
 use rtfs_compiler::runtime::ir_runtime::IrRuntime;
 use rtfs_compiler::ir::core::{IrNode, IrMapEntry};
-use rtfs_compiler::ir::core::IrNode::*;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::ccos::host::RuntimeHost;

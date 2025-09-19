@@ -19,7 +19,6 @@ use rtfs_compiler::runtime::type_validator::{
     TypeCheckingConfig, ValidationLevel
 };
 use rtfs_compiler::runtime::error::RuntimeError;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::types::ExecutionResult;
 
 /// Mock host interface for testing

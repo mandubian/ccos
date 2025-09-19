@@ -751,10 +751,6 @@ impl IrRuntime {
                 let _ = binding;
                 Ok(ExecutionOutcome::Complete(Value::Nil))
             }
-            _ => Err(RuntimeError::Generic(format!(
-                "Execution for IR node {:?} is not yet implemented",
-                node.id()
-            ))),
         }
     }
 
@@ -843,9 +839,6 @@ impl IrRuntime {
                         // Execute closure by setting up environment and executing body
                         self.apply_closure(closure, args, env, module_registry)
                     }
-                    _ => Err(RuntimeError::new(
-                        "Calling this type of function from the IR runtime is not currently supported.",
-                    )),
                 }
             },
             Value::Keyword(keyword) => {

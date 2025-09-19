@@ -1079,7 +1079,7 @@ impl Evaluator {
 
         // Sequential execution with isolation, plus deterministic merging after each branch
         let mut results: Vec<Value> = Vec::with_capacity(args.len().saturating_sub(i));
-        let mut last_error: Option<RuntimeError> = None;
+        let last_error: Option<RuntimeError> = None;
         for (rel_index, expr) in args[i..].iter().enumerate() {
             let index = i + rel_index;
             // Begin isolated child context for this branch (also switches into it)

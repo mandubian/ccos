@@ -10,7 +10,7 @@ use rtfs_compiler::runtime::type_validator::{
     TypeValidator, TypeCheckingConfig, VerificationContext, ValidationLevel
 };
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, MapKey, MapTypeEntry};
+use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, MapKey};
 use tokio::sync::RwLock;
 
 #[cfg(test)]

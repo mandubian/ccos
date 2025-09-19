@@ -1,7 +1,6 @@
 // Example demonstrating enhanced parser error reporting
 
 use rtfs_compiler::parser::parse_with_enhanced_errors;
-use rtfs_compiler::parser_error_reporter::ParserErrorReporter;
 
 fn main() {
     println!("Testing Enhanced Parser Error Reporting\n");

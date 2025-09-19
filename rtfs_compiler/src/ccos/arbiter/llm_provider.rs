@@ -1259,12 +1259,12 @@ impl StubLlmProvider {
 impl LlmProvider for StubLlmProvider {
     async fn generate_intent(
         &self,
-        _prompt: &str,
+        prompt: &str,
         _context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError> {
         // For stub provider, we'll use a simple pattern matching approach
         // In a real implementation, this would parse the prompt and context
-        let intent = self.generate_stub_intent("stub_request");
+        let intent = self.generate_stub_intent(prompt);
         Ok(intent)
     }
     
@@ -1491,9 +1491,9 @@ mod tests {
         let provider = StubLlmProvider::new(config);
         let intent = provider.generate_intent("analyze sentiment", None).await.unwrap();
         
-        // The stub provider uses a fixed pattern, so we check for the general assistance pattern
-        assert_eq!(intent.name, Some("general_assistance".to_string()));
-        assert!(intent.goal.contains("delegated task"));
+        // The stub provider responds based on prompt content
+        assert_eq!(intent.name, Some("analyze_user_sentiment".to_string()));
+        assert!(intent.goal.contains("Analyze user sentiment"));
     }
     
     #[tokio::test]
@@ -1512,8 +1512,8 @@ mod tests {
         let intent = provider.generate_intent("optimize performance", None).await.unwrap();
         let plan = provider.generate_plan(&intent, None).await.unwrap();
         
-        // The stub provider uses a fixed pattern, so we check for the general assistance pattern
-        assert_eq!(plan.name, Some("stub_plan_for_general_assistance".to_string()));
+        // The stub provider responds based on intent content
+        assert_eq!(plan.name, Some("stub_plan_for_optimize_system_performance".to_string()));
         assert!(matches!(plan.body, PlanBody::Rtfs(_)));
     }
     

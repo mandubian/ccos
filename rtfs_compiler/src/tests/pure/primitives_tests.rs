@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod primitives_tests {
     use crate::{
-        ast::{Keyword, TopLevel},
-        parser,
+        ast::Keyword,
         runtime::{RuntimeResult, Value},
     };
     use crate::tests::pure::pure_test_utils::parse_and_evaluate_pure;
