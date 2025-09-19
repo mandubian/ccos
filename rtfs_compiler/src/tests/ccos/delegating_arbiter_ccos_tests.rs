@@ -1,13 +1,20 @@
-use std::sync::Arc;
-
 use crate::ccos::agent::{AgentDescriptor, TrustTier, CostModel, LatencyStats, SuccessStats};
 use crate::ccos::agent::registry::AgentRegistry;
 use crate::ccos::CCOS;
 use crate::runtime::security::{RuntimeContext, SecurityLevel};
 use crate::runtime::values::Value;
+use lazy_static::lazy_static;
+use std::sync::Mutex;
+
+// Global lock to serialize tests that mutate process-wide environment variables.
+// This avoids races where one test disables delegation while another expects it enabled.
+lazy_static! {
+    static ref ENV_LOCK: Mutex<()> = Mutex::new(());
+}
 
 #[tokio::test]
 async fn test_ccos_with_delegating_arbiter_stub_model() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
@@ -18,6 +25,7 @@ async fn test_ccos_with_delegating_arbiter_stub_model() {
     // Enable DelegatingArbiter with deterministic stub model
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
+    std::env::set_var("CCOS_DELEGATION_ENABLED", "1");
 
     // Build CCOS with defaults (registers echo and math.add capabilities)
     let ccos = CCOS::new().await.expect("failed to init CCOS");
@@ -47,10 +55,18 @@ async fn test_ccos_with_delegating_arbiter_stub_model() {
     let ig_locked = ig.lock().expect("lock intent graph");
     let intents = ig_locked.find_relevant_intents("delegated");
     assert!(intents.len() >= 1, "expected at least one stored intent");
+
+    // Clean up environment variables
+    std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
+    std::env::remove_var("CCOS_DELEGATING_MODEL");
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
+    std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
 }
 
 #[tokio::test]
 async fn test_agent_registry_delegation_short_circuit() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
@@ -60,6 +76,7 @@ async fn test_agent_registry_delegation_short_circuit() {
     
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "deterministic-stub-model");
+    std::env::set_var("CCOS_DELEGATION_ENABLED", "1");
 
     let ccos = CCOS::new().await.expect("init ccos");
 
@@ -102,10 +119,18 @@ async fn test_agent_registry_delegation_short_circuit() {
     } else {
         panic!("Delegating arbiter not enabled");
     }
+
+    // Clean up environment variables
+    std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
+    std::env::remove_var("CCOS_DELEGATING_MODEL");
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
+    std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
 }
 
 #[tokio::test]
 async fn test_delegation_env_threshold_overrides_config() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
@@ -152,10 +177,18 @@ async fn test_delegation_env_threshold_overrides_config() {
         // Should not have delegated because env threshold too high
         assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should have been blocked by high threshold");
     } else { panic!("delegating arbiter missing"); }
+
+    // Clean up environment variables
+    std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
+    std::env::remove_var("CCOS_DELEGATING_MODEL");
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
+    std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
 }
 
 #[tokio::test]
 async fn test_delegation_min_skill_hits_enforced() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
@@ -165,6 +198,7 @@ async fn test_delegation_min_skill_hits_enforced() {
     
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
+    std::env::set_var("CCOS_DELEGATION_ENABLED", "1");
     std::env::set_var("CCOS_DELEGATION_MIN_SKILL_HITS", "3"); // require 3 hits
 
     let ccos = CCOS::new().await.expect("init ccos");
@@ -195,10 +229,18 @@ async fn test_delegation_min_skill_hits_enforced() {
         let intent = da.natural_language_to_intent(request, None).await.expect("intent");
         assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should not occur due to min skill hits");
     } else { panic!("delegating arbiter missing"); }
+
+    // Clean up environment variables
+    std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
+    std::env::remove_var("CCOS_DELEGATING_MODEL");
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
+    std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
 }
 
 #[tokio::test]
 async fn test_delegation_disabled_flag_blocks_delegation() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
@@ -235,10 +277,18 @@ async fn test_delegation_disabled_flag_blocks_delegation() {
     // When delegation is disabled via CCOS_DELEGATION_ENABLED=0, no delegating arbiter is created
     // This test verifies that the delegation disabled flag prevents delegation infrastructure from being set up
     assert!(ccos.get_delegating_arbiter().is_none(), "delegating arbiter should not be created when delegation is disabled");
+
+    // Clean up environment variables after test
+    std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
+    std::env::remove_var("CCOS_DELEGATING_MODEL");
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
+    std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
 }
 
 #[tokio::test]
 async fn test_delegation_governance_rejection_records_event() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
@@ -249,7 +299,7 @@ async fn test_delegation_governance_rejection_records_event() {
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
     // Ensure delegation logic enabled
-    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::set_var("CCOS_DELEGATION_ENABLED", "1");
 
     let ccos = CCOS::new().await.expect("init ccos");
     {
@@ -291,10 +341,18 @@ async fn test_delegation_governance_rejection_records_event() {
         // we should not see delegation.rejected events
         assert!(!found_rejected, "delegation.rejected event should not occur due to disconnected agent registries");
     } else { panic!("delegating arbiter missing"); }
+
+    // Clean up environment variables
+    std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
+    std::env::remove_var("CCOS_DELEGATING_MODEL");
+    std::env::remove_var("CCOS_DELEGATION_ENABLED");
+    std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
+    std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
 }
 
 #[tokio::test]
 async fn test_delegation_completed_event_emitted() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     // Clean up any existing environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
     std::env::remove_var("CCOS_DELEGATING_MODEL");
