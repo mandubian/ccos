@@ -1670,6 +1670,8 @@ impl StandardLibrary {
     /// `(str ...)` - Converts all arguments to strings and concatenates them
     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
         let mut result = String::new();
+        
+        // Convert all arguments to strings and concatenate them
         for arg in args {
             match arg {
                 Value::String(s) => {

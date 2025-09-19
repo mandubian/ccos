@@ -193,7 +193,7 @@ async fn test_working_memory_query_apis_for_arbiter_context_horizon() {
             }),
             cost: Some(0.01),
             duration_ms: Some(100),
-            timestamp: now - (30 * 60 * 1000) + ((i as u64) * 5 * 60 * 1000), // Spread over 30 min in milliseconds
+            timestamp: now - (30 * 60 * 1000) + ((i as u64) * 2 * 60 * 1000), // Spread every 2 minutes over 30 min
             metadata,
         };
         

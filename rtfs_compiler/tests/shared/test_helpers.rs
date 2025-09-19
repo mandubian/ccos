@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::thread;
+use std::sync::Once;
 
 /// Creates a minimal host for pure RTFS tests
 fn create_minimal_host() -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
@@ -169,4 +170,28 @@ pub fn get_mock_response(path: &str, method: &str) -> String {
         ("GET", "/mock/json") => r#"{"name": "test", "value": 42, "active": true}"#.to_string(),
         _ => format!(r#"{{"error": "Not found", "path": "{}", "method": "{}"}}"#, path, method),
     }
+}
+
+/// Global mock server that starts once and is available for all tests
+static MOCK_SERVER_INIT: Once = Once::new();
+static mut MOCK_SERVER_STARTED: bool = false;
+
+/// Ensure the global mock server is started
+pub fn ensure_mock_server() {
+    MOCK_SERVER_INIT.call_once(|| {
+        // Try to start the mock server
+        if let Ok(_server) = MockHttpServer::start() {
+            unsafe {
+                MOCK_SERVER_STARTED = true;
+            }
+            println!("Global mock HTTP server started on localhost:9999");
+        } else {
+            eprintln!("Warning: Failed to start global mock HTTP server");
+        }
+    });
+}
+
+/// Check if the mock server is available
+pub fn is_mock_server_available() -> bool {
+    unsafe { MOCK_SERVER_STARTED }
 }

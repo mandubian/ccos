@@ -290,7 +290,7 @@ impl CapabilityRegistry {
 				Value::Integer(200),
 			);
             
-			let url = args.get(0).and_then(|v| v.as_string()).unwrap_or("https://httpbin.org/get");
+			let url = args.get(0).and_then(|v| v.as_string()).unwrap_or("http://localhost:9999/mock");
 			response_map.insert(
 				crate::ast::MapKey::String("body".to_string()),
 				Value::String(format!("{{\"args\": {{}}, \"headers\": {{}}, \"origin\": \"127.0.0.1\", \"url\": \"{}\"}}", url)),
