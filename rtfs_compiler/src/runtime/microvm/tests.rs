@@ -96,7 +96,7 @@ fn test_mock_provider_program_execution() {
     } else {
         panic!("Expected integer result, got {:?}", execution_result.value);
     }
-    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert!(execution_result.metadata.duration.as_micros() > 0);
 }
 
 
@@ -188,7 +188,7 @@ fn test_process_provider_program_execution() {
     } else {
         panic!("Expected string result, got {:?}", execution_result.value);
     }
-    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert!(execution_result.metadata.duration.as_micros() > 0);
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn test_process_provider_rtfs_execution() {
     } else {
         panic!("Expected integer result, got {:?}", execution_result.value);
     }
-    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert!(execution_result.metadata.duration.as_micros() > 0);
 }
 
 #[test]
@@ -383,7 +383,7 @@ fn test_firecracker_provider_rtfs_execution() {
     } else {
         panic!("Expected integer result, got {:?}", execution_result.value);
     }
-    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert!(execution_result.metadata.duration.as_micros() > 0);
     assert_eq!(execution_result.metadata.memory_used_mb, 512); // Default memory
     assert!(execution_result.metadata.cpu_time.as_millis() > 0);
 } 
@@ -460,7 +460,7 @@ fn test_gvisor_provider_rtfs_execution() {
     } else {
         panic!("Expected integer result, got {:?}", execution_result.value);
     }
-    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert!(execution_result.metadata.duration.as_micros() > 0);
     // Container ID is not available in current ExecutionMetadata structure
 }
 
@@ -510,7 +510,7 @@ fn test_gvisor_provider_container_lifecycle() {
     
     let execution_result = result.unwrap();
     // Success field is not available in current ExecutionResult structure
-    assert!(execution_result.metadata.duration.as_millis() > 0);
+    assert!(execution_result.metadata.duration.as_micros() > 0);
     // Container ID is not available in current ExecutionMetadata structure
     
     // Test cleanup - requires mutable access, so we'll skip this test

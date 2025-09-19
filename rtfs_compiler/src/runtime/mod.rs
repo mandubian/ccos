@@ -4,13 +4,11 @@
 //! implemented in the submodules listed below.
 
 pub mod streaming;
-pub mod capability_marketplace;
-pub mod ccos_environment;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
-pub mod host;
 pub mod host_interface;
+pub mod pure_host;
 pub mod ir_runtime;
 pub mod microvm;
 pub mod module_runtime;
@@ -20,8 +18,7 @@ pub mod type_validator;
 pub mod values;
 pub mod security;
 pub mod param_binding;
-#[cfg(feature = "metrics_exporter")]
-pub mod metrics_exporter;
+pub mod execution_outcome;
 pub mod capabilities;
 
 #[cfg(test)]
@@ -34,19 +31,15 @@ pub use ir_runtime::IrRuntime;
 pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
-pub use ccos_environment::{CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory};
+pub use execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
 pub use security::RuntimeContext;
+pub use capabilities::*;
 
 use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
 use crate::runtime::ir_runtime::IrStrategy;
-use crate::runtime::host::RuntimeHost;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::capabilities::registry::CapabilityRegistry;
-use crate::ccos::causal_chain::CausalChain;
-use crate::ccos::delegation::StaticDelegationEngine;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use crate::runtime::pure_host::create_pure_host;
+use std::sync::Arc;
 
 /// Trait for RTFS runtime operations needed by CCOS
 pub trait RTFSRuntime {
@@ -56,7 +49,7 @@ pub trait RTFSRuntime {
 }
 
 pub trait RuntimeStrategy: std::fmt::Debug + 'static {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError>;
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError>;
     fn clone_box(&self) -> Box<dyn RuntimeStrategy>;
 }
 
@@ -78,7 +71,8 @@ impl TreeWalkingStrategy {
 }
 
 impl RuntimeStrategy for TreeWalkingStrategy {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
+        // Evaluator.evaluate now returns Result<ExecutionOutcome, RuntimeError>
         self.evaluator.evaluate(program)
     }
 
@@ -104,24 +98,19 @@ impl Runtime {
     }
 
     pub fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
-        self.strategy.run(program)
+        match self.strategy.run(program)? {
+            ExecutionOutcome::Complete(value) => Ok(value),
+            ExecutionOutcome::RequiresHost(host_call) => {
+                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.fn_symbol)))
+            }
+        }
     }
 
     pub fn new_with_tree_walking_strategy(module_registry: Arc<ModuleRegistry>) -> Self {
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
+        let host = create_pure_host();
 
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
-
-        let evaluator = Evaluator::new(module_registry.clone(), de, security_context, host);
+        let evaluator = Evaluator::new(module_registry.clone(), security_context, host);
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
     }
@@ -132,21 +121,15 @@ impl Runtime {
             Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {:?}", e))),
         };
         let module_registry = ModuleRegistry::new();
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
+        let host = create_pure_host();
 
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
-
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
-        evaluator.eval_toplevel(&parsed)
+        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
+        match evaluator.eval_toplevel(&parsed) {
+            Ok(ExecutionOutcome::Complete(v)) => Ok(v),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn evaluate_with_stdlib(&self, input: &str) -> Result<Value, RuntimeError> {
@@ -156,21 +139,15 @@ impl Runtime {
         };
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
+        let host = create_pure_host();
 
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
-
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
-        evaluator.eval_toplevel(&parsed)
+        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
+        match evaluator.eval_toplevel(&parsed) {
+            Ok(ExecutionOutcome::Complete(v)) => Ok(v),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -184,20 +161,10 @@ pub struct IrWithFallbackStrategy {
 impl IrWithFallbackStrategy {
     pub fn new(module_registry: ModuleRegistry) -> Self {
         let ir_strategy = IrStrategy::new(module_registry.clone());
-        let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let security_context = RuntimeContext::pure();
+        let host = create_pure_host();
 
-        let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
-
-        let host = Arc::new(RuntimeHost::new(
-            causal_chain,
-            capability_marketplace,
-            security_context.clone(),
-        ));
-
-        let evaluator = Evaluator::new(Arc::new(module_registry), de, security_context, host);
+        let evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {
@@ -208,7 +175,7 @@ impl IrWithFallbackStrategy {
 }
 
 impl RuntimeStrategy for IrWithFallbackStrategy {
-    fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
+    fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
         match self.ir_strategy.run(program) {
             Ok(result) => Ok(result),
             Err(ir_error) => match self.ast_strategy.run(program) {

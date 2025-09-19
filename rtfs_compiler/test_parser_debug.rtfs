@@ -1,0 +1,16 @@
+(plan
+  :type :rtfs.core:v2.0:plan
+  :plan-id "plan-e5f8-1a3c-6b7d"
+  :intent-ids ["intent-2a7d-4b8e-9c1f"]
+  :program (do
+    (let [
+      analysis_doc {:docs [] :format :competitive-analysis}
+    ]
+      {
+        :analysis-document analysis_doc
+        :press-release-draft "test"
+        :notification-status :success
+      }
+    )
+  ))
+)

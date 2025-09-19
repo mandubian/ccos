@@ -36,7 +36,7 @@ chroot = "/var/lib/rtfs-sandbox"
 timeout = "30s"
 memory_limit_mb = 64
 cpu_limit = 0.3
-network_policy = { AllowList = ["api.github.com", "httpbin.org"] }
+network_policy = { AllowList = ["api.github.com", "localhost"] }
 fs_policy = "None"
 
 [capability_configs."ccos.io.open-file"]

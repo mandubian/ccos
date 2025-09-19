@@ -10,7 +10,7 @@ use super::template_arbiter::TemplateArbiter;
 use super::hybrid_arbiter::HybridArbiter;
 use super::delegating_arbiter::DelegatingArbiter;
 use crate::ccos::intent_graph::IntentGraph;
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 
 /// Factory for creating different types of arbiters based on configuration.
 pub struct ArbiterFactory;

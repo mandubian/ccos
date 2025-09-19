@@ -139,6 +139,8 @@ pub trait DelegationEngine: Send + Sync + std::fmt::Debug {
     fn decide(&self, ctx: &CallContext) -> ExecTarget;
 }
 
+
+
 /// Simple static mapping + cache implementation.
 #[derive(Debug)]
 pub struct StaticDelegationEngine {
@@ -262,6 +264,12 @@ impl DelegationEngine for StaticDelegationEngine {
         decision
     }
 }
+
+// Implement the runtime::delegation::DelegationEngine for the CCOS
+// StaticDelegationEngine so that code which expects an
+// Arc<dyn crate::runtime::delegation::DelegationEngine> can accept a
+// CCOS StaticDelegationEngine without additional wrapping. This is a
+// small compatibility shim used during migration.
 
 // ──────────────────────────────────────────────────────────────────────────
 // Model Provider abstraction

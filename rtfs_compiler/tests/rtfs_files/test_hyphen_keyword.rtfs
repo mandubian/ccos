@@ -1,4 +1,0 @@
-;; Test hyphen in keyword name
-(let [headers {:content-type "application/json" :x-custom-header "test"}
-      response (tool/http-fetch "https://httpbin.org/get")]
-  (println "Hyphen keyword test complete")) 

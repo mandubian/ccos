@@ -634,8 +634,13 @@ impl ModuleRegistry {
             }
         } else {
             // Before failing, try to load the module
-            let delegation_engine = Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()));
-            let mut ir_runtime = IrRuntime::new_compat(delegation_engine); // Temporary runtime
+            // Create a temporary runtime with default host and security context
+            let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+            let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(capability_registry.clone()));
+            let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().expect("Failed to create causal chain")));
+            let security_context = crate::runtime::security::RuntimeContext::pure();
+            let host: Arc<dyn crate::runtime::host_interface::HostInterface> = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+            let mut ir_runtime = IrRuntime::new(host, security_context); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
                     if let Some(export) = module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(symbol_name) {
@@ -760,7 +765,15 @@ impl ModuleAwareRuntime {
     pub fn new() -> Self {
         let module_registry = ModuleRegistry::new();
         ModuleAwareRuntime {
-            ir_runtime: IrRuntime::new_compat(Arc::new(crate::ccos::delegation::StaticDelegationEngine::new(HashMap::new()))),
+            ir_runtime: {
+                // Create a default runtime with minimal host
+                let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+                let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(capability_registry.clone()));
+                let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().expect("Failed to create causal chain")));
+                let security_context = crate::runtime::security::RuntimeContext::pure();
+                let host: Arc<dyn crate::runtime::host_interface::HostInterface> = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+                IrRuntime::new(host, security_context)
+            },
             module_registry,
         }
     }
@@ -778,9 +791,14 @@ impl ModuleAwareRuntime {
 
                 Ok(last_value)
             }
-            _ => self
-                .ir_runtime
-                .execute_program(program, &mut self.module_registry),
+            _ => {
+                // IrRuntime now returns ExecutionOutcome; unwrap Complete or map RequiresHost to error
+                match self.ir_runtime.execute_program(program, &mut self.module_registry) {
+                    Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_host_call)) => Err(RuntimeError::Generic("Host call required during module-level program execution".to_string())),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 
@@ -792,8 +810,11 @@ impl ModuleAwareRuntime {
             _ => {
                 // Regular IR node execution
                 let mut env = IrEnvironment::new();
-                self.ir_runtime
-                    .execute_node(form, &mut env, false, &mut self.module_registry)
+                match self.ir_runtime.execute_node(form, &mut env, false, &mut self.module_registry) {
+                    Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required during module top-level form execution".to_string())),
+                    Err(e) => Err(e),
+                }
             }
         }
     }
@@ -845,7 +866,11 @@ impl ModuleAwareRuntime {
                     } => {
                         {
                             let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            let func_value = self.ir_runtime.execute_node(lambda, &mut *guard, false, &mut self.module_registry)?;
+                            let func_outcome = self.ir_runtime.execute_node(lambda, &mut *guard, false, &mut self.module_registry)?;
+                            let func_value = match func_outcome {
+                                super::execution_outcome::ExecutionOutcome::Complete(v) => v,
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module function definition".to_string())),
+                            };
                             guard.define(func_name.clone(), func_value.clone());
                         }
                     }
@@ -856,7 +881,11 @@ impl ModuleAwareRuntime {
                     } => {
                         {
                             let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            let var_value = self.ir_runtime.execute_node(init_expr, &mut *guard, false, &mut self.module_registry)?;
+                            let var_outcome = self.ir_runtime.execute_node(init_expr, &mut *guard, false, &mut self.module_registry)?;
+                            let var_value = match var_outcome {
+                                super::execution_outcome::ExecutionOutcome::Complete(v) => v,
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module variable definition".to_string())),
+                            };
                             guard.define(var_name.clone(), var_value.clone());
                         }
                     }
@@ -969,7 +998,7 @@ impl ModuleAwareRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::StaticDelegationEngine;
+    use crate::ccos::delegation::StaticDelegationEngine;
 
     #[test]
     fn test_module_registry_creation() {
@@ -980,8 +1009,33 @@ mod tests {
     fn test_module_loading_from_file() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        ));
+        let security_context = crate::runtime::security::RuntimeContext {
+            security_level: crate::runtime::security::SecurityLevel::Controlled,
+            max_execution_time: Some(30000), // 30 seconds in milliseconds
+            max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
+            allowed_capabilities: std::collections::HashSet::new(),
+            use_microvm: false,
+            log_capability_calls: false,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: std::collections::HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: std::collections::HashSet::new(),
+            microvm_config_override: None,
+            cross_plan_params: std::collections::HashMap::new(),
+        };
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
 
         // Test loading the math.utils module
         let module = registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -1002,8 +1056,33 @@ mod tests {
     fn test_qualified_symbol_resolution() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        ));
+        let security_context = crate::runtime::security::RuntimeContext {
+            security_level: crate::runtime::security::SecurityLevel::Controlled,
+            max_execution_time: Some(30000), // 30 seconds in milliseconds
+            max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
+            allowed_capabilities: std::collections::HashSet::new(),
+            use_microvm: false,
+            log_capability_calls: false,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: std::collections::HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: std::collections::HashSet::new(),
+            microvm_config_override: None,
+            cross_plan_params: std::collections::HashMap::new(),
+        };
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
 
         // Load math.utils module from file
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
@@ -1024,8 +1103,33 @@ mod tests {
             .unwrap()
             .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
-        let delegation_engine = Arc::new(StaticDelegationEngine::new(HashMap::new()));
-    let mut ir_runtime = IrRuntime::new_compat(delegation_engine);
+        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        ));
+        let security_context = crate::runtime::security::RuntimeContext {
+            security_level: crate::runtime::security::SecurityLevel::Controlled,
+            max_execution_time: Some(30000), // 30 seconds in milliseconds
+            max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
+            allowed_capabilities: std::collections::HashSet::new(),
+            use_microvm: false,
+            log_capability_calls: false,
+            allow_inherit_isolation: true,
+            allow_isolated_isolation: true,
+            allow_sandboxed_isolation: true,
+            expose_readonly_context: false,
+            exposed_context_caps: std::collections::HashSet::new(),
+            exposed_context_prefixes: Vec::new(),
+            exposed_context_tags: std::collections::HashSet::new(),
+            microvm_config_override: None,
+            cross_plan_params: std::collections::HashMap::new(),
+        };
+        let host = Arc::new(crate::ccos::host::RuntimeHost::new(
+            causal_chain,
+            capability_marketplace,
+            security_context.clone(),
+        ));
+        let mut ir_runtime = IrRuntime::new(host, security_context);
         let result = registry.load_module("module-a", &mut ir_runtime);
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();

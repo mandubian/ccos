@@ -25,7 +25,7 @@ pub mod shared;
 // Core CCOS + RTFS imports
 use rtfs_compiler::ccos::types::{Intent, Plan, StorableIntent};
 use rtfs_compiler::ccos::delegation::ModelRegistry;
-use rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::utils::{format_rtfs_value_pretty};
 use rtfs_compiler::parser;

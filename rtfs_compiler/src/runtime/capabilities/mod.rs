@@ -1,22 +1,14 @@
-//! Runtime Capabilities module
-//!
-//! This module groups runtime-level capability primitives and implementations (contracts, registry, providers).
-//! It keeps execution/broker concerns in the runtime layer and leaves policy/governance to `ccos`.
+// Compatibility shim: re-export capability provider interfaces from ccos::capabilities
+// Historically these lived under `runtime::capabilities::provider`. During the
+// CCOS/RTFS decoupling they were moved to `ccos::capabilities::provider`. Many
+// provider implementations and tests still import the old path. This module
+// provides thin re-exports to preserve the public API during migration.
 
 pub mod provider;
-pub mod capability;
-pub mod registry;
 pub mod providers;
+pub mod registry;
 
-// /// Common re-exports for ergonomic imports
-// pub mod prelude {
-//     // Provider implementations
-//     pub use super::providers::{GitHubMCPCapability, WeatherMCPCapability, LocalLlmProvider};
-//     // Core capability wrappers and helpers
-//     pub use super::capability::{Capability, inject_capability};
-//     pub use super::capability_provider::{
-//         CapabilityProvider, CapabilityDescriptor, SecurityRequirements, Permission,
-//         NetworkAccess, ResourceLimits, HealthStatus, ProviderConfig, ProviderMetadata,
-//         ExecutionContext,
-//     };
-// }
+// Keep convenience re-exports for code that imports `crate::runtime::capabilities::*`.
+pub use provider::*;
+pub use providers::*;
+pub use registry::*;

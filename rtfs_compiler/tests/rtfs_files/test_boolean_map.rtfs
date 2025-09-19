@@ -1,4 +1,0 @@
-;; Test boolean values in maps
-(let [headers {:a 1 :b true :c false}
-      response (tool/http-fetch "https://httpbin.org/get")]
-  (println "Boolean test complete")) 

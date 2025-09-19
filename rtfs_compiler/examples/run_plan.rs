@@ -96,8 +96,8 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
             let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
             let stdlib_env = StandardLibrary::create_global_environment();
             let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-            let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-            let host = std::sync::Arc::new(rtfs_compiler::runtime::host::RuntimeHost::new(
+            let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+            let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
                 Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
                 capability_marketplace,
                 rtfs_compiler::runtime::security::RuntimeContext::full(),
@@ -105,7 +105,6 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
             let evaluator = Evaluator::with_environment(
                 Arc::new(ModuleRegistry::new()),
                 stdlib_env,
-                delegation,
                 RuntimeContext::full(),
                 host,
             );

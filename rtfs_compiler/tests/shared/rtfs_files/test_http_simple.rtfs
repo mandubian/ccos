@@ -1,0 +1,19 @@
+;; Simple HTTP test with basic headers
+(println "=== Simple HTTP Test ===")
+
+;; Test basic GET request
+(let [response (tool/http-fetch "http://localhost:9999/mock/get")]
+  (println "Status:" (get response :status)))
+
+;; Test with simple headers
+(let [headers {:Accept "application/json"}
+      response (tool/http-fetch "http://localhost:9999/mock/headers" "GET" headers)]
+  (println "Status:" (get response :status)))
+
+;; Test with POST and body
+(let [headers {:ContentType "application/json"}
+      body "{\"test\": \"data\"}"
+      response (tool/http-fetch "http://localhost:9999/mock/post" "POST" headers body)]
+  (println "Status:" (get response :status)))
+
+(println "=== Test Complete ===") 

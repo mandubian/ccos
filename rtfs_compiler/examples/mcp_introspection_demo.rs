@@ -16,10 +16,10 @@
 
 use clap::Parser;
 use reqwest::Client;
-use rtfs_compiler::runtime::capability_marketplace::{CapabilityMarketplace, CapabilityIsolationPolicy};
+use rtfs_compiler::ccos::capability_marketplace::{CapabilityMarketplace, CapabilityIsolationPolicy};
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::runtime::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPDiscoveryBuilder};
+use rtfs_compiler::ccos::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPDiscoveryBuilder};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Convert tools to MCPTool format for conversion
         let mcp_tools: Vec<_> = tools.iter().map(|t| {
-            rtfs_compiler::runtime::capability_marketplace::mcp_discovery::MCPTool {
+            rtfs_compiler::ccos::capability_marketplace::mcp_discovery::MCPTool {
                 name: t.name.clone(),
                 description: t.description.clone(),
                 inputSchema: None,
@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Convert tools to MCPTool format for conversion
         let mcp_tools: Vec<_> = tools.iter().map(|t| {
-            rtfs_compiler::runtime::capability_marketplace::mcp_discovery::MCPTool {
+            rtfs_compiler::ccos::capability_marketplace::mcp_discovery::MCPTool {
                 name: t.name.clone(),
                 description: t.description.clone(),
                 inputSchema: None,
@@ -226,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build inputs Value from JSON string if provided, otherwise empty map
     let inputs: Value = if let Some(json) = args.args {
         let parsed: serde_json::Value = serde_json::from_str(&json)?;
-        rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::json_to_rtfs_value(&parsed)?
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::json_to_rtfs_value(&parsed)?
     } else {
         Value::Map(HashMap::new())
     };

@@ -1,0 +1,5 @@
+;; Test comma in string value
+(let [headers {:a "value,with,comma" :b 42}
+      result (try (tool/http-fetch "http://localhost:9999/mock")
+                  (catch _ err "Connection refused as expected"))]
+  (println "Comma string test complete - HTTP call handled gracefully")) 

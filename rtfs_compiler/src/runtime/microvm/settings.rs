@@ -32,7 +32,7 @@ impl Default for MicroVMSettings {
                 cpu_limit: 0.3,
                 network_policy: NetworkPolicy::AllowList(vec![
                     "api.github.com".to_string(),
-                    "httpbin.org".to_string(),
+                    "localhost".to_string(),
                 ]),
                 fs_policy: FileSystemPolicy::None,
                 env_vars: HashMap::new(),

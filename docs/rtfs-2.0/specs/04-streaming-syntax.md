@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document defines the RTFS 2.0 syntax for expressing streaming capabilities in homoiconic plans that can be executed by the CCOS capability marketplace runtime.
+This document defines the RTFS 2.0 syntax for expressing streaming types and intent in homoiconic plans. Operational streaming (providers, callbacks, pipelines) is executed by CCOS via marketplace capabilities. RTFS keeps streaming as types/schemas and macro forms that lower to `(call ...)`.
 
 ## Design Principles
 
@@ -459,6 +459,32 @@ This document defines the RTFS 2.0 syntax for expressing streaming capabilities 
    :sampling-rate 0.1
    :output-format :json})
 ```
+
+## Lowering to `(call ...)`
+
+All streaming operational forms are syntactic sugar over plain capability calls. The canonical lowering is:
+
+```rtfs
+;; Source
+(stream-source id opts)
+;; →
+(call :marketplace.stream.start {:id id :config (:config opts)})
+
+;; Channel/pull consume
+(stream-consume h {x => (body)})
+;; → expands to a bounded pull loop using :marketplace.stream.next
+
+;; Callback consume
+(stream-consume h {:on-item f :on-error g})
+;; →
+(call :marketplace.stream.register-callbacks {:handle h :on-item {:fn 'f} :on-error {:fn 'g}})
+
+;; Sink and produce
+(stream-sink id)           → (call :marketplace.stream.open-sink {:id id})
+(stream-produce h item)    → (call :marketplace.stream.send {:handle h :item item})
+```
+
+Effects: Streaming implies effects (e.g., `:network`, `:ipc`). These are validated per the effect system (see `07-effect-system.md`).
 
 ## Conclusion
 

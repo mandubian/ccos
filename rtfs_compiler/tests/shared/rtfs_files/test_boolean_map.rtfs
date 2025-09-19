@@ -1,0 +1,5 @@
+;; Test boolean values in maps
+(let [headers {:a 1 :b true :c false}
+      result (try (tool/http-fetch "http://localhost:9999/mock")
+                  (catch _ err "Connection refused as expected"))]
+  (println "Boolean test complete - HTTP call handled gracefully")) 

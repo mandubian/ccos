@@ -13,7 +13,7 @@ use super::arbiter_engine::ArbiterEngine;
 use super::plan_generation::{PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider};
 use crate::ccos::intent_graph::IntentGraph;
 use crate::ccos::types::{ExecutionResult, Intent, Plan, PlanBody, StorableIntent, IntentStatus, PlanLanguage, PlanStatus, TriggerSource, GenerationContext, IntentId};
-use crate::runtime::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use tokio::sync::RwLock;
 
 /// A deterministic dummy arbiter for testing purposes.
@@ -550,7 +550,7 @@ impl ArbiterEngine for DummyArbiter {
             created_at: intent.created_at,
             updated_at: intent.updated_at,
             metadata: HashMap::new(),
-        }, Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()))))).await?;
+        }, Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))))).await?;
         Ok(plan_res)
     }
 }

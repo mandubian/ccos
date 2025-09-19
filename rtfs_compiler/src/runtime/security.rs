@@ -3,10 +3,34 @@
 //! This module defines security policies and execution contexts for RTFS programs.
 
 use std::collections::{HashSet, HashMap};
-use crate::ccos::execution_context::IsolationLevel;
 use crate::runtime::microvm::config::MicroVMConfig;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
+
+/// RTFS-local isolation levels for security contexts
+/// 
+/// This enum defines the isolation levels that RTFS can express.
+/// CCOS will map these to its own isolation levels during execution.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IsolationLevel {
+    /// Inherit isolation from parent context
+    Inherit,
+    /// Isolated execution with limited capabilities
+    Isolated,
+    /// Sandboxed execution with strict security boundaries
+    Sandboxed,
+}
+
+impl IsolationLevel {
+    /// Convert from CCOS execution context isolation level to RTFS security isolation level
+    pub fn from_ccos(ccos_level: &crate::ccos::execution_context::IsolationLevel) -> Self {
+        match ccos_level {
+            crate::ccos::execution_context::IsolationLevel::Inherit => IsolationLevel::Inherit,
+            crate::ccos::execution_context::IsolationLevel::Isolated => IsolationLevel::Isolated,
+            crate::ccos::execution_context::IsolationLevel::Sandboxed => IsolationLevel::Sandboxed,
+        }
+    }
+}
 
 /// Central security authorizer for capability execution
 pub struct SecurityAuthorizer;

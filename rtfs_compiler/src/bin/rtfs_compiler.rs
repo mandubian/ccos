@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 use std::sync::Arc;
-use rtfs_compiler::runtime::host::RuntimeHost;
+use rtfs_compiler::ccos::host::RuntimeHost;
 
 // Import the RTFS compiler modules
 // Note: We need to reference the parent crate since this is a binary
@@ -117,8 +117,8 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
-                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-                let capability_marketplace = std::sync::Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
+                let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
                 
                 let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
                 let host = std::sync::Arc::new(RuntimeHost::new(
@@ -129,7 +129,6 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 let evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::sync::Arc::new(module_registry),
-                        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
                         rtfs_compiler::runtime::security::RuntimeContext::full(),
                         host,
                     );
@@ -281,9 +280,9 @@ fn main() {
             if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                 eprintln!("Warning: Failed to load standard library: {:?}", e);
             }
-                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
+                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
                 let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
-                let capability_marketplace = Arc::new(rtfs_compiler::runtime::capability_marketplace::CapabilityMarketplace::new(registry));
+                let capability_marketplace = Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
                 let host = std::sync::Arc::new(RuntimeHost::new(
                     causal_chain,
                     capability_marketplace,
@@ -292,7 +291,6 @@ fn main() {
                 let mut evaluator =
                     rtfs_compiler::runtime::Evaluator::new(
                         std::sync::Arc::new(module_registry),
-                        std::sync::Arc::new(rtfs_compiler::ccos::delegation::StaticDelegationEngine::new(std::collections::HashMap::new())),
                         rtfs_compiler::runtime::security::RuntimeContext::full(),
                         host.clone(),
                     );
@@ -332,7 +330,7 @@ fn main() {
                             if args.verbose {
                                 println!("📊 Result: {:?}", value);
                             }
-                            all_results.push(value);
+                            all_results.push(rtfs_compiler::runtime::ExecutionOutcome::Complete(value));
                         }
                         Err(e) => {
                             eprintln!("❌ Runtime error for expression {}: {:?}", i + 1, e);
