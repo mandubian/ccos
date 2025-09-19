@@ -54,13 +54,11 @@
     y))
 ;; Expected: 10 (with side effects)
 
-;; Do with loop constructs (if available)
+;; Do with loop constructs rewritten to pure reduce
 (do
-  (def sum (atom 0))
-  (dotimes [i 5]
-    (reset! sum (+ (deref sum) i)))
-  (deref sum))
-;; Expected: 10 (if mutable variables and dotimes are supported)
+  (let [sum (reduce + 0 (range 0 5))]
+    sum))
+;; Expected: 10
 
 ;; Do with error handling
 (do
