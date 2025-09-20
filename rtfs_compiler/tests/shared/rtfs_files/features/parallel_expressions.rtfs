@@ -110,13 +110,12 @@
             [b2 40])])
 ;; Expected: Nested parallel execution
 
-;; Parallel with shared mutable state (if supported)
-(let [counter (atom 0)]
-  (parallel
-    [inc1 (swap! counter inc)]
-    [inc2 (swap! counter inc)]
-    [inc3 (swap! counter inc)]))
-;; Expected: Concurrent increments (results may vary)
+;; Parallel with shared state via host capabilities
+(parallel
+  [inc1 (call :ccos.state.counter.inc {:key "parallel-counter" :increment 1})]
+  [inc2 (call :ccos.state.counter.inc {:key "parallel-counter" :increment 1})]
+  [inc3 (call :ccos.state.counter.inc {:key "parallel-counter" :increment 1})])
+;; Expected: Concurrent increments via host-backed counter
 
 ;; Parallel with timeout (if supported)
 (parallel
@@ -125,13 +124,12 @@
   [medium (do (thread/sleep 1000) "medium")])
 ;; Expected: Results as they complete
 
-;; Parallel execution order independence
-(let [log (atom [])]
-  (parallel
-    [task1 (do (swap! log conj "task1") 1)]
-    [task2 (do (swap! log conj "task2") 2)]
-    [task3 (do (swap! log conj "task3") 3)]))
-;; Expected: [1 2 3] with log order varying
+;; Parallel execution order independence via host-backed logging
+(parallel
+  [task1 (do (call :ccos.state.event.append {:key "parallel-log" :event "task1"}) 1)]
+  [task2 (do (call :ccos.state.event.append {:key "parallel-log" :event "task2"}) 2)]
+  [task3 (do (call :ccos.state.event.append {:key "parallel-log" :event "task3"}) 3)])
+;; Expected: [1 2 3] with log order varying via host-backed event logging
 
 ;; Edge case: Single parallel task
 (parallel
