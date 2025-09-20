@@ -321,7 +321,7 @@
 (defn execute-monitoring-loop [monitoring-session duration-ms check-interval-ms alert-thresholds]
   (let [start-time (tool/current-timestamp-ms)
         end-time (+ start-time duration-ms)
-        recovery-events (atom [])]
+        recovery-events-key "monitoring-recovery-events"]
     
     (tool/log "Executing monitoring loop from" start-time "to" end-time)
     
@@ -367,7 +367,7 @@
                           (match recovery-result
                             [:ok recovery-actions]
                             (do
-                              (swap! recovery-events conj recovery-actions)
+                              (call :ccos.state.event.append {:key recovery-events-key :event recovery-actions})
                               (tool/log "Recovery actions completed")
                               
                               ;; Update adaptive strategies based on recovery success
@@ -413,10 +413,11 @@
           
           ;; Monitoring loop completed
           (let [final-health-score (calculate-final-health-score health-history)
-                ft-metrics (calculate-fault-tolerance-metrics @recovery-events health-history)]
+                recovery-events-list (call :ccos.state.kv.get {:key recovery-events-key})
+                ft-metrics (calculate-fault-tolerance-metrics recovery-events-list health-history)]
             [:ok {
               :final-health-score final-health-score
-              :recovery-events @recovery-events
+              :recovery-events recovery-events-list
               :fault-tolerance-metrics ft-metrics
               :health-history health-history
               :failure-patterns failure-patterns
@@ -424,7 +425,7 @@
               :summary {
                 :monitoring-duration-ms (- (tool/current-timestamp-ms) start-time)
                 :health-checks-performed (count health-history)
-                :recovery-events-triggered (count @recovery-events)
+                :recovery-events-triggered (count recovery-events-list)
                 :patterns-learned (count (keys failure-patterns))
               }
             }])))
