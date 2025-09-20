@@ -588,7 +588,17 @@ impl Orchestrator {
                 ExecutionOutcome::RequiresHost(host_call) => {
                     // Handle the host call through CCOS delegation
                     let result = self.handle_host_call(&host_call).await?;
-                    
+
+                    // For now, we'll return the result directly.
+                    // In a more sophisticated implementation, we might resume execution
+                    // with the result substituted back into the expression.
+                    return Ok(ExecutionOutcome::Complete(result));
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHostEffect(effect_request) => {
+                    // Handle the effect request through CCOS delegation
+                    let result = self.handle_effect_request(&effect_request).await?;
+
                     // For now, we'll return the result directly.
                     // In a more sophisticated implementation, we might resume execution
                     // with the result substituted back into the expression.
@@ -599,6 +609,20 @@ impl Orchestrator {
     }
 
     /// Handle a host call by delegating to the appropriate CCOS component.
+    #[cfg(feature = "effect-boundary")]
+    async fn handle_effect_request(&self, effect_request: &crate::runtime::execution_outcome::EffectRequest) -> RuntimeResult<Value> {
+        // Handle effect requests by delegating to appropriate host state capabilities
+        // For now, return a placeholder response - this would be implemented with actual state services
+        match effect_request.capability_id.as_str() {
+            "ccos.state.kv.get" => Ok(Value::String(format!("[KV GET {}]", effect_request.input_payload))),
+            "ccos.state.kv.put" => Ok(Value::String(format!("[KV PUT {}]", effect_request.input_payload))),
+            "ccos.state.kv.cas-put" => Ok(Value::String(format!("[KV CAS-PUT {}]", effect_request.input_payload))),
+            "ccos.state.counter.inc" => Ok(Value::String(format!("[COUNTER INC {}]", effect_request.input_payload))),
+            "ccos.state.event.append" => Ok(Value::String(format!("[EVENT APPEND {}]", effect_request.input_payload))),
+            _ => Err(RuntimeError::Generic(format!("Unknown effect request capability: {}", effect_request.capability_id))),
+        }
+    }
+
     async fn handle_host_call(&self, host_call: &crate::runtime::execution_outcome::HostCall) -> RuntimeResult<Value> {
         // Parse the function symbol to determine the type of call
         if host_call.fn_symbol.starts_with("call:") {
@@ -710,6 +734,13 @@ impl Orchestrator {
                 // This should not happen as we handle RequiresHost in the loop
                 let error = RuntimeError::Generic("Unexpected RequiresHost in final result".to_string());
                 let res = ExecutionResult { success: false, value: RtfsValue::String("error: Unexpected RequiresHost".to_string()), metadata: Default::default() };
+                (res, Some(error))
+            },
+            #[cfg(feature = "effect-boundary")]
+            Ok(ExecutionOutcome::RequiresHostEffect(_)) => {
+                // This should not happen as we handle RequiresHostEffect in the loop
+                let error = RuntimeError::Generic("Unexpected RequiresHostEffect in final result".to_string());
+                let res = ExecutionResult { success: false, value: RtfsValue::String("error: Unexpected RequiresHostEffect".to_string()), metadata: Default::default() };
                 (res, Some(error))
             },
             Err(e) => {

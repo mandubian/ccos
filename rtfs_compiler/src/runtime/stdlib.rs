@@ -21,8 +21,7 @@ use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext,
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::ExecutionOutcome;
 use std::sync::Arc;
-#[cfg(feature = "legacy-atoms")]
-use std::sync::RwLock;
+// Removed RwLock - no longer needed after atom removal
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};
@@ -1516,6 +1515,8 @@ impl StandardLibrary {
                 match evaluator.call_function(f_to_call, &args_for_call, env)? {
                     ExecutionOutcome::Complete(v) => v,
                     ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'update'".to_string())),
                 }
             };
             new_map.insert(map_key, new_value);
@@ -1580,6 +1581,8 @@ impl StandardLibrary {
                 match evaluator.call_function(f_to_call, &args_for_call, env)? {
                     ExecutionOutcome::Complete(v) => v,
                     ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'update'".to_string())),
                 }
             };
             new_vec[index] = new_value;
@@ -1702,6 +1705,8 @@ impl StandardLibrary {
                     match evaluator.call_function(f.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map-indexed': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'map-indexed'".to_string())),
                     }
                 }
                 _ => {
@@ -1763,6 +1768,8 @@ impl StandardLibrary {
                     let pred_result = match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'remove': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'remove'".to_string())),
                     };
                     match pred_result {
                         Value::Boolean(b) => !b, // Keep elements where predicate returns false
@@ -1829,6 +1836,8 @@ impl StandardLibrary {
                             match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                                 ExecutionOutcome::Complete(v) => v,
                                 ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'some?': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'some?'".to_string())),
                             }
                         }
                         _ => {
@@ -1887,6 +1896,8 @@ impl StandardLibrary {
                     match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'every?': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'every?'".to_string())),
                     }
                 }
                 _ => {
@@ -2198,6 +2209,8 @@ impl StandardLibrary {
             match evaluator.call_function(function.clone(), &[element], env)? {
                 ExecutionOutcome::Complete(v) => result.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'map'".to_string())),
             }
         }
 
@@ -2260,6 +2273,8 @@ impl StandardLibrary {
             let should_include = match evaluator.call_function(predicate.clone(), &[element.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
                 ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'filter': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'filter'".to_string())),
             };
             match should_include {
                 Value::Boolean(true) => result.push(element),
@@ -2350,6 +2365,8 @@ impl StandardLibrary {
             accumulator = match evaluator.call_function(function.clone(), &[accumulator.clone(), value.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
                 ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'reduce': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'reduce'".to_string())),
             };
         }
 
@@ -2455,6 +2472,8 @@ impl StandardLibrary {
             let key = match evaluator.call_function(key_fn.clone(), &[element.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
                 ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'sort-by': {}", hc.fn_symbol))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'sort-by'".to_string())),
             };
             pairs.push((element, key));
         }

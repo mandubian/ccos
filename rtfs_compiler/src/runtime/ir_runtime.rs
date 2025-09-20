@@ -127,6 +127,10 @@ impl IrRuntime {
                 ExecutionOutcome::RequiresHost(host_call) => {
                     return Ok(ExecutionOutcome::RequiresHost(host_call));
                 }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHostEffect(effect_request) => {
+                    return Ok(ExecutionOutcome::RequiresHostEffect(effect_request));
+                }
             }
         }
 
@@ -158,6 +162,8 @@ impl IrRuntime {
                         Ok(ExecutionOutcome::Complete(Value::Nil))
                     }
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 }
             }
             IrNode::Lambda {
@@ -181,6 +187,8 @@ impl IrRuntime {
                         Ok(ExecutionOutcome::Complete(function_val))
                     }
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 }
             }
             IrNode::Apply {
@@ -209,6 +217,8 @@ impl IrRuntime {
                         }
                     }
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 }
             }
             IrNode::Import { module_name, .. } => {
@@ -222,6 +232,10 @@ impl IrRuntime {
                     match self.execute_node(def, env, false, module_registry)? {
                         ExecutionOutcome::Complete(_) => {}
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Nil))
@@ -232,6 +246,10 @@ impl IrRuntime {
                     match self.execute_node(expr, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(result))
@@ -267,6 +285,10 @@ impl IrRuntime {
                                 }
                             }
                             ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                         }
                 }
                 // Now handle non-function bindings as usual
@@ -282,6 +304,10 @@ impl IrRuntime {
                                 )? {
                                     ExecutionOutcome::Complete(value) => env.define(name.clone(), value),
                                     ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                                 }
                             }
                         }
@@ -291,6 +317,10 @@ impl IrRuntime {
                                     self.execute_destructure(pattern, &value, env, module_registry)?;
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         _ => {
@@ -301,6 +331,10 @@ impl IrRuntime {
                                     let _ = value;
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                     }
@@ -311,6 +345,10 @@ impl IrRuntime {
                     match self.execute_node(expr, env, is_tail_call, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(result))
@@ -321,6 +359,10 @@ impl IrRuntime {
                     match self.execute_node(elem, env, false, module_registry)? {
                         ExecutionOutcome::Complete(val) => values.push(val),
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Vector(values)))
@@ -331,10 +373,18 @@ impl IrRuntime {
                     let key = match self.execute_node(&entry.key, env, false, module_registry)? {
                         ExecutionOutcome::Complete(val) => val,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     };
                     let value = match self.execute_node(&entry.value, env, false, module_registry)? {
                         ExecutionOutcome::Complete(val) => val,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     };
                     // Convert key to MapKey format
                     let map_key = match key {
@@ -355,6 +405,10 @@ impl IrRuntime {
                 let value = match self.execute_node(expression, env, false, module_registry)? {
                     ExecutionOutcome::Complete(val) => val,
                     ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 };
                 // For now, implement basic pattern matching
                 for clause in clauses {
@@ -364,6 +418,10 @@ impl IrRuntime {
                             let guard_result = match self.execute_node(guard, env, false, module_registry)? {
                                 ExecutionOutcome::Complete(val) => val,
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             };
                             if !guard_result.is_truthy() {
                                 continue;
@@ -388,6 +446,10 @@ impl IrRuntime {
                     match self.execute_node(expr, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
 
@@ -397,6 +459,10 @@ impl IrRuntime {
                         match self.execute_node(expr, env, false, module_registry)? {
                             ExecutionOutcome::Complete(_) => {},
                             ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                         }
                     }
                 }
@@ -415,6 +481,10 @@ impl IrRuntime {
                             }
                         },
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Map(results)))
@@ -433,11 +503,17 @@ impl IrRuntime {
                             match self.execute_node(expr, env, false, module_registry)? {
                                 ExecutionOutcome::Complete(value) => result = value,
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         Ok(ExecutionOutcome::Complete(result))
                     },
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 }
             }
             IrNode::LogStep {  values, .. } => {
@@ -447,6 +523,10 @@ impl IrRuntime {
                     match self.execute_node(value_expr, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => log_values.push(value),
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 // For now, just return the last value
@@ -701,6 +781,8 @@ impl IrRuntime {
                 match self.execute_node(criteria, env, false, module_registry)? {
                     ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(vec![]))),
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 }
             }
             IrNode::ResourceRef { name, .. } => {
@@ -724,6 +806,8 @@ impl IrRuntime {
                         Ok(ExecutionOutcome::Complete(Value::Nil))
                     },
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                 }
             }
             IrNode::Program { forms, .. } => {
@@ -733,6 +817,10 @@ impl IrRuntime {
                     match self.execute_node(form, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(result))
@@ -780,6 +868,10 @@ impl IrRuntime {
         let callee_val = match self.execute_node(callee_node, env, false, module_registry)? {
             ExecutionOutcome::Complete(val) => val,
             ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
         };
 
         let mut args = Vec::new();
@@ -787,6 +879,10 @@ impl IrRuntime {
             match self.execute_node(arg_node, env, false, module_registry)? {
                 ExecutionOutcome::Complete(val) => args.push(val),
                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
             }
         }
 
@@ -990,6 +1086,10 @@ impl IrRuntime {
                     )? {
                         ExecutionOutcome::Complete(value) => result.push(value),
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Value::Function(Function::Native(native_func)) => {
@@ -1010,6 +1110,10 @@ impl IrRuntime {
                     )? {
                         ExecutionOutcome::Complete(value) => result.push(value),
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 _ => {
@@ -1142,11 +1246,19 @@ impl IrRuntime {
                                 match self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)? {
                                     ExecutionOutcome::Complete(v) => v,
                                     ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                                 }
                             }
                             Value::Function(_) => match self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)? {
                                 ExecutionOutcome::Complete(v) => v,
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             },
                             _ => return Err(RuntimeError::TypeError {
                                 expected: "function".to_string(),
@@ -1184,11 +1296,19 @@ impl IrRuntime {
                                 match self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)? {
                                     ExecutionOutcome::Complete(v) => v,
                                     ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                                 }
                             }
                             Value::Function(_) => match self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)? {
                                 ExecutionOutcome::Complete(v) => v,
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             },
                             _ => return Err(RuntimeError::TypeError {
                                 expected: "function".to_string(),
@@ -1353,6 +1473,10 @@ impl IrRuntime {
                     match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
                         ExecutionOutcome::Complete(value) => value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Value::Function(func) => {
@@ -1366,6 +1490,10 @@ impl IrRuntime {
                     )? {
                         ExecutionOutcome::Complete(value) => value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 _ => {
@@ -1422,6 +1550,10 @@ impl IrRuntime {
                     match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
                         ExecutionOutcome::Complete(v) => v.is_truthy(),
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Value::Function(func) => {
@@ -1435,6 +1567,10 @@ impl IrRuntime {
                     )? {
                         ExecutionOutcome::Complete(v) => v.is_truthy(),
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 _ => {
@@ -1509,6 +1645,10 @@ impl IrRuntime {
                     match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
                         ExecutionOutcome::Complete(value) => value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Value::Function(func) => {
@@ -1522,6 +1662,10 @@ impl IrRuntime {
                     )? {
                         ExecutionOutcome::Complete(value) => value,
                         ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 _ => {
@@ -1574,6 +1718,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         Value::Function(func) => {
@@ -1591,6 +1739,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         _ => {
@@ -1624,6 +1776,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         Value::Function(func) => {
@@ -1641,6 +1797,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         _ => {
@@ -1701,6 +1861,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         Value::Function(func) => {
@@ -1718,6 +1882,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         _ => {
@@ -1751,6 +1919,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         Value::Function(func) => {
@@ -1768,6 +1940,10 @@ impl IrRuntime {
                                     }
                                 }
                                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                             }
                         }
                         _ => {
@@ -1973,6 +2149,10 @@ impl IrRuntime {
             let key = match self.apply_function(key_fn.clone(), &[element.clone()], env, false, module_registry)? {
                 ExecutionOutcome::Complete(value) => value,
                 ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
             };
             pairs.push((element, key));
         }
