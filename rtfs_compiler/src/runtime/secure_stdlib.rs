@@ -594,14 +594,14 @@ impl SecureStandardLibrary {
         );
 
         // Reset! mutation function
-        env.define(
-            &Symbol("reset!".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "reset!".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::reset_bang),
-            })),
-        );
+            env.define(
+                &Symbol("reset!".to_string()),
+                Value::Function(Function::Builtin(BuiltinFunction {
+                    name: "reset!".to_string(),
+                    arity: Arity::Fixed(2),
+                    func: Arc::new(Self::reset_bang),
+                })),
+            ); // Reset! mutation function (gated by legacy-atoms; non-legacy builds return canonical error)
 
         // Dissoc function
         env.define(
@@ -690,14 +690,14 @@ impl SecureStandardLibrary {
         );
 
         // Take function
-        env.define(
-            &Symbol("take".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "take".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::take),
-            })),
-        );
+            env.define(
+                &Symbol("assoc!".to_string()),
+                Value::Function(Function::Builtin(BuiltinFunction {
+                    name: "assoc!".to_string(),
+                    arity: Arity::Variadic(3),
+                    func: Arc::new(Self::assoc_bang),
+                })),
+            ); // Assoc! mutation function (gated by legacy-atoms; non-legacy builds return canonical error)
 
         // Drop function
         env.define(
@@ -1994,6 +1994,7 @@ impl SecureStandardLibrary {
         Ok(Value::Vector(result))
     }
 
+    #[cfg(feature = "legacy-atoms")]
     fn reset_bang(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
@@ -2017,6 +2018,12 @@ impl SecureStandardLibrary {
         }
     }
 
+    #[cfg(not(feature = "legacy-atoms"))]
+    fn reset_bang(_args: Vec<Value>) -> RuntimeResult<Value> {
+        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
+    }
+
+    #[cfg(feature = "legacy-atoms")]
     fn assoc_bang(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() < 3 {
             return Err(RuntimeError::ArityMismatch {
@@ -2056,6 +2063,11 @@ impl SecureStandardLibrary {
                 operation: "assoc!".to_string(),
             })
         }
+    }
+
+    #[cfg(not(feature = "legacy-atoms"))]
+    fn assoc_bang(_args: Vec<Value>) -> RuntimeResult<Value> {
+        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
     }
 
     fn assoc(args: Vec<Value>) -> RuntimeResult<Value> {

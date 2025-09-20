@@ -1,32 +1,33 @@
-Migration checklist for removing `legacy-atoms` dependency
+Migration checklist: Pure runtime (atoms removed by default) + future Host-backed effects
 
-Completed (this PR)
+Phase A — Mutation primitives removed by default (DONE)
 
-- [x] Replace simple `set!` examples with let-shadowing or pure functions.
-- [x] Replace atom-based increment examples with pure increment functions or computed results.
-- [x] Replace sequential swap! sequences with pure reductions over collections.
-- [x] Update e2e harness to avoid marking migrated cases as expected failures.
+- [x] Evaluator: `set!` returns canonical error unless `legacy-atoms` feature is enabled.
+- [x] Stdlib: `atom`, `deref`, `reset!`, `swap!` cfg‑gated; non‑legacy stubs return canonical error; legacy builds warn and preserve behavior.
+- [x] Secure stdlib: `assoc!`, `reset!` cfg‑gated with same behavior as above.
+- [x] Parser keeps `@x` sugar; evaluator lowers to `(deref x)` → canonical error in non‑legacy builds.
+- [x] Harness: atom‑heavy feature files (`parallel_expressions`, `test_fault_tolerance`) treated as expected‑fail when `legacy-atoms` is disabled.
+- [x] Canonical error: "Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs."
 
-Pending (follow-ups)
+Verification
 
-- [ ] Replace memoization tests that use atoms with a pure `memoize` helper or a test shim that simulates caching without global mutation.
-- [ ] Rework parallel tests that rely on shared mutable atoms — options include:
-  - Use a concurrency-safe, feature-retained primitive if needed during migration.
-  - Rewrite tests to avoid shared mutable state and assert on eventual state deterministically.
-- [ ] Audit the repo for any remaining uses of `atom`, `swap!`, `reset!`, `set!`, and `@`/`deref` outside tests and decide whether to gate or migrate.
-- [ ] Update documentation explaining the migration rationale and the replacement patterns for common mutation idioms.
+- [x] cargo test (default features): green.
+- [x] Feature harness in non‑legacy path: atom‑dependent cases are expected‑fail; suite green.
 
-Risks & notes
+Phase B — Inventory and migration plan (IN PROGRESS)
 
-- Behavioral parity must be verified for migrated tests; I ensured outputs are unchanged for the cases migrated here.
-- For parallel tests, deterministic assertions are important; consider replacing timing-based concurrency checks with controlled concurrency helpers.
+- [x] Inventory remaining atom usages in tests; document in `docs/migration-notes/remaining-mutation-inventory.md`.
+- [ ] Decide migration for complex features: pure rewrite vs. Host‑backed vs. deprecate.
+- [ ] Open follow‑up issues: host APIs design, IR lowering for removal of `set!`, migrate parallel examples.
 
+Phase C — Host‑backed effects (FUTURE)
 
-## Local verification
+- [ ] Define RequiresHost contract and resume path.
+- [ ] Implement minimal Host capabilities (mock): `counter.inc`, `event.append`, `kv.get`, `kv.cas-put` (idempotency).
+- [ ] Migrate tests to host capabilities and remove harness expected‑fail gating.
 
-- Date: 2025-09-19
-- Commit: 4e62267
-- Action: Ran full feature test matrix from `rtfs_compiler/` with `--no-default-features --features "pest regex"` (i.e. `legacy-atoms` disabled). All features passed locally (106 passed, 0 failed).
+Notes
 
-Next: create migration branch and open PR (awaiting user signal).
+- `Value::Atom` variant is retained for compatibility; it isn’t constructed in non‑legacy builds.
+- IR converter errors on Deref until a host‑backed deref is designed.
 
