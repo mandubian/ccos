@@ -152,7 +152,9 @@ impl CapabilityMarketplace {
         let registry = self.capability_registry.read().await;
         
         // Get all registered capabilities from the registry
-        for (capability_id, _capability) in registry.get_capabilities() {
+        for capability_id in registry.list_capabilities() {
+            let capability_id = capability_id.to_string();
+            let _capability_opt = registry.get_capability(&capability_id);
             let capability_id_clone = capability_id.clone();
             let provenance = CapabilityProvenance {
                 source: "registry_bootstrap".to_string(),
