@@ -1889,34 +1889,43 @@ impl Evaluator {
     }
 
     fn eval_set_form(&self, args: &[Expression], env: &mut Environment) -> Result<ExecutionOutcome, RuntimeError> {
-        // Expect (set! sym expr)
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "set!".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // First arg may be a symbol or a keyword literal (keywords are used in examples like (set! :key v)).
-        // Coerce Keyword -> Symbol to be permissive with generated plans and docs.
-        let sym = match &args[0] {
-            Expression::Symbol(s) => s.clone(),
-            Expression::Literal(crate::ast::Literal::Keyword(k)) => crate::ast::Symbol(k.0.clone()),
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "symbol".to_string(),
-                    actual: format!("{:?}", args[0]),
-                    operation: "set!".to_string(),
-                })
+        // If the legacy feature is enabled, preserve the old semantics for tests
+        // and existing code that relies on `set!`. Otherwise, return the
+        // canonical runtime error to forbid mutation inside the pure runtime.
+        if cfg!(feature = "legacy-atoms") {
+            // Expect (set! sym expr)
+            if args.len() != 2 {
+                return Err(RuntimeError::ArityMismatch {
+                    function: "set!".to_string(),
+                    expected: "2".to_string(),
+                    actual: args.len(),
+                });
             }
-        };
 
-        // Evaluate value
-        let value = self.eval_expr(&args[1], env)?;
-        match value {
-            ExecutionOutcome::Complete(v) => { env.define(&sym, v.clone()); Ok(ExecutionOutcome::Complete(Value::Nil)) }
-            ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+            // First arg may be a symbol or a keyword literal (keywords are used in examples like (set! :key v)).
+            // Coerce Keyword -> Symbol to be permissive with generated plans and docs.
+            let sym = match &args[0] {
+                Expression::Symbol(s) => s.clone(),
+                Expression::Literal(crate::ast::Literal::Keyword(k)) => crate::ast::Symbol(k.0.clone()),
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "symbol".to_string(),
+                        actual: format!("{:?}", args[0]),
+                        operation: "set!".to_string(),
+                    })
+                }
+            };
+
+            // Evaluate value
+            let value = self.eval_expr(&args[1], env)?;
+            match value {
+                ExecutionOutcome::Complete(v) => { env.define(&sym, v.clone()); Ok(ExecutionOutcome::Complete(Value::Nil)) }
+                ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+            }
+        } else {
+            Err(RuntimeError::Generic(
+                "Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()
+            ))
         }
     }
 
