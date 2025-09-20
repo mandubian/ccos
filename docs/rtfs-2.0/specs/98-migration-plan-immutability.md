@@ -181,6 +181,20 @@ Phase 5 — Host-backed state and security (2–4 days, incremental)
 - Implement append-only audit stream
 - Add timeouts and retry policies
 
+### Future Work: Redis integration plan
+- Milestone 1: Optional dependency and config
+  - Add `redis` crate behind a non-default feature (e.g., `state-redis`)
+  - Read `REDIS_URL` from env or config; if missing, fall back to mock
+  - Keep capability functions pure wrappers that delegate to a provider trait
+- Milestone 2: Provider abstraction
+  - Define `StateProvider` trait with `kv_get/put/cas`, `counter_inc`, `event_append`
+  - Implement `MockStateProvider` and `RedisStateProvider`
+  - Wire provider selection via runtime configuration
+- Milestone 3: Reliability & observability
+  - Add timeouts, retry/backoff, idempotency keys
+  - Emit effect logs with causal metadata to audit stream
+  - Export metrics (latency, error rates, retries)
+
 Phase 6 — Disable feature in CI on migration branch + fix (iterative)
 
 - On migration branch, run CI with `--no-default-features --features ""` or explicitly with `--no-default-features` to simulate removal.
