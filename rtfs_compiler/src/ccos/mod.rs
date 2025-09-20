@@ -42,6 +42,7 @@ pub mod host;
 pub mod environment;
 pub mod observability;
 pub mod streaming;
+pub mod state_provider;
 
  // Advanced components
 pub mod context_horizon;
