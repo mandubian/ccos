@@ -1,7 +1,7 @@
 
 # Migration plan: Pure RTFS runtime, effects delegated to Host (feature-gated, reversible)
 
-Status: In Progress — Phase 3 Started, Effect Boundary Types Defined
+Status: In Progress — Phase 4 Complete, Ready for Phase 5
 Audience: RTFS compiler/runtime owners, maintainers, release managers
 Related: `docs/rtfs-2.0/specs-new/07-immutability-and-state.md`
 
@@ -61,6 +61,65 @@ Phase 3 — Effect boundary and continuations (1–2 days)
 
 **Next Steps**: Complete pattern matching fixes throughout codebase to enable full integration.
 
+## Migration Guide: From Atoms to Immutable APIs
+
+### Why Remove Atoms?
+
+Atoms represent mutable state, which conflicts with RTFS 2.0's pure functional model. The new architecture uses:
+
+- **Host-managed state**: External capabilities manage state outside RTFS
+- **Immutable data structures**: Functional programming patterns
+- **Effect boundary**: Structured interaction with external state
+
+### Migration Strategies
+
+#### 1. Simple Values → Host-Managed Counters
+```clojure
+; OLD: (atom 0)
+; NEW: Use host capability
+(call :ccos.counter:create {:key "my-counter" :initial-value 0})
+```
+
+#### 2. Mutable Maps → Host-Managed State
+```clojure
+; OLD: (atom {}) then (swap! atom assoc :key value)
+; NEW: Use host capability for state management
+(call :ccos.state:update {:key "my-state" :updates {:key value}})
+```
+
+#### 3. Coordination → Effect Boundary
+```clojure
+; OLD: (atom false) then (reset! atom true)
+; NEW: Use structured effect calls
+(call :ccos.flag:set {:flag "processing-complete" :value true})
+```
+
+#### 4. Configuration → Context Parameters
+```clojure
+; OLD: (def config (atom {:debug false}))
+; NEW: Use step parameters or host-managed config
+(step "Configure" (call :ccos.config:get {:key "debug-mode"}))
+```
+
+### Deprecation Warnings
+
+When using legacy-atoms feature, you'll see warnings like:
+```
+DEPRECATION: `atom` is deprecated and will be removed in RTFS 2.0. Use immutable APIs or host-managed handles instead.
+DEPRECATION: `set!` is deprecated and will be removed in RTFS 2.0. Use immutable data structures or host-managed state instead.
+```
+
+### Testing Strategy
+
+To test both modes:
+```bash
+# Test with legacy atoms (for migration compatibility)
+cargo test --features legacy-atoms
+
+# Test without legacy atoms (for future RTFS 2.0)
+cargo test --no-default-features --features pest,regex
+```
+
 Acceptance criteria for Phase 3
 
 - ✅ Round‑trip demo: a simple program that requests `ccos.counter.inc` returns RequiresHost, Host mock processes it, evaluator resumes and completes with the incremented value.
@@ -68,8 +127,17 @@ Acceptance criteria for Phase 3
 
 Phase 4 — Deprecation & docs (0.5 day)
 
-- Mark stdlib functions `#[deprecated(note = "RTFS 2.0 removes atoms — use X instead")]` when feature enabled.
-- Add deprecation notes in `docs/rtfs-2.0/specs/` and examples.
+**Status**: ✅ Complete
+
+- ✅ Mark stdlib functions `#[deprecated(note = "RTFS 2.0 removes atoms — use X instead")]` when feature enabled.
+- ✅ Add deprecation notes in `docs/rtfs-2.0/specs/` and examples.
+- ✅ Add runtime deprecation warnings with clear migration guidance.
+- ✅ Update migration plan with comprehensive migration strategies.
+
+**Added Deprecation Warnings:**
+- `atom`, `deref`, `reset!`, `swap!` - All emit runtime warnings when used
+- `set!` - Special form now emits deprecation warning
+- Migration guide with concrete examples provided
 
 Phase 5 — Host-backed state and security (2–4 days, incremental)
 
