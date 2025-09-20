@@ -403,7 +403,10 @@ fn value_to_expression(value: &Value) -> Expression {
         Value::Timestamp(ts) => Expression::Literal(Literal::Timestamp(ts.clone())),
         Value::Uuid(uuid) => Expression::Literal(Literal::Uuid(uuid.clone())),
         Value::ResourceHandle(handle) => Expression::Literal(Literal::ResourceHandle(handle.clone())),
+    #[cfg(feature = "legacy-atoms")]
     Value::Atom(_) => Expression::Literal(Literal::String("<atom>".to_string())),
+    #[cfg(not(feature = "legacy-atoms"))]
+    Value::Atom(_) => Expression::Literal(Literal::String("<legacy-atom>".to_string())),
         Value::List(_) => Expression::Literal(Literal::String("<list>".to_string())),
         Value::Function(_) => Expression::Literal(Literal::String("<function>".to_string())),
         Value::FunctionPlaceholder(_) => Expression::Literal(Literal::String("<function_placeholder>".to_string())),
