@@ -367,7 +367,7 @@
                           (match recovery-result
                             [:ok recovery-actions]
                             (do
-                              (call :ccos.state.event.append {:key recovery-events-key :event recovery-actions})
+                              (call :ccos.state.event.append recovery-events-key recovery-actions)
                               (tool/log "Recovery actions completed")
                               
                               ;; Update adaptive strategies based on recovery success

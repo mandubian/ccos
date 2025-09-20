@@ -183,9 +183,11 @@ fn run_test_case(
         .map_err(|e| format!("Parse error in {}[{}]: {:?}", feature_name, case_index, e))?;
 
     // Try to run the expression using the evaluator
-    match evaluator.eval_expr(&expr, &mut evaluator.env.clone()) {
+    match evaluator.evaluate(&expr) {
         Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(result)) => Ok(result.to_string()),
         Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(format!("Host call required in {}[{}]", feature_name, case_index)),
+        #[cfg(feature = "effect-boundary")]
+        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHostEffect(_)) => Err(format!("Host effect required in {}[{}]", feature_name, case_index)),
         Err(e) => Err(format!("Runtime error in {}[{}]: {:?}", feature_name, case_index, e)),
     }
 }
@@ -215,14 +217,6 @@ fn run_feature_tests(config: &FeatureTestConfig) -> Result<(), String> {
                 RuntimeStrategy::Both => unreachable!(),
             };
             // Determine whether this particular case is expected to fail for this runtime
-            #[cfg(not(feature = "legacy-atoms"))]
-            let mut case_expected_fail = match strategy {
-                RuntimeStrategy::Ast => config.expected_fail_cases_ast.contains(&case_index),
-                RuntimeStrategy::Ir => config.expected_fail_cases_ir.contains(&case_index),
-                RuntimeStrategy::Both => unreachable!(),
-            };
-
-            #[cfg(feature = "legacy-atoms")]
             let case_expected_fail = match strategy {
                 RuntimeStrategy::Ast => config.expected_fail_cases_ast.contains(&case_index),
                 RuntimeStrategy::Ir => config.expected_fail_cases_ir.contains(&case_index),
@@ -261,16 +255,8 @@ fn run_feature_tests(config: &FeatureTestConfig) -> Result<(), String> {
                         }
                     }
 
-                    // If compiled without legacy-atoms, treat the specific atom-removal runtime
-                    // error as an expected failure so the suite can progress and we can triage.
-                    #[cfg(not(feature = "legacy-atoms"))]
-                    {
-                        if e.contains("Atom primitives have been removed") {
-                            println!("  ✓ {}[{}] ({}) failed as expected: {}", 
-                                   config.feature_name, case_index, strategy_name, e);
-                            continue;
-                        }
-                    }
+                    // Migration completed: All atom-dependent features have been migrated to use
+                    // host capabilities. No special handling needed for legacy atom errors.
 
                     // If this case was explicitly marked as expected to fail, accept any error as expected.
                     let expected_by_config = match strategy {
@@ -344,6 +330,9 @@ fn test_def_defn_expressions_feature() {
 
 #[test]
 fn test_parallel_expressions_feature() {
+    // Set environment variable for host capability calls
+    std::env::set_var("CCOS_TEST_FALLBACK_CONTEXT", "1");
+    
     let config = FeatureTestConfig::new("parallel_expressions", FeatureCategory::ControlFlow);
     run_feature_tests(&config).expect("parallel_expressions feature tests failed");
 }
@@ -399,6 +388,9 @@ fn test_type_system_feature() {
 
 #[test]
 fn test_all_features_integration() {
+    // Set environment variable for host capability calls
+    std::env::set_var("CCOS_TEST_FALLBACK_CONTEXT", "1");
+    
     let all_features = vec![
         // Special Forms
         FeatureTestConfig::new("let_expressions", FeatureCategory::SpecialForms),
@@ -432,32 +424,8 @@ fn test_all_features_integration() {
     let mut passed_features = 0;
 
     for config in all_features {
-        // If the crate was compiled without legacy-atoms, some features that
-        // rely on mutable atoms must be expected to fail. This is a temporary
-        // measure to allow the rest of the feature matrix to run while we
-        // migrate or gate call sites. The list below mirrors known atom
-        // dependent feature files.
-        #[cfg(not(feature = "legacy-atoms"))]
-        let config = match config.feature_name.as_str() {
-            // These features contain a small number of AST-only cases that use atoms/mutation.
-            // Mark only the specific case indices expected to fail on AST runtime.
-            "function_expressions" => config
-                .expect_fail_ast(&[18], "Atom primitives have been removed")
-                .expect_fail_ir(&[18], "Atom primitives have been removed"),
-            "do_expressions" => config,
-            "parallel_expressions" => config
-                // Parallel tests rely heavily on shared mutable atoms (swap!, atom, etc.).
-                // If the runtime is built without legacy-atoms, treat the entire feature
-                // as deprecated/expected-fail so the rest of the matrix can run.
-                .should_fail("Atom primitives have been removed"),
-            "mutation_and_state" => config,
-            // Fault tolerance tests include some recovery/event logs implemented with atoms
-            // which exercise mutation semantics. Treat the entire feature as deprecated in
-            // non-legacy builds so the rest of the suite can continue to be validated.
-            "test_fault_tolerance" => config
-                .should_fail("Atom primitives have been removed"),
-            _ => config,
-        };
+        // Migration completed: All atom-dependent features have been migrated to use
+        // host capabilities. No special handling needed.
         total_features += 1;
         match run_feature_tests(&config) {
             Ok(()) => {
