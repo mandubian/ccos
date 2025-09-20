@@ -57,8 +57,6 @@ impl fmt::Display for Value {
             Value::ResourceHandle(rh) => write!(f, "#resource-handle(\"{}\")", rh),
             #[cfg(feature = "legacy-atoms")]
             Value::Atom(_) => write!(f, "#<atom>"),
-            #[cfg(not(feature = "legacy-atoms"))]
-            Value::Atom(_) => write!(f, "#<legacy-atom>"),
             Value::Symbol(s) => write!(f, "{}", s.0),
             Value::Keyword(k) => write!(f, ":{}", k.0),
             Value::Vector(v) => {
@@ -101,8 +99,6 @@ impl Value {
             Value::ResourceHandle(_) => "resource-handle",
             #[cfg(feature = "legacy-atoms")]
             Value::Atom(_) => "atom",
-            #[cfg(not(feature = "legacy-atoms"))]
-            Value::Atom(_) => "legacy-atom",
             Value::Symbol(_) => "symbol",
             Value::Keyword(_) => "keyword",
             Value::Vector(_) => "vector",
