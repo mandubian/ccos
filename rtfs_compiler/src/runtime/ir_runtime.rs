@@ -2008,7 +2008,7 @@ impl IrRuntime {
             "vector", "hash-map", // Removed: atom, deref, reset!, swap!
             "range", "take", "drop", "distinct", "partition",
             "some?", "every?", "contains?", "find",
-            "merge", "update", "get-in", "assoc!",
+            "merge", "update", "get-in", // Removed: assoc!
             "read-file", "file-exists?", "get-env",
             "log", "tool.log", "tool.time-ms",
             "println", "current-time-millis",

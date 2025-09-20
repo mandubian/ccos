@@ -24,7 +24,7 @@ Plan overview (high level) - AGGRESSIVE APPROACH
 
 1. **COMPLETE REMOVAL** - Remove all atom-related code entirely:
    - Remove `Value::Atom` variant from Value enum
-   - Remove all atom stdlib functions (`atom`, `deref`, `reset!`, `swap!`) - ALL REMOVED
+   - Remove all atom stdlib functions (`atom`, `deref`, `reset!`, `swap!`, `assoc!`) - ALL REMOVED
    - Remove `set!` special form evaluation
    - Remove all legacy feature flags
 2. **MANDATORY HOST CAPABILITIES** - Force all stateful operations through host:
@@ -230,7 +230,7 @@ I will not change code beyond updating docs/branch metadata until you confirm wh
 
 ### **What Was Removed:**
 - ✅ `Value::Atom` variant entirely
-- ✅ All atom stdlib functions: `atom`, `deref`, `reset!`, `swap!` - ALL REMOVED
+- ✅ All atom stdlib functions: `atom`, `deref`, `reset!`, `swap!`, `assoc!` - ALL REMOVED
 - ✅ `set!` special form evaluation
 - ✅ `legacy-atoms` feature flag
 - ✅ All deprecation warnings and compatibility shims
@@ -247,6 +247,7 @@ I will not change code beyond updating docs/branch metadata until you confirm wh
 (atom 0)
 (reset! atom new-val)
 (swap! atom inc)
+(assoc! atom {:key "value"})
 
 ; NEW (required):
 (call :ccos.state.kv.get {:key "my-counter"})
