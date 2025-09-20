@@ -19,6 +19,8 @@ repl = ["dep:rustyline"]
 cuda = []
 # Legacy support for atom/mutation primitives. Default=on on `main` to keep backward compatibility.
 legacy-atoms = []
+# New effect boundary for typed host calls. Default=off to avoid breaking changes.
+effect-boundary = []
 metrics_exporter = []
 
 [[bin]]
