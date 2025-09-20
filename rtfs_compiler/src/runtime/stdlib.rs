@@ -20,7 +20,9 @@ use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::ExecutionOutcome;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(feature = "legacy-atoms")]
+use std::sync::RwLock;
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};

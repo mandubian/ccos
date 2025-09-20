@@ -52,7 +52,10 @@ impl StorageValue {
             // Skip non-serializable types
             Value::Function(_) => StorageValue::String("<<function>>".to_string()),
             Value::FunctionPlaceholder(_) => StorageValue::String("<<function_placeholder>>".to_string()),
+            #[cfg(feature = "legacy-atoms")]
             Value::Atom(_) => StorageValue::String("<<atom>>".to_string()),
+            #[cfg(not(feature = "legacy-atoms"))]
+            Value::Atom(_) => StorageValue::String("<<legacy-atom>>".to_string()),
             // Handle other Value variants
             Value::Timestamp(t) => StorageValue::String(format!("timestamp:{}", t)),
             Value::Uuid(u) => StorageValue::String(format!("uuid:{}", u)),

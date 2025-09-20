@@ -528,7 +528,10 @@ impl GitHubMCPCapability {
 		match value {
 			RuntimeValue::Nil => Ok(Value::Null),
 			// Atoms are mutable refs; serialize as a tagged string for now
-			RuntimeValue::Atom(_) => Ok(Value::String("#<atom>".to_string())),
+            #[cfg(feature = "legacy-atoms")]
+            RuntimeValue::Atom(_) => Ok(Value::String("#<atom>".to_string())),
+            #[cfg(not(feature = "legacy-atoms"))]
+            RuntimeValue::Atom(_) => Ok(Value::String("#<legacy-atom>".to_string())),
 			RuntimeValue::String(s) => Ok(Value::String(s.clone())),
 			RuntimeValue::Float(n) => {
 				if n.fract() == 0.0 {
