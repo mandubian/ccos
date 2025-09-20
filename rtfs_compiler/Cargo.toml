@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/yourusername/rtfs-compiler"
 
 [features]
-default = ["pest", "regex", "legacy-atoms"]
+default = ["pest", "regex"]
 # Parser (pest grammar + derives)
 pest = ["dep:pest", "dep:pest_derive"]
 # Regex-based intent extraction & validators
@@ -17,11 +17,8 @@ regex = ["dep:regex"]
 repl = ["dep:rustyline"]
 # Local models with CUDA support
 cuda = []
-# Legacy support for atom/mutation primitives. Default=on on `main` to keep backward compatibility.
-legacy-atoms = []
-# New effect boundary for typed host calls. Default=off to avoid breaking changes.
-# TODO: Enable after completing pattern matching fixes throughout codebase
-# effect-boundary = []
+# New effect boundary for typed host calls - now the only way to do stateful operations
+effect-boundary = []
 metrics_exporter = []
 
 [[bin]]

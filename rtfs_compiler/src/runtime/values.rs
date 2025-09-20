@@ -23,9 +23,6 @@ pub enum Value {
     Uuid(String),
     ResourceHandle(String),
     /// Mutable reference type used by atom/deref/reset!/swap!
-    #[cfg(feature = "legacy-atoms")]
-    #[serde(skip_serializing, skip_deserializing)]
-    Atom(Arc<RwLock<Value>>),
     Symbol(Symbol),
     Keyword(Keyword),
     Vector(Vec<Value>),
@@ -55,8 +52,6 @@ impl fmt::Display for Value {
             Value::Timestamp(t) => write!(f, "#timestamp(\"{}\")", t),
             Value::Uuid(u) => write!(f, "#uuid(\"{}\")", u),
             Value::ResourceHandle(rh) => write!(f, "#resource-handle(\"{}\")", rh),
-            #[cfg(feature = "legacy-atoms")]
-            Value::Atom(_) => write!(f, "#<atom>"),
             Value::Symbol(s) => write!(f, "{}", s.0),
             Value::Keyword(k) => write!(f, ":{}", k.0),
             Value::Vector(v) => {
@@ -97,8 +92,6 @@ impl Value {
             Value::Timestamp(_) => "timestamp",
             Value::Uuid(_) => "uuid",
             Value::ResourceHandle(_) => "resource-handle",
-            #[cfg(feature = "legacy-atoms")]
-            Value::Atom(_) => "atom",
             Value::Symbol(_) => "symbol",
             Value::Keyword(_) => "keyword",
             Value::Vector(_) => "vector",
@@ -344,8 +337,7 @@ impl PartialEq for Value {
             (Map(a), Map(b)) => a == b,
             (Error(a), Error(b)) => a == b,
             (Function(a), Function(b)) => a == b,
-            #[cfg(feature = "legacy-atoms")]
-            (Atom(a), Atom(b)) | (FunctionPlaceholder(a), FunctionPlaceholder(b)) => {
+            (FunctionPlaceholder(a), FunctionPlaceholder(b)) => {
                 // If pointers equal, they're equal
                 if Arc::ptr_eq(a, b) {
                     return true;

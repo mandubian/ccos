@@ -367,41 +367,9 @@ impl StandardLibrary {
             })),
         );
 
-        // Atoms and coordination helpers
-        env.define(
-            &Symbol("atom".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "atom".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::atom_new(args)),
-            })),
-        );
-        env.define(
-            &Symbol("deref".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "deref".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::atom_deref(args)),
-            })),
-        );
-        env.define(
-            &Symbol("reset!".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "reset!".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(|args: Vec<Value>| Self::atom_reset(args)),
-            })),
-        );
-        env.define(
-            &Symbol("swap!".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "swap!".to_string(),
-                arity: Arity::Variadic(2), // (swap! a f & args)
-                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
-                    Self::atom_swap(args, evaluator, env)
-                }),
-            })),
-        );
+        // No atoms - use host state capabilities instead
+        // Removed: atom, deref, reset!, swap! - migrate to host capabilities
+        // Use: (call :ccos.state.kv.get {...}) or (call :ccos.state.counter.inc {...})
         env.define(
             &Symbol("coordinate-work".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -2660,78 +2628,10 @@ impl StandardLibrary {
         Ok(Value::Map(out))
     }
 
-    /// Atoms: (atom v)
-    #[cfg(feature = "legacy-atoms")]
-    #[deprecated(note = "RTFS 2.0 removes atoms — migrate to immutable APIs or host-managed handles. See docs/rtfs-2.0/specs/98-migration-plan-immutability.md")]
-    fn atom_new(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 { return Err(RuntimeError::ArityMismatch { function: "atom".into(), expected: "1".into(), actual: args.len() }); }
-        // Emit a clear runtime deprecation warning to guide users during migration
-        eprintln!("DEPRECATION: `atom` is deprecated and will be removed in a future RTFS release. See docs/rtfs-2.0/specs/98-migration-plan-immutability.md");
-        Ok(Value::Atom(Arc::new(RwLock::new(args[0].clone()))))
-    }
-
-    #[cfg(not(feature = "legacy-atoms"))]
-    fn atom_new(_args: Vec<Value>) -> RuntimeResult<Value> {
-        // When the legacy-atoms feature is disabled, provide a clear failure path.
-        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
-    }
-
-    /// (deref a)
-    #[cfg(feature = "legacy-atoms")]
-    fn atom_deref(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 { return Err(RuntimeError::ArityMismatch { function: "deref".into(), expected: "1".into(), actual: args.len() }); }
-        eprintln!("DEPRECATION: `deref` is deprecated and will be removed in a future RTFS release. See docs/rtfs-2.0/specs/98-migration-plan-immutability.md");
-        match &args[0] {
-            Value::Atom(rc) => Ok(rc.read().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))?.clone()),
-            other => Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "deref".into() })
-        }
-    }
-
-    #[cfg(not(feature = "legacy-atoms"))]
-    fn atom_deref(_args: Vec<Value>) -> RuntimeResult<Value> {
-        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
-    }
-
-    /// (reset! a v)
-    #[cfg(feature = "legacy-atoms")]
-    fn atom_reset(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 2 { return Err(RuntimeError::ArityMismatch { function: "reset!".into(), expected: "2".into(), actual: args.len() }); }
-        eprintln!("DEPRECATION: `reset!` is deprecated and will be removed in a future RTFS release. See docs/rtfs-2.0/specs/98-migration-plan-immutability.md");
-        match &args[0] {
-            Value::Atom(rc) => { *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = args[1].clone(); Ok(args[1].clone()) }
-            other => Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "reset!".into() })
-        }
-    }
-
-    #[cfg(not(feature = "legacy-atoms"))]
-    fn atom_reset(_args: Vec<Value>) -> RuntimeResult<Value> {
-        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
-    }
-
-    /// (swap! a f & args) -> applies f to current value and args, stores result back
-    #[cfg(feature = "legacy-atoms")]
-    fn atom_swap(args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
-        if args.len() < 2 { return Err(RuntimeError::ArityMismatch { function: "swap!".into(), expected: "at least 2".into(), actual: args.len() }); }
-        eprintln!("DEPRECATION: `swap!` is deprecated and will be removed in a future RTFS release. See docs/rtfs-2.0/specs/98-migration-plan-immutability.md");
-        let (atom_val, f_val, rest) = (&args[0], &args[1], &args[2..]);
-    let rc = match atom_val { Value::Atom(rc) => rc.clone(), other => return Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "swap!".into() }) };
-    // Build call args current, rest...
-    let current = rc.read().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))?.clone();
-        let mut call_args = Vec::with_capacity(1 + rest.len());
-        call_args.push(current);
-        call_args.extend_from_slice(rest);
-        let new_val = match evaluator.call_function(f_val.clone(), &call_args, env)? {
-            ExecutionOutcome::Complete(v) => v,
-            ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'atom_swap': {}", hc.fn_symbol))),
-        };
-    *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = new_val.clone();
-        Ok(new_val)
-    }
-
-    #[cfg(not(feature = "legacy-atoms"))]
-    fn atom_swap(_args: Vec<Value>, _evaluator: &Evaluator, _env: &mut Environment) -> RuntimeResult<Value> {
-        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
-    }
+    // Removed all atom functions - use host state capabilities instead
+    // Migrate from: (atom 0), (deref atom), (reset! atom val), (swap! atom f args)
+    // Migrate to: (call :ccos.state.kv.get {...}), (call :ccos.state.kv.put {...}),
+    //             (call :ccos.state.counter.inc {...})
 
     /// Stub for coordinate-work to satisfy tests until full impl exists
     fn coordinate_work_stub(args: Vec<Value>) -> RuntimeResult<Value> {
