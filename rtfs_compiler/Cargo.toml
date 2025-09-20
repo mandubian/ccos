@@ -123,6 +123,9 @@ axum = { version = "0.7", features = ["ws"] }
 tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
 tower-http = { version = "0.5", features = ["fs"] }
 
+# Redis for host state services
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 wat = "1.0"
