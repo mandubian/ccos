@@ -112,9 +112,9 @@
 
 ;; Parallel with shared state via host capabilities
 (parallel
-  [inc1 (call :ccos.state.counter.inc {:key "parallel-counter" :increment 1})]
-  [inc2 (call :ccos.state.counter.inc {:key "parallel-counter" :increment 1})]
-  [inc3 (call :ccos.state.counter.inc {:key "parallel-counter" :increment 1})])
+  [inc1 (call :ccos.state.counter.inc "parallel-counter" 1)]
+  [inc2 (call :ccos.state.counter.inc "parallel-counter" 1)]
+  [inc3 (call :ccos.state.counter.inc "parallel-counter" 1)])
 ;; Expected: Concurrent increments via host-backed counter
 
 ;; Parallel with timeout (if supported)
@@ -126,9 +126,9 @@
 
 ;; Parallel execution order independence via host-backed logging
 (parallel
-  [task1 (do (call :ccos.state.event.append {:key "parallel-log" :event "task1"}) 1)]
-  [task2 (do (call :ccos.state.event.append {:key "parallel-log" :event "task2"}) 2)]
-  [task3 (do (call :ccos.state.event.append {:key "parallel-log" :event "task3"}) 3)])
+  [task1 (do (call :ccos.state.event.append "parallel-log" "task1") 1)]
+  [task2 (do (call :ccos.state.event.append "parallel-log" "task2") 2)]
+  [task3 (do (call :ccos.state.event.append "parallel-log" "task3") 3)])
 ;; Expected: [1 2 3] with log order varying via host-backed event logging
 
 ;; Edge case: Single parallel task

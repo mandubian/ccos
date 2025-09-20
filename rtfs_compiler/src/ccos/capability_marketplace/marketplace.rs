@@ -891,7 +891,11 @@ impl CapabilityMarketplace {
             m
         } else {
             let registry = self.capability_registry.read().await;
-            let args = vec![inputs.clone()];
+            // Extract arguments from the input Value::List if it's a list, otherwise wrap in vector
+            let args = match inputs {
+                Value::List(list) => list.clone(),
+                _ => vec![inputs.clone()],
+            };
             // For marketplace fallback, use a controlled runtime context
             let runtime_context = RuntimeContext::controlled(vec![id.to_string()]);
             return registry.execute_capability_with_microvm(id, args, Some(&runtime_context));
