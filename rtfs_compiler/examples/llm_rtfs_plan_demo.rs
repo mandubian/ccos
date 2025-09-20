@@ -49,7 +49,7 @@ fn render_value_compact(v: &Value) -> String {
         Value::Timestamp(t) => format!("#timestamp(\"{}\")", t),
         Value::Uuid(u) => format!("#uuid(\"{}\")", u),
         Value::ResourceHandle(rh) => format!("#resource-handle(\"{}\")", rh),
-        Value::Atom(_) => "#<atom>".to_string(),
+        // Value::Atom removed - use host capabilities for state instead
         Value::Symbol(s) => s.0.clone(),
         Value::Keyword(k) => format!(":{}", k.0),
         Value::Vector(vec) => {
