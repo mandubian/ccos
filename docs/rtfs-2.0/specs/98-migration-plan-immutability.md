@@ -1,7 +1,7 @@
 
 # Migration plan: Pure RTFS runtime, effects delegated to Host (feature-gated, reversible)
 
-Status: Proposed — conservative/staged
+Status: In Progress — Phase 2 Complete, Ready for Phase 3
 Audience: RTFS compiler/runtime owners, maintainers, release managers
 Related: `docs/rtfs-2.0/specs-new/07-immutability-and-state.md`
 
