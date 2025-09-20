@@ -2005,7 +2005,7 @@ impl IrRuntime {
             "conj", "cons", "concat", "reverse",
             "map", "filter", "reduce", "sort",
             "str", "string?", "keyword?", "symbol?", "number?", "int?", "float?", "bool?", "nil?", "fn?", "vector?", "map?",
-            "vector", "hash-map", "atom", "deref", "reset!", "swap!",
+            "vector", "hash-map", // Removed: atom, deref, reset!, swap!
             "range", "take", "drop", "distinct", "partition",
             "some?", "every?", "contains?", "find",
             "merge", "update", "get-in", "assoc!",
