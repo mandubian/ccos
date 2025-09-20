@@ -198,8 +198,8 @@ mod tests {
     async fn test_mock_state_provider_cas_operations() {
         let provider = MockStateProvider::new();
         let key = "cas-test";
-        let initial_value = Value::Number(42.0);
-        let new_value = Value::Number(84.0);
+        let initial_value = Value::Integer(42);
+        let new_value = Value::Integer(84);
         
         // CAS with None (key doesn't exist) should succeed
         let result = provider.kv_cas_put(key, None, initial_value.clone()).await.unwrap();
@@ -209,10 +209,10 @@ mod tests {
         // CAS with correct expected value should succeed
         let result = provider.kv_cas_put(key, Some(initial_value), new_value.clone()).await.unwrap();
         assert!(result);
-        assert_eq!(provider.kv_get(key).await.unwrap(), Some(new_value));
+        assert_eq!(provider.kv_get(key).await.unwrap(), Some(new_value.clone()));
         
         // CAS with wrong expected value should fail
-        let result = provider.kv_cas_put(key, Some(Value::Number(100.0)), Value::Number(200.0)).await.unwrap();
+        let result = provider.kv_cas_put(key, Some(Value::Integer(100)), Value::Integer(200)).await.unwrap();
         assert!(!result);
         assert_eq!(provider.kv_get(key).await.unwrap(), Some(new_value));
     }

@@ -175,36 +175,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn test_effect_request_creation() {
-        // Test creating an EffectRequest for a counter increment
-        let security_context = RuntimeContext::pure();
-        let causal_context = CausalContext {
-            intent_id: Some("intent-123".to_string()),
-            step_id: Some("step-456".to_string()),
-            plan_id: None,
-        };
-
-        let effect_request = EffectRequest {
-            capability_id: "ccos.counter:v1.inc".to_string(),
-            input_payload: json!({"key": "my-counter", "increment": 1}),
-            security_context,
-            causal_context: Some(causal_context),
-            timeout_ms: Some(5000),
-            idempotency_key: Some("inc-counter-123".to_string()),
-            metadata: None,
-        };
-
-        // Verify the EffectRequest was created correctly
-        assert_eq!(effect_request.capability_id, "ccos.counter:v1.inc");
-        assert_eq!(effect_request.timeout_ms, Some(5000));
-        assert_eq!(effect_request.idempotency_key, Some("inc-counter-123".to_string()));
-
-        if let Some(context) = &effect_request.causal_context {
-            assert_eq!(context.intent_id, Some("intent-123".to_string()));
-            assert_eq!(context.step_id, Some("step-456".to_string()));
-        }
-    }
+    // Note: EffectRequest and CausalContext tests removed as these types are no longer available
+    // when effect-boundary feature is disabled
 
     #[test]
     fn test_execution_outcome_with_effect_request() {
