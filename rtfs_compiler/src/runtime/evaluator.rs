@@ -1893,6 +1893,8 @@ impl Evaluator {
         // and existing code that relies on `set!`. Otherwise, return the
         // canonical runtime error to forbid mutation inside the pure runtime.
         if cfg!(feature = "legacy-atoms") {
+            // Emit deprecation warning for set! usage
+            eprintln!("DEPRECATION: `set!` is deprecated and will be removed in RTFS 2.0. Use immutable data structures or host-managed state instead. See docs/rtfs-2.0/specs/98-migration-plan-immutability.md");
             // Expect (set! sym expr)
             if args.len() != 2 {
                 return Err(RuntimeError::ArityMismatch {
@@ -2231,6 +2233,7 @@ impl Evaluator {
             match self.eval_expr(binding, env)? {
                 ExecutionOutcome::Complete(v) => bindings_vec.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                ExecutionOutcome::RequiresHostEffect(_) => todo!(),
             }
         }
 
@@ -2268,6 +2271,7 @@ impl Evaluator {
         match self.for_nest(&pairs, 0, env, &for_expr.body, &mut out)? {
             ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(out))),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
         }
     }
     fn for_nest(&self, pairs: &[(Symbol, Vec<Value>)], depth: usize, env: &Environment, body: &Expression, out: &mut Vec<Value>) -> Result<ExecutionOutcome, RuntimeError> {
@@ -2280,6 +2284,7 @@ impl Evaluator {
                     return Ok(ExecutionOutcome::Complete(Value::Nil));
                 }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                ExecutionOutcome::RequiresHostEffect(_) => todo!(),
             }
         }
         let (sym, items) = &pairs[depth];
@@ -2289,6 +2294,7 @@ impl Evaluator {
             match self.for_nest(pairs, depth + 1, &loop_env, body, out)? {
                 ExecutionOutcome::Complete(_) => (),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                ExecutionOutcome::RequiresHostEffect(_) => todo!(),
             }
         }
         Ok(ExecutionOutcome::Complete(Value::Nil))
@@ -2308,6 +2314,7 @@ impl Evaluator {
         let value_to_match = match self.eval_expr(&args[0], env)? {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
         };
 
         // Remaining arguments are pattern-body pairs
@@ -2399,6 +2406,7 @@ impl Evaluator {
         let init_val = match self.eval_expr(&binding_vec[2], env)? {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
         };
 
         // Create a new environment scope with the variable bound
@@ -2409,6 +2417,7 @@ impl Evaluator {
         match self.eval_expr(&args[1], &mut resource_env)? {
             ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
         }
     }
 
@@ -3084,6 +3093,7 @@ impl Evaluator {
                     )? {
                         ExecutionOutcome::Complete(v) => result.push(v),
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        ExecutionOutcome::RequiresHostEffect(_) => todo!(),
                     }
                 }
                 Value::Function(Function::Native(native_func)) => {
