@@ -2193,8 +2193,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => bindings_vec.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                 #[cfg(feature = "effect-boundary")]
-                #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+                ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
             }
         }
 
@@ -2233,7 +2232,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(out))),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+            ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
         }
     }
     fn for_nest(&self, pairs: &[(Symbol, Vec<Value>)], depth: usize, env: &Environment, body: &Expression, out: &mut Vec<Value>) -> Result<ExecutionOutcome, RuntimeError> {
@@ -2247,8 +2246,7 @@ impl Evaluator {
                 }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                 #[cfg(feature = "effect-boundary")]
-                #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+                ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
             }
         }
         let (sym, items) = &pairs[depth];
@@ -2259,8 +2257,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(_) => (),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                 #[cfg(feature = "effect-boundary")]
-                #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+                ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
             }
         }
         Ok(ExecutionOutcome::Complete(Value::Nil))
@@ -2281,7 +2278,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+            ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
         };
 
         // Remaining arguments are pattern-body pairs
@@ -2374,7 +2371,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+            ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
         };
 
         // Create a new environment scope with the variable bound
@@ -2386,7 +2383,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+            ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
         }
     }
 
@@ -3063,8 +3060,7 @@ impl Evaluator {
                         ExecutionOutcome::Complete(v) => result.push(v),
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
                     }
                 }
                 Value::Function(Function::Native(native_func)) => {

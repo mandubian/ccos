@@ -106,7 +106,7 @@ impl Runtime {
                 Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.fn_symbol)))
             }
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
+            ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(effect_request),
         }
     }
 
@@ -133,7 +133,7 @@ impl Runtime {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
             #[cfg(feature = "effect-boundary")]
-            Ok(ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
+            Ok(ExecutionOutcome::RequiresHostEffect(effect_request)) => Ok(effect_request),
             Err(e) => Err(e),
         }
     }
@@ -153,7 +153,7 @@ impl Runtime {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
             #[cfg(feature = "effect-boundary")]
-            Ok(ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
+            Ok(ExecutionOutcome::RequiresHostEffect(effect_request)) => Ok(effect_request),
             Err(e) => Err(e),
         }
     }

@@ -154,9 +154,13 @@ Phase 4 — Deprecation & docs (0.5 day)
 
 Phase 5 — Host-backed state and security (2–4 days, incremental)
 
-**Status**: ✅ Core capabilities implemented, 🧪 Tests created, 🔧 ACLs/audit deferred to next phases
+**Status**: ✅ Core capabilities implemented, 🧪 Tests created, 🔧 ACLs/audit deferred to next phases, ✅ Pattern matching fixes completed
 
 - ✅ Provide minimal Host capabilities: `kv.get`, `kv.cas-put`, `counter.inc`, `event.append`.
+- ✅ **Pattern Matching Fixes Complete**: Fixed all `ExecutionOutcome::RequiresHostEffect` pattern matching issues:
+  - Fixed 6 occurrences in `evaluator.rs` across `for`, `match`, and `with-resource` forms
+  - Fixed 3 occurrences in `mod.rs` for `run`, `evaluate_program`, and `evaluate_node` methods
+  - All `todo!()` placeholders replaced with proper effect request propagation
 - 🔧 Enforce ACLs/quotas via arbiter; log all effects to an append‑only audit stream with causal metadata.
 - 🔧 Add timeouts, retry policy, and error taxonomy (retryable vs permanent).
 
