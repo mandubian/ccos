@@ -34,6 +34,7 @@ impl CapabilityRegistry {
 		registry.register_io_capabilities();
 		registry.register_network_capabilities();
 		registry.register_agent_capabilities();
+		registry.register_state_capabilities();
 
 		registry
 	}
@@ -243,7 +244,58 @@ impl CapabilityRegistry {
 			},
 		);
 	}
-    
+
+	/// Register host-backed state capabilities that replace atoms
+	fn register_state_capabilities(&mut self) {
+		// Key-value store operations
+		self.capabilities.insert(
+			"ccos.state.kv.get".to_string(),
+			Capability {
+				id: "ccos.state.kv.get".to_string(),
+				arity: Arity::Fixed(1),
+				func: Arc::new(|args| Self::kv_get_capability(args)),
+			},
+		);
+
+		self.capabilities.insert(
+			"ccos.state.kv.put".to_string(),
+			Capability {
+				id: "ccos.state.kv.put".to_string(),
+				arity: Arity::Fixed(2),
+				func: Arc::new(|args| Self::kv_put_capability(args)),
+			},
+		);
+
+		self.capabilities.insert(
+			"ccos.state.kv.cas-put".to_string(),
+			Capability {
+				id: "ccos.state.kv.cas-put".to_string(),
+				arity: Arity::Fixed(3), // key, expected_value, new_value
+				func: Arc::new(|args| Self::kv_cas_put_capability(args)),
+			},
+		);
+
+		// Counter operations
+		self.capabilities.insert(
+			"ccos.state.counter.inc".to_string(),
+			Capability {
+				id: "ccos.state.counter.inc".to_string(),
+				arity: Arity::Variadic(1), // key, increment (default 1)
+				func: Arc::new(|args| Self::counter_inc_capability(args)),
+			},
+		);
+
+		// Event log operations
+		self.capabilities.insert(
+			"ccos.state.event.append".to_string(),
+			Capability {
+				id: "ccos.state.event.append".to_string(),
+				arity: Arity::Variadic(1), // key, event_data...
+				func: Arc::new(|args| Self::event_append_capability(args)),
+			},
+		);
+	}
+
 	pub fn get_capability(&self, id: &str) -> Option<&Capability> {
 		self.capabilities.get(id)
 	}
@@ -710,6 +762,143 @@ impl CapabilityRegistry {
 				"Cannot serialize lists to JSON (use vectors instead)".to_string(),
 			)),
 		}
+	}
+
+	/// Host-backed state capabilities implementations
+
+	/// Key-value store: get operation
+	fn kv_get_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.len() != 1 {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.kv.get".to_string(),
+				expected: "1".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "kv.get".to_string(),
+			}),
+		};
+
+		// In a real implementation, this would call the host state service
+		// For now, return a placeholder
+		eprintln!("HOST_CALL: kv.get({}) - Would retrieve from host state store", key);
+		Ok(Value::String(format!("mock-value-for-{}", key)))
+	}
+
+	/// Key-value store: put operation
+	fn kv_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.len() != 2 {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.kv.put".to_string(),
+				expected: "2".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "kv.put".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: kv.put({}, <value>) - Would store in host state store", key);
+		Ok(Value::Boolean(true))
+	}
+
+	/// Key-value store: compare-and-swap operation
+	fn kv_cas_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.len() != 3 {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.kv.cas-put".to_string(),
+				expected: "3".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "kv.cas-put".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: kv.cas-put({}, <expected>, <new>) - Would CAS in host state store", key);
+		Ok(Value::Boolean(true)) // Mock success
+	}
+
+	/// Counter: increment operation
+	fn counter_inc_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.is_empty() {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.counter.inc".to_string(),
+				expected: "at least 1".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "counter.inc".to_string(),
+			}),
+		};
+
+		let increment = if args.len() > 1 {
+			match &args[1] {
+				Value::Integer(i) => *i as i64,
+				_ => return Err(RuntimeError::TypeError {
+					expected: "integer".to_string(),
+					actual: args[1].type_name().to_string(),
+					operation: "counter.inc".to_string(),
+				}),
+			}
+		} else {
+			1i64 // Default increment
+		};
+
+		eprintln!("HOST_CALL: counter.inc({}, {}) - Would increment counter in host", key, increment);
+		Ok(Value::Integer(42i64)) // Mock result
+	}
+
+	/// Event log: append operation
+	fn event_append_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.is_empty() {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.event.append".to_string(),
+				expected: "at least 1".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "event.append".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: event.append({}, <event-data>) - Would append to event log", key);
+		Ok(Value::Boolean(true))
 	}
 }
 

@@ -16,7 +16,72 @@ pub mod effect_boundary_demo {
     use super::*;
     use serde_json::json;
 
+    #[cfg(feature = "effect-boundary")]
+    #[test]
+    fn test_host_capabilities_integration() {
+        // Test that the state capabilities are registered and working
+        let registry = crate::ccos::capabilities::registry::CapabilityRegistry::new();
+
+        // Test that all 5 state capabilities are registered
+        assert!(registry.get_capability("ccos.state.kv.get").is_some());
+        assert!(registry.get_capability("ccos.state.kv.put").is_some());
+        assert!(registry.get_capability("ccos.state.kv.cas-put").is_some());
+        assert!(registry.get_capability("ccos.state.counter.inc").is_some());
+        assert!(registry.get_capability("ccos.state.event.append").is_some());
+
+        println!("✅ All 5 host-backed state capabilities are registered");
+    }
+
+    #[cfg(feature = "effect-boundary")]
+    #[test]
+    fn test_kv_get_capability_demo() {
+        let args = vec![Value::String("test-key".to_string())];
+        let result = kv_get_capability(args);
+
+        match result {
+            Ok(Value::String(s)) => {
+                assert!(s.starts_with("mock-value-for-"));
+                println!("✅ kv.get capability works: {}", s);
+            }
+            Ok(_) => panic!("Expected string result"),
+            Err(e) => panic!("kv.get failed: {:?}", e),
+        }
+    }
+
+    #[cfg(feature = "effect-boundary")]
+    #[test]
+    fn test_counter_inc_capability_demo() {
+        let args = vec![Value::String("test-counter".to_string()), Value::Integer(5)];
+        let result = counter_inc_capability(args);
+
+        match result {
+            Ok(Value::Integer(n)) => {
+                assert_eq!(n, 42); // Mock result
+                println!("✅ counter.inc capability works: returned {}", n);
+            }
+            Ok(_) => panic!("Expected integer result"),
+            Err(e) => panic!("counter.inc failed: {:?}", e),
+        }
+    }
+
+    #[cfg(feature = "effect-boundary")]
+    #[test]
+    fn test_event_append_capability_demo() {
+        let args = vec![Value::String("test-log".to_string())];
+        let result = event_append_capability(args);
+
+        match result {
+            Ok(Value::Boolean(b)) => {
+                assert_eq!(b, true);
+                println!("✅ event.append capability works: returned {}", b);
+            }
+            Ok(_) => panic!("Expected boolean result"),
+            Err(e) => panic!("event.append failed: {:?}", e),
+        }
+    }
+
     /// Demonstration function showing the effect boundary in action
+    #[cfg(feature = "effect-boundary")]
     pub fn demonstrate_effect_boundary() -> Result<(), Box<dyn std::error::Error>> {
         println!("🎯 RTFS Effect Boundary Demonstration");
         println!("====================================");

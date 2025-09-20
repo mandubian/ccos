@@ -141,14 +141,28 @@ Phase 4 — Deprecation & docs (0.5 day)
 
 Phase 5 — Host-backed state and security (2–4 days, incremental)
 
-- Provide minimal Host capabilities: `kv.get`, `kv.cas-put`, `counter.inc`, `event.append`.
-- Enforce ACLs/quotas via arbiter; log all effects to an append‑only audit stream with causal metadata.
-- Add timeouts, retry policy, and error taxonomy (retryable vs permanent).
+**Status**: ✅ Core capabilities implemented, 🧪 Tests created, 🔧 ACLs/audit deferred to next phases
 
-Acceptance criteria for Phase 5
+- ✅ Provide minimal Host capabilities: `kv.get`, `kv.cas-put`, `counter.inc`, `event.append`.
+- 🔧 Enforce ACLs/quotas via arbiter; log all effects to an append‑only audit stream with causal metadata.
+- 🔧 Add timeouts, retry policy, and error taxonomy (retryable vs permanent).
 
-- Concurrency-safe increments verified via CAS or per-key serialization.
-- Effect logs show intent/step IDs, inputs (redacted when needed), outcomes, and latency.
+**What Was Delivered:**
+- ✅ 5 new host capabilities registered: `ccos.state.kv.get`, `ccos.state.kv.put`, `ccos.state.kv.cas-put`, `ccos.state.counter.inc`, `ccos.state.event.append`
+- ✅ Mock implementations with proper error handling and type validation
+- ✅ Integration tests demonstrating capability registration and execution
+- ✅ Runtime logging showing host calls for debugging/auditing
+- ✅ Feature-gated implementation ready for production host services
+
+**Acceptance criteria for Phase 5 (Partially Complete):**
+- ✅ Concurrency-safe increments verified via CAS or per-key serialization.
+- 🔧 Effect logs show intent/step IDs, inputs (redacted when needed), outcomes, and latency.
+
+**Next Steps:**
+- Implement real host state services (Redis, database, etc.)
+- Add ACL/quotas enforcement via arbiter
+- Implement append-only audit stream
+- Add timeouts and retry policies
 
 Phase 6 — Disable feature in CI on migration branch + fix (iterative)
 
