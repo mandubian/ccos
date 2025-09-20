@@ -593,15 +593,7 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Reset! mutation function
-            env.define(
-                &Symbol("reset!".to_string()),
-                Value::Function(Function::Builtin(BuiltinFunction {
-                    name: "reset!".to_string(),
-                    arity: Arity::Fixed(2),
-                    func: Arc::new(Self::reset_bang),
-                })),
-            ); // Reset! mutation function (gated by legacy-atoms; non-legacy builds return canonical error)
+        // Removed reset! - use host state capabilities instead
 
         // Dissoc function
         env.define(
@@ -1994,34 +1986,7 @@ impl SecureStandardLibrary {
         Ok(Value::Vector(result))
     }
 
-    #[cfg(feature = "legacy-atoms")]
-    fn reset_bang(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "reset!".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Atom(atom_ref) => {
-                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                *atom_guard = args[1].clone();
-                Ok(Value::Nil)
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "atom".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "reset!".to_string(),
-            })
-        }
-    }
-
-    #[cfg(not(feature = "legacy-atoms"))]
-    fn reset_bang(_args: Vec<Value>) -> RuntimeResult<Value> {
-        Err(RuntimeError::Generic("Atom primitives have been removed in this build. Enable the `legacy-atoms` feature to restore them or migrate code to the new immutable APIs.".to_string()))
-    }
+    // Removed reset_bang - use host state capabilities instead
 
     #[cfg(feature = "legacy-atoms")]
     fn assoc_bang(args: Vec<Value>) -> RuntimeResult<Value> {

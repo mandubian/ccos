@@ -22,7 +22,7 @@ pub enum Value {
     Timestamp(String),
     Uuid(String),
     ResourceHandle(String),
-    /// Mutable reference type used by atom/deref/reset!/swap!
+    /// Removed atom functionality - use host state capabilities instead
     Symbol(Symbol),
     Keyword(Keyword),
     Vector(Vec<Value>),

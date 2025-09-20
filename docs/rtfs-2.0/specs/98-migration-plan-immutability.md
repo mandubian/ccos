@@ -24,7 +24,7 @@ Plan overview (high level) - AGGRESSIVE APPROACH
 
 1. **COMPLETE REMOVAL** - Remove all atom-related code entirely:
    - Remove `Value::Atom` variant from Value enum
-   - Remove all atom stdlib functions (`atom`, `deref`, `reset!`, `swap!`)
+   - Remove all atom stdlib functions (`atom`, `deref`, `reset!`, `swap!`) - ALL REMOVED
    - Remove `set!` special form evaluation
    - Remove all legacy feature flags
 2. **MANDATORY HOST CAPABILITIES** - Force all stateful operations through host:
@@ -102,7 +102,7 @@ Atoms represent mutable state, which conflicts with RTFS 2.0's pure functional m
 
 #### 3. Coordination → Effect Boundary
 ```clojure
-; OLD: (atom false) then (reset! atom true)
+; OLD: (atom false) then (reset! atom true) - BOTH REMOVED
 ; NEW: Use structured effect calls
 (call :ccos.flag:set {:flag "processing-complete" :value true})
 ```
@@ -147,10 +147,10 @@ Phase 4 — Deprecation & docs (0.5 day)
 - ✅ Add runtime deprecation warnings with clear migration guidance.
 - ✅ Update migration plan with comprehensive migration strategies.
 
-**Added Deprecation Warnings:**
-- `atom`, `deref`, `reset!`, `swap!` - All emit runtime warnings when used
-- `set!` - Special form now emits deprecation warning
-- Migration guide with concrete examples provided
+**Aggressive Removal Completed:**
+- ✅ `atom`, `deref`, `reset!`, `swap!` - ALL REMOVED ENTIRELY
+- ✅ `set!` - Special form removed completely
+- ✅ Migration guide with concrete examples provided
 
 Phase 5 — Host-backed state and security (2–4 days, incremental)
 
@@ -230,7 +230,7 @@ I will not change code beyond updating docs/branch metadata until you confirm wh
 
 ### **What Was Removed:**
 - ✅ `Value::Atom` variant entirely
-- ✅ All atom stdlib functions: `atom`, `deref`, `reset!`, `swap!`
+- ✅ All atom stdlib functions: `atom`, `deref`, `reset!`, `swap!` - ALL REMOVED
 - ✅ `set!` special form evaluation
 - ✅ `legacy-atoms` feature flag
 - ✅ All deprecation warnings and compatibility shims
@@ -245,6 +245,7 @@ I will not change code beyond updating docs/branch metadata until you confirm wh
 ```clojure
 ; OLD (no longer works):
 (atom 0)
+(reset! atom new-val)
 (swap! atom inc)
 
 ; NEW (required):
