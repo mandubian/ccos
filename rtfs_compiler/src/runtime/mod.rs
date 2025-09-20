@@ -32,6 +32,8 @@ pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
 pub use execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
+#[cfg(feature = "effect-boundary")]
+pub use execution_outcome::{EffectRequest, CausalContext};
 pub use security::RuntimeContext;
 pub use capabilities::*;
 
@@ -103,6 +105,8 @@ impl Runtime {
             ExecutionOutcome::RequiresHost(host_call) => {
                 Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.fn_symbol)))
             }
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHostEffect(_) => todo!(),
         }
     }
 
@@ -128,6 +132,8 @@ impl Runtime {
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            #[cfg(feature = "effect-boundary")]
+            Ok(ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
             Err(e) => Err(e),
         }
     }
@@ -146,6 +152,8 @@ impl Runtime {
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            #[cfg(feature = "effect-boundary")]
+            Ok(ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
             Err(e) => Err(e),
         }
     }

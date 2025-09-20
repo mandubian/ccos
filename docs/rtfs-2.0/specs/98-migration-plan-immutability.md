@@ -1,22 +1,35 @@
 
 # Migration plan: Pure RTFS runtime, effects delegated to Host (feature-gated, reversible)
 
-Status: In Progress — Phase 4 Complete, Ready for Phase 5
+Status: AGGRESSIVE MIGRATION — Phase 5 Complete, Legacy Atoms REMOVED
 Audience: RTFS compiler/runtime owners, maintainers, release managers
 Related: `docs/rtfs-2.0/specs-new/07-immutability-and-state.md`
 
 Goal
 
-Make the RTFS runtime pure/deterministic and delegate all effects and mutations to the Host via explicit capability calls and continuations. Maintain a feature-gated, deprecation-first path for legacy atom semantics to keep migration safe and reversible.
+Make the RTFS runtime pure/deterministic and delegate all effects and mutations to the Host via explicit capability calls and continuations. **AGGRESSIVE APPROACH**: Remove all legacy atom semantics entirely - force migration to host-based state management for maximum efficiency and purity.
 
 Rationale
 
-The previous aggressive removal plan reduces time-to-completion but increases review and rollback complexity. This staged plan trades elapsed time for safety: each step is reviewable, reversible, and keeps the tree usable.
+**AGGRESSIVE APPROACH**: We prioritize efficiency and purity over backward compatibility. This approach:
 
-Plan overview (high level)
+- **Forces immediate migration** to the new immutable model
+- **Reduces maintenance burden** of supporting legacy code paths
+- **Ensures pure functional programming** throughout the system
+- **Provides clear migration path** to host-based state management
 
-1. Discovery & inventory — find every use of `atom`, `set!`, `deref`, `reset!`, `swap!`, `Value::Atom` and reader-macro `@`.
-2. Feature-gate legacy atoms — keep legacy behavior behind `legacy-atoms` while default builds forbid mutation with a clear error.
+The trade-off: Higher upfront migration effort for maximum long-term benefits in system purity and maintainability.
+
+Plan overview (high level) - AGGRESSIVE APPROACH
+
+1. **COMPLETE REMOVAL** - Remove all atom-related code entirely:
+   - Remove `Value::Atom` variant from Value enum
+   - Remove all atom stdlib functions (`atom`, `deref`, `reset!`, `swap!`)
+   - Remove `set!` special form evaluation
+   - Remove all legacy feature flags
+2. **MANDATORY HOST CAPABILITIES** - Force all stateful operations through host:
+   - Provide host capabilities: `kv.get`, `kv.put`, `counter.inc`, `event.append`
+   - Make host calls the ONLY way to do stateful operations
 3. Introduce Host effect boundary — standardize ExecutionOutcome::RequiresHost(effect_request) and a typed effect_request schema.
 4. Add continuations — make evaluation resumable after Host completes an effect (sync first, async later).
 5. Provide Host-backed state primitives — versioned KV + CAS, counters, log/event append, all with ACLs and audit logs.
