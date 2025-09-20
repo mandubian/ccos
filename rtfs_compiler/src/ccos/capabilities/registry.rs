@@ -11,7 +11,6 @@ use crate::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use crate::ast::Keyword;
 use std::collections::HashMap;
 use std::sync::Arc;
-use redis::{Client, Connection, Commands};
 
 /// Registry of CCOS capabilities that require special execution
 pub struct CapabilityRegistry {
@@ -19,25 +18,15 @@ pub struct CapabilityRegistry {
 	providers: HashMap<String, Box<dyn CapabilityProvider>>, // Pluggable providers
 	microvm_factory: MicroVMFactory,
 	microvm_provider: Option<String>,
-	redis_client: Option<Client>, // Redis connection for state services
 }
 
 impl CapabilityRegistry {
 	pub fn new() -> Self {
-		let redis_client = match std::env::var("REDIS_URL") {
-			Ok(url) => Client::open(url).ok(),
-			Err(_) => {
-				eprintln!("WARNING: REDIS_URL not set, state capabilities will use mock implementations");
-				None
-			}
-		};
-
 		let mut registry = Self {
 			capabilities: HashMap::new(),
 			providers: HashMap::new(),
 			microvm_factory: MicroVMFactory::new(),
 			microvm_provider: None,
-			redis_client,
 		};
 
 		// Register system capabilities
@@ -54,29 +43,16 @@ impl CapabilityRegistry {
 		self.providers.insert(provider_id.to_string(), provider);
 	}
 
-	/// Get Redis connection if available
-	fn get_redis_connection(&self) -> RuntimeResult<Option<Connection>> {
-		match &self.redis_client {
-			Some(client) => {
-				let conn = client.get_connection()
-					.map_err(|e| RuntimeError::Generic(format!("Redis connection failed: {}", e)))?;
-				Ok(Some(conn))
-			}
-			None => Ok(None)
-		}
-	}
-
 	/// Get a provider by ID
 	pub fn get_provider(&self, provider_id: &str) -> Option<&Box<dyn CapabilityProvider>> {
 		self.providers.get(provider_id)
 	}
-    
-	/// Get all registered capabilities
-	pub fn get_capabilities(&self) -> &HashMap<String, Capability> {
-		&self.capabilities
+	
+	pub fn list_providers(&self) -> Vec<&str> {
+		self.providers.keys().map(|k| k.as_str()).collect()
 	}
-    
-	fn register_system_capabilities(&mut self) {
+
+	pub fn register_system_capabilities(&mut self) {
 		// Environment access capability
 		self.capabilities.insert(
 			"ccos.system.get-env".to_string(),
@@ -276,7 +252,7 @@ impl CapabilityRegistry {
 			Capability {
 				id: "ccos.state.kv.get".to_string(),
 				arity: Arity::Fixed(1),
-				func: Arc::new(|args| self.kv_get_capability(args)),
+				func: Arc::new(|args| Self::kv_get_capability(args)),
 			},
 		);
 
@@ -285,7 +261,7 @@ impl CapabilityRegistry {
 			Capability {
 				id: "ccos.state.kv.put".to_string(),
 				arity: Arity::Fixed(2),
-				func: Arc::new(|args| self.kv_put_capability(args)),
+				func: Arc::new(|args| Self::kv_put_capability(args)),
 			},
 		);
 
@@ -294,7 +270,7 @@ impl CapabilityRegistry {
 			Capability {
 				id: "ccos.state.kv.cas-put".to_string(),
 				arity: Arity::Fixed(3), // key, expected_value, new_value
-				func: Arc::new(|args| self.kv_cas_put_capability(args)),
+				func: Arc::new(|args| Self::kv_cas_put_capability(args)),
 			},
 		);
 
@@ -304,7 +280,7 @@ impl CapabilityRegistry {
 			Capability {
 				id: "ccos.state.counter.inc".to_string(),
 				arity: Arity::Variadic(1), // key, increment (default 1)
-				func: Arc::new(|args| self.counter_inc_capability(args)),
+				func: Arc::new(|args| Self::counter_inc_capability(args)),
 			},
 		);
 
@@ -314,7 +290,7 @@ impl CapabilityRegistry {
 			Capability {
 				id: "ccos.state.event.append".to_string(),
 				arity: Arity::Variadic(1), // key, event_data...
-				func: Arc::new(|args| self.event_append_capability(args)),
+				func: Arc::new(|args| Self::event_append_capability(args)),
 			},
 		);
 	}
@@ -786,10 +762,10 @@ impl CapabilityRegistry {
 		}
 	}
 
-	/// Host-backed state capabilities implementations
+	/// Host-backed state capabilities implementations (mock-only for now)
 
 	/// Key-value store: get operation
-	fn kv_get_capability(&self, args: Vec<Value>) -> RuntimeResult<Value> {
+	fn kv_get_capability(args: Vec<Value>) -> RuntimeResult<Value> {
 		if args.len() != 1 {
 			return Err(RuntimeError::ArityMismatch {
 				function: "ccos.state.kv.get".to_string(),
@@ -808,25 +784,12 @@ impl CapabilityRegistry {
 			}),
 		};
 
-		// Try Redis first, fall back to mock if not available
-		match self.get_redis_connection() {
-			Ok(Some(mut conn)) => {
-				let result: Option<String> = conn.get(&key)
-					.map_err(|e| RuntimeError::Generic(format!("Redis GET failed: {}", e)))?;
-				match result {
-					Some(value) => Ok(Value::String(value)),
-					None => Ok(Value::Nil),
-				}
-			}
-			_ => {
-				eprintln!("HOST_CALL: kv.get({}) - Redis not available, using mock", key);
-				Ok(Value::String(format!("mock-value-for-{}", key)))
-			}
-		}
+		eprintln!("HOST_CALL: kv.get({}) - mock", key);
+		Ok(Value::String(format!("mock-value-for-{}", key)))
 	}
 
 	/// Key-value store: put operation
-	fn kv_put_capability(&self, args: Vec<Value>) -> RuntimeResult<Value> {
+	fn kv_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
 		if args.len() != 2 {
 			return Err(RuntimeError::ArityMismatch {
 				function: "ccos.state.kv.put".to_string(),
@@ -845,33 +808,12 @@ impl CapabilityRegistry {
 			}),
 		};
 
-		let value = match &args[1] {
-			Value::String(s) => s.clone(),
-			Value::Integer(i) => i.to_string(),
-			Value::Boolean(b) => b.to_string(),
-			_ => return Err(RuntimeError::TypeError {
-				expected: "string, integer, or boolean".to_string(),
-				actual: args[1].type_name().to_string(),
-				operation: "kv.put".to_string(),
-			}),
-		};
-
-		// Try Redis first, fall back to mock if not available
-		match self.get_redis_connection() {
-			Ok(Some(mut conn)) => {
-				let result: String = conn.set(&key, &value)
-					.map_err(|e| RuntimeError::Generic(format!("Redis SET failed: {}", e)))?;
-				Ok(Value::Boolean(true))
-			}
-			_ => {
-				eprintln!("HOST_CALL: kv.put({}, {}) - Redis not available, using mock", key, value);
-				Ok(Value::Boolean(true))
-			}
-		}
+		eprintln!("HOST_CALL: kv.put({}, <value>) - mock", key);
+		Ok(Value::Boolean(true))
 	}
 
 	/// Key-value store: compare-and-swap operation
-	fn kv_cas_put_capability(&self, args: Vec<Value>) -> RuntimeResult<Value> {
+	fn kv_cas_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
 		if args.len() != 3 {
 			return Err(RuntimeError::ArityMismatch {
 				function: "ccos.state.kv.cas-put".to_string(),
@@ -890,58 +832,12 @@ impl CapabilityRegistry {
 			}),
 		};
 
-		let expected_value = match &args[1] {
-			Value::String(s) => s.clone(),
-			Value::Integer(i) => i.to_string(),
-			Value::Boolean(b) => b.to_string(),
-			Value::Nil => "".to_string(), // Redis uses empty string for nil
-			_ => return Err(RuntimeError::TypeError {
-				expected: "string, integer, boolean, or nil".to_string(),
-				actual: args[1].type_name().to_string(),
-				operation: "kv.cas-put".to_string(),
-			}),
-		};
-
-		let new_value = match &args[2] {
-			Value::String(s) => s.clone(),
-			Value::Integer(i) => i.to_string(),
-			Value::Boolean(b) => b.to_string(),
-			_ => return Err(RuntimeError::TypeError {
-				expected: "string, integer, or boolean".to_string(),
-				actual: args[2].type_name().to_string(),
-				operation: "kv.cas-put".to_string(),
-			}),
-		};
-
-		// Try Redis first, fall back to mock if not available
-		match self.get_redis_connection() {
-			Ok(Some(mut conn)) => {
-				// Get current value
-				let current: Option<String> = conn.get(&key)
-					.map_err(|e| RuntimeError::Generic(format!("Redis GET failed: {}", e)))?;
-
-				// Check if current value matches expected
-				let current_str = current.unwrap_or_default();
-				let matches = current_str == expected_value;
-
-				if matches {
-					// Perform the set operation
-					let result: String = conn.set(&key, &new_value)
-						.map_err(|e| RuntimeError::Generic(format!("Redis SET failed: {}", e)))?;
-					Ok(Value::Boolean(true))
-				} else {
-					Ok(Value::Boolean(false)) // CAS failed
-				}
-			}
-			_ => {
-				eprintln!("HOST_CALL: kv.cas-put({}, {}, {}) - Redis not available, using mock", key, expected_value, new_value);
-				Ok(Value::Boolean(true)) // Mock success
-			}
-		}
+		eprintln!("HOST_CALL: kv.cas-put({}, <expected>, <new>) - mock", key);
+		Ok(Value::Boolean(true))
 	}
 
 	/// Counter: increment operation
-	fn counter_inc_capability(&self, args: Vec<Value>) -> RuntimeResult<Value> {
+	fn counter_inc_capability(args: Vec<Value>) -> RuntimeResult<Value> {
 		if args.is_empty() {
 			return Err(RuntimeError::ArityMismatch {
 				function: "ccos.state.counter.inc".to_string(),
@@ -973,23 +869,12 @@ impl CapabilityRegistry {
 			1i64 // Default increment
 		};
 
-		// Try Redis first, fall back to mock if not available
-		match self.get_redis_connection() {
-			Ok(Some(mut conn)) => {
-				// Use Redis INCRBY operation
-				let new_value: i64 = conn.incr(&key, increment)
-					.map_err(|e| RuntimeError::Generic(format!("Redis INCRBY failed: {}", e)))?;
-				Ok(Value::Integer(new_value))
-			}
-			_ => {
-				eprintln!("HOST_CALL: counter.inc({}, {}) - Redis not available, using mock", key, increment);
-				Ok(Value::Integer(42i64)) // Mock result
-			}
-		}
+		eprintln!("HOST_CALL: counter.inc({}, {}) - mock", key, increment);
+		Ok(Value::Integer(42i64))
 	}
 
 	/// Event log: append operation
-	fn event_append_capability(&self, args: Vec<Value>) -> RuntimeResult<Value> {
+	fn event_append_capability(args: Vec<Value>) -> RuntimeResult<Value> {
 		if args.is_empty() {
 			return Err(RuntimeError::ArityMismatch {
 				function: "ccos.state.event.append".to_string(),
@@ -1008,28 +893,8 @@ impl CapabilityRegistry {
 			}),
 		};
 
-		// Use a simple string representation for the event data
-		let event_data = if args.len() > 1 {
-			format!("{:?}", &args[1])
-		} else {
-			"event".to_string()
-		};
-		let event_json = serde_json::to_string(&event_data)
-			.map_err(|e| RuntimeError::Generic(format!("Failed to serialize event data: {}", e)))?;
-
-		// Try Redis first, fall back to mock if not available
-		match self.get_redis_connection() {
-			Ok(Some(mut conn)) => {
-				// Use Redis LPUSH to append to the event list
-				let result: u32 = conn.lpush(&key, &event_json)
-					.map_err(|e| RuntimeError::Generic(format!("Redis LPUSH failed: {}", e)))?;
-				Ok(Value::Integer(result as i64)) // Return the new length
-			}
-			_ => {
-				eprintln!("HOST_CALL: event.append({}, <event-data>) - Redis not available, using mock", key);
-				Ok(Value::Boolean(true)) // Mock success
-			}
-		}
+		eprintln!("HOST_CALL: event.append({}, <event-data>) - mock", key);
+		Ok(Value::Boolean(true))
 	}
 }
 

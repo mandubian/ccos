@@ -154,7 +154,7 @@ Phase 4 — Deprecation & docs (0.5 day)
 
 Phase 5 — Host-backed state and security (2–4 days, incremental)
 
-**Status**: ✅ Core capabilities implemented, 🧪 Tests created, 🔧 ACLs/audit deferred to next phases, ✅ Pattern matching fixes completed, ✅ Real Redis-backed state services implemented
+**Status**: ✅ Core capabilities implemented, 🧪 Tests created, 🔧 ACLs/audit deferred to next phases, ✅ Pattern matching fixes completed
 
 - ✅ Provide minimal Host capabilities: `kv.get`, `kv.cas-put`, `counter.inc`, `event.append`.
 - ✅ **Pattern Matching Fixes Complete**: Fixed all `ExecutionOutcome::RequiresHostEffect` pattern matching issues:
@@ -166,10 +166,7 @@ Phase 5 — Host-backed state and security (2–4 days, incremental)
 
 **What Was Delivered:**
 - ✅ 5 new host capabilities registered: `ccos.state.kv.get`, `ccos.state.kv.put`, `ccos.state.kv.cas-put`, `ccos.state.counter.inc`, `ccos.state.event.append`
-- ✅ **Real Redis-backed implementations** with proper error handling and type validation
-- ✅ **Graceful fallback** to mock implementations when Redis is unavailable
-- ✅ Redis dependency added to Cargo.toml with connection manager
-- ✅ Environment variable configuration (REDIS_URL) for Redis connection
+- ✅ Mock implementations with proper error handling and type validation
 - ✅ Integration tests demonstrating capability registration and execution
 - ✅ Runtime logging showing host calls for debugging/auditing
 - ✅ Feature-gated implementation ready for production host services
