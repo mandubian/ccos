@@ -94,7 +94,7 @@ impl Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
-            max_recursion_depth: 1000,
+            max_recursion_depth: 50,
             security_context,
             host,
             special_forms: Self::default_special_forms(),
@@ -424,6 +424,17 @@ impl Evaluator {
 
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> Result<ExecutionOutcome, RuntimeError> {
+        // Check recursion depth to prevent stack overflow
+        if self.recursion_depth >= self.max_recursion_depth {
+            return Err(RuntimeError::Generic(format!(
+                "Maximum recursion depth ({}) exceeded. This usually indicates infinite recursion or deeply nested expressions.",
+                self.max_recursion_depth
+            )));
+        }
+
+        // Create a new evaluator with incremented recursion depth for recursive calls
+        let mut deeper_evaluator = self.clone();
+        deeper_evaluator.recursion_depth += 1;
 
         match expr {
             Expression::Literal(lit) => Ok(ExecutionOutcome::Complete(self.eval_literal(lit)?)),
@@ -446,12 +457,12 @@ impl Evaluator {
 
                 // It's a regular function call
                 let func_expr = &list[0];
-                match self.eval_expr(func_expr, env)? {
+                match deeper_evaluator.eval_expr(func_expr, env)? {
                     ExecutionOutcome::Complete(func_value) => {
                         // Evaluate args, aborting early if any arg requires host
                         let mut args_vec: Vec<Value> = Vec::new();
                         for e in &list[1..] {
-                            match self.eval_expr(e, env)? {
+                            match deeper_evaluator.eval_expr(e, env)? {
                                 ExecutionOutcome::Complete(av) => args_vec.push(av),
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
@@ -1418,7 +1429,9 @@ impl Evaluator {
                 let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
                 let f = guard.clone();
                 if let Value::Function(f) = f {
-                    self.call_function(Value::Function(f), args, env)
+                    let mut deeper_evaluator = self.clone();
+                    deeper_evaluator.recursion_depth += 1;
+                    deeper_evaluator.call_function(Value::Function(f), args, env)
                 } else {
                     Err(RuntimeError::InternalError(
                         "Function placeholder not resolved".to_string(),
@@ -1546,8 +1559,10 @@ impl Evaluator {
                     }
                 }
 
-                // Execute function body
-                match self.eval_expr(&closure.body, &mut func_env)? {
+                // Execute function body with incremented recursion depth
+                let mut deeper_evaluator = self.clone();
+                deeper_evaluator.recursion_depth += 1;
+                match deeper_evaluator.eval_expr(&closure.body, &mut func_env)? {
                     ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                     ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
@@ -3246,7 +3261,7 @@ impl Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
-            max_recursion_depth: 1000,
+            max_recursion_depth: 50,
             security_context,
             host,
             special_forms: Self::default_special_forms(),

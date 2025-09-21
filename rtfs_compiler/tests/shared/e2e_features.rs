@@ -6,8 +6,10 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use crate::test_helpers::*;
+use rtfs_compiler::runtime::{ModuleRegistry as RtfsModuleRegistry, IrStrategy, RuntimeStrategy as RtfsRuntimeStrategy};
 
 /// Feature test configuration for each grammar rule
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct FeatureTestConfig {
     /// Feature name (matches .rtfs filename)
@@ -37,6 +39,7 @@ enum RuntimeStrategy {
     Both,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum FeatureCategory {
     SpecialForms,     // let, if, fn, do, match, try-catch, etc.
@@ -47,6 +50,7 @@ enum FeatureCategory {
     Advanced,         // complex combinations
 }
 
+#[allow(dead_code)]
 impl FeatureTestConfig {
     fn new(feature_name: &str, category: FeatureCategory) -> Self {
         FeatureTestConfig {
@@ -167,28 +171,41 @@ fn extract_test_cases(content: &str) -> Vec<(String, String)> {
 /// Run a single test case within a feature
 fn run_test_case(
     test_code: &str,
-    expected: &str,
+    _expected: &str,
     runtime_strategy: RuntimeStrategy,
     feature_name: &str,
     case_index: usize,
 ) -> Result<String, String> {
-    // Create evaluator with proper host setup
-    let evaluator = create_full_evaluator();
-    
-    // Set up execution context for host method calls
-    // setup_execution_context is no longer needed in the new architecture
-
     // Try to parse the expression
     let expr = parse_expression(test_code)
         .map_err(|e| format!("Parse error in {}[{}]: {:?}", feature_name, case_index, e))?;
 
-    // Try to run the expression using the evaluator
-    match evaluator.evaluate(&expr) {
-        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(result)) => Ok(result.to_string()),
-        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(format!("Host call required in {}[{}]", feature_name, case_index)),
-        #[cfg(feature = "effect-boundary")]
-        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHostEffect(_)) => Err(format!("Host effect required in {}[{}]", feature_name, case_index)),
-        Err(e) => Err(format!("Runtime error in {}[{}]: {:?}", feature_name, case_index, e)),
+    match runtime_strategy {
+        RuntimeStrategy::Ast => {
+            let evaluator = create_full_evaluator();
+            match evaluator.evaluate(&expr) {
+                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(result)) => Ok(result.to_string()),
+                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(format!("Host call required in {}[{}]", feature_name, case_index)),
+                #[cfg(feature = "effect-boundary")]
+                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHostEffect(_)) => Err(format!("Host effect required in {}[{}]", feature_name, case_index)),
+                Err(e) => Err(format!("Runtime error in {}[{}]: {:?}", feature_name, case_index, e)),
+            }
+        }
+        RuntimeStrategy::Ir => {
+            // Build an IR strategy and run the expression through the IR runtime
+            let mut module_registry = RtfsModuleRegistry::new();
+            // Load stdlib to match evaluator's environment
+            if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                return Err(format!("Failed to load stdlib for IR runtime in {}[{}]: {:?}", feature_name, case_index, e));
+            }
+            let mut strategy = IrStrategy::new(module_registry);
+            match RtfsRuntimeStrategy::run(&mut strategy, &expr) {
+                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(result)) => Ok(result.to_string()),
+                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(format!("Host call required in {}[{}]", feature_name, case_index)),
+                Err(e) => Err(format!("IR runtime error in {}[{}]: {:?}", feature_name, case_index, e)),
+            }
+        }
+        RuntimeStrategy::Both => unreachable!(),
     }
 }
 
@@ -216,12 +233,7 @@ fn run_feature_tests(config: &FeatureTestConfig) -> Result<(), String> {
                 RuntimeStrategy::Ir => "IR",
                 RuntimeStrategy::Both => unreachable!(),
             };
-            // Determine whether this particular case is expected to fail for this runtime
-            let case_expected_fail = match strategy {
-                RuntimeStrategy::Ast => config.expected_fail_cases_ast.contains(&case_index),
-                RuntimeStrategy::Ir => config.expected_fail_cases_ir.contains(&case_index),
-                RuntimeStrategy::Both => unreachable!(),
-            };
+            // Determine whether this particular case is expected to fail for this runtime (handled later)
 
             // Execute the test case and then classify the result.
             let run_result = run_test_case(test_code, expected, *strategy, &config.feature_name, case_index);
