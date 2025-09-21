@@ -611,26 +611,23 @@ impl Orchestrator {
     /// Handle a host call by delegating to the appropriate CCOS component.
     #[cfg(feature = "effect-boundary")]
     async fn handle_effect_request(&self, effect_request: &crate::runtime::execution_outcome::EffectRequest) -> RuntimeResult<Value> {
-        // Handle effect requests by delegating to appropriate host state capabilities
-        // For now, return a placeholder response - this would be implemented with actual state services
-        match effect_request.capability_id.as_str() {
-            "ccos.state.kv.get" => Ok(Value::String(format!("[KV GET {}]", effect_request.input_payload))),
-            "ccos.state.kv.put" => Ok(Value::String(format!("[KV PUT {}]", effect_request.input_payload))),
-            "ccos.state.kv.cas-put" => Ok(Value::String(format!("[KV CAS-PUT {}]", effect_request.input_payload))),
-            "ccos.state.counter.inc" => Ok(Value::String(format!("[COUNTER INC {}]", effect_request.input_payload))),
-            "ccos.state.event.append" => Ok(Value::String(format!("[EVENT APPEND {}]", effect_request.input_payload))),
-            _ => Err(RuntimeError::Generic(format!("Unknown effect request capability: {}", effect_request.capability_id))),
-        }
+        // Unified capability handling: delegate to capability marketplace
+        self.capability_marketplace.execute_effect_request(effect_request).await
     }
 
     async fn handle_host_call(&self, host_call: &crate::runtime::execution_outcome::HostCall) -> RuntimeResult<Value> {
         // Parse the function symbol to determine the type of call
         if host_call.fn_symbol.starts_with("call:") {
-            // Capability call
+            // Capability call - use unified capability handling
             let capability_id = host_call.fn_symbol.strip_prefix("call:").unwrap_or(&host_call.fn_symbol);
             // Convert Vec<Value> to Value::Vector for capability execution
             let args_value = Value::Vector(host_call.args.clone());
-            self.capability_marketplace.execute_capability(capability_id, &args_value).await
+            // Use enhanced execution with metadata
+            self.capability_marketplace.execute_capability_enhanced(
+                capability_id, 
+                &args_value, 
+                host_call.metadata.as_ref()
+            ).await
         } else if host_call.fn_symbol.starts_with("model-call:") {
             // Model call - delegate to CCOS model execution
             let model_id = host_call.fn_symbol.strip_prefix("model-call:").unwrap_or(&host_call.fn_symbol);

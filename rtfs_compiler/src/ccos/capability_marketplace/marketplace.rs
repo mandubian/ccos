@@ -848,6 +848,35 @@ impl CapabilityMarketplace {
         let capabilities = self.capabilities.read().await; capabilities.values().cloned().collect()
     }
 
+    /// Execute a capability with enhanced metadata support
+    pub async fn execute_capability_enhanced(
+        &self, 
+        id: &str, 
+        inputs: &Value,
+        _metadata: Option<&crate::runtime::execution_outcome::CallMetadata>
+    ) -> RuntimeResult<Value> {
+        // For now, delegate to the existing method
+        // TODO: Use metadata for enhanced execution context
+        self.execute_capability(id, inputs).await
+    }
+
+    /// Execute a capability from an EffectRequest
+    #[cfg(feature = "effect-boundary")]
+    pub async fn execute_effect_request(
+        &self,
+        effect_request: &crate::runtime::execution_outcome::EffectRequest
+    ) -> RuntimeResult<Value> {
+        // Convert EffectRequest to capability call
+        let inputs = Value::List(vec![Value::String(effect_request.input_payload.to_string())]);
+        
+        // Use enhanced execution with metadata
+        self.execute_capability_enhanced(
+            &effect_request.capability_id,
+            &inputs,
+            effect_request.metadata.as_ref()
+        ).await
+    }
+
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
         // Validate capability access according to isolation policy
         self.validate_capability_access(id)?;
