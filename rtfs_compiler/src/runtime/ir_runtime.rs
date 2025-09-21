@@ -2894,6 +2894,9 @@ impl IrRuntime {
             crate::ast::Expression::Fn(fn_expr) => {
                 self.execute_fn_expression(fn_expr, env, module_registry)
             }
+            crate::ast::Expression::Defn(defn_expr) => {
+                self.execute_defn_expression(defn_expr, env, module_registry)
+            }
             _ => {
                 Err(RuntimeError::Generic(format!(
                     "Complex expression not yet implemented in IR runtime: {:?}. \
@@ -3016,6 +3019,34 @@ impl IrRuntime {
         }
     }
 
+    /// Execute a Defn expression by converting it to a Fn and defining it in the environment
+    fn execute_defn_expression(
+        &mut self,
+        defn_expr: &crate::ast::DefnExpr,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        // Convert defn to fn expression
+        let fn_expr = crate::ast::FnExpr {
+            params: defn_expr.params.clone(),
+            variadic_param: defn_expr.variadic_param.clone(),
+            return_type: defn_expr.return_type.clone(),
+            body: defn_expr.body.clone(),
+            delegation_hint: defn_expr.delegation_hint.clone(),
+        };
+
+        // Execute the fn expression to create the function value
+        let function_result = self.execute_fn_expression(&fn_expr, env, module_registry)?;
+        
+        match function_result {
+            ExecutionOutcome::Complete(function_value) => {
+                // Define the function in the environment
+                env.define(defn_expr.name.0.clone(), function_value);
+                Ok(ExecutionOutcome::Complete(Value::Nil))
+            }
+            ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+        }
+    }
 
     /// Evaluate an expression in the given environment
     fn evaluate_expression(
