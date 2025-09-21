@@ -2335,27 +2335,167 @@ impl IrRuntime {
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        // Fallback to evaluator for complex expressions not yet implemented in IR runtime
-        // This ensures compatibility while we work on proper IR implementation
-        self.fallback_to_evaluator(body, env, module_registry)
+        // Convert AST to IR and execute
+        self.convert_ast_to_ir_and_execute(body, env, module_registry)
     }
 
-    /// Fallback to evaluator for complex expressions
-    fn fallback_to_evaluator(
+    /// Convert AST expression to IR and execute it
+    fn convert_ast_to_ir_and_execute(
         &mut self,
-        body: &crate::ast::Expression,
+        expr: &crate::ast::Expression,
         env: &mut IrEnvironment,
         module_registry: &mut ModuleRegistry,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        // For now, return a clear error indicating that complex expressions
-        // need to be implemented in the IR runtime or the test should use AST runtime
-        Err(RuntimeError::Generic(format!(
-            "Complex expression not implemented in IR runtime: {:?}. \
-             This expression requires features like Let, If, Do, Fn that are not yet \
-             implemented in the IR runtime. Consider using the AST runtime for this test \
-             or implementing proper IR support for these expression types.",
-            body
-        )))
+        // For now, implement direct execution of complex AST expressions
+        // This is a simplified approach that handles the most common cases
+        match expr {
+            crate::ast::Expression::Let(let_expr) => {
+                self.execute_let_expression(let_expr, env, module_registry)
+            }
+            crate::ast::Expression::If(if_expr) => {
+                self.execute_if_expression(if_expr, env, module_registry)
+            }
+            crate::ast::Expression::Do(do_expr) => {
+                self.execute_do_expression(do_expr, env, module_registry)
+            }
+            crate::ast::Expression::Fn(fn_expr) => {
+                self.execute_fn_expression(fn_expr, env, module_registry)
+            }
+            _ => {
+                Err(RuntimeError::Generic(format!(
+                    "Complex expression not yet implemented in IR runtime: {:?}. \
+                     This expression type needs to be implemented in the IR runtime.",
+                    expr
+                )))
+            }
+        }
+    }
+
+    /// Execute a Let expression
+    fn execute_let_expression(
+        &mut self,
+        let_expr: &crate::ast::LetExpr,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        // Create a new child environment for the let bindings
+        let mut child_env = env.new_child();
+        
+        // Evaluate all bindings
+        for binding in &let_expr.bindings {
+            let value = self.evaluate_expression(&binding.value, &mut child_env, module_registry)?;
+            match &binding.pattern {
+                crate::ast::Pattern::Symbol(sym) => {
+                    child_env.define(sym.0.clone(), value);
+                }
+                _ => {
+                    return Err(RuntimeError::Generic("Complex destructuring not implemented in IR runtime".to_string()));
+                }
+            }
+        }
+        
+        // Evaluate the body in the new environment
+        let mut body_result = Value::Nil;
+        for expr in &let_expr.body {
+            body_result = self.evaluate_expression(expr, &mut child_env, module_registry)?;
+        }
+        
+        Ok(ExecutionOutcome::Complete(body_result))
+    }
+
+    /// Execute an If expression
+    fn execute_if_expression(
+        &mut self,
+        if_expr: &crate::ast::IfExpr,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        let condition = self.evaluate_expression(&if_expr.condition, env, module_registry)?;
+        
+        // Check if condition is truthy
+        let is_truthy = match condition {
+            Value::Boolean(false) | Value::Nil => false,
+            _ => true,
+        };
+        
+        if is_truthy {
+            let result = self.evaluate_expression(&if_expr.then_branch, env, module_registry)?;
+            Ok(ExecutionOutcome::Complete(result))
+        } else if let Some(else_branch) = &if_expr.else_branch {
+            let result = self.evaluate_expression(else_branch, env, module_registry)?;
+            Ok(ExecutionOutcome::Complete(result))
+        } else {
+            Ok(ExecutionOutcome::Complete(Value::Nil))
+        }
+    }
+
+    /// Execute a Do expression
+    fn execute_do_expression(
+        &mut self,
+        do_expr: &crate::ast::DoExpr,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        let mut result = Value::Nil;
+        for expr in &do_expr.expressions {
+            result = self.evaluate_expression(expr, env, module_registry)?;
+        }
+        Ok(ExecutionOutcome::Complete(result))
+    }
+
+    /// Execute a Fn expression (create a closure)
+    fn execute_fn_expression(
+        &mut self,
+        fn_expr: &crate::ast::FnExpr,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        // Convert ParamDef patterns to Symbols for closure params
+        let params: Vec<crate::ast::Symbol> = fn_expr.params.iter()
+            .filter_map(|param| match &param.pattern {
+                crate::ast::Pattern::Symbol(sym) => Some(sym.clone()),
+                _ => None, // Skip complex patterns for now
+            })
+            .collect();
+        
+        // Convert param patterns
+        let param_patterns: Vec<crate::ast::Pattern> = fn_expr.params.iter()
+            .map(|param| param.pattern.clone())
+            .collect();
+        
+        // Convert variadic param
+        let variadic_param = fn_expr.variadic_param.as_ref()
+            .and_then(|param| match &param.pattern {
+                crate::ast::Pattern::Symbol(sym) => Some(sym.clone()),
+                _ => None, // Skip complex patterns for now
+            });
+        
+        // Convert body to single expression (take the last one for now)
+        let body = fn_expr.body.last()
+            .cloned()
+            .map(Box::new)
+            .unwrap_or_else(|| Box::new(crate::ast::Expression::Literal(crate::ast::Literal::Nil)));
+        
+        // Convert IrEnvironment to Environment
+        let mut regular_env = crate::runtime::environment::Environment::new();
+        for symbol_name in env.binding_names() {
+            if let Some(value) = env.get(&symbol_name) {
+                use crate::ast::Symbol;
+                regular_env.define(&Symbol(symbol_name), value);
+            }
+        }
+        
+        // Create a closure value
+        let closure = crate::runtime::values::Closure {
+            params,
+            param_patterns,
+            variadic_param,
+            body,
+            env: Arc::new(regular_env),
+            delegation_hint: fn_expr.delegation_hint.clone(),
+        };
+        
+        Ok(ExecutionOutcome::Complete(Value::Function(crate::runtime::values::Function::Closure(Arc::new(closure)))))
     }
 
 
