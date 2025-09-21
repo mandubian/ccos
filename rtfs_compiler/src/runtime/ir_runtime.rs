@@ -155,7 +155,7 @@ impl IrRuntime {
             IrNode::VariableRef { name, .. } => {
                 let val = env
                     .get(name)
-                    .ok_or_else(|| RuntimeError::Generic(format!("Undefined variable: {}", name)))?;
+                    .ok_or_else(|| RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone())))?;
                 Ok(ExecutionOutcome::Complete(val))
             }
             IrNode::VariableDef {
@@ -1418,7 +1418,7 @@ impl IrRuntime {
                         }
                         IrNode::VariableRef { name, .. } => {
                             let v = frame.env.get(&name)
-                                .ok_or_else(|| RuntimeError::Generic(format!("Undefined variable: {}", name)))?;
+                                .ok_or_else(|| RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone())))?;
                             value_stack.push(v);
                         }
                         IrNode::If { condition, then_branch, else_branch, .. } => {
@@ -2846,7 +2846,7 @@ impl IrRuntime {
                 if let Some(value) = env.get(&symbol.0) {
                     Ok(ExecutionOutcome::Complete(value))
                 } else {
-                    Err(RuntimeError::Generic(format!("Undefined variable: {}", symbol.0)))
+                    Err(RuntimeError::UndefinedSymbol(symbol.clone()))
                 }
             }
             crate::ast::Expression::Literal(literal) => {
