@@ -1653,6 +1653,39 @@ impl IrRuntime {
             "every?" => self.ir_every_with_context(args, env, module_registry),
             "some?" => self.ir_some_with_context(args, env, module_registry),
             "sort-by" => self.ir_sort_by_with_context(args, env, module_registry),
+            "call" => {
+                // Handle capability calls in IR runtime
+                if args.len() < 2 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: "call".to_string(),
+                        expected: "at least 2".to_string(),
+                        actual: args.len(),
+                    });
+                }
+                
+                let capability_id = match &args[0] {
+                    Value::Keyword(kw) => kw.0.clone(),
+                    Value::String(s) => s.clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "keyword or string".to_string(),
+                        actual: args[0].type_name().to_string(),
+                        operation: "capability call".to_string(),
+                    }),
+                };
+                
+                let call_args = args[1..].to_vec();
+                
+                // Create HostCall for capability invocation
+                let host_call = crate::runtime::execution_outcome::HostCall {
+                    capability_id,
+                    args: call_args,
+                    security_context: self.security_context.clone(),
+                    causal_context: None,
+                    metadata: None,
+                };
+                
+                Ok(ExecutionOutcome::RequiresHost(host_call))
+            }
             "update" => {
                 // Provide a minimal implementation of update usable by IR tests.
                 if args.len() < 3 || args.len() > 4 {
