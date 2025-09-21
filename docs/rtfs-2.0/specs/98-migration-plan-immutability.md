@@ -30,7 +30,7 @@ Plan overview (high level) - AGGRESSIVE APPROACH
 2. **MANDATORY HOST CAPABILITIES** - Force all stateful operations through host:
    - Provide host capabilities: `kv.get`, `kv.put`, `counter.inc`, `event.append`
    - Make host calls the ONLY way to do stateful operations
-3. Introduce Host effect boundary — standardize ExecutionOutcome::RequiresHost(effect_request) and a typed effect_request schema.
+3. Introduce Host effect boundary — standardize `ExecutionOutcome::RequiresHost(HostCall)` and a typed `HostCall` schema.
 4. Add continuations — make evaluation resumable after Host completes an effect (sync first, async later).
 5. Provide Host-backed state primitives — versioned KV + CAS, counters, log/event append, all with ACLs and audit logs.
 6. Migrate tests/examples — rewrite trivial cases to pure; replace complex mutation patterns with Host capability calls.
@@ -60,17 +60,13 @@ Acceptance criteria for Phase 2
 
 Phase 3 — Effect boundary and continuations (1–2 days)
 
-**Status**: ✅ Types defined, 🎯 Demo created, 🔧 Pattern matching in progress
+**Status**: ✅ Unified HostCall defined, 🎯 Reentrance demos created, 🔧 Pattern matching in progress
 
-- ✅ Define a typed `effect_request` envelope: capability_id, input payload, security_context, causal_context (intent_id/step_id), timeout_ms, idempotency_key.
-- ✅ Ensure evaluator yields `ExecutionOutcome::RequiresHost(effect_request)` at effect sites and can resume with the Host result injected at the call site.
+- ✅ Define a typed `HostCall` envelope: capability_id, args, security_context, optional causal_context (intent/step), optional metadata (timeout_ms, idempotency_key, compatibility fields).
+- ✅ Ensure runtimes yield `ExecutionOutcome::RequiresHost(HostCall)` at effect sites and can resume with the Host result injected at the call site.
 - 🔧 Start synchronous resume (single-step) and document the async model for later.
 
-**Working Demo**: A demonstration of the effect boundary concept is available in `rtfs_compiler/src/runtime/execution_outcome.rs::effect_boundary_demo`. This shows:
-
-1. Creating a typed `EffectRequest` with full causal context
-2. Simulating host processing of counter increment
-3. Demonstrating the round-trip functionality
+**Working Demos**: Reentrance and host integration are demonstrated in `rtfs_compiler/examples/rtfs_reentrance_demo.rs` and `rtfs_compiler/examples/enhanced_reentrance_orchestrator.rs`.
 
 **Next Steps**: Complete pattern matching fixes throughout codebase to enable full integration.
 
@@ -114,7 +110,7 @@ Atoms represent mutable state, which conflicts with RTFS 2.0's pure functional m
 (step "Configure" (call :ccos.config:get {:key "debug-mode"}))
 ```
 
-### Deprecation Warnings
+### Deprecation Warnings (historical)
 
 When using legacy-atoms feature, you'll see warnings like:
 ```
@@ -122,7 +118,7 @@ DEPRECATION: `atom` is deprecated and will be removed in RTFS 2.0. Use immutable
 DEPRECATION: `set!` is deprecated and will be removed in RTFS 2.0. Use immutable data structures or host-managed state instead.
 ```
 
-### Testing Strategy
+### Testing Strategy (historical)
 
 To test both modes:
 ```bash
@@ -135,8 +131,8 @@ cargo test --no-default-features --features pest,regex
 
 Acceptance criteria for Phase 3
 
-- ✅ Round‑trip demo: a simple program that requests `ccos.counter.inc` returns RequiresHost, Host mock processes it, evaluator resumes and completes with the incremented value.
-- ✅ Idempotency key plumbed through for Host retries.
+- ✅ Round‑trip demo: a simple program that requests `ccos.counter.inc` returns `RequiresHost(HostCall)`, Host mock processes it, runtime resumes and completes with the incremented value.
+- ✅ Idempotency key plumbed through `CallMetadata` for Host retries.
 
 Phase 4 — Deprecation & docs (0.5 day)
 
@@ -157,7 +153,7 @@ Phase 5 — Host-backed state and security (2–4 days, incremental)
 **Status**: ✅ Core capabilities implemented, 🧪 Tests created, 🔧 ACLs/audit deferred to next phases, ✅ Pattern matching fixes completed
 
 - ✅ Provide minimal Host capabilities: `kv.get`, `kv.cas-put`, `counter.inc`, `event.append`.
-- ✅ **Pattern Matching Fixes Complete**: Fixed all `ExecutionOutcome::RequiresHostEffect` pattern matching issues:
+- ✅ **Pattern Matching Fixes Complete**: Fixed all `ExecutionOutcome::RequiresHost` pattern matching issues:
   - Fixed 6 occurrences in `evaluator.rs` across `for`, `match`, and `with-resource` forms
   - Fixed 3 occurrences in `mod.rs` for `run`, `evaluate_program`, and `evaluate_node` methods
   - All `todo!()` placeholders replaced with proper effect request propagation
