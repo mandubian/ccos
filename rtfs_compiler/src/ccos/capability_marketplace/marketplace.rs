@@ -860,22 +860,7 @@ impl CapabilityMarketplace {
         self.execute_capability(id, inputs).await
     }
 
-    /// Execute a capability from an EffectRequest
-    #[cfg(feature = "effect-boundary")]
-    pub async fn execute_effect_request(
-        &self,
-        effect_request: &crate::runtime::execution_outcome::EffectRequest
-    ) -> RuntimeResult<Value> {
-        // Convert EffectRequest to capability call
-        let inputs = Value::List(vec![Value::String(effect_request.input_payload.to_string())]);
-        
-        // Use enhanced execution with metadata
-        self.execute_capability_enhanced(
-            &effect_request.capability_id,
-            &inputs,
-            effect_request.metadata.as_ref()
-        ).await
-    }
+    // execute_effect_request removed - unified into execute_capability_enhanced
 
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
         // Validate capability access according to isolation policy
