@@ -56,7 +56,7 @@ impl ReentrantOrchestrator {
                 }
                 ExecutionOutcome::RequiresHost(host_call) => {
                     println!("  ⏸️  Host call required at depth {}", execution_depth);
-                    println!("      Function: {}", host_call.fn_symbol);
+                    println!("      Function: {}", host_call.capability_id);
                     println!("      Args: {:?}", host_call.args);
                     
                     // Handle the host call
@@ -97,13 +97,13 @@ impl ReentrantOrchestrator {
     
     async fn handle_host_call(&self, host_call: &HostCall) -> Result<Value, RuntimeError> {
         // Parse the function symbol to determine the type of call
-        if host_call.fn_symbol.starts_with("call:") {
+        if host_call.capability_id.starts_with("call:") {
             // Capability call
-            let capability_id = host_call.fn_symbol.strip_prefix("call:").unwrap_or(&host_call.fn_symbol);
+            let capability_id = host_call.capability_id.strip_prefix("call:").unwrap_or(&host_call.capability_id);
             let args_value = Value::Vector(host_call.args.clone());
             self.capability_marketplace.execute_capability(capability_id, &args_value).await
         } else {
-            Err(RuntimeError::Generic(format!("Unknown host call: {}", host_call.fn_symbol)))
+            Err(RuntimeError::Generic(format!("Unknown host call: {}", host_call.capability_id)))
         }
     }
     
