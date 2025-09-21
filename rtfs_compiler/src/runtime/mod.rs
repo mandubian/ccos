@@ -28,6 +28,7 @@ pub use environment::{Environment, IrEnvironment};
 pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
 pub use ir_runtime::IrRuntime;
+pub use ir_runtime::IrStrategy;
 pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
@@ -39,7 +40,7 @@ pub use capabilities::*;
 
 use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
-use crate::runtime::ir_runtime::IrStrategy;
+// IrStrategy is re-exported below; avoid duplicate local import
 use crate::runtime::pure_host::create_pure_host;
 use std::sync::Arc;
 

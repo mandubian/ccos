@@ -406,6 +406,7 @@ fn test_fibonacci_recursive() {
     run_all_tests_for_file(&TestConfig {
         name: "test_fibonacci_recursive".to_string(),
         expected_result: Some("Integer(55)".to_string()),
+        runtime: RuntimeStrategy::Ir,
         ..TestConfig::new("test_fibonacci_recursive")
     });
 }
