@@ -797,7 +797,7 @@ impl ModuleAwareRuntime {
                     Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
                     Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_host_call)) => Err(RuntimeError::Generic("Host call required during module-level program execution".to_string())),
                     #[cfg(feature = "effect-boundary")]
-                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required during module-level program execution".to_string())),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host effect required during module-level program execution".to_string())),
                     Err(e) => Err(e),
                 }
             }
@@ -816,7 +816,7 @@ impl ModuleAwareRuntime {
                     Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
                     Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required during module top-level form execution".to_string())),
                     #[cfg(feature = "effect-boundary")]
-                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required during module top-level form execution".to_string())),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host effect required during module top-level form execution".to_string())),
                     Err(e) => Err(e),
                 }
             }
@@ -875,7 +875,7 @@ impl ModuleAwareRuntime {
                                 super::execution_outcome::ExecutionOutcome::Complete(v) => v,
                                 super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module function definition".to_string())),
                                 #[cfg(feature = "effect-boundary")]
-                                super::execution_outcome::ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required during module function definition".to_string())),
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_) => return Err(RuntimeError::Generic("Host effect required during module function definition".to_string())),
                             };
                             guard.define(func_name.clone(), func_value.clone());
                         }
@@ -892,7 +892,7 @@ impl ModuleAwareRuntime {
                                 super::execution_outcome::ExecutionOutcome::Complete(v) => v,
                                 super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module variable definition".to_string())),
                                 #[cfg(feature = "effect-boundary")]
-                                super::execution_outcome::ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required during module variable definition".to_string())),
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_) => return Err(RuntimeError::Generic("Host effect required during module variable definition".to_string())),
                             };
                             guard.define(var_name.clone(), var_value.clone());
                         }

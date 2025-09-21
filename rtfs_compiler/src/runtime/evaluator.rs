@@ -315,9 +315,9 @@ impl Evaluator {
                         ExecutionOutcome::Complete(v) => last_value = v,
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 TopLevel::Intent(intent) => {
@@ -329,7 +329,7 @@ impl Evaluator {
                             ExecutionOutcome::Complete(v) => { intent_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(intent_metadata);
@@ -343,7 +343,7 @@ impl Evaluator {
                             ExecutionOutcome::Complete(v) => { plan_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(plan_metadata);
@@ -357,7 +357,7 @@ impl Evaluator {
                             ExecutionOutcome::Complete(v) => { action_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(action_metadata);
@@ -371,7 +371,7 @@ impl Evaluator {
                             ExecutionOutcome::Complete(v) => { capability_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(capability_metadata);
@@ -385,7 +385,7 @@ impl Evaluator {
                             ExecutionOutcome::Complete(v) => { resource_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(resource_metadata);
@@ -455,14 +455,14 @@ impl Evaluator {
                                 ExecutionOutcome::Complete(av) => args_vec.push(av),
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                             }
                         }
                         return self.call_function(func_value, &args_vec, env);
                     }
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             Expression::Vector(exprs) => {
@@ -472,7 +472,7 @@ impl Evaluator {
                         ExecutionOutcome::Complete(v) => values_vec.push(v),
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Vector(values_vec)))
@@ -484,7 +484,7 @@ impl Evaluator {
                         ExecutionOutcome::Complete(v) => { result.insert(key.clone(), v); }
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Map(result)))
@@ -505,14 +505,14 @@ impl Evaluator {
                                             ExecutionOutcome::Complete(av) => args_vec.push(av),
                                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                                         }
                                     }
                                     return self.call_function(func_value, &args_vec, env);
                                 }
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                             }
                         }
                     }
@@ -543,14 +543,14 @@ impl Evaluator {
                                 ExecutionOutcome::Complete(av) => args_vec.push(av),
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                             }
                         }
                         return self.call_function(func_value, &args_vec, env);
                     }
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             Expression::If(if_expr) => self.eval_if(if_expr, env),
@@ -596,7 +596,7 @@ impl Evaluator {
                         ExecutionOutcome::Complete(v) => { result_map.insert(key.clone(), v); }
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Map(result_map)))
@@ -1207,7 +1207,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => evaluated_args.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -1253,12 +1253,12 @@ impl Evaluator {
                     ExecutionOutcome::Complete(other) => return Err(RuntimeError::InvalidArguments { expected: "prompt string".to_string(), actual: format!("{:?}", other) }),
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 },
                 ExecutionOutcome::Complete(other) => return Err(RuntimeError::InvalidArguments { expected: "model id string".to_string(), actual: format!("{:?}", other) }),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         } else if !args.is_empty() {
             // Parse keyword arguments: :model, :prompt, optional :system
@@ -1287,7 +1287,7 @@ impl Evaluator {
                     ExecutionOutcome::Complete(v) => v,
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 };
                 match (key.as_str(), val) {
                     ("model", Value::String(s)) => model_id = Some(s),
@@ -1477,8 +1477,10 @@ impl Evaluator {
                         DH::LocalModel(id) | DH::RemoteModel(id) => {
                             // Yield control to CCOS for model execution
                             let host_call = HostCall { 
-                                fn_symbol: format!("model-call:{}", id), 
-                                args: args.to_vec(), 
+                                capability_id: format!("model-call:{}", id), 
+                                args: args.to_vec(),
+                                security_context: self.security_context.clone(),
+                                causal_context: None,
                                 metadata: Some(CallMetadata::new()) 
                             };
                             return Ok(ExecutionOutcome::RequiresHost(host_call));
@@ -1490,8 +1492,10 @@ impl Evaluator {
                     if self.is_non_pure_function(fn_symbol) {
                         // Yield control to CCOS for non-pure operations
                         let host_call = HostCall { 
-                            fn_symbol: fn_symbol.to_string(), 
-                            args: args.to_vec(), 
+                            capability_id: fn_symbol.to_string(), 
+                            args: args.to_vec(),
+                            security_context: self.security_context.clone(),
+                            causal_context: None,
                             metadata: Some(CallMetadata::new()) 
                         };
                         return Ok(ExecutionOutcome::RequiresHost(host_call));
@@ -1547,7 +1551,7 @@ impl Evaluator {
                     ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                     ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             Value::Keyword(keyword) => {
@@ -1617,7 +1621,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         if condition.is_truthy() {
@@ -1635,14 +1639,14 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                 ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         } else {
             match self.eval_let_simple(let_expr, env)? {
                 ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                 ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
     }
@@ -1825,7 +1829,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => self.bind_pattern(&binding.pattern, &v, &mut let_env)?,
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -1870,7 +1874,7 @@ impl Evaluator {
                 }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -1892,7 +1896,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => last_outcome = ExecutionOutcome::Complete(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         Ok(last_outcome)
@@ -1904,7 +1908,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         for clause in &match_expr.clauses {
@@ -1919,7 +1923,7 @@ impl Evaluator {
                         }
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 return self.eval_expr(&clause.body, &mut clause_env);
@@ -1941,7 +1945,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => messages.push(v.to_string()),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         println!("[{}] {}", level, messages.join(" "));
@@ -2037,7 +2041,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => resource_env.define(&with_expr.resource_symbol, v),
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
         self.eval_do_body(&with_expr.body, &mut resource_env)
     }
@@ -2066,7 +2070,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => { results.insert(MapKey::Keyword(Keyword(binding.symbol.0.clone())), v); }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         
@@ -2082,7 +2086,7 @@ impl Evaluator {
             }
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
     }
 
@@ -2190,7 +2194,7 @@ impl Evaluator {
                     ExecutionOutcome::Complete(v) => v,
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 };
                 let n = match count_val { 
                     Value::Integer(i) => i, 
@@ -2213,7 +2217,7 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => last = v,
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         Ok(ExecutionOutcome::Complete(last))
@@ -2230,7 +2234,7 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
         let bindings_vec = match binding_val {
             Value::Vector(v) => v,
@@ -2265,9 +2269,9 @@ impl Evaluator {
                 ExecutionOutcome::Complete(v) => bindings_vec.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -2306,9 +2310,9 @@ impl Evaluator {
             ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(out))),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+            ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
     }
     fn for_nest(&self, pairs: &[(Symbol, Vec<Value>)], depth: usize, env: &Environment, body: &Expression, out: &mut Vec<Value>) -> Result<ExecutionOutcome, RuntimeError> {
@@ -2322,9 +2326,9 @@ impl Evaluator {
                 }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         let (sym, items) = &pairs[depth];
@@ -2335,9 +2339,9 @@ impl Evaluator {
                 ExecutionOutcome::Complete(_) => (),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         Ok(ExecutionOutcome::Complete(Value::Nil))
@@ -2358,9 +2362,9 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         // Remaining arguments are pattern-body pairs
@@ -2453,9 +2457,9 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         // Create a new environment scope with the variable bound
@@ -2467,9 +2471,9 @@ impl Evaluator {
             ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
             #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(effect_request) => Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+            ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
     }
 
@@ -3146,9 +3150,9 @@ impl Evaluator {
                         ExecutionOutcome::Complete(v) => result.push(v),
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(effect_request) => return Ok(ExecutionOutcome::RequiresHostEffect(effect_request)),
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Value::Function(Function::Native(native_func)) => {

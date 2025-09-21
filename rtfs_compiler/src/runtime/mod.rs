@@ -103,10 +103,8 @@ impl Runtime {
         match self.strategy.run(program)? {
             ExecutionOutcome::Complete(value) => Ok(value),
             ExecutionOutcome::RequiresHost(host_call) => {
-                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.fn_symbol)))
+                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.capability_id)))
             }
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHostEffect(_) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
         }
     }
 
@@ -131,9 +129,9 @@ impl Runtime {
         let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
-            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.capability_id))),
             #[cfg(feature = "effect-boundary")]
-            Ok(ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
+            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required but not supported in this context".to_string())),
             Err(e) => Err(e),
         }
     }
@@ -151,9 +149,9 @@ impl Runtime {
         let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
-            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.capability_id))),
             #[cfg(feature = "effect-boundary")]
-            Ok(ExecutionOutcome::RequiresHostEffect(_)) => Err(RuntimeError::Generic("Host effect required but not supported in this context".to_string())),
+            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required but not supported in this context".to_string())),
             Err(e) => Err(e),
         }
     }
