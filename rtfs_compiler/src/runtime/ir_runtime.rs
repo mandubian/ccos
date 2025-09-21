@@ -1,7 +1,7 @@
 // IR Runtime - Efficient execution engine for typed RTFS IR
 // This runtime leverages type information and pre-resolved bindings for performance
 
-use super::execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
+use super::execution_outcome::ExecutionOutcome;
 use super::environment::IrEnvironment;
 use super::error::RuntimeError;
 use super::module_runtime::ModuleRegistry;
@@ -2321,17 +2321,27 @@ impl IrRuntime {
                 Ok(ExecutionOutcome::Complete(literal.clone().into()))
             }
             _ => {
-                // For complex expressions, yield to host for now
-                let host_call = HostCall {
-                    capability_id: "complex-closure-expression".to_string(),
-                    args: vec![],
-                    security_context: RuntimeContext::full(),
-                    causal_context: None,
-                    metadata: Some(CallMetadata::new()),
-                };
-                Ok(ExecutionOutcome::RequiresHost(host_call))
+                // For complex expressions, convert to IR and execute, or fall back to evaluator
+                // This handles cases like Let, If, Do, etc. that aren't implemented in IR runtime yet
+                self.convert_and_execute_complex_expression(body, env, module_registry)
             }
         }
+    }
+
+    /// Convert complex expression to IR and execute, or provide fallback
+    fn convert_and_execute_complex_expression(
+        &mut self,
+        body: &crate::ast::Expression,
+        env: &mut IrEnvironment,
+        module_registry: &mut ModuleRegistry,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        // For now, provide a clear error message indicating this needs implementation
+        // In a full implementation, this would convert the AST to IR and execute it
+        Err(RuntimeError::Generic(format!(
+            "Complex expression not yet implemented in IR runtime: {:?}. \
+             Consider using the tree-walking evaluator for expressions like Let, If, Do, etc.",
+            body
+        )))
     }
 
     /// Evaluate an expression in the given environment
