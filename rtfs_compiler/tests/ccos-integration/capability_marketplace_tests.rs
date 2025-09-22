@@ -9,11 +9,11 @@ async fn test_capability_marketplace_bootstrap() {
     use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 
     // Create a capability registry with some built-in capabilities
-    let mut registry = CapabilityRegistry::new();
+    let registry = CapabilityRegistry::new();
     
     // Create marketplace with the registry
     let capability_registry = Arc::new(RwLock::new(registry));
-    let mut marketplace = CapabilityMarketplace::new(Arc::clone(&capability_registry));
+    let marketplace = CapabilityMarketplace::new(Arc::clone(&capability_registry));
     
     // Bootstrap the marketplace
     marketplace.bootstrap().await.expect("Bootstrap should succeed");

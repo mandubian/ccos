@@ -1,0 +1,52 @@
+;; Destructuring rules feature: allowed and disallowed forms with deterministic outcomes
+
+;; 0. Baseline: simple symbol params (allowed)
+(fn [x y] (+ x y))
+;; Expected: Function(Closure)
+
+;; 1. Vector destructuring in fixed params (allowed) and used in body
+(defn add-pair [[a b]] (+ a b))
+(add-pair [1 2])
+;; Expected: Integer(3)
+
+;; 2. Nested vector destructuring (allowed)
+(defn head-tail [[h & t]] [h (count t)])
+(head-tail [10 20 30 40])
+;; Expected: Vector([Integer(10), Integer(3)])
+
+;; 3. Map destructuring with :keys (allowed)
+(defn greet [{:keys [name title]}]
+  (str title ": " name))
+(greet {:name "Ada" :title "Dr"})
+;; Expected: String("Dr: Ada")
+
+;; 4. Wildcard in params (allowed, binds nothing)
+(defn second-item [_ y] y)
+(second-item 1 42)
+;; Expected: Integer(42)
+
+;; 5. Variadic param must be symbol (allowed)
+(defn collect [x & rest] (cons x rest))
+(collect 1 2 3)
+;; Expected: Vector([Integer(1), Integer(2), Integer(3)])
+
+;; 6. Destructuring AFTER & is NOT allowed (should fail to compile/convert)
+(defn bad-collect [x & [a b]] [x a b])
+(bad-collect 1 2 3)
+;; Expected: ERROR: InvalidSpecialForm|variadic parameter must be a symbol|Invalid.*variadic
+
+;; 7. Lambda params must be symbols; no destructuring directly (should fail)
+(lambda [[a b]] (+ a b))
+;; Expected: ERROR: lambda parameters must be symbols
+
+;; 8. Destructure inside body is the correct alternative for lambdas (allowed)
+(let [pair [7 8]]
+  (let [[a b] pair]
+    (+ a b)))
+;; Expected: Integer(15)
+
+;; 9. Fixed-position vector destructuring doesn't absorb extra args → arity mismatch (should fail)
+;; Wrap in a single do form so this is one expression and triggers the error at evaluation time
+(do (defn first-two [[a b]] a)
+  (first-two [1 2 3]))
+;; Expected: ERROR: Arity|arity|mismatch|expected 1|function expected 1

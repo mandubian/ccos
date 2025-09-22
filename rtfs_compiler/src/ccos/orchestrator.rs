@@ -568,7 +568,7 @@ impl Orchestrator {
         evaluator: &Evaluator,
         expr: &Expression,
     ) -> RuntimeResult<ExecutionOutcome> {
-        let mut current_expr = expr.clone();
+        let current_expr = expr.clone();
         let mut max_iterations = 1000; // Prevent infinite loops
         
         loop {
@@ -588,7 +588,7 @@ impl Orchestrator {
                 ExecutionOutcome::RequiresHost(host_call) => {
                     // Handle the host call through CCOS delegation
                     let result = self.handle_host_call(&host_call).await?;
-                    
+
                     // For now, we'll return the result directly.
                     // In a more sophisticated implementation, we might resume execution
                     // with the result substituted back into the expression.
@@ -598,25 +598,18 @@ impl Orchestrator {
         }
     }
 
-    /// Handle a host call by delegating to the appropriate CCOS component.
+    // handle_effect_request removed - unified into handle_host_call
+
     async fn handle_host_call(&self, host_call: &crate::runtime::execution_outcome::HostCall) -> RuntimeResult<Value> {
-        // Parse the function symbol to determine the type of call
-        if host_call.fn_symbol.starts_with("call:") {
-            // Capability call
-            let capability_id = host_call.fn_symbol.strip_prefix("call:").unwrap_or(&host_call.fn_symbol);
-            // Convert Vec<Value> to Value::Vector for capability execution
-            let args_value = Value::Vector(host_call.args.clone());
-            self.capability_marketplace.execute_capability(capability_id, &args_value).await
-        } else if host_call.fn_symbol.starts_with("model-call:") {
-            // Model call - delegate to CCOS model execution
-            let model_id = host_call.fn_symbol.strip_prefix("model-call:").unwrap_or(&host_call.fn_symbol);
-            // For now, return a placeholder response
-            // TODO: Implement actual model execution through CCOS
-            Ok(Value::String(format!("[Model {} response placeholder]", model_id)))
-        } else {
-            // Unknown function - return error
-            Err(RuntimeError::Generic(format!("Unknown host call: {}", host_call.fn_symbol)))
-        }
+        // Unified capability handling - all host calls go through capability marketplace
+        let args_value = Value::Vector(host_call.args.clone());
+        
+        // Use enhanced execution with metadata
+        self.capability_marketplace.execute_capability_enhanced(
+            &host_call.capability_id, 
+            &args_value, 
+            host_call.metadata.as_ref()
+        ).await
     }
 
     /// Executes a given `Plan` within a specified `RuntimeContext`.

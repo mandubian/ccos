@@ -34,6 +34,7 @@ impl CapabilityRegistry {
 		registry.register_io_capabilities();
 		registry.register_network_capabilities();
 		registry.register_agent_capabilities();
+		registry.register_state_capabilities();
 
 		registry
 	}
@@ -46,13 +47,12 @@ impl CapabilityRegistry {
 	pub fn get_provider(&self, provider_id: &str) -> Option<&Box<dyn CapabilityProvider>> {
 		self.providers.get(provider_id)
 	}
-    
-	/// Get all registered capabilities
-	pub fn get_capabilities(&self) -> &HashMap<String, Capability> {
-		&self.capabilities
+	
+	pub fn list_providers(&self) -> Vec<&str> {
+		self.providers.keys().map(|k| k.as_str()).collect()
 	}
-    
-	fn register_system_capabilities(&mut self) {
+
+	pub fn register_system_capabilities(&mut self) {
 		// Environment access capability
 		self.capabilities.insert(
 			"ccos.system.get-env".to_string(),
@@ -243,7 +243,58 @@ impl CapabilityRegistry {
 			},
 		);
 	}
-    
+
+	/// Register host-backed state capabilities that replace atoms
+	fn register_state_capabilities(&mut self) {
+		// Key-value store operations
+		self.capabilities.insert(
+			"ccos.state.kv.get".to_string(),
+			Capability {
+				id: "ccos.state.kv.get".to_string(),
+				arity: Arity::Fixed(1),
+				func: Arc::new(|args| Self::kv_get_capability(args)),
+			},
+		);
+
+		self.capabilities.insert(
+			"ccos.state.kv.put".to_string(),
+			Capability {
+				id: "ccos.state.kv.put".to_string(),
+				arity: Arity::Fixed(2),
+				func: Arc::new(|args| Self::kv_put_capability(args)),
+			},
+		);
+
+		self.capabilities.insert(
+			"ccos.state.kv.cas-put".to_string(),
+			Capability {
+				id: "ccos.state.kv.cas-put".to_string(),
+				arity: Arity::Fixed(3), // key, expected_value, new_value
+				func: Arc::new(|args| Self::kv_cas_put_capability(args)),
+			},
+		);
+
+		// Counter operations
+		self.capabilities.insert(
+			"ccos.state.counter.inc".to_string(),
+			Capability {
+				id: "ccos.state.counter.inc".to_string(),
+				arity: Arity::Variadic(1), // key, increment (default 1)
+				func: Arc::new(|args| Self::counter_inc_capability(args)),
+			},
+		);
+
+		// Event log operations
+		self.capabilities.insert(
+			"ccos.state.event.append".to_string(),
+			Capability {
+				id: "ccos.state.event.append".to_string(),
+				arity: Arity::Variadic(1), // key, event_data...
+				func: Arc::new(|args| Self::event_append_capability(args)),
+			},
+		);
+	}
+
 	pub fn get_capability(&self, id: &str) -> Option<&Capability> {
 		self.capabilities.get(id)
 	}
@@ -694,7 +745,7 @@ impl CapabilityRegistry {
 			Value::Timestamp(ts) => Ok(serde_json::Value::String(format!("@{}", ts))),
 			Value::Uuid(uuid) => Ok(serde_json::Value::String(format!("@{}", uuid))),
 			Value::ResourceHandle(handle) => Ok(serde_json::Value::String(format!("@{}", handle))),
-			Value::Atom(_) => Ok(serde_json::Value::String("<atom>".to_string())),
+            // Value::Atom variant removed - no longer exists
 			Value::Function(_) => Err(RuntimeError::Generic(
 				"Cannot serialize functions to JSON".to_string(),
 			)),
@@ -709,6 +760,141 @@ impl CapabilityRegistry {
 				"Cannot serialize lists to JSON (use vectors instead)".to_string(),
 			)),
 		}
+	}
+
+	/// Host-backed state capabilities implementations (mock-only for now)
+
+	/// Key-value store: get operation
+	fn kv_get_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.len() != 1 {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.kv.get".to_string(),
+				expected: "1".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "kv.get".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: kv.get({}) - mock", key);
+		Ok(Value::String(format!("mock-value-for-{}", key)))
+	}
+
+	/// Key-value store: put operation
+	fn kv_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.len() != 2 {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.kv.put".to_string(),
+				expected: "2".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "kv.put".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: kv.put({}, <value>) - mock", key);
+		Ok(Value::Boolean(true))
+	}
+
+	/// Key-value store: compare-and-swap operation
+	fn kv_cas_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.len() != 3 {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.kv.cas-put".to_string(),
+				expected: "3".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "kv.cas-put".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: kv.cas-put({}, <expected>, <new>) - mock", key);
+		Ok(Value::Boolean(true))
+	}
+
+	/// Counter: increment operation
+	fn counter_inc_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.is_empty() {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.counter.inc".to_string(),
+				expected: "at least 1".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "counter.inc".to_string(),
+			}),
+		};
+
+		let increment = if args.len() > 1 {
+			match &args[1] {
+				Value::Integer(i) => *i as i64,
+				_ => return Err(RuntimeError::TypeError {
+					expected: "integer".to_string(),
+					actual: args[1].type_name().to_string(),
+					operation: "counter.inc".to_string(),
+				}),
+			}
+		} else {
+			1i64 // Default increment
+		};
+
+		eprintln!("HOST_CALL: counter.inc({}, {}) - mock", key, increment);
+		Ok(Value::Integer(42i64))
+	}
+
+	/// Event log: append operation
+	fn event_append_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+		if args.is_empty() {
+			return Err(RuntimeError::ArityMismatch {
+				function: "ccos.state.event.append".to_string(),
+				expected: "at least 1".to_string(),
+				actual: args.len(),
+			});
+		}
+
+		let key = match &args[0] {
+			Value::String(s) => s.clone(),
+			Value::Keyword(k) => k.0.clone(),
+			_ => return Err(RuntimeError::TypeError {
+				expected: "string or keyword".to_string(),
+				actual: args[0].type_name().to_string(),
+				operation: "event.append".to_string(),
+			}),
+		};
+
+		eprintln!("HOST_CALL: event.append({}, <event-data>) - mock", key);
+		Ok(Value::Boolean(true))
 	}
 }
 

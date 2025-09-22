@@ -1,6 +1,6 @@
 use crate::ast::{DelegationHint, Expression, FnExpr, Literal, Pattern, Symbol, ParamDef};
 use crate::ccos::delegation::{ExecTarget, StaticDelegationEngine, CallContext, DelegationEngine};
-use crate::runtime::{Environment, Evaluator, IrRuntime, ModuleRegistry, security::RuntimeContext, host_interface::HostInterface, values::Value, execution_outcome::ExecutionOutcome};
+use crate::runtime::{Evaluator, IrRuntime, ModuleRegistry, security::RuntimeContext, values::Value, execution_outcome::ExecutionOutcome};
 use crate::tests::ccos::ccos_test_utils::create_ccos_runtime_host;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ fn test_delegation_hint_local_model() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    let mut evaluator = Evaluator::new(module_registry, security_context, host);
+    let evaluator = Evaluator::new(module_registry, security_context, host);
     
     // Create a function with delegation hint
     let fn_expr = FnExpr {
@@ -44,7 +44,7 @@ fn test_delegation_hint_remote_model() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    let mut evaluator = Evaluator::new(module_registry, security_context, host);
+    let evaluator = Evaluator::new(module_registry, security_context, host);
     
     // Create a function with delegation hint
     let fn_expr = FnExpr {
@@ -107,7 +107,7 @@ fn test_ir_runtime_delegation() {
         capability_marketplace,
         security_context.clone(),
     ));
-    let mut ir_runtime = IrRuntime::new(host, security_context);
+    let ir_runtime = IrRuntime::new(host, security_context);
     
     // The IR runtime should have the model registry available
     // This test verifies that the delegation engine integration is complete

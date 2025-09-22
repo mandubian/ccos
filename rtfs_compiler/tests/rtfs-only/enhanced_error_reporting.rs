@@ -1,7 +1,7 @@
 // Tests for enhanced parser error reporting
 // Testing the acceptance criteria from issue #39
 
-use rtfs_compiler::parser::{parse, parse_with_enhanced_errors};
+use rtfs_compiler::parser::parse_with_enhanced_errors;
 use rtfs_compiler::parser_error_reporter::ParserErrorReporter;
 
 /// Test mismatched delimiter error reporting

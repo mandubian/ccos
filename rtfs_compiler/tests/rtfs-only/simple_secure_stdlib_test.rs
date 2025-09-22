@@ -1,5 +1,4 @@
 use rtfs_compiler::runtime::secure_stdlib::SecureStandardLibrary;
-use rtfs_compiler::runtime::values::Value;
 
 #[test]
 fn test_secure_stdlib_basic() {

@@ -7,7 +7,6 @@ use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 use std::sync::Arc;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 // Focused tests for :params behavior

@@ -4,7 +4,6 @@
 use crate::ast::*;
 use crate::ir::core::*;
 use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::values::Value;
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -113,6 +112,8 @@ pub struct IrConverter<'a> {
     capture_analysis: HashMap<NodeId, Vec<IrCapture>>,
     /// Optional module registry for resolving qualified symbols during conversion
     module_registry: Option<&'a ModuleRegistry>,
+    /// When true, unknown symbols cause a conversion error instead of deferring to runtime
+    strict_unknown_symbols: bool,
 }
 
 impl<'a> IrConverter<'a> {
@@ -126,6 +127,7 @@ impl<'a> IrConverter<'a> {
             },
             capture_analysis: HashMap::new(),
             module_registry: None,
+            strict_unknown_symbols: false,
         };
 
         // Add built-in functions to global scope
@@ -142,11 +144,18 @@ impl<'a> IrConverter<'a> {
             },
             capture_analysis: HashMap::new(),
             module_registry: Some(registry),
+            strict_unknown_symbols: false,
         };
 
         // Add built-in functions to global scope
         converter.add_builtin_functions();
         converter
+    }
+
+    /// Enable strict mode for unknown symbols: emit UndefinedSymbol at conversion time
+    pub fn strict(mut self) -> Self {
+        self.strict_unknown_symbols = true;
+        self
     }
 
     pub fn next_id(&mut self) -> NodeId {
@@ -1146,11 +1155,23 @@ impl<'a> IrConverter<'a> {
                             });
                         }
                     }
+                    // Check other modules if qualified resolution was not applicable but registry is present
+                    // (No-op here: unqualified names don't search other modules by default)
                 }
-                
-                Err(IrConversionError::UndefinedSymbol {
-                    symbol: name,
-                    location: None,
+                // If in strict mode, error on unknown symbols at conversion time
+                if self.strict_unknown_symbols {
+                    return Err(IrConversionError::UndefinedSymbol {
+                        symbol: name,
+                        location: None,
+                    });
+                }
+                // Fallback to a dynamic variable ref to be resolved at runtime
+                Ok(IrNode::VariableRef {
+                    id,
+                    name,
+                    binding_id: 0,
+                    ir_type: IrType::Any,
+                    source_location: None,
                 })
             }
         }
@@ -1707,38 +1728,102 @@ impl<'a> IrConverter<'a> {
             // Do NOT enter a new scope here; the placeholder is already in the current scope
             let init_expr = match *binding.value {
                 Expression::Fn(fn_expr) => {
-                    // Patch: do not enter a new scope in convert_fn, so the placeholder is visible
-                    // Instead, convert params and body in the current scope
+                    // Patch: inline convert_fn in current scope, supporting destructuring params
                     let id = self.next_id();
                     let mut params = Vec::new();
+                    let mut param_destructure_prologue: Vec<IrNode> = Vec::new();
+                    let mut hidden_param_idx: usize = 0;
+
                     for p_def in fn_expr.params {
-                        if let Pattern::Symbol(s) = p_def.pattern {
-                            let param_id = self.next_id();
-                            let param_type =
-                                self.convert_type_annotation_option(p_def.type_annotation)?;
-                            let binding_info = BindingInfo {
-                                name: s.0.clone(),
-                                binding_id: param_id,
-                                ir_type: param_type.clone().unwrap_or(IrType::Any),
-                                kind: BindingKind::Parameter,
-                            };
-                            self.define_binding(s.0.clone(), binding_info);
-                            params.push(IrNode::Param {
-                                id: param_id,
-                                binding: Box::new(IrNode::VariableBinding {
+                        match p_def.pattern {
+                            Pattern::Symbol(s) => {
+                                let param_id = self.next_id();
+                                let param_type =
+                                    self.convert_type_annotation_option(p_def.type_annotation.clone())?;
+                                let binding_info = BindingInfo {
+                                    name: s.0.clone(),
+                                    binding_id: param_id,
+                                    ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                    kind: BindingKind::Parameter,
+                                };
+                                self.define_binding(s.0.clone(), binding_info);
+                                params.push(IrNode::Param {
                                     id: param_id,
-                                    name: s.0,
+                                    binding: Box::new(IrNode::VariableBinding {
+                                        id: param_id,
+                                        name: s.0,
+                                        ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                        source_location: None,
+                                    }),
+                                    type_annotation: param_type.clone(),
                                     ir_type: param_type.clone().unwrap_or(IrType::Any),
                                     source_location: None,
-                                }),
-                                type_annotation: param_type.clone(),
-                                ir_type: param_type.clone().unwrap_or(IrType::Any),
-                                source_location: None,
-                            });
+                                });
+                            }
+                            Pattern::Wildcard | Pattern::VectorDestructuring { .. } | Pattern::MapDestructuring { .. } => {
+                                let hidden_name = format!("__arg{}", hidden_param_idx);
+                                hidden_param_idx += 1;
+                                let param_id = self.next_id();
+                                let param_type =
+                                    self.convert_type_annotation_option(p_def.type_annotation.clone())?;
+                                let binding_info = BindingInfo {
+                                    name: hidden_name.clone(),
+                                    binding_id: param_id,
+                                    ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                    kind: BindingKind::Parameter,
+                                };
+                                self.define_binding(hidden_name.clone(), binding_info);
+
+                                // Predeclare symbols from pattern
+                                let pattern_symbols = self.extract_pattern_symbols(&p_def.pattern);
+                                for sym in pattern_symbols {
+                                    let sym_binding_id = self.next_id();
+                                    let sym_binding_info = BindingInfo {
+                                        name: sym.clone(),
+                                        binding_id: sym_binding_id,
+                                        ir_type: IrType::Any,
+                                        kind: BindingKind::Variable,
+                                    };
+                                    self.define_binding(sym, sym_binding_info);
+                                }
+
+                                params.push(IrNode::Param {
+                                    id: param_id,
+                                    binding: Box::new(IrNode::VariableBinding {
+                                        id: param_id,
+                                        name: hidden_name.clone(),
+                                        ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                        source_location: None,
+                                    }),
+                                    type_annotation: param_type.clone(),
+                                    ir_type: param_type.clone().unwrap_or(IrType::Any),
+                                    source_location: None,
+                                });
+
+                                if !matches!(p_def.pattern, Pattern::Wildcard) {
+                                    let ir_pattern = self.convert_pattern_to_irpattern(p_def.pattern)?;
+                                    let value_ref_id = self.next_id();
+                                    param_destructure_prologue.push(IrNode::Destructure {
+                                        id: self.next_id(),
+                                        pattern: ir_pattern,
+                                        value: Box::new(IrNode::VariableRef {
+                                            id: value_ref_id,
+                                            name: hidden_name,
+                                            binding_id: param_id,
+                                            ir_type: IrType::Any,
+                                            source_location: None,
+                                        }),
+                                        ir_type: IrType::Any,
+                                        source_location: None,
+                                    });
+                                }
+                            }
                         }
                     }
                     let variadic_param = None; // TODO: handle variadic
                     let mut body = Vec::new();
+                    // Insert param destructuring before body
+                    body.extend(param_destructure_prologue.into_iter());
                     for expr in fn_expr.body {
                         body.push(self.convert_expression(expr)?);
                     }
@@ -1859,34 +1944,107 @@ impl<'a> IrConverter<'a> {
         let id = self.next_id();
         self.enter_scope();
         let mut params = Vec::new();
+        // Prologue destructuring steps for complex parameter patterns
+        let mut param_destructure_prologue: Vec<IrNode> = Vec::new();
+
+        // We'll index hidden params for deterministic fresh names
+        let mut hidden_param_idx: usize = 0;
+
         for p_def in fn_expr.params {
-            if let Pattern::Symbol(s) = p_def.pattern {
-                let param_id = self.next_id();
-                let param_type = self.convert_type_annotation_option(p_def.type_annotation)?;
+            match p_def.pattern {
+                Pattern::Symbol(s) => {
+                    let param_id = self.next_id();
+                    let param_type = self.convert_type_annotation_option(p_def.type_annotation)?;
 
-                let binding_info = BindingInfo {
-                    name: s.0.clone(),
-                    binding_id: param_id,
-                    ir_type: param_type.clone().unwrap_or(IrType::Any),
-                    kind: BindingKind::Parameter,
-                };
-                self.define_binding(s.0.clone(), binding_info);
+                    let binding_info = BindingInfo {
+                        name: s.0.clone(),
+                        binding_id: param_id,
+                        ir_type: param_type.clone().unwrap_or(IrType::Any),
+                        kind: BindingKind::Parameter,
+                    };
+                    self.define_binding(s.0.clone(), binding_info);
 
-                params.push(IrNode::Param {
-                    id: param_id,
-                    binding: Box::new(IrNode::VariableBinding {
+                    params.push(IrNode::Param {
                         id: param_id,
-                        name: s.0,
+                        binding: Box::new(IrNode::VariableBinding {
+                            id: param_id,
+                            name: s.0,
+                            ir_type: param_type.clone().unwrap_or(IrType::Any),
+                            source_location: None,
+                        }),
+                        type_annotation: param_type.clone(),
                         ir_type: param_type.clone().unwrap_or(IrType::Any),
                         source_location: None,
-                    }),
-                    type_annotation: param_type.clone(),
-                    ir_type: param_type.clone().unwrap_or(IrType::Any),
-                    source_location: None,
-                });
+                    });
+                }
+                // Wildcard or destructuring patterns → compile to hidden param + Destructure prologue
+                Pattern::Wildcard | Pattern::VectorDestructuring { .. } | Pattern::MapDestructuring { .. } => {
+                    // Fresh hidden param name
+                    let hidden_name = format!("__arg{}", hidden_param_idx);
+                    hidden_param_idx += 1;
+
+                    let param_id = self.next_id();
+                    let param_type = self.convert_type_annotation_option(p_def.type_annotation.clone())?;
+
+                    // Add the hidden param symbol into current scope as a parameter
+                    let binding_info = BindingInfo {
+                        name: hidden_name.clone(),
+                        binding_id: param_id,
+                        ir_type: param_type.clone().unwrap_or(IrType::Any),
+                        kind: BindingKind::Parameter,
+                    };
+                    self.define_binding(hidden_name.clone(), binding_info);
+
+                    // Also predeclare all symbols provided by the pattern in this scope
+                    let pattern_symbols = self.extract_pattern_symbols(&p_def.pattern);
+                    for sym in pattern_symbols {
+                        let sym_binding_id = self.next_id();
+                        let sym_binding_info = BindingInfo {
+                            name: sym.clone(),
+                            binding_id: sym_binding_id,
+                            ir_type: IrType::Any,
+                            kind: BindingKind::Variable,
+                        };
+                        self.define_binding(sym, sym_binding_info);
+                    }
+
+                    // Add a simple param binding (to the hidden name)
+                    params.push(IrNode::Param {
+                        id: param_id,
+                        binding: Box::new(IrNode::VariableBinding {
+                            id: param_id,
+                            name: hidden_name.clone(),
+                            ir_type: param_type.clone().unwrap_or(IrType::Any),
+                            source_location: None,
+                        }),
+                        type_annotation: param_type.clone(),
+                        ir_type: param_type.clone().unwrap_or(IrType::Any),
+                        source_location: None,
+                    });
+
+                    // Add destructure prologue if not wildcard (wildcard binds nothing)
+                    if !matches!(p_def.pattern, Pattern::Wildcard) {
+                        let ir_pattern = self.convert_pattern_to_irpattern(p_def.pattern)?;
+                        let value_ref_id = self.next_id();
+                        param_destructure_prologue.push(IrNode::Destructure {
+                            id: self.next_id(),
+                            pattern: ir_pattern,
+                            value: Box::new(IrNode::VariableRef {
+                                id: value_ref_id,
+                                name: hidden_name,
+                                binding_id: param_id,
+                                ir_type: IrType::Any,
+                                source_location: None,
+                            }),
+                            ir_type: IrType::Any,
+                            source_location: None,
+                        });
+                    }
+                }
             }
-            // TODO: Handle other patterns in params
-        } // Handle variadic parameter
+        }
+
+        // Handle variadic parameter
         let variadic_param = if let Some(variadic_param_def) = fn_expr.variadic_param {
             if let Pattern::Symbol(s) = variadic_param_def.pattern {
                 let param_id = self.next_id();
@@ -1921,6 +2079,8 @@ impl<'a> IrConverter<'a> {
         };
 
         let mut body = Vec::new();
+        // Insert destructure prologue first (so bindings are established before body uses them)
+        body.extend(param_destructure_prologue.into_iter());
         for expr in fn_expr.body {
             body.push(self.convert_expression(expr)?);
         }
@@ -2113,20 +2273,50 @@ impl<'a> IrConverter<'a> {
 
         let mut catch_clauses = Vec::new();
         for clause in try_expr.catch_clauses {
+            // Convert catch pattern first
             let pattern = match clause.pattern {
                 CatchPattern::Keyword(k) => IrPattern::Literal(Literal::Keyword(k)),
                 CatchPattern::Type(t) => IrPattern::Type(self.convert_type_annotation(t)?),
                 CatchPattern::Symbol(s) => IrPattern::Variable(s.0),
                 CatchPattern::Wildcard => IrPattern::Wildcard,
             };
+            // Enter a new scope for the catch body so the binding and any pattern vars are in scope
+            self.enter_scope();
+
+            // If pattern is a variable, predeclare it in the scope
+            if let IrPattern::Variable(var_name) = &pattern {
+                let binding_info = BindingInfo {
+                    name: var_name.clone(),
+                    binding_id: self.next_id(),
+                    ir_type: IrType::Any,
+                    kind: BindingKind::Variable,
+                };
+                self.define_binding(var_name.clone(), binding_info);
+            }
+
+            // Also declare the explicit catch binding symbol (e.g., `e`)
+            let binding_symbol = clause.binding.0.clone();
+            let catch_binding_info = BindingInfo {
+                name: binding_symbol.clone(),
+                binding_id: self.next_id(),
+                ir_type: IrType::Any,
+                kind: BindingKind::Variable,
+            };
+            self.define_binding(binding_symbol.clone(), catch_binding_info);
+
+            // Now convert the catch body within this scope
             let body = clause
                 .body
                 .into_iter()
                 .map(|e| self.convert_expression(e))
                 .collect::<Result<_, _>>()?;
+
+            // Exit the catch scope after converting body
+            self.exit_scope();
+
             catch_clauses.push(IrCatchClause {
                 error_pattern: pattern,
-                binding: Some(clause.binding.0),
+                binding: Some(binding_symbol),
                 body,
             });
         }

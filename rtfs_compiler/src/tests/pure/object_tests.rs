@@ -6,12 +6,12 @@ mod object_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
         validator::SchemaValidator,
     };
-    use crate::ccos::delegation::StaticDelegationEngine;
+    
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    
+    
     
 
     #[test]

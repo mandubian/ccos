@@ -10,7 +10,6 @@ use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::ccos::host::RuntimeHost;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

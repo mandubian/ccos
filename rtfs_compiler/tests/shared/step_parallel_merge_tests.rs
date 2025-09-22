@@ -1,7 +1,5 @@
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::ccos::host::RuntimeHost;

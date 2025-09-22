@@ -8,14 +8,12 @@
 //! Usage:
 //! `cargo run --example plan_generation_demo -- ./output/intent_20250711_153000_analyze_the_sentiment.rtfs`
 
-use rtfs_compiler::ccos::delegation::{ExecTarget, ModelRegistry, StaticDelegationEngine, ModelProvider};
+use rtfs_compiler::ccos::delegation::{ModelRegistry, StaticDelegationEngine, ModelProvider};
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ast::TopLevel;
-use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityPolicies};
-use rtfs_compiler::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::fs;
@@ -517,7 +515,7 @@ GENERATED RTFS PLAN:
         rtfs_compiler::runtime::security::RuntimeContext::full(),
     ));
     
-    let mut evaluator = Evaluator::with_environment(
+    let evaluator = Evaluator::with_environment(
         Arc::new(ModuleRegistry::new()),
         stdlib_env,
         RuntimeContext::full(),

@@ -6,15 +6,11 @@
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
-use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::ccos::host::RuntimeHost;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
-use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
-use std::cell::RefCell;
 use tokio::sync::RwLock;
 
 /// Creates a new capability registry wrapped in Arc<RwLock<>>

@@ -2,13 +2,13 @@
 mod tests {
     use crate::runtime::module_runtime::ModuleRegistry;
     use crate::runtime::ir_runtime::IrRuntime;
-    use crate::ccos::delegation::StaticDelegationEngine;
+    
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
     use std::path::PathBuf;
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    
+    
 
     #[test]
     fn test_file_based_module_loading() -> Result<(), Box<dyn std::error::Error>> {

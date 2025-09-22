@@ -20,7 +20,8 @@ use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::ExecutionOutcome;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+// Removed RwLock - no longer needed after atom removal
 use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
 use crate::runtime::environment::IrEnvironment;
 use crate::ir::core::{IrType, IrNode};
@@ -365,41 +366,9 @@ impl StandardLibrary {
             })),
         );
 
-        // Atoms and coordination helpers
-        env.define(
-            &Symbol("atom".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "atom".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::atom_new(args)),
-            })),
-        );
-        env.define(
-            &Symbol("deref".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "deref".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::atom_deref(args)),
-            })),
-        );
-        env.define(
-            &Symbol("reset!".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "reset!".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(|args: Vec<Value>| Self::atom_reset(args)),
-            })),
-        );
-        env.define(
-            &Symbol("swap!".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "swap!".to_string(),
-                arity: Arity::Variadic(2), // (swap! a f & args)
-                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
-                    Self::atom_swap(args, evaluator, env)
-                }),
-            })),
-        );
+        // No atoms - use host state capabilities instead
+        // Removed: atom, deref, reset!, swap! - migrate to host capabilities
+        // Use: (call :ccos.state.kv.get {...}) or (call :ccos.state.counter.inc {...})
         env.define(
             &Symbol("coordinate-work".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -1545,7 +1514,9 @@ impl StandardLibrary {
                 args_for_call.extend(extra_args.clone());
                 match evaluator.call_function(f_to_call, &args_for_call, env)? {
                     ExecutionOutcome::Complete(v) => v,
-                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.fn_symbol))),
+                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'update'".to_string())),
                 }
             };
             new_map.insert(map_key, new_value);
@@ -1609,7 +1580,9 @@ impl StandardLibrary {
                 args_for_call.extend(extra_args.clone());
                 match evaluator.call_function(f_to_call, &args_for_call, env)? {
                     ExecutionOutcome::Complete(v) => v,
-                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.fn_symbol))),
+                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'update'".to_string())),
                 }
             };
             new_vec[index] = new_value;
@@ -1731,7 +1704,9 @@ impl StandardLibrary {
                     let args_for_call = vec![Value::Integer(index as i64), element.clone()];
                     match evaluator.call_function(f.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map-indexed': {}", hc.fn_symbol))),
+                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map-indexed': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'map-indexed'".to_string())),
                     }
                 }
                 _ => {
@@ -1792,7 +1767,9 @@ impl StandardLibrary {
                     let args_for_call = vec![element.clone()];
                     let pred_result = match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'remove': {}", hc.fn_symbol))),
+                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'remove': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'remove'".to_string())),
                     };
                     match pred_result {
                         Value::Boolean(b) => !b, // Keep elements where predicate returns false
@@ -1858,7 +1835,9 @@ impl StandardLibrary {
                             let args_for_call = vec![element.clone()];
                             match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                                 ExecutionOutcome::Complete(v) => v,
-                                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'some?': {}", hc.fn_symbol))),
+                                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'some?': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'some?'".to_string())),
                             }
                         }
                         _ => {
@@ -1916,7 +1895,9 @@ impl StandardLibrary {
                     let args_for_call = vec![element.clone()];
                     match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'every?': {}", hc.fn_symbol))),
+                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'every?': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'every?'".to_string())),
                     }
                 }
                 _ => {
@@ -2227,7 +2208,9 @@ impl StandardLibrary {
         for element in elements {
             match evaluator.call_function(function.clone(), &[element], env)? {
                 ExecutionOutcome::Complete(v) => result.push(v),
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map': {}", hc.fn_symbol))),
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'map'".to_string())),
             }
         }
 
@@ -2289,7 +2272,9 @@ impl StandardLibrary {
         for element in elements {
             let should_include = match evaluator.call_function(predicate.clone(), &[element.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'filter': {}", hc.fn_symbol))),
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'filter': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'filter'".to_string())),
             };
             match should_include {
                 Value::Boolean(true) => result.push(element),
@@ -2379,7 +2364,9 @@ impl StandardLibrary {
         for value in rest {
             accumulator = match evaluator.call_function(function.clone(), &[accumulator.clone(), value.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'reduce': {}", hc.fn_symbol))),
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'reduce': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'reduce'".to_string())),
             };
         }
 
@@ -2484,7 +2471,9 @@ impl StandardLibrary {
         for element in elements {
             let key = match evaluator.call_function(key_fn.clone(), &[element.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'sort-by': {}", hc.fn_symbol))),
+                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'sort-by': {}", hc.capability_id))),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'sort-by'".to_string())),
             };
             pairs.push((element, key));
         }
@@ -2658,47 +2647,10 @@ impl StandardLibrary {
         Ok(Value::Map(out))
     }
 
-    /// Atoms: (atom v)
-    fn atom_new(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 { return Err(RuntimeError::ArityMismatch { function: "atom".into(), expected: "1".into(), actual: args.len() }); }
-        Ok(Value::Atom(Arc::new(RwLock::new(args[0].clone()))))
-    }
-
-    /// (deref a)
-    fn atom_deref(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 { return Err(RuntimeError::ArityMismatch { function: "deref".into(), expected: "1".into(), actual: args.len() }); }
-        match &args[0] {
-            Value::Atom(rc) => Ok(rc.read().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))?.clone()),
-            other => Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "deref".into() })
-        }
-    }
-
-    /// (reset! a v)
-    fn atom_reset(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 2 { return Err(RuntimeError::ArityMismatch { function: "reset!".into(), expected: "2".into(), actual: args.len() }); }
-        match &args[0] {
-            Value::Atom(rc) => { *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = args[1].clone(); Ok(args[1].clone()) }
-            other => Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "reset!".into() })
-        }
-    }
-
-    /// (swap! a f & args) -> applies f to current value and args, stores result back
-    fn atom_swap(args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
-        if args.len() < 2 { return Err(RuntimeError::ArityMismatch { function: "swap!".into(), expected: "at least 2".into(), actual: args.len() }); }
-        let (atom_val, f_val, rest) = (&args[0], &args[1], &args[2..]);
-    let rc = match atom_val { Value::Atom(rc) => rc.clone(), other => return Err(RuntimeError::TypeError { expected: "atom".into(), actual: other.type_name().into(), operation: "swap!".into() }) };
-    // Build call args current, rest...
-    let current = rc.read().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))?.clone();
-        let mut call_args = Vec::with_capacity(1 + rest.len());
-        call_args.push(current);
-        call_args.extend_from_slice(rest);
-        let new_val = match evaluator.call_function(f_val.clone(), &call_args, env)? {
-            ExecutionOutcome::Complete(v) => v,
-            ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'atom_swap': {}", hc.fn_symbol))),
-        };
-    *rc.write().map_err(|e| RuntimeError::Generic(format!("RwLock poisoned: {}", e)))? = new_val.clone();
-        Ok(new_val)
-    }
+    // Removed all atom functions - use host state capabilities instead
+    // Migrate from: (atom 0), (deref atom), (reset! atom val), (swap! atom f args)
+    // Migrate to: (call :ccos.state.kv.get {...}), (call :ccos.state.kv.put {...}),
+    //             (call :ccos.state.counter.inc {...})
 
     /// Stub for coordinate-work to satisfy tests until full impl exists
     fn coordinate_work_stub(args: Vec<Value>) -> RuntimeResult<Value> {

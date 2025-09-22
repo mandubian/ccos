@@ -1,5 +1,5 @@
 use rtfs_compiler::runtime::microvm::providers::{MicroVMProvider, process::ProcessMicroVMProvider};
-use rtfs_compiler::runtime::microvm::core::{ExecutionContext, Program};
+use rtfs_compiler::runtime::microvm::core::ExecutionContext;
 use rtfs_compiler::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;

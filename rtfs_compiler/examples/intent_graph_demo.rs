@@ -329,7 +329,7 @@ fn render_value(v: &Value) -> String {
         Value::Timestamp(ts) => format!("#timestamp(\"{}\")", ts),
         Value::Uuid(u) => format!("#uuid(\"{}\")", u),
         Value::ResourceHandle(r) => format!("#resource(\"{}\")", r),
-        Value::Atom(_) => "#<atom>".into(),
+        // Value::Atom removed - use host capabilities for state instead
         Value::Symbol(s) => s.0.clone(),
         Value::Keyword(k) => format!(":{}", k.0),
     }

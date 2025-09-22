@@ -3,8 +3,7 @@ use rtfs_compiler::runtime::evaluator::Evaluator;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::host_interface::HostInterface;
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
-use std::collections::HashMap;
+use rtfs_compiler::ast::{MapKey, Keyword};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -15,7 +14,25 @@ impl HostInterface for StubHost {
     fn notify_step_completed(&self, _id: &str, _res: &rtfs_compiler::ccos::types::ExecutionResult) -> Result<(), rtfs_compiler::runtime::error::RuntimeError> { Ok(()) }
     fn notify_step_failed(&self, _id: &str, _err: &str) -> Result<(), rtfs_compiler::runtime::error::RuntimeError> { Ok(()) }
     fn get_context_value(&self, _k: &str) -> Option<rtfs_compiler::runtime::values::Value> { None }
-    fn execute_capability(&self, _cap: &str, _args: &[rtfs_compiler::runtime::values::Value]) -> Result<rtfs_compiler::runtime::values::Value, rtfs_compiler::runtime::error::RuntimeError> { Ok(rtfs_compiler::runtime::values::Value::Nil) }
+    fn execute_capability(&self, cap: &str, args: &[rtfs_compiler::runtime::values::Value]) -> Result<rtfs_compiler::runtime::values::Value, rtfs_compiler::runtime::error::RuntimeError> { 
+        match cap {
+            "ccos.state.kv.put" => Ok(rtfs_compiler::runtime::values::Value::Nil), // Put operations return nil
+            "ccos.state.kv.get" => {
+                // For get operations, check if we're looking for key "k"
+                if args.len() >= 1 {
+                    if let rtfs_compiler::runtime::values::Value::Map(map) = &args[0] {
+                        if let Some(rtfs_compiler::runtime::values::Value::String(key)) = map.get(&MapKey::Keyword(Keyword("key".to_string()))) {
+                            if key == "k" {
+                                return Ok(rtfs_compiler::runtime::values::Value::String("v".to_string()));
+                            }
+                        }
+                    }
+                }
+                Ok(rtfs_compiler::runtime::values::Value::Nil)
+            },
+            _ => Ok(rtfs_compiler::runtime::values::Value::Nil)
+        }
+    }
     fn set_execution_context(&self, _plan_id: String, _intent_ids: Vec<String>, _parent_action_id: String) { }
     fn clear_execution_context(&self) { }
     fn set_step_exposure_override(&self, _expose: bool, _keys: Option<Vec<String>>) { }
@@ -29,8 +46,8 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs_compiler::runtime::er
     let host = Arc::new(StubHost);
     let mut ev = Evaluator::new_with_defaults(module_registry, host);
 
-    // Test shorthand get after set!
-    let set_prog = "(do (step \"set\" (set! :k \"v\")))";
+    // Test shorthand get with host capabilities (set! removed in migration)
+    let set_prog = "(do (step \"set\" (call :ccos.state.kv.put {:key \"k\" :value \"v\"})))";
     let set_items = parser::parse(set_prog).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
     let _ = match ev.eval_toplevel(&set_items)? {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(_) => {},
@@ -39,7 +56,7 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs_compiler::runtime::er
         }
     };
 
-    let get_prog = "(do (step \"get\" (get :k)))";
+    let get_prog = "(do (step \"get\" (call :ccos.state.kv.get {:key \"k\"})))";
     let get_items = parser::parse(get_prog).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
     let result = ev.eval_toplevel(&get_items)?;
     let val = match result {
@@ -49,11 +66,11 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs_compiler::runtime::er
         }
     };
     println!("DEBUG val = {:?}", val);
-    // last evaluation should be the value of (get :k)
+    // last evaluation should be the value of (call :ccos.state.kv.get {:key "k"})
     assert!(matches!(val, Value::String(ref s) if s == "v"));
 
-    // Test builtin get on a map
-    let program2 = "(do (step \"mkt\" (set! :m (hash-map :a 1))) (step \"read\" (get (get :m) :a)))";
+    // Test builtin get on a map (set! removed in migration)
+    let program2 = "(do (step \"mkt\" (let [m (hash-map :a 1)] m)) (step \"read\" (get (hash-map :a 1) :a)))";
     let items2 = parser::parse(program2).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
     let result2 = ev.eval_toplevel(&items2)?;
     let val2 = match result2 {

@@ -6,7 +6,7 @@
 
 use rtfs_compiler::ccos::delegation::{ExecTarget, ModelRegistry, StaticDelegationEngine, ModelProvider};
 use rtfs_compiler::ccos::remote_models::{
-    RemoteModelFactory, OpenAIModel, GeminiModel, ClaudeModel, OpenRouterModel, RemoteModelConfig
+    RemoteModelFactory, RemoteModelConfig
 };
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
@@ -194,7 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("✅ Result: {}", value);
                             }
                             rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(host_call) => {
-                                println!("⚠️  Host call required: {}", host_call.fn_symbol);
+                                println!("⚠️  Host call required: {}", host_call.capability_id);
                             }
                         }
                     }

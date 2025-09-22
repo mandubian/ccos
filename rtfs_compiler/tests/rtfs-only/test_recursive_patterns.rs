@@ -1,7 +1,3 @@
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use std::sync::Arc;
 // Test for recursive function patterns

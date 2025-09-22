@@ -119,8 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             rtfs_compiler::ccos::capability_marketplace::mcp_discovery::MCPTool {
                 name: t.name.clone(),
                 description: t.description.clone(),
-                inputSchema: None,
-                outputSchema: None,
+                input_schema: None,
+                output_schema: None,
             }
         }).collect();
 
@@ -154,8 +154,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             rtfs_compiler::ccos::capability_marketplace::mcp_discovery::MCPTool {
                 name: t.name.clone(),
                 description: t.description.clone(),
-                inputSchema: None,
-                outputSchema: None,
+                input_schema: None,
+                output_schema: None,
             }
         }).collect();
 

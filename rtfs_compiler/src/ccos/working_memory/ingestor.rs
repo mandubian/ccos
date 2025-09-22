@@ -282,7 +282,7 @@ mod tests {
 
         // Append a couple of actions via lifecycle helpers
         let intent = Intent::new("WM sink goal".to_string());
-        let mut a = chain.create_action(intent.clone(), None).unwrap();
+        let a = chain.create_action(intent.clone(), None).unwrap();
         // Record a result to trigger append + notification
         let result = crate::ccos::types::ExecutionResult { success: true, value: crate::runtime::values::Value::Nil, metadata: Default::default() };
         chain.record_result(a.clone(), result).unwrap();

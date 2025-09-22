@@ -28,16 +28,19 @@ pub use environment::{Environment, IrEnvironment};
 pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
 pub use ir_runtime::IrRuntime;
+pub use ir_runtime::IrStrategy;
 pub use module_runtime::{Module, ModuleRegistry};
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
 pub use execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
+#[cfg(feature = "effect-boundary")]
+pub use execution_outcome::{EffectRequest, CausalContext};
 pub use security::RuntimeContext;
 pub use capabilities::*;
 
 use crate::ast::{Expression, Literal, TopLevel, DoExpr};
 use crate::parser;
-use crate::runtime::ir_runtime::IrStrategy;
+// IrStrategy is re-exported below; avoid duplicate local import
 use crate::runtime::pure_host::create_pure_host;
 use std::sync::Arc;
 
@@ -101,7 +104,7 @@ impl Runtime {
         match self.strategy.run(program)? {
             ExecutionOutcome::Complete(value) => Ok(value),
             ExecutionOutcome::RequiresHost(host_call) => {
-                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.fn_symbol)))
+                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.capability_id)))
             }
         }
     }
@@ -127,7 +130,9 @@ impl Runtime {
         let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
-            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.capability_id))),
+            #[cfg(feature = "effect-boundary")]
+            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required but not supported in this context".to_string())),
             Err(e) => Err(e),
         }
     }
@@ -145,7 +150,9 @@ impl Runtime {
         let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
-            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.fn_symbol))),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.capability_id))),
+            #[cfg(feature = "effect-boundary")]
+            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required but not supported in this context".to_string())),
             Err(e) => Err(e),
         }
     }

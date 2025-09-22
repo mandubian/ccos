@@ -1,9 +1,6 @@
 use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 // Simple test for basic recursion functionality
 use rtfs_compiler::*;
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::runtime::evaluator::Evaluator;
 
 #[test]

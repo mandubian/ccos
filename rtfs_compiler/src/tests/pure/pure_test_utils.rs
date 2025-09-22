@@ -3,14 +3,11 @@
 //! These utilities use PureHost and are designed for testing RTFS language
 //! features in isolation without CCOS orchestration, capabilities, or external dependencies.
 
-use crate::ir::converter::IrConverter;
 use crate::parser;
 use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value, pure_host::PureHost, security::RuntimeContext,
 };
-use crate::ccos::delegation::StaticDelegationEngine;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Creates a standard module registry for pure RTFS testing.

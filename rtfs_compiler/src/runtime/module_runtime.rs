@@ -796,6 +796,8 @@ impl ModuleAwareRuntime {
                 match self.ir_runtime.execute_program(program, &mut self.module_registry) {
                     Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
                     Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_host_call)) => Err(RuntimeError::Generic("Host call required during module-level program execution".to_string())),
+                    #[cfg(feature = "effect-boundary")]
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host effect required during module-level program execution".to_string())),
                     Err(e) => Err(e),
                 }
             }
@@ -813,6 +815,8 @@ impl ModuleAwareRuntime {
                 match self.ir_runtime.execute_node(form, &mut env, false, &mut self.module_registry) {
                     Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
                     Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required during module top-level form execution".to_string())),
+                    #[cfg(feature = "effect-boundary")]
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host effect required during module top-level form execution".to_string())),
                     Err(e) => Err(e),
                 }
             }
@@ -870,6 +874,8 @@ impl ModuleAwareRuntime {
                             let func_value = match func_outcome {
                                 super::execution_outcome::ExecutionOutcome::Complete(v) => v,
                                 super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module function definition".to_string())),
+                                #[cfg(feature = "effect-boundary")]
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_) => return Err(RuntimeError::Generic("Host effect required during module function definition".to_string())),
                             };
                             guard.define(func_name.clone(), func_value.clone());
                         }
@@ -885,6 +891,8 @@ impl ModuleAwareRuntime {
                             let var_value = match var_outcome {
                                 super::execution_outcome::ExecutionOutcome::Complete(v) => v,
                                 super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module variable definition".to_string())),
+                                #[cfg(feature = "effect-boundary")]
+                                super::execution_outcome::ExecutionOutcome::RequiresHost(_) => return Err(RuntimeError::Generic("Host effect required during module variable definition".to_string())),
                             };
                             guard.define(var_name.clone(), var_value.clone());
                         }
@@ -998,7 +1006,7 @@ impl ModuleAwareRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::delegation::StaticDelegationEngine;
+    
 
     #[test]
     fn test_module_registry_creation() {
