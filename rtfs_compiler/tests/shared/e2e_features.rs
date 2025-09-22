@@ -336,8 +336,7 @@ fn test_try_catch_expressions_feature() {
 
 #[test]
 fn test_def_defn_expressions_feature() {
-    let config = FeatureTestConfig::new("def_defn_expressions", FeatureCategory::SpecialForms)
-        .ast_only(); // IR runtime still has arity mismatch issues with mutually recursive defn
+    let config = FeatureTestConfig::new("def_defn_expressions", FeatureCategory::SpecialForms); // IR runtime still has arity mismatch issues with mutually recursive defn
     run_feature_tests(&config).expect("def_defn_expressions feature tests failed");
 }
 
@@ -377,6 +376,19 @@ fn test_vector_operations_feature() {
 fn test_map_operations_feature() {
     let config = FeatureTestConfig::new("map_operations", FeatureCategory::DataStructures);
     run_feature_tests(&config).expect("map_operations feature tests failed");
+}
+
+#[test]
+fn test_destructuring_rules_feature() {
+    // Deterministic spec-style tests covering allowed and disallowed destructuring
+    // Some cases are intentionally invalid and should fail:
+    // 6 -> destructuring after & (invalid variadic form)
+    // 7 -> lambda params must be symbols (no destructuring directly in lambda)
+    // 9 -> arity mismatch when passing 3 elements to [a b] pattern
+    let config = FeatureTestConfig::new("destructuring_rules", FeatureCategory::SpecialForms)
+        .expect_fail_ast(&[6, 7, 9], "error")
+        .expect_fail_ir(&[6, 7, 9], "error");
+    run_feature_tests(&config).expect("destructuring_rules feature tests failed");
 }
 
 // MARK: - RTFS 2.0 Specific Tests

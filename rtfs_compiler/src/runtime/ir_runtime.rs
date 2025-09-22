@@ -114,6 +114,14 @@ impl IrRuntime {
 
     let mut env = IrEnvironment::with_stdlib(_module_registry)?;
 
+        // First pass: predefine placeholders for any function definitions to support
+        // forward references and mutual recursion at the top level.
+        if let IrNode::Program { forms, .. } = program_node {
+            for n in forms {
+                self.predefine_function_placeholders_in_node(&mut env, n);
+            }
+        }
+
         // Ensure the context manager has an initialized root context so step
         // lifecycle operations (enter_step/exit_step) can create child contexts.
         {
@@ -188,7 +196,20 @@ impl IrRuntime {
             IrNode::FunctionDef { name, lambda, .. } => {
                 match self.execute_node(lambda, env, false, module_registry)? {
                     ExecutionOutcome::Complete(function_val) => {
-                        env.define(name.clone(), function_val.clone());
+                        // If we pre-created a placeholder for this function (to allow
+                        // mutual recursion), fill it instead of overwriting the binding.
+                        if let Some(existing) = env.get(name) {
+                            if let Value::FunctionPlaceholder(cell) = existing {
+                                let mut guard = cell
+                                    .write()
+                                    .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                                *guard = function_val.clone();
+                            } else {
+                                env.define(name.clone(), function_val.clone());
+                            }
+                        } else {
+                            env.define(name.clone(), function_val.clone());
+                        }
                         Ok(ExecutionOutcome::Complete(function_val))
                     }
                     ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
@@ -236,6 +257,8 @@ impl IrRuntime {
                 }
             }
             IrNode::Module { definitions, .. } => {
+                // Predefine placeholders for all function definitions in this module
+                self.predefine_function_placeholders_in_seq(env, definitions);
                 for def in definitions {
                     match self.execute_node(def, env, false, module_registry)? {
                         ExecutionOutcome::Complete(_) => {}
@@ -249,6 +272,8 @@ impl IrRuntime {
                 Ok(ExecutionOutcome::Complete(Value::Nil))
             }
             IrNode::Do { expressions, .. } => {
+                // Predefine placeholders before executing to support mutual recursion
+                self.predefine_function_placeholders_in_seq(env, expressions);
                 let mut result = Value::Nil;
                 for expr in expressions {
                     match self.execute_node(expr, env, false, module_registry)? {
@@ -934,6 +959,8 @@ impl IrRuntime {
             }
             IrNode::Program { forms, .. } => {
                 // Execute contained forms in the provided environment
+                // Predefine placeholders in nested program nodes as well
+                self.predefine_function_placeholders_in_seq(env, forms);
                 let mut result = Value::Nil;
                 for form in forms {
                     match self.execute_node(form, env, false, module_registry)? {
@@ -961,6 +988,33 @@ impl IrRuntime {
                 let _ = binding;
                 Ok(ExecutionOutcome::Complete(Value::Nil))
             }
+        }
+    }
+
+    /// Predefine function placeholders in a linear sequence of nodes
+    fn predefine_function_placeholders_in_seq(&self, env: &mut IrEnvironment, nodes: &[IrNode]) {
+        for n in nodes {
+            self.predefine_function_placeholders_in_node(env, n);
+        }
+    }
+
+    /// Recursively predefine placeholders for FunctionDef nodes to enable mutual recursion
+    fn predefine_function_placeholders_in_node(&self, env: &mut IrEnvironment, node: &IrNode) {
+        match node {
+            IrNode::FunctionDef { name, .. } => {
+                // Only create placeholder if not already present
+                if env.get(name).is_none() {
+                    let cell = std::sync::Arc::new(std::sync::RwLock::new(Value::Nil));
+                    env.define(name.clone(), Value::FunctionPlaceholder(cell));
+                }
+            }
+            IrNode::Do { expressions, .. } => {
+                self.predefine_function_placeholders_in_seq(env, expressions);
+            }
+            IrNode::Module { definitions, .. } => {
+                self.predefine_function_placeholders_in_seq(env, definitions);
+            }
+            _ => {}
         }
     }
 
@@ -2093,11 +2147,14 @@ impl IrRuntime {
         let collection = &args[collection_arg_index];
         let init_value = if args.len() == 3 { Some(&args[1]) } else { None };
         
-        let collection_vec = match collection {
+        // Accept vector, string (as chars), and list to mirror stdlib behavior
+        let collection_vec: Vec<Value> = match collection {
             Value::Vector(v) => v.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::List(list) => list.clone(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector, string, or list".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "reduce".to_string(),
                 })
@@ -2527,6 +2584,25 @@ impl IrRuntime {
             }
             IrPattern::Vector { elements, rest } => {
                 if let Value::Vector(vec_elements) = value {
+                    // Enforce length rules consistent with AST runtime:
+                    // - If no rest binding, require exact length match
+                    // - If rest binding present, require at least as many elements as fixed patterns
+                    let required = elements.len();
+                    let actual = vec_elements.len();
+                    if rest.is_none() && actual != required {
+                        return Err(RuntimeError::TypeError {
+                            expected: format!("vector with exactly {} elements", required),
+                            actual: format!("vector with {} elements", actual),
+                            operation: "vector destructuring".to_string(),
+                        });
+                    }
+                    if rest.is_some() && actual < required {
+                        return Err(RuntimeError::TypeError {
+                            expected: format!("vector with at least {} elements", required),
+                            actual: format!("vector with {} elements", actual),
+                            operation: "vector destructuring".to_string(),
+                        });
+                    }
                     // Bind each element to its corresponding pattern
                     for (i, element_pattern) in elements.iter().enumerate() {
                         if i < vec_elements.len() {
