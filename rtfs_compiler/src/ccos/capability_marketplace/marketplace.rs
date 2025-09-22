@@ -152,7 +152,9 @@ impl CapabilityMarketplace {
         let registry = self.capability_registry.read().await;
         
         // Get all registered capabilities from the registry
-        for (capability_id, _capability) in registry.get_capabilities() {
+        for capability_id in registry.list_capabilities() {
+            let capability_id = capability_id.to_string();
+            let _capability_opt = registry.get_capability(&capability_id);
             let capability_id_clone = capability_id.clone();
             let provenance = CapabilityProvenance {
                 source: "registry_bootstrap".to_string(),
@@ -846,6 +848,20 @@ impl CapabilityMarketplace {
         let capabilities = self.capabilities.read().await; capabilities.values().cloned().collect()
     }
 
+    /// Execute a capability with enhanced metadata support
+    pub async fn execute_capability_enhanced(
+        &self, 
+        id: &str, 
+        inputs: &Value,
+        _metadata: Option<&crate::runtime::execution_outcome::CallMetadata>
+    ) -> RuntimeResult<Value> {
+        // For now, delegate to the existing method
+        // TODO: Use metadata for enhanced execution context
+        self.execute_capability(id, inputs).await
+    }
+
+    // execute_effect_request removed - unified into execute_capability_enhanced
+
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
         // Validate capability access according to isolation policy
         self.validate_capability_access(id)?;
@@ -889,7 +905,11 @@ impl CapabilityMarketplace {
             m
         } else {
             let registry = self.capability_registry.read().await;
-            let args = vec![inputs.clone()];
+            // Extract arguments from the input Value::List if it's a list, otherwise wrap in vector
+            let args = match inputs {
+                Value::List(list) => list.clone(),
+                _ => vec![inputs.clone()],
+            };
             // For marketplace fallback, use a controlled runtime context
             let runtime_context = RuntimeContext::controlled(vec![id.to_string()]);
             return registry.execute_capability_with_microvm(id, args, Some(&runtime_context));

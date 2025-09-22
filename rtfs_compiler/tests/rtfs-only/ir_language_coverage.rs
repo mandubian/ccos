@@ -260,11 +260,22 @@ fn test_ir_conversion_log_step() {
 fn test_ir_conversion_symbol_references() {
     let mut converter = setup_converter();
     
-    // Symbol reference (should fail for unknown symbols)
+    // Symbol reference (unknown symbols now compile to a runtime-resolved variable ref)
     let ast = Expression::Symbol(Symbol::new("unknown-symbol"));
-    let result = converter.convert_expression(ast);
-    assert!(result.is_err()); // Should be UndefinedSymbol error
+    let ir = converter
+        .convert_expression(ast)
+        .expect("Should convert unknown symbol to runtime variable ref");
+    assert!(matches!(
+        ir,
+        IrNode::VariableRef { name, binding_id, .. } if name == "unknown-symbol" && binding_id == 0
+    ));
     
+    // In strict mode, unknown symbols should error at conversion time
+    let mut strict_converter = IrConverter::new().strict();
+    let ast = Expression::Symbol(Symbol::new("unknown-symbol"));
+    let result = strict_converter.convert_expression(ast);
+    assert!(result.is_err(), "Strict mode should error on unknown symbols");
+
     // But built-in symbols should work
     let ast = Expression::Symbol(Symbol::new("+"));
     let ir = converter.convert_expression(ast).expect("Should convert built-in symbol");

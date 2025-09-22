@@ -4,7 +4,7 @@ use rtfs_compiler::ccos::arbiter::plan_generation::{PlanGenerationProvider, Stub
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::types::IntentStatus;
-use rtfs_compiler::ccos::orchestrator::{self, Orchestrator};
+use rtfs_compiler::ccos::orchestrator::{self};
 use rtfs_compiler::ccos::types::{Intent, StorableIntent};
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::security::RuntimeContext;

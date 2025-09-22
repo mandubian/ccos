@@ -11,7 +11,7 @@
 use rtfs_compiler::runtime::microvm::*;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::runtime::{RuntimeResult, RuntimeError};
+use rtfs_compiler::runtime::RuntimeError;
 use std::time::Duration;
 
 #[test]
@@ -258,7 +258,7 @@ fn test_mock_provider_config_schema() {
 
 #[test]
 fn test_mock_provider_error_handling() {
-    let mut provider = providers::mock::MockMicroVMProvider::new();
+    let provider = providers::mock::MockMicroVMProvider::new();
     
     // Test execution without initialization
     let context = ExecutionContext {

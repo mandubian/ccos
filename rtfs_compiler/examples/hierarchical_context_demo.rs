@@ -3,7 +3,7 @@
 //! This example demonstrates the hierarchical execution context management system
 //! for CCOS, showing context inheritance, data propagation, isolation, and checkpointing.
 
-use rtfs_compiler::ccos::execution_context::{ContextManager, IsolationLevel, ConflictResolution};
+use rtfs_compiler::ccos::execution_context::{ContextManager, IsolationLevel};
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::error::RuntimeResult;
 

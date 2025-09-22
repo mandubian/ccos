@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("✅ Result: {}", value);
                             }
                             rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(host_call) => {
-                                println!("⚠️  Host call required: {}", host_call.fn_symbol);
+                                println!("⚠️  Host call required: {}", host_call.capability_id);
                             }
                         }
                     }

@@ -61,7 +61,7 @@ impl Evaluator {
         special_forms.insert("step-if".to_string(), Self::eval_step_if_form);
         special_forms.insert("step-loop".to_string(), Self::eval_step_loop_form);
         special_forms.insert("step-parallel".to_string(), Self::eval_step_parallel_form);
-        special_forms.insert("set!".to_string(), Self::eval_set_form);
+        // Removed: set! special form - no mutable variables allowed
         // Allow (get :key) as a special form that reads from the execution context
         // with cross-plan fallback. For other usages (get collection key [default])
         // fall back to the normal builtin function by delegating to the env lookup.
@@ -94,7 +94,7 @@ impl Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
-            max_recursion_depth: 1000,
+            max_recursion_depth: 50,
             security_context,
             host,
             special_forms: Self::default_special_forms(),
@@ -314,6 +314,10 @@ impl Evaluator {
                     match self.eval_expr(expr, &mut env)? {
                         ExecutionOutcome::Complete(v) => last_value = v,
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 TopLevel::Intent(intent) => {
@@ -324,6 +328,8 @@ impl Evaluator {
                         match self.eval_expr(&property.value, &mut env)? {
                             ExecutionOutcome::Complete(v) => { intent_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(intent_metadata);
@@ -336,6 +342,8 @@ impl Evaluator {
                         match self.eval_expr(&property.value, &mut env)? {
                             ExecutionOutcome::Complete(v) => { plan_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(plan_metadata);
@@ -348,6 +356,8 @@ impl Evaluator {
                         match self.eval_expr(&property.value, &mut env)? {
                             ExecutionOutcome::Complete(v) => { action_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(action_metadata);
@@ -360,6 +370,8 @@ impl Evaluator {
                         match self.eval_expr(&property.value, &mut env)? {
                             ExecutionOutcome::Complete(v) => { capability_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(capability_metadata);
@@ -372,6 +384,8 @@ impl Evaluator {
                         match self.eval_expr(&property.value, &mut env)? {
                             ExecutionOutcome::Complete(v) => { resource_metadata.insert(key, v); }
                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                         }
                     }
                     last_value = Value::Map(resource_metadata);
@@ -410,6 +424,17 @@ impl Evaluator {
 
     /// Evaluate an expression in a given environment
     pub fn eval_expr(&self, expr: &Expression, env: &mut Environment) -> Result<ExecutionOutcome, RuntimeError> {
+        // Check recursion depth to prevent stack overflow
+        if self.recursion_depth >= self.max_recursion_depth {
+            return Err(RuntimeError::Generic(format!(
+                "Maximum recursion depth ({}) exceeded. This usually indicates infinite recursion or deeply nested expressions.",
+                self.max_recursion_depth
+            )));
+        }
+
+        // Create a new evaluator with incremented recursion depth for recursive calls
+        let mut deeper_evaluator = self.clone();
+        deeper_evaluator.recursion_depth += 1;
 
         match expr {
             Expression::Literal(lit) => Ok(ExecutionOutcome::Complete(self.eval_literal(lit)?)),
@@ -432,19 +457,23 @@ impl Evaluator {
 
                 // It's a regular function call
                 let func_expr = &list[0];
-                match self.eval_expr(func_expr, env)? {
+                match deeper_evaluator.eval_expr(func_expr, env)? {
                     ExecutionOutcome::Complete(func_value) => {
                         // Evaluate args, aborting early if any arg requires host
                         let mut args_vec: Vec<Value> = Vec::new();
                         for e in &list[1..] {
-                            match self.eval_expr(e, env)? {
+                            match deeper_evaluator.eval_expr(e, env)? {
                                 ExecutionOutcome::Complete(av) => args_vec.push(av),
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                             }
                         }
                         return self.call_function(func_value, &args_vec, env);
                     }
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             Expression::Vector(exprs) => {
@@ -453,6 +482,8 @@ impl Evaluator {
                     match self.eval_expr(e, env)? {
                         ExecutionOutcome::Complete(v) => values_vec.push(v),
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Vector(values_vec)))
@@ -463,6 +494,8 @@ impl Evaluator {
                     match self.eval_expr(value_expr, env)? {
                         ExecutionOutcome::Complete(v) => { result.insert(key.clone(), v); }
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Map(result)))
@@ -482,11 +515,15 @@ impl Evaluator {
                                         match self.eval_expr(e, env)? {
                                             ExecutionOutcome::Complete(av) => args_vec.push(av),
                                             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                                         }
                                     }
                                     return self.call_function(func_value, &args_vec, env);
                                 }
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                             }
                         }
                     }
@@ -516,11 +553,15 @@ impl Evaluator {
                             match self.eval_expr(e, env)? {
                                 ExecutionOutcome::Complete(av) => args_vec.push(av),
                                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                             }
                         }
                         return self.call_function(func_value, &args_vec, env);
                     }
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             Expression::If(if_expr) => self.eval_if(if_expr, env),
@@ -565,6 +606,8 @@ impl Evaluator {
                     match self.eval_expr(value_expr, env)? {
                         ExecutionOutcome::Complete(v) => { result_map.insert(key.clone(), v); }
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Map(result_map)))
@@ -1079,7 +1122,7 @@ impl Evaluator {
 
         // Sequential execution with isolation, plus deterministic merging after each branch
         let mut results: Vec<Value> = Vec::with_capacity(args.len().saturating_sub(i));
-        let mut last_error: Option<RuntimeError> = None;
+        let last_error: Option<RuntimeError> = None;
         for (rel_index, expr) in args[i..].iter().enumerate() {
             let index = i + rel_index;
             // Begin isolated child context for this branch (also switches into it)
@@ -1174,6 +1217,8 @@ impl Evaluator {
             match self.eval_expr(e, env)? {
                 ExecutionOutcome::Complete(v) => evaluated_args.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -1218,9 +1263,13 @@ impl Evaluator {
                     ExecutionOutcome::Complete(Value::String(pstr)) => { model_id = Some(mstr); prompt = Some(pstr); }
                     ExecutionOutcome::Complete(other) => return Err(RuntimeError::InvalidArguments { expected: "prompt string".to_string(), actual: format!("{:?}", other) }),
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 },
                 ExecutionOutcome::Complete(other) => return Err(RuntimeError::InvalidArguments { expected: "model id string".to_string(), actual: format!("{:?}", other) }),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         } else if !args.is_empty() {
             // Parse keyword arguments: :model, :prompt, optional :system
@@ -1248,6 +1297,8 @@ impl Evaluator {
                 let val = match outcome {
                     ExecutionOutcome::Complete(v) => v,
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 };
                 match (key.as_str(), val) {
                     ("model", Value::String(s)) => model_id = Some(s),
@@ -1378,7 +1429,9 @@ impl Evaluator {
                 let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
                 let f = guard.clone();
                 if let Value::Function(f) = f {
-                    self.call_function(Value::Function(f), args, env)
+                    let mut deeper_evaluator = self.clone();
+                    deeper_evaluator.recursion_depth += 1;
+                    deeper_evaluator.call_function(Value::Function(f), args, env)
                 } else {
                     Err(RuntimeError::InternalError(
                         "Function placeholder not resolved".to_string(),
@@ -1437,8 +1490,10 @@ impl Evaluator {
                         DH::LocalModel(id) | DH::RemoteModel(id) => {
                             // Yield control to CCOS for model execution
                             let host_call = HostCall { 
-                                fn_symbol: format!("model-call:{}", id), 
-                                args: args.to_vec(), 
+                                capability_id: format!("model-call:{}", id), 
+                                args: args.to_vec(),
+                                security_context: self.security_context.clone(),
+                                causal_context: None,
                                 metadata: Some(CallMetadata::new()) 
                             };
                             return Ok(ExecutionOutcome::RequiresHost(host_call));
@@ -1450,8 +1505,10 @@ impl Evaluator {
                     if self.is_non_pure_function(fn_symbol) {
                         // Yield control to CCOS for non-pure operations
                         let host_call = HostCall { 
-                            fn_symbol: fn_symbol.to_string(), 
-                            args: args.to_vec(), 
+                            capability_id: fn_symbol.to_string(), 
+                            args: args.to_vec(),
+                            security_context: self.security_context.clone(),
+                            causal_context: None,
                             metadata: Some(CallMetadata::new()) 
                         };
                         return Ok(ExecutionOutcome::RequiresHost(host_call));
@@ -1502,10 +1559,14 @@ impl Evaluator {
                     }
                 }
 
-                // Execute function body
-                match self.eval_expr(&closure.body, &mut func_env)? {
+                // Execute function body with incremented recursion depth
+                let mut deeper_evaluator = self.clone();
+                deeper_evaluator.recursion_depth += 1;
+                match deeper_evaluator.eval_expr(&closure.body, &mut func_env)? {
                     ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                     ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
                 }
             }
             Value::Keyword(keyword) => {
@@ -1574,6 +1635,8 @@ impl Evaluator {
         let condition = match condition_out {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         if condition.is_truthy() {
@@ -1590,11 +1653,15 @@ impl Evaluator {
             match self.eval_let_with_recursion(let_expr, env)? {
                 ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                 ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         } else {
             match self.eval_let_simple(let_expr, env)? {
                 ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
                 ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
     }
@@ -1776,6 +1843,8 @@ impl Evaluator {
             match self.eval_expr(&binding.value, &mut let_env)? {
                 ExecutionOutcome::Complete(v) => self.bind_pattern(&binding.pattern, &v, &mut let_env)?,
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -1819,6 +1888,8 @@ impl Evaluator {
                     }
                 }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -1839,6 +1910,8 @@ impl Evaluator {
             match self.eval_expr(expr, env)? {
                 ExecutionOutcome::Complete(v) => last_outcome = ExecutionOutcome::Complete(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         Ok(last_outcome)
@@ -1849,6 +1922,8 @@ impl Evaluator {
         let value_to_match = match value_to_match_out {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         for clause in &match_expr.clauses {
@@ -1862,6 +1937,8 @@ impl Evaluator {
                             if !v.is_truthy() { continue; }
                         }
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 return self.eval_expr(&clause.body, &mut clause_env);
@@ -1882,43 +1959,15 @@ impl Evaluator {
             match self.eval_expr(expr, env)? {
                 ExecutionOutcome::Complete(v) => messages.push(v.to_string()),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         println!("[{}] {}", level, messages.join(" "));
         Ok(ExecutionOutcome::Complete(Value::Nil))
     }
 
-    fn eval_set_form(&self, args: &[Expression], env: &mut Environment) -> Result<ExecutionOutcome, RuntimeError> {
-        // Expect (set! sym expr)
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "set!".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // First arg may be a symbol or a keyword literal (keywords are used in examples like (set! :key v)).
-        // Coerce Keyword -> Symbol to be permissive with generated plans and docs.
-        let sym = match &args[0] {
-            Expression::Symbol(s) => s.clone(),
-            Expression::Literal(crate::ast::Literal::Keyword(k)) => crate::ast::Symbol(k.0.clone()),
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "symbol".to_string(),
-                    actual: format!("{:?}", args[0]),
-                    operation: "set!".to_string(),
-                })
-            }
-        };
-
-        // Evaluate value
-        let value = self.eval_expr(&args[1], env)?;
-        match value {
-            ExecutionOutcome::Complete(v) => { env.define(&sym, v.clone()); Ok(ExecutionOutcome::Complete(Value::Nil)) }
-            ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
-        }
-    }
+    // Removed eval_set_form - no mutable variables allowed in RTFS 2.0
 
     fn eval_try_catch(
         &self,
@@ -2006,6 +2055,8 @@ impl Evaluator {
         match resource {
             ExecutionOutcome::Complete(v) => resource_env.define(&with_expr.resource_symbol, v),
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
         self.eval_do_body(&with_expr.body, &mut resource_env)
     }
@@ -2033,6 +2084,8 @@ impl Evaluator {
             match value {
                 ExecutionOutcome::Complete(v) => { results.insert(MapKey::Keyword(Keyword(binding.symbol.0.clone())), v); }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         
@@ -2047,6 +2100,8 @@ impl Evaluator {
                 Ok(ExecutionOutcome::Complete(v))
             }
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
     }
 
@@ -2153,6 +2208,8 @@ impl Evaluator {
                 let count_val = match count_val {
                     ExecutionOutcome::Complete(v) => v,
                     ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                 };
                 let n = match count_val { 
                     Value::Integer(i) => i, 
@@ -2174,6 +2231,8 @@ impl Evaluator {
             match body_res {
                 ExecutionOutcome::Complete(v) => last = v,
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         Ok(ExecutionOutcome::Complete(last))
@@ -2189,6 +2248,8 @@ impl Evaluator {
         let binding_val = match binding_val {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
         let bindings_vec = match binding_val {
             Value::Vector(v) => v,
@@ -2222,6 +2283,10 @@ impl Evaluator {
             match self.eval_expr(binding, env)? {
                 ExecutionOutcome::Complete(v) => bindings_vec.push(v),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
 
@@ -2259,6 +2324,10 @@ impl Evaluator {
         match self.for_nest(&pairs, 0, env, &for_expr.body, &mut out)? {
             ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(out))),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
     }
     fn for_nest(&self, pairs: &[(Symbol, Vec<Value>)], depth: usize, env: &Environment, body: &Expression, out: &mut Vec<Value>) -> Result<ExecutionOutcome, RuntimeError> {
@@ -2271,6 +2340,10 @@ impl Evaluator {
                     return Ok(ExecutionOutcome::Complete(Value::Nil));
                 }
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         let (sym, items) = &pairs[depth];
@@ -2280,6 +2353,10 @@ impl Evaluator {
             match self.for_nest(pairs, depth + 1, &loop_env, body, out)? {
                 ExecutionOutcome::Complete(_) => (),
                 ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
             }
         }
         Ok(ExecutionOutcome::Complete(Value::Nil))
@@ -2299,6 +2376,10 @@ impl Evaluator {
         let value_to_match = match self.eval_expr(&args[0], env)? {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         // Remaining arguments are pattern-body pairs
@@ -2390,6 +2471,10 @@ impl Evaluator {
         let init_val = match self.eval_expr(&binding_vec[2], env)? {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
         };
 
         // Create a new environment scope with the variable bound
@@ -2400,6 +2485,10 @@ impl Evaluator {
         match self.eval_expr(&args[1], &mut resource_env)? {
             ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
             ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
         }
     }
 
@@ -3075,6 +3164,10 @@ impl Evaluator {
                     )? {
                         ExecutionOutcome::Complete(v) => result.push(v),
                         ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
                     }
                 }
                 Value::Function(Function::Native(native_func)) => {
@@ -3168,7 +3261,7 @@ impl Evaluator {
             module_registry,
             env,
             recursion_depth: 0,
-            max_recursion_depth: 1000,
+            max_recursion_depth: 50,
             security_context,
             host,
             special_forms: Self::default_special_forms(),

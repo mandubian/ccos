@@ -583,25 +583,9 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Assoc! mutation function
-        env.define(
-            &Symbol("assoc!".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "assoc!".to_string(),
-                arity: Arity::Variadic(3),
-                func: Arc::new(Self::assoc_bang),
-            })),
-        );
+        // Removed assoc! - use host state capabilities instead
 
-        // Reset! mutation function
-        env.define(
-            &Symbol("reset!".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "reset!".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::reset_bang),
-            })),
-        );
+        // Removed reset! - use host state capabilities instead
 
         // Dissoc function
         env.define(
@@ -689,15 +673,7 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // Take function
-        env.define(
-            &Symbol("take".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "take".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::take),
-            })),
-        );
+        // Removed assoc! - use host state capabilities instead
 
         // Drop function
         env.define(
@@ -1638,6 +1614,8 @@ impl SecureStandardLibrary {
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => result.push(v),
                         ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in map closure".into())),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in map closure".to_string())),
                     }
                 }
                 _ => {
@@ -1695,6 +1673,8 @@ impl SecureStandardLibrary {
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => v.is_truthy(),
                         ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in filter closure".into())),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in filter closure".to_string())),
                     }
                 }
                 _ => {
@@ -1761,6 +1741,8 @@ impl SecureStandardLibrary {
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in reduce closure".into())),
+                    #[cfg(feature = "effect-boundary")]
+                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in reduce closure".to_string())),
                     }
                 }
                 _ => {
@@ -1994,69 +1976,9 @@ impl SecureStandardLibrary {
         Ok(Value::Vector(result))
     }
 
-    fn reset_bang(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "reset!".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
+    // Removed reset_bang - use host state capabilities instead
 
-        match &args[0] {
-            Value::Atom(atom_ref) => {
-                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                *atom_guard = args[1].clone();
-                Ok(Value::Nil)
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "atom".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "reset!".to_string(),
-            })
-        }
-    }
-
-    fn assoc_bang(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() < 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "assoc!".to_string(),
-                expected: "at least 3".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        match &args[0] {
-            Value::Atom(atom_ref) => {
-                let mut atom_guard = atom_ref.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                match &*atom_guard {
-                    Value::Map(map) => {
-                        let mut new_map = map.clone();
-                        // Process key-value pairs
-                        for chunk in args[1..].chunks(2) {
-                            if chunk.len() == 2 {
-                                let key = Self::value_to_map_key(&chunk[0])?;
-                                let value = chunk[1].clone();
-                                new_map.insert(key, value);
-                            }
-                        }
-                        *atom_guard = Value::Map(new_map);
-                        Ok(Value::Nil)
-                    }
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "atom containing map".to_string(),
-                        actual: atom_guard.type_name().to_string(),
-                        operation: "assoc!".to_string(),
-                    })
-                }
-            }
-            _ => Err(RuntimeError::TypeError {
-                expected: "atom".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "assoc!".to_string(),
-            })
-        }
-    }
+    // Removed assoc_bang - use host state capabilities instead
 
     fn assoc(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -2823,6 +2745,10 @@ impl SecureStandardLibrary {
                         ExecutionOutcome::RequiresHost(_hc) => {
                             return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc)));
                         }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string()));
+                        }
                     };
 
                     match result {
@@ -2852,6 +2778,8 @@ impl SecureStandardLibrary {
                     let result = match outcome {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc))),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string())),
                     };
 
                     match result {
@@ -2907,6 +2835,10 @@ impl SecureStandardLibrary {
                         ExecutionOutcome::RequiresHost(_hc) => {
                             return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc)));
                         }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string()));
+                        }
                     };
 
                     match result {
@@ -2936,6 +2868,8 @@ impl SecureStandardLibrary {
                     let result = match outcome {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc))),
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string())),
                     };
 
                     match result {

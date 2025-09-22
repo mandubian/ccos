@@ -153,7 +153,7 @@ fn test_plan_map_extraction() {
 #[test]
 fn test_intent_to_rtfs_conversion() {
     // Create a test intent
-    let mut intent = Intent {
+    let intent = Intent {
         intent_id: "test-intent".to_string(),
         name: Some("test-intent".to_string()),
         original_request: "Test request".to_string(),
@@ -207,7 +207,7 @@ fn test_intent_to_rtfs_conversion() {
 #[test]
 fn test_plan_to_rtfs_conversion() {
     // Create a test plan
-    let mut plan = Plan {
+    let plan = Plan {
         plan_id: "test-plan".to_string(),
         name: Some("test-plan".to_string()),
         intent_ids: vec!["intent-1".to_string(), "intent-2".to_string()],

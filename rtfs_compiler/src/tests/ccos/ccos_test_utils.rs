@@ -3,17 +3,14 @@
 //! These utilities use RuntimeHost and are designed for testing CCOS integration,
 //! capabilities, delegation, and orchestration features.
 
-use crate::ir::converter::IrConverter;
 use crate::parser;
 use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
     values::Value, security::RuntimeContext,
 };
-use crate::ccos::delegation::StaticDelegationEngine;
 use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::host::RuntimeHost;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

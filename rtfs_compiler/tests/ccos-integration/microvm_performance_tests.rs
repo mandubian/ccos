@@ -4,7 +4,6 @@
 //! These tests measure execution times and provide basic performance metrics.
 
 use rtfs_compiler::runtime::microvm::*;
-use rtfs_compiler::runtime::values::Value;
 use std::time::Instant;
 
 // Simple arithmetic program for basic performance testing
@@ -317,7 +316,7 @@ fn test_large_program_performance() {
 fn test_provider_metadata_performance() {
     println!("Testing provider metadata performance...");
     
-    let mut provider = providers::mock::MockMicroVMProvider::new();
+    let provider = providers::mock::MockMicroVMProvider::new();
     
     let start = Instant::now();
     for _ in 0..1000 {

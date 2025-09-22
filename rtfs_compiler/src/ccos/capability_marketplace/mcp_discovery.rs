@@ -42,8 +42,10 @@ impl Default for MCPServerConfig {
 pub struct MCPTool {
     pub name: String,
     pub description: Option<String>,
-    pub inputSchema: Option<serde_json::Value>,
-    pub outputSchema: Option<serde_json::Value>,
+    #[serde(rename = "inputSchema")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(rename = "outputSchema")]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 /// MCP Server response for tools
@@ -366,10 +368,10 @@ impl MCPDiscoveryProvider {
         ].into_iter().collect());
 
         // Convert input/output schemas if available (simplified for now)
-        let input_schema = tool.inputSchema.as_ref()
+        let input_schema = tool.input_schema.as_ref()
             .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok());
 
-        let output_schema = tool.outputSchema.as_ref()
+        let output_schema = tool.output_schema.as_ref()
             .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok());
 
         Ok(RTFSCapabilityDefinition {
@@ -1314,8 +1316,8 @@ mod tests {
         let tool = MCPTool {
             name: "test_tool".to_string(),
             description: Some("A test MCP tool".to_string()),
-            inputSchema: None,
-            outputSchema: None,
+            input_schema: None,
+            output_schema: None,
         };
         
         let capability = provider.convert_tool_to_capability(tool);
@@ -1340,8 +1342,8 @@ mod tests {
         let tool = MCPTool {
             name: "test_tool".to_string(),
             description: Some("A test MCP tool".to_string()),
-            inputSchema: Some(serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}})),
-            outputSchema: Some(serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}}})),
+            input_schema: Some(serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}})),
+            output_schema: Some(serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}}})),
         };
 
         let rtfs_cap = provider.convert_tool_to_rtfs_format(&tool).unwrap();
@@ -1394,8 +1396,8 @@ mod tests {
         let tool = MCPTool {
             name: "test_tool".to_string(),
             description: Some("A test MCP tool".to_string()),
-            inputSchema: Some(serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}})),
-            outputSchema: Some(serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}}})),
+            input_schema: Some(serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}})),
+            output_schema: Some(serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}}})),
         };
 
         // Convert to RTFS
@@ -1468,14 +1470,14 @@ mod tests {
             MCPTool {
                 name: "tool1".to_string(),
                 description: Some("First tool".to_string()),
-                inputSchema: None,
-                outputSchema: None,
+                input_schema: None,
+                output_schema: None,
             },
             MCPTool {
                 name: "tool2".to_string(),
                 description: Some("Second tool".to_string()),
-                inputSchema: None,
-                outputSchema: None,
+                input_schema: None,
+                output_schema: None,
             },
         ];
 

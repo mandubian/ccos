@@ -1,4 +1,4 @@
-use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, Literal, Keyword, MapTypeEntry};
+use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, Keyword, MapTypeEntry};
 use rtfs_compiler::runtime::{Value, RuntimeResult, RuntimeError};
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;

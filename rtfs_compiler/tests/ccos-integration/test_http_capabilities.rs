@@ -184,7 +184,7 @@ mod http_capability_tests {
             Ok(Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(host_call))) => {
                 println!("RTFS HTTP call requires host: {:?}", host_call);
                 println!("✅ RTFS HTTP capability integration test passed (host call required)!");
-                assert!(host_call.fn_symbol.contains("http.get") || host_call.fn_symbol.contains("http"));
+                assert!(host_call.capability_id.contains("http.get") || host_call.capability_id.contains("http"));
             }
             Ok(Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(v))) => {
                 println!("✅ RTFS HTTP capability integration test passed (completed with value): {:?}", v);

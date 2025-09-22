@@ -4,7 +4,6 @@ use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
 use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::runtime::host_interface::HostInterface;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::env;

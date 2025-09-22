@@ -532,7 +532,7 @@ fn test_all_secure_stdlib_functions() {
 fn test_error_handling() {
     use rtfs_compiler::runtime::error::RuntimeError;
     
-    let mut runner = SecureStdlibTestRunner::new();
+    let runner = SecureStdlibTestRunner::new();
     
     // Test division by zero
     let ast = rtfs_compiler::parser::parse_expression("(/ 1 0)").unwrap();

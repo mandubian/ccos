@@ -16,18 +16,22 @@ use std::io::{Read, Write};
 use std::thread;
 use std::sync::Once;
 
-/// Creates a minimal host for pure RTFS tests
-fn create_minimal_host() -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
+/// Creates a minimal host for RTFS tests with specified security context
+fn create_minimal_host_with_context(security_context: RuntimeContext) -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-    let security_context = RuntimeContext::pure();
     
     Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context,
     ))
+}
+
+/// Creates a minimal host for pure RTFS tests (with Pure security context)
+fn create_minimal_host() -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
+    create_minimal_host_with_context(RuntimeContext::pure())
 }
 
 /// Creates a pure RTFS evaluator without CCOS dependencies
@@ -47,7 +51,7 @@ pub fn create_pure_evaluator() -> Evaluator {
 /// Creates a pure RTFS evaluator with custom security context
 pub fn create_pure_evaluator_with_context(security_context: RuntimeContext) -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
-    let host = create_minimal_host();
+    let host = create_minimal_host_with_context(security_context.clone());
     let mut evaluator = Evaluator::new(module_registry, security_context, host);
     
     // Load the standard library
@@ -61,7 +65,7 @@ pub fn create_pure_evaluator_with_context(security_context: RuntimeContext) -> E
 pub fn create_full_evaluator() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::full();
-    let host = create_minimal_host();
+    let host = create_minimal_host_with_context(security_context.clone());
     let mut evaluator = Evaluator::new(module_registry, security_context, host);
     
     // Load the standard library

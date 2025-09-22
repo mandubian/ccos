@@ -15,6 +15,10 @@ pest = ["dep:pest", "dep:pest_derive"]
 regex = ["dep:regex"]
 # REPL (line editing)
 repl = ["dep:rustyline"]
+# Local models with CUDA support
+cuda = []
+# New effect boundary for typed host calls - now the only way to do stateful operations
+effect-boundary = []
 metrics_exporter = []
 
 [[bin]]

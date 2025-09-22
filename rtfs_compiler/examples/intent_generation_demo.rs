@@ -444,7 +444,7 @@ COMMON PATTERNS:
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
-    let mut evaluator = Evaluator::new(
+    let evaluator = Evaluator::new(
         std::sync::Arc::new(ModuleRegistry::new()),
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
         host,
