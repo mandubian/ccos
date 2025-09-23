@@ -1,163 +1,82 @@
-# CCOS Specification 008: Delegation Engine
+# CCOS Specification 008: Delegation Engine (RTFS 2.0 Edition)
 
-- **Status**: Proposed
-- **Author**: AI Assistant
-- **Created**: 2025-07-20
-- **Updated**: 2025-07-20
+**Status:** Draft for Review  
+**Version:** 1.0  
+**Date:** 2025-09-20  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [007: Global Function Mesh](./007-global-function-mesh-new.md), [005: Security](./005-security-and-context-new.md)  
 
-## 1. Abstract
+## Introduction: Policy-Driven Provider Selection
 
-This specification defines the **Delegation Engine (DE)**, a core component of the CCOS Orchestration Layer and the RTFS runtime. The DE is a pluggable, policy-driven routing mechanism that determines where and how any **delegatable RTFS function call** is executed. It works in concert with the Global Function Mesh (GFM) to balance performance, cost, privacy, and reliability.
+The Delegation Engine (DE) is CCOS's decision layer: After GFM provides capability candidates, DE selects the optimal provider based on runtime policies (e.g., cost, privacy, latency). Pluggable and configurable, it ensures yields align with context (e.g., intent constraints). In RTFS 2.0, DE operates on yield requests, keeping plans abstract and pure—selection is host-side, transparent via chain logs.
 
-## 2. Motivation
+Why critical? GFM finds 'what's available'; DE decides 'which one'—balancing tradeoffs. Reentrancy: Deterministic selection on resume (policy-seeded randomness or fixed).
 
-A key feature of CCOS is its ability to run on diverse hardware, from resource-constrained edge devices to powerful cloud servers. A one-size-fits-all execution model is not viable. The DE provides the necessary intelligence to dynamically adapt execution strategy to the current context, enabling:
+## Core Concepts
 
-- **Privacy**: Processing sensitive data on-device using local models.
-- **Performance**: Routing simple, low-latency tasks to a local evaluator.
-- **Power**: Leveraging large-scale remote models for complex reasoning tasks.
-- **Cost-Efficiency**: Using expensive remote models only when necessary.
-- **Resilience**: Falling back to local or alternative providers when a primary provider fails.
+### 1. DE Structure and Scoring
+DE uses pluggable scorers (e.g., CostScorer, PrivacyScorer) to rank GFM candidates.
 
-## 3. Core Concepts
+**Input**: Yield request + candidates from GFM.
+**Policies**: From Runtime Context (e.g., {:prefer-local true, :max-latency 100ms, :budget-per-call 0.05}).
+**Output**: Selected provider (e.g., {:impl :local-nlp, :score 0.95}).
 
-### 3.1. The DE and GFM Partnership
+**Scoring Example** (Pseudo-RTFS for config):
+```
+;; Policy as RTFS Map (compiled for verification)
+{:scorers [cost-weight 0.4, latency-weight 0.3, privacy-weight 0.3]
+ :threshold 0.8
+ :fallback :cheapest}
+```
 
-The Delegation Engine and the Global Function Mesh are distinct but complementary components that govern the execution of any function call within the RTFS runtime.
+### 2. Workflow
+1. GFM returns candidates.
+2. DE applies scorers: e.g., Cost = 1 - (price / budget); Privacy = match-level (0-1).
+3. Weighted sum → Rank; select top if > threshold, else fallback.
+4. Log decision to chain.
 
-- **Global Function Mesh (GFM)**: The GFM is the **discovery and resolution layer** for *external capabilities*. It maintains a registry of all available capability providers and answers the question: "_What providers can fulfill this capability ID?_" It is primarily concerned with the `(call ...)` primitive.
-- **Delegation Engine (DE)**: The DE is the **selection and policy layer** for *any RTFS function*. It answers the question: "_Given the current context and policies, where should this function execute?_" This applies to standard RTFS functions `(my-func ...)` as well as capability calls `(call ...)`
-
-The interaction is as follows:
-1. For a standard function `(my-func arg1)`, the RTFS runtime first asks the DE where to execute it. The DE might decide `LocalPure`, `LocalModel`, or `RemoteModel`.
-2. For a capability call `(call :my-cap arg1)`, the runtime *still* asks the DE first. If the DE chooses a target like `RemoteModel("some-arbiter")`, that remote arbiter will then use its own GFM to resolve the final provider.
-
+**Diagram: Selection Process**:
 ```mermaid
-graph TD
-    subgraph RTFS Runtime
-        A[1. Encounter any function call <br/> e.g., (my-func) or (call :cap-id)] --> B{2. Invoke DE};
-        B -- "Function Symbol + Context" --> C[3. DE applies policy <br/> (e.g., privacy-first)];
-        C -- "Decision: ExecTarget" --> D[4. Execute via selected target];
-    end
+graph LR
+    Yield[Yield Request<br/>:nlp.sentiment + Context]
+    GFM[GFM: Candidates<br/>(OpenAI, Local, HuggingFace)]
+    DE[Delegation Engine<br/>Apply Policies]
+    S1[Cost Scorer: OpenAI=0.2, Local=0.9]
+    S2[Latency: OpenAI=0.8, Local=0.95]
+    S3[Privacy: OpenAI=0.6, Local=1.0]
+    Rank[Ranked: Local (0.93) > OpenAI (0.53)]
+    Select[Select Local]
+    Exec[Execute + Resume RTFS]
 
-    subgraph "Example Target: RemoteModel"
-        D --> E{5. RPC to Remote Arbiter};
-        E --> F{6. Arbiter invokes GFM};
-        F --> G[7. GFM finds provider];
-        G --> H[8. Remote Execution];
-    end
-
-    style B fill:#cde4ff,stroke:#333,stroke-width:2px
+    Yield --> GFM
+    GFM --> DE
+    DE --> S1 & S2 & S3
+    S1 & S2 & S3 --> Rank
+    Rank --> Select
+    Select --> Exec
 ```
 
-### 3.2. Execution Targets
+### 3. Integration with RTFS 2.0
+- **Yield Context**: Requests include policies from env (e.g., intent constraints) → DE uses for scoring.
+- **Reentrancy**: Selections logged in chain (`Action {:type :DelegationDecision, :policy-hash \"xyz\"}`); resume re-applies same policy for consistency.
+- **Purity**: DE is opaque to RTFS—plans yield abstractly; host decides.
 
-The DE's decision materializes as an `ExecTarget` enum, which instructs the Orchestrator on how to proceed.
+**Sample in Reentrant Resume**:
+- Initial yield: DE selects Local (low latency).
+- Pause → Chain logs decision.
+- Resume: Re-yield with same context → DE re-selects Local (no drift).
 
-```rust
-pub enum ExecTarget {
-    /// Execute in the local, deterministic RTFS runtime.
-    /// This may involve interpreting the function's AST/IR directly for
-    /// maximum portability, or executing an optimized, JIT-compiled
-    /// version of the function that has been cached.
-    LocalPure,
-    /// Execute using a registered on-device model provider (e.g., tiny LLM, rules engine).
-    LocalModel(String), // e.g., "phi-mini", "sentiment-rules"
-    /// Delegate to a remote model service via the Arbiter's RPC mechanism.
-    RemoteModel(String), // e.g., "gpt4o", "claude-opus"
-    /// Use a result from a cache.
-    CacheHit { cache_level: u8, storage_pointer: String },
-}
-```
+### 4. Pluggability and Configuration
+- **Custom Scorers**: Implement as host modules (e.g., GeoScorer for location).
+- **Governance Tie-In**: Kernel vetoes selections (e.g., deny high-risk providers).
 
-### 3.3. Pluggable Policies
+DE turns availability into alignment: Policies ensure yields serve intents safely, reentrantly.
 
-The core of the DE is the `DelegationEngine` trait. This allows different policies to be loaded at runtime without altering the Orchestrator.
+### Future: Extending Selection to Agents
+The Delegation Engine’s policy/scorer framework can later include agent selection alongside provider selection, without API breaks:
+- Reuse the same candidate → scorer → rank → select pipeline.
+- Add an `:agent` candidate type with additional scorers (skills match, trust tier).
+- Keep policy files compatible by adding optional sections; old configs remain valid.
 
-```rust
-// Represents all information needed to make a routing decision.
-pub struct CallContext<'a> {
-    pub function_symbol: &'a str, // "my-func", "call", etc.
-    pub capability_id: Option<&'a str>, // Only for `(call ...)`
-    pub candidate_providers: Vec<ProviderInfo>, // From GFM, if applicable
-    pub user_context: &'a UserContext, // Includes permissions, tenancy
-    pub device_context: &'a DeviceContext, // Includes network status, battery
-    // ... and other relevant metadata
-}
+This ensures multi-agent delegation can be layered in incrementally.
 
-// The pluggable policy engine.
-trait DelegationEngine: Send + Sync {
-    fn decide(&self, ctx: &CallContext) -> ExecTarget;
-}
-```
-
-Example implementations could include:
-- `PrivacyFirstEngine`: Prefers `LocalPure` and `LocalModel` targets.
-- `CostOptimizedEngine`: Avoids `RemoteModel` targets that have a high cost metric.
-- `PerformanceEngine`: Prefers providers with the lowest latency.
-- `StaticEngine`: Implements a fixed routing table from a configuration file.
-
-### 3.4. Developer-Defined Hints
-
-To ensure deterministic behavior when required, developers can embed delegation hints directly in RTFS source code.
-
-```clojure
-;; This function MUST run remotely on a powerful model.
-(defn analyze-complex-image
-  ^:delegation :remote "gpt4o"
-  [image-data]
-  (call :com.acme.vision:v1:analyze image-data))
-```
-
-If a valid `^:delegation` hint is present, the Orchestrator **bypasses** the Delegation Engine entirely, guaranteeing the developer's intent is respected.
-
-## 4. Caching Architecture
-
-The DE is also responsible for managing a multi-layered caching strategy to minimize redundant computation and network traffic.
-
-- **L1 (Delegation Cache)**: High-speed memoization of DE decisions. Maps `hash(CallContext) -> ExecTarget`.
-- **L2 (Inference Cache)**: Caches the actual results of expensive model inferences. Maps `hash(CallContext) -> Result`.
-- **L3 (Semantic Cache)**: A vector-based cache that finds semantically similar, previously computed results.
-- **L4 (Content-Addressable JIT Cache)**: Caches compiled, native machine code for frequently executed, pure RTFS functions. This is the core of the JIT compilation strategy.
-
-The DE first checks these caches before invoking the GFM or making a policy decision. When a pure function is called frequently, the DE can decide to trigger a JIT compilation process, storing the resulting machine code in the L4 cache. Subsequent calls can then bypass interpretation entirely for near-native performance.
-
-
-## 5. Integration with the Causal Chain
-
-Every delegated function call and its outcome must be recorded in the Causal Chain for auditability and observability. The `Action` in the chain will be augmented to include this information, whether it's a standard function or a capability call.
-
-```rust
-// From 003-causal-chain.md
-pub struct Action {
-    // ... existing fields
-    pub details: ActionType,
-}
-
-pub enum ActionType {
-    // ... other types
-    FunctionCall {
-        function_symbol: String,
-        // ... input/output
-        delegation_info: DelegationInfo,
-    },
-    CapabilityCall {
-        capability_id: String,
-        // ... input/output
-        delegation_info: DelegationInfo,
-    }
-}
-
-pub struct DelegationInfo {
-    /// The list of candidates considered by the DE.
-    providers_considered: Vec<String>,
-    /// The policy engine that made the decision.
-    decision_engine: String, // e.g., "PrivacyFirstEngine"
-    /// The final target chosen by the DE.
-    chosen_target: ExecTarget,
-    /// Whether the decision was overridden by a developer hint.
-    is_override: bool,
-}
-```
-
-This ensures that every action is transparent and the reasoning behind the execution path is explicitly recorded.
+Next: Context Horizon in 009.

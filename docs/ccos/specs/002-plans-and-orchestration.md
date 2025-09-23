@@ -1,103 +1,192 @@
-# CCOS Specification 002: Plans and Orchestration
+# CCOS Specification 002: Plans and Orchestration (RTFS 2.0 Edition)
 
-**Status:** Proposed
-**Version:** 1.0
-**Date:** 2025-07-20
-**Related:**
-- [SEP-000: System Architecture](./000-ccos-architecture.md)
-- [SEP-003: Causal Chain](./003-causal-chain.md)
-- [Intent Event Sink (Audit) Specification](./intent_event_sink.md)
-- [Worktree summary: wt/orch-core-status-context](./worktree-orch-core-status-context.md)
-- [015 - Execution Contexts](./015-execution-contexts.md)
+**Status:** Draft for Review  
+**Version:** 1.0  
+**Date:** 2025-09-20  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [003: Causal Chain](./003-causal-chain-new.md)  
 
-## 1. Abstract
+## Introduction: Declarative Execution in a Pure World
 
-This specification defines the structure of a `Plan` and the role of the **Orchestrator** in executing it. A `Plan` is not merely a script to be run; it is a declarative program that defines the high-level orchestration flow of a task. The Orchestrator is the active component that interprets this flow, manages state, and interacts with all other parts of the CCOS.
+Plans in CCOS are executable RTFS 2.0 programs—compiled, immutable IR representing 'how' to fulfill an intent. The Orchestrator is the deterministic driver: It executes plans reentrantly, handling yields as host calls while keeping RTFS pure (no state/mutation). This spec explains plan design, compilation, and the yield-resume loop, emphasizing why purity enables safe, verifiable orchestration.
 
-## 2. The `Plan` Object
+Core Idea: Plans are data transformers. Effects (I/O, state) yield to CCOS; local logic (maps, lets) runs purely. Reentrancy: Execution can pause/resume without side effects, using chain for state.
 
-A `Plan` is a structured RTFS object that defines the "how" for achieving an `Intent`.
+## Core Concepts
 
-### 2.1. Fields
+### 1. Plan Structure
+A Plan is RTFS source → verified IR, archived immutably. Includes steps (special form for sequencing), pure functions, and yields.
 
--   `plan_id` (String, UUID): A unique identifier for the plan instance.
--   `name` (String, Optional): A human-readable symbolic name.
--   `intent_ids` (Vec<IntentId>): A list of one or more intents this plan is designed to fulfill.
--   `language` (Enum): The language of the plan's body. While other languages are possible, this spec focuses on `Rtfs20`.
--   `body` (Value): The executable content of the plan. For RTFS, this is a single RTFS expression, typically `(do ...)` or a `(ccos.steps/execute ...)` block.
--   `status` (Enum): The lifecycle status (`Running`, `Paused`, `Completed`, `Aborted`).
--   `metadata` (Map<String, Value>): Open-ended map for additional context, such as the plan's generation source (e.g., which LLM).
+**Key Elements**:
+- **Header**: Metadata (intent ID, version, constraints).
+- **Body**: S-expressions: Pure ops (`let`, `map`, `if`) + `(step ...)` for scoped execution + `(call :cap ...)` for yields.
+- **IR Format**: Bytecode with opcodes (e.g., `OP_CALL`, `OP_YIELD`), verifiable at compile.
 
-### 2.2. Plan Lifecycle and Archival
+Note: In the codebase, plan metadata reflects this as `PlanLanguage::Rtfs20` and the body as `PlanBody::Rtfs(<source>)`.
 
-A `Plan` is not a long-lived, mutable object; it is an immutable script that is archived upon creation.
+**Sample Plan Source** (pure analysis pipeline):
+```
+;; Plan Header (metadata)
+{:intent-id :intent-123
+ :version 1
+ :constraints {:timeout 30000 :max-yields 5}}
 
-1.  **Generation**: The Arbiter generates the `body` of the plan.
-2.  **Archival**: Before execution, the complete `Plan` object, with its new `plan_id`, is serialized and stored permanently in the **Plan Archive**. This is a content-addressable or key-value store dedicated to preserving the exact code that was proposed for execution.
-3.  **Execution**: The Orchestrator receives the `plan_id` and retrieves the immutable plan from the archive to execute it.
-4.  **Auditing**: The `plan_id` stored in every `Action` in the Causal Chain now serves as a permanent, verifiable foreign key, allowing any action to be traced back to the exact line of code in the archived plan that caused it.
+;; Body: Pure + Yields
+(step "load-data"
+  (let [reviews (call :storage.fetch {:bucket \"reviews\" :key \"2025.json\"})]  ;; Yield 1
+    reviews))
 
-This ensures a complete and auditable record, separating the "what was intended" (Intent), "what was proposed" (Plan Archive), and "what actually happened" (Causal Chain).
+(step "analyze"
+  (let [reviews (call :storage.fetch {:bucket \"reviews\" :key \"2025.json\"})   ;; Explicit fetch within this step
+        raw-sentiments (map (fn (review)
+                               (call :nlp.sentiment review))  ;; Yield per item (batched)
+                             reviews)]
+    (reduce (fn (acc sent) (assoc acc sent :count (+ (get acc sent :count 0) 1)))
+            {} raw-sentiments)))  ;; Pure aggregation
 
-## 3. Orchestration Primitives in RTFS
+(step "persist"
+  (call :storage.save {:key \"sentiments.json\" :data :<computed-summary>}))  ;; Yield 2 (reference to prior computed value if exposed by implementation)
+```
+- **Pure Parts**: `let`, `map`, `reduce`—create new data, no mutation.
+- **Yields**: `(call ...)` → `RequiresHost({:cap :storage.fetch, :args [...] , :step-id "load-data"})`.
+- **Steps**: Scoped units for logging/hierarchy/checkpoints. Step IDs can be symbols or strings. Data can be threaded explicitly (e.g., via env/state capabilities) depending on implementation ergonomics. If a runtime exposes the previous step result as a binding, it must be immutable.
 
-To enable orchestration, RTFS is extended with a conceptual library of special forms. The Orchestrator has specific knowledge of these forms and treats them as instructions for itself.
+Compiled IR: Efficient, portable (e.g., Wasm-compatible).
 
-### 3.1. `(step <name> <body>)`
+### 1.a Step Special Form & Parameters
+Steps provide semantic and operational boundaries inside a plan. They scope logging, retries, and timeouts, and anchor reentrancy checkpoints.
 
--   **Purpose**: Defines a major, observable milestone in the plan.
--   **Orchestrator Behavior**:
-    1.  Logs a `PlanStepStarted` action to the Causal Chain. The `name` is recorded in the action.
-    2.  Executes the `<body>` expression.
-    3.  If the body executes successfully, logs a `PlanStepCompleted` action with the result.
-    4.  If the body fails, logs a `PlanStepFailed` action with the error and proceeds based on the retry/error handling policy.
-
-### 3.2. `(step-if <condition> <then-branch> <else-branch>)`
-
--   **Purpose**: Defines a major strategic branch in the plan.
--   **Orchestrator Behavior**:
-    1.  Evaluates the `<condition>` expression.
-    2.  Based on the result, it dynamically injects the steps from either the `<then-branch>` or `<else-branch>` into its execution queue.
-    3.  The branch itself is logged as an action, providing a clear record of the decision point.
-
-### 3.3. Other Primitives
-
-The `step` model is extensible to other control flow structures, such as:
-   `(step-loop <condition> <body>)`: Loops through a block of steps.
-   `(step-parallel <step1> <step2> ...)`: Executes a set of steps concurrently, waiting for all to complete.
-
-## 4. The Orchestrator
-
-The Orchestrator is the stateful engine that drives plan execution.
-
-### 4.1. Responsibilities
-
--   **Execution Context Stack**: Maintains a stack of active `ActionId`s. When a step begins, its ID is pushed. When it ends, it's popped. This stack provides the `parent_action_id` for all nested actions, ensuring a correct hierarchy in the Causal Chain.
--   **State Management**: Manages the RTFS environment for the plan, ensuring that variables defined in one step are available to subsequent steps.
--   **Error and Retry Logic**: Implements the retry behavior. When a step fails, the Orchestrator logs the failure and, based on the plan's policy, can log a `PlanStepRetrying` action and re-execute the step.
--   **Security Enforcement**: Before executing a step (especially one containing a `(call ...)`), it consults the current `Runtime Context` to ensure the operation is permitted.
--   **Lifecycle Management**: Logs all lifecycle events (`PlanStarted`, `PlanAborted`, etc.) to the Causal Chain.
-
-## 5. Execution Example
-
-Consider the plan:
-```lisp
-(do
-  (step "Prepare" (let [x 10]))
-  (step "Execute" (call :my-cap x))
+**Syntax** (source):
+```
+(step :step-id-or-string {:timeout-ms 5000
+                :retries {:max 2 :backoff-ms 200}
+                :on-fail :abort  ;; or :retry / :delegate
+                :metadata {:purpose :analysis}}
+  ;; body (pure + yields)
+  (let [...])
 )
 ```
 
-The Orchestrator would:
-1.  Log `PlanStarted`. Push `plan-exec-1` to stack.
-2.  See `(step "Prepare" ...)`
-3.  Log `PlanStepStarted` (name: "Prepare", parent: `plan-exec-1`). Push `step-1` to stack.
-4.  Execute `(let [x 10])`.
-5.  Log `PlanStepCompleted` (result: `10`). Pop `step-1` from stack.
-6.  See `(step "Execute" ...)`
-7.  Log `PlanStepStarted` (name: "Execute", parent: `plan-exec-1`). Push `step-2` to stack.
-8.  Execute `(call :my-cap x)`.
-    -   The Capability Provider logs `CapabilityCall` (name: ":my-cap", parent: `step-2`).
-9.  Log `PlanStepCompleted` (result of call). Pop `step-2` from stack.
-10. Log `PlanCompleted`. Pop `plan-exec-1` from stack.
+- `:timeout-ms`: Max wall-time for the step. Kernel enforces; exceeding triggers failure action.
+- `:retries`: Policy for transient yield failures; idempotent keys required.
+- `:on-fail`: Strategy (abort, retry, delegate to Arbiter).
+- `:metadata`: Free-form annotations; reflected in chain actions.
 
+Steps map to hierarchical actions in the Causal Chain (StepStarted/Completed/Failed). Each step boundary is a natural checkpoint location.
+
+### 1.b Execution Contexts (Hierarchical)
+Execution contexts carry immutable, hierarchical metadata/environment across steps.
+
+**Model**:
+- Plan Context → Step Context → Substep Context
+- Inheritance: Child context extends parent with overrides (e.g., tighter quotas).
+
+**Fields** (examples):
+- `:intent-id`, `:plan-id`
+- `:quota` (tokens, yields, budget)
+- `:acl` (allowed capabilities)
+- `:policy` (delegation preferences)
+- `:checkpoint` (last action-id)
+
+Contexts are injected as RTFS env bindings; yields include the active context for Kernel decisions. On resume, context reloads from chain to prevent privilege drift.
+
+**Sample**:
+```
+(step :analyze {:quota {:yields 2}}
+  (let [ctx (merge context {:step :analyze})]
+    (call :nlp.sentiment {:text review :context ctx})))
+```
+
+### 1.c Macros & Ergonomics
+To keep plan source expressive while preserving purity, provide macros that expand into pure forms + yields. Examples:
+
+- `(with-timeout 5000 body)` → wraps body in a step with :timeout-ms.
+- `(with-kv key body)` → expands to `:kv.get` yield + binds value in body.
+- `(batch-call :cap coll)` → expands to `map` with per-item yield + idempotent keys.
+
+Macros compile away; runtime remains minimal and pure.
+
+### 1.d Sample: Stateful Orchestration via Capabilities (Demo-like)
+This mirrors the demo program using string step IDs and `ccos.*` state capabilities to preserve context across steps via host effects.
+
+```
+(do
+  (step "initialize-state"
+    (let [initial-data (call :ccos.state.kv.put "workflow-state" "initialized")]
+      (call :ccos.echo (str "State initialized: " initial-data))))
+
+  (step "process-data"
+    (let [counter (call :ccos.state.counter.inc "process-counter" 1)
+          data (call :ccos.state.kv.get "workflow-state")]
+      (do
+        (call :ccos.echo (str "Processing data: " data))
+        (call :ccos.echo (str "Counter value: " counter))
+        (if (> counter 0)
+          (do
+            (call :ccos.echo "Counter is positive, proceeding...")
+            (let [processed (call :ccos.state.event.append "workflow-events" "data-processed")]
+              (call :ccos.echo (str "Event logged: " processed))))
+          (call :ccos.echo "Counter is zero or negative")))))
+
+  (step "finalize"
+    (let [final-counter (call :ccos.state.counter.inc "process-counter" 1)
+          final-state (call :ccos.state.kv.put "workflow-state" "completed")
+          summary (call :ccos.state.event.append "workflow-events" "workflow-completed")]
+      (do
+        (call :ccos.echo (str "Final counter: " final-counter))
+        (call :ccos.echo (str "Final state: " final-state))
+        (call :ccos.echo (str "Summary: " summary))
+        {:status "completed" :counter final-counter :state final-state}))) )
+```
+
+This showcases reentrancy with multiple yields per step and context preservation via explicit capability calls, consistent with RTFS purity (no hidden mutation).
+
+### 2. Orchestration: The Yield-Resume Engine
+Orchestrator embeds RTFS runtime:
+1. Load verified IR + initial env (from intent/graph).
+2. Eval step-by-step: Pure ops locally; yields → pause, return `effect_request`.
+3. On yield: Forward to Governance Kernel → Resolve (GFM/DE) → Execute capability → Log action → Resume with result injected.
+4. Reentrancy: If interrupted, store env/chain ID; resume by replaying pure prefix + injecting host results.
+
+**Yield-Resume Cycle Diagram**:
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator (RTFS Driver)
+    participant RTFS as RTFS Runtime
+    participant GK as Governance Kernel
+    participant Cap as Capability Provider
+    participant CC as Causal Chain
+
+    O->>RTFS: Execute IR (env: {:intent :123})
+    RTFS->>RTFS: Pure let/map (local)
+    RTFS->>O: Yield :storage.fetch (request)
+    O->>GK: Validate request (Constitution)
+    GK->>O: Approved
+    O->>Cap: Resolve/Execute (via GFM)
+    Cap->>O: Result {:reviews [...]}
+    O->>CC: Log Action {:type :CapabilityCall, :success true}
+    O->>RTFS: Resume (inject result to env)
+    RTFS->>RTFS: Continue pure reduce
+    RTFS->>O: Yield :nlp.sentiment (batched)
+    Note over O,CC: Repeat for each yield...
+    RTFS->>O: Complete (final value)
+    O->>CC: Log PlanCompleted
+```
+
+**Reentrant Sample** (Interrupted Analysis):
+- Start: Eval to first yield → Pause (e.g., quota).
+- Chain: `Action {:id :act-1, :type :YieldPending, :env-snapshot {...}}`.
+- Resume Later: Load IR, replay pure ops to yield point (deterministic), inject prior results, continue. No re-execution of effects—idempotency via request keys.
+
+### 3. Compilation and Verification
+- **Compile**: Source → IR (parse, macro-expand, optimize). Macros add syntax sugar (e.g., `(with-kv key body)` → yield sequence).
+- **Verify**: Kernel scans IR for disallowed yields (e.g., no `:dangerous.exec`), checks complexity, signs for archive.
+- **Why Pure?** Enables static analysis; reentrancy without races (no shared mutable state).
+
+### 4. Error Handling and Adaptation
+- Local Errors: Pure (e.g., type mismatch) → Abort step, log, notify Arbiter.
+- Yield Errors: Host failure → Retry (idempotent) or escalate to Arbiter for new plan.
+- Reentrancy: Failed resumes roll back to last chain checkpoint, preserving purity.
+
+Plans + Orchestrator form CCOS's 'how': Declarative, safe execution where RTFS computes, CCOS acts.
+
+Next: Causal Chain in 003.

@@ -1,170 +1,81 @@
-# CCOS Specification 000: System Architecture
+# CCOS Specification 000: System Architecture (RTFS 2.0 Edition)
 
-**Status:** Proposed
-**Version:** 1.0
-**Date:** 2025-07-20
+**Status:** Draft for Review  
+**Version:** 1.0  
+**Date:** 2025-09-20  
+**Audience:** Developers, Architects building AI agent systems  
 
-## 1. Abstract
+## Introduction: What is CCOS?
 
-This document specifies the architecture of the Cognitive Computing Operating System (CCOS), a framework for building autonomous agents capable of reasoning, planning, and execution. CCOS leverages the **RTFS (Runtime Functional Specification)** language as its universal backbone for data representation, communication, and defining executable logic.
+CCOS (Cognitive-Causal Orchestration System) is a secure framework for coordinating AI agents. It treats AI as a 'mind' for reasoning (why/how) and provides a deterministic 'engine' for execution (what). At its core, CCOS embeds RTFS 2.0—a pure, immutable, reentrant language—as the substrate for plans. RTFS handles declarative logic; CCOS acts as the host, managing effects, state, and governance.
 
-The core principle of CCOS is the separation of **"why"** (Intent), **"how"** (Plan), and **"what happened"** (Action). This specification details the components that manage these concepts and their interactions.
+Why this design? AI-generated code can be unpredictable. RTFS's purity ensures safe evaluation; CCOS's layers add auditability, security, and adaptability. Result: Verifiable agentic systems where every action traces to an intent, without hidden mutations.
 
-## 2. Core Philosophy
+Key Benefits:
+- **Safety**: No in-plan side effects—yields to governed host calls.
+- **Auditability**: Immutable Causal Chain logs reasoning + execution.
+- **Scalability**: Reentrant RTFS supports concurrent/federated agents.
+- **Extensibility**: Capabilities via marketplace, not language bloat.
 
-- **Intent-Driven**: All actions performed by the system originate from a clearly defined **Intent**.
-- **Orchestration over Execution**: The system prioritizes the ability to observe, manage, and adapt the execution flow of a plan, rather than treating it as an opaque script.
-- **Immutable Auditing**: All significant events are recorded in an immutable, cryptographically verifiable ledger known as the **Causal Chain**. This provides a complete and trustworthy audit trail.
-- **Secure by Design**: The system is built on a zero-trust model. Security is not an add-on but a core architectural principle, enforced through privilege separation, formal verification, and cryptographic attestations.
-- **Extensible & Verifiable Capabilities**: The system's abilities are not fixed. They can be dynamically extended through a marketplace of versioned, cryptographically signed, and verifiable `Capabilities`.
+## Core Concepts
 
-## 3. System Components
+### 1. Intent: The 'Why'
+Intents originate from natural language goals provided by users or systems. The Arbiter, leveraging LLM capabilities, transforms this ambiguous text into a structured, immutable RTFS Map stored in the Intent Graph. This RTFS format offers superior expressiveness over plain JSON—homoiconic s-expressions enable nested semantics, symbolic references, and easy transformation into executable plans. The Intent represents objectives with metadata like priority, constraints, and dependencies.
 
-CCOS is composed of several primary components organized into layers: Cognitive, Orchestration, and Data/State.
-
-```mermaid
-graph TD
-    subgraph "Cognitive Layer"
-        Arbiter["Arbiter (AI Decider)"]
-    end
-
-    subgraph "Orchestration Layer"
-        Orchestrator["Orchestrator (RTFS Engine)"]
-        GFM["Global Function Mesh"]
-    end
-    
-    subgraph "Data & State Layer"
-        IG[Intent Graph]
-        CC[Causal Chain]
-        CM[Capability Marketplace]
-        RC[Runtime Context]
-        EC[Execution Contexts]
-        P[Plan]
-    end
-
-    User[User Request] --> Arbiter
-    Arbiter -- "1. Creates/Selects Intent" --> IG
-    Arbiter -- "2. Generates/Selects Plan" --> P
-    Arbiter -- "3. Initiates Execution" --> Orchestrator
-    
-    Orchestrator -- "Executes" --> P
-    Orchestrator -- "Resolves functions via" --> GFM
-    GFM -- "Discovers in" --> CM
-    Orchestrator -- "Constrained by" --> RC
-    Orchestrator -- "Data Flow via" --> EC
-    Orchestrator -- "Records to" --> CC
-    
-    Orchestrator -- "4. Reports Outcome (Success/Failure)" --> Arbiter
-    Arbiter -- "5. Updates Status" --> IG
+**Sample Intent** (JSON-like for readability; natively an RTFS Map):
 ```
-
-### 3.1. Cognitive Layer
-
--   **Arbiter**: The "mind" of the CCOS. This is an AI-driven component responsible for high-level reasoning, plan generation, and strategic exception handling. See [SEP-006: Arbiter and Cognitive Control](./006-arbiter-and-cognitive-control.md).
-
-### 3.2. Orchestration Layer
-
--   **Orchestrator & RTFS Runtime**: The "engine" of the CCOS. This is a deterministic component that executes a `Plan` step-by-step, enforces security, and logs to the Causal Chain. See [SEP-002: Plans and Orchestration](./002-plans-and-orchestration.md).
--   **Global Function Mesh (GFM)**: The "DNS for functions." A universal discovery and routing layer that resolves abstract capability requests (e.g., `:image.sharpen`) to specific, available providers based on policies and SLAs. See [SEP-007: Global Function Mesh](./007-global-function-mesh.md).
--   **Delegation Engine (DE)**: The "Policy Engine." A pluggable component that works with the GFM. While the GFM finds *what* providers are available, the DE decides *which* provider to use based on runtime context (cost, privacy, latency, etc.). See [SEP-008: Delegation Engine](./008-delegation-engine.md).
--   **Context Horizon**: The "Payload Manager." A service that virtualizes large information spaces into a constrained, relevant context for an execution target, especially an LLM. It manages token limits, data relevance, and summarization. See [SEP-009: Context Horizon](./009-context-horizon.md).
-
-### 3.3. Data & State Layer
-
--   **Intent Graph**: Stores and manages the "why." See [SEP-001: Intent Graph](./001-intent-graph.md).
--   **Plan Archive**: A permanent, content-addressable store for the immutable `Plan` scripts generated by the Arbiter. See [SEP-002: Plans and Orchestration](./002-plans-and-orchestration.md).
--   **Causal Chain**: The immutable, long-term memory ledger. Records "what happened." See [SEP-003: Causal Chain](./003-causal-chain.md).
--   **Working Memory**: A high-performance cache and index of the Causal Chain for efficient recall. See [SEP-013: Working Memory](./013-working-memory.md), [SEP-023: Observability Foundation](./023-observability-foundation.md), and [SEP-024: Observability Ingestor Capability](./024-observability-ingestor-capability.md).
--   **Capability Marketplace**: A registry of all concrete `Capability` providers available to the Orchestrator. See [SEP-004: Capabilities and Marketplace](./004-capabilities-and-marketplace.md).
- -   **Runtime Context**: Enforces security policies and resource constraints. See [SEP-005: Security and Context](./005-security-and-context.md).
- -   **Execution Contexts**: Hierarchical execution data/state. See [SEP-015: Execution Contexts](./015-execution-contexts.md).
-
-## 4. High-Level Execution Flow & Security
-
-The diagram below illustrates the primary path from an `Intent` to the execution of a `Plan`. The flow is governed at every step by the **formally verified Governance Kernel** to ensure security, safety, and alignment.
-
-```mermaid
-graph TD
-    subgraph "Human Oversight"
-        DEC["Digital Ethics Committee"];
-    end
-
-    subgraph "Governance Layer (High-Privilege)"
-        GK{Governance Kernel};
-        subgraph "Kernel Components"
-            IS[Intent Sanitizer]
-            PS[Plan Scaffolder]
-            CV[Constitution Validator]
-            AV[Attestation Verifier]
-        end
-        C[Constitution];
-        DEC -->|Signs & Issues| C;
-        GK -->|Loads| C;
-        GK --> IS & PS & CV & AV
-    end
-
-    subgraph "Cognitive Layer (Low-Privilege Sandbox)"
-        A[Intent] -->|Triggers| B{Arbiter};
-        B -->|Generates| P[Raw Plan];
-    end
-
-    subgraph "Orchestration Layer"
-        Orch{Orchestrator};
-        GFM["Global Function Mesh"];
-        CH["Context Horizon"];
-    end
-
-    subgraph "Data & State Layer"
-        IG[Intent Graph];
-        PA[Plan Archive];
-        CC[Causal Chain];
-        WM[Working Memory];
-        MI[Memory Ingestor];
-        CM[Capability Marketplace];
-    end
-
-    B -- "1. Proposes Raw Plan" --> GK;
-    GK -- "2. Archives Plan" --> PA;
-    GK -- "3. Sanitizes & Scaffolds Plan" --> P;
-    GK -- "4. Validates Plan & Attestations" --> C;
-    GK -- "5. Hands Valid Plan to" --> Orch;
-    
-    Orch -->|6. Executes| GFM;
-    GFM -->|Discovers in| CM;
-
-    GK -->|Logs All Actions w/ Provenance| CC;
-    CC -->|Ingested by| MI;
-    MI -->|Populates| WM;
-    CH -->|Queries| WM;
-    CH -->|Builds Context For| B;
-    A --> IG;
-
-    style GK fill:#f9f,stroke:#333,stroke-width:2px
-    style B fill:#cde4ff,stroke:#333,stroke-width:2px
+{
+  :id \"intent-123\",
+  :goal \"Analyze customer sentiment in reviews\",
+  :constraints {:max-cost 0.5, :privacy-level :high},
+  :dependencies [\"load-reviews-from-s3\"],
+  :timestamp \"2025-09-20T10:00:00Z\"
+}
 ```
+Intents evolve immutably: New versions link to priors based on outcomes, feeding back into the graph for contextual planning.
 
-1.  **Governance**: The **Digital Ethics Committee (DEC)**, a human body, defines and cryptographically signs the `Constitution`.
-2.  **Bootstrap**: The high-privilege **Governance Kernel** loads the `Constitution` at boot. Its own correctness is guaranteed through formal verification.
-3.  **Context Building**: Before invoking the Arbiter, the **Context Horizon** queries the **Working Memory** to build a relevant, token-aware payload of the user's history and preferences.
-4.  **Intent & Proposal**: The **Arbiter**, running in a low-privilege sandbox, receives an `Intent` and the context payload. It generates a `Plan` and *proposes* it to the Governance Kernel.
-5.  **Archival**: The Governance Kernel immediately archives the immutable `Plan` in the **Plan Archive**, ensuring a permanent record of the proposed logic exists before any further processing.
-6.  **Sanitize & Scaffold**: The Kernel first runs the plan through the **Intent Sanitizer** to check for prompt injection, then uses the **Plan Scaffolder** to wrap it in a safety harness (e.g., resource limits, failure handlers). See [SEP-012](./012-intent-sanitization.md).
-7.  **Validate & Verify**: The Kernel's **Constitution Validator** checks the scaffolded plan against all rules. Simultaneously, the **Attestation Verifier** checks the cryptographic signature of every `Capability` in the plan to ensure it's from a trusted source and hasn't been tampered with. See [SEP-011](./011-capability-attestation.md).
-8.  **Orchestration**: Only if the plan is valid and all capabilities are verified does the Kernel hand it to the **Orchestrator** for execution.
-9.  **Execution**: The Orchestrator executes the plan's RTFS, resolving capabilities via the **Global Function Mesh**.
-10. **Causal Chain Logging**: The **Governance Kernel** is the only component with write access to the **Causal Chain**. It records every action, creating an unforgeable audit trail.
-11. **Memory Ingestion**: The **Memory Ingestor** runs as an asynchronous process, reading from the Causal Chain and populating the **Working Memory** with indexed, queryable data for future interactions. See [SEP-013](./013-working-memory.md), [SEP-023](./023-observability-foundation.md), and [SEP-024](./024-observability-ingestor-capability.md).
+### 2. Plan: The 'How' in Pure RTFS
+Building on the structured Intent, the Arbiter again employs LLM to generate RTFS source code—a declarative, pure program that the Orchestrator compiles into immutable IR. This IR consists of pure functions for data transformation and explicit yields for effects. No internal mutation: State is threaded through arguments or delegated to host capabilities (e.g., KV stores). 
 
-## 5. Vision: Towards a Living Architecture
+In production, the workflow favors compiling RTFS source to IR once, verifying it thoroughly, and executing the cached IR multiple times for performance and security. For flexibility in dynamic or exploratory scenarios (e.g., quick iterations on new intents), the system supports on-the-fly compilation from the Arbiter's freshly generated source, preserving RTFS's deterministic purity and reentrancy.
 
-The robust, security-first architecture defined above provides the foundation for a truly cognitive system. The following advanced concepts, drawn from the project's vision, are the next logical evolution, enabled by the core components we have specified.
+**Sample Plan** (RTFS source generated by Arbiter; compiles to IR):
+```
+;; Pure data transform + yield for effect
+(let [reviews (call :storage.get :s3/reviews)  ;; Yields to CCOS host
+      sentiments (map (fn (review) (call :nlp.analyze review)) reviews)]  ;; Parallel yields
+  (call :report.save sentiments))  ;; Yield to persist
+```
+Here, `(call ...)` triggers a yield: RTFS pauses execution, handing control to CCOS for resolution (e.g., via the capability marketplace), then resumes with the result. Purity ensures `map` produces new collections without altering originals—no shared state.
 
--   **The Subconscious & Strategic Replay**: The **Causal Chain of Thought (`SEP-003`)** is not just an audit log; it is the system's memory. Future system-level agents will continuously analyze this chain to discover more efficient strategies and propose new, optimized `Capabilities` to the **Marketplace (`SEP-004`)**. This is the system's core learning loop.
+### Flow: From Intent to Outcome
+1. **Natural Language Goal to Intent**: User inputs a goal (e.g., "Analyze reviews"); Arbiter's LLM parses and structures it into an RTFS-based Intent, adding to the Intent Graph.
+2. **Intent to Plan Generation**: Arbiter uses the Intent (plus graph/chain context) to LLM-generate pure RTFS Plan source, then proposes it to the Kernel for validation.
+3. **Validation**: Kernel sanitizes for injections, verifies the compiled IR and referenced capabilities, and scaffolds with safety wrappers (e.g., timeouts, error handlers).
+4. **Execution Loop**:
+   - Orchestrator loads the RTFS IR with initial environment from the Intent.
+   - Pure computations execute locally (fast and deterministic).
+   - Effectful steps yield to the Kernel for approval, resolution via GFM/DE, execution, and resumption.
+   - Each phase logs to the Causal Chain (e.g., `Action {:type :CapabilityCall, :yield-request {...}}`).
+5. **Adaptation**: Execution outcomes update the Intent Graph; the Arbiter analyzes failures via chain queries to generate revised plans or intents.
 
--   **The Persona & Evolving Identity**: The **Living Intent Graph (`SEP-001`)** will serve as the foundation for a persistent `Persona`. By learning from the user's goals, preferences, and feedback, the Arbiter can evolve from a generic tool into a true, personalized cognitive partner.
+**Reentrant Twist**: Interruptions (e.g., quota exhaustion) capture state in the chain. Resumption loads from an `action_id`, replays pure segments deterministically, and injects host results into the RTFS environment to continue seamlessly.
 
--   **The Immune System & Self-Defense**: The **Capability Attestation (`SEP-011`)** model is the first step of a proactive Immune System. This system will evolve to actively monitor the marketplace for threats, using the Governance Kernel to quarantine malicious actors and protect the health of the entire ecosystem.
+## Why RTFS 2.0 Changes Everything
+Pre-RTFS 2.0 assumed mutable plans (atoms for state). Now: Absolute immutability forces explicit yields, making CCOS the sole state/effect authority. Benefits:
+- **Verifiability**: Compile-time IR scans for disallowed yields.
+- **Reentrancy**: No hidden state—resumes are pure continuations.
+- **Security**: Kernel gates every effect, chain proves compliance.
 
--   **Metabolism & Homeostasis**: The principles of resource management will be codified within the **Constitution (`SEP-010`)** and enforced by the **Plan Scaffolder (`SEP-012`)**. This ensures the system operates sustainably and safely, with a core drive to maintain resource equilibrium.
+### Future: Multi-agent federation (non-breaking)
+The architecture is intentionally designed to admit future multi-agent capabilities without breaking existing contracts:
+- **Plan Boundary**: Plans remain pure RTFS IR artifacts. Additional agents may generate plans, but the Orchestrator and Kernel interface (compile → verify → execute with yields) stays unchanged.
+- **Yield Protocol**: The `RequiresHost(effect_request)` envelope is stable. New agent types would still issue yields via the same host boundary, preserving governance and audit.
+- **Delegation Logging**: The Causal Chain records all delegation decisions and outcomes. Adding an Agent Registry later only adds new action types (e.g., DelegationProposed/Approved), without changing existing ones.
+- **Governance Rules**: The Constitution evaluates events as pure RTFS expressions; new agent roles become new rule scopes, not new mechanisms.
 
-This architecture provides a robust foundation for building powerful AI systems while ensuring they remain safe, aligned, and under meaningful human control.
+This keeps the single-agent baseline simple while ensuring multi-agent federation can be layered in incrementally.
+
+This architecture scales to federated agents: Each sub-agent runs reentrant RTFS, sharing via chain/marketplace.
+
+Next: Dive into Intent Graph details in 001.

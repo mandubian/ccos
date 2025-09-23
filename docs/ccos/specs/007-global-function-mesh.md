@@ -1,58 +1,61 @@
-# CCOS Specification 007: Global Function Mesh
+# CCOS Specification 007: Global Function Mesh (RTFS 2.0 Edition)
 
-**Status:** Proposed
-**Version:** 1.0
-**Date:** 2025-07-20
-**Related:**
-- [SEP-000: System Architecture](./000-ccos-architecture.md)
-- [SEP-004: Capabilities and Delegation](./004-capabilities-and-delegation.md)
+**Status:** Draft for Review  
+**Version:** 1.0  
+**Date:** 2025-09-20  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [004: Capabilities](./004-capabilities-and-marketplace-new.md), [008: Delegation Engine](./008-delegation-engine-new.md)  
 
-## 1. Abstract
+## Introduction: The DNS for Capabilities
 
-The Global Function Mesh (GFM) is a universal discovery and routing layer for CCOS capabilities. It acts as a "DNS for functions," allowing plans to call abstract capabilities (e.g., `:image.sharpen`) without being hardcoded to a specific provider. The GFM resolves these abstract requests to concrete, available `Capability` providers at runtime based on policy, performance, and cost.
+The Global Function Mesh (GFM) is CCOS's universal discovery layer for capabilities—acting as a 'DNS' that maps abstract RTFS yield names (e.g., `:image.sharpen`) to available providers in the Marketplace. In RTFS 2.0, GFM receives yield requests from the Orchestrator, queries for matches, and returns candidates for the Delegation Engine to select. This keeps plans portable: Write abstract yields; GFM handles resolution dynamically.
 
-## 2. Position in the Architecture
+Why essential? Enables extensibility without hardcoding—RTFS stays pure, unaware of providers. Reentrancy: Consistent resolution on resume (e.g., same version pinned).
 
-The GFM sits within the **Orchestration Layer**, acting as an intermediary between the **Orchestrator** and the **Capability Marketplace**.
+## Core Concepts
 
--   **Orchestrator**: When it encounters a `(call ...)` in a plan, it does not look up the capability directly. Instead, it asks the GFM to resolve the function name.
--   **Global Function Mesh**: It takes the function name and a set of criteria (from the `RuntimeContext`) and determines the best provider.
--   **Capability Marketplace**: This is the local registry of concrete providers that the GFM queries to find candidates for resolution. The GFM can also query other decentralized registries.
+### 1. GFM Structure and Workflow
+GFM is a queryable index over Marketplace manifests:
+- **Query Input**: From yield `RequiresHost({:cap :image.sharpen, :version \"^1.0\", :constraints {:latency < 200ms}})`).
+- **Resolution**: Search by name/version/schema; filter by availability (e.g., healthy providers).
+- **Output**: List of provider candidates (e.g., AWS, Local, Cloudflare), with metadata (cost, SLA).
 
+**Resolution Flow Diagram** (Integrated with Yield):
 ```mermaid
-graph TD
-    A[Orchestrator] -- "1. call(:image.sharpen)" --> B[Global Function Mesh]
-    B -- "2. Who provides :image.sharpen?" --> C[Capability Marketplace]
-    C -- "3. ProviderA, ProviderB" --> B
-    B -- "4. Select ProviderA based on policy" --> B
-    B -- "5. Resolved to ProviderA" --> A
-    A -- "6. Dispatches call to ProviderA" --> D[ProviderA]
+sequenceDiagram
+    RTFS[RTFS Runtime] --> O[Orchestrator]
+    RTFS->>O: Yield :image.sharpen (request)
+    O->>GK[Governance Kernel]: Validate
+    GK->>O: Approved
+    O->>GFM: Query {:cap :image.sharpen :version ^1.0}
+    GFM->>MP[Marketplace]: Search Manifests
+    MP->>GFM: Candidates [AWS-v1.1, Local-v1.0]
+    GFM->>DE[Delegation Engine]: Pass Candidates
+    DE->>O: Selected AWS-v1.1
+    O->>Provider: Execute
+    Provider->>O: Result
+    O->>RTFS: Resume
 ```
 
-## 3. Core Functionality
+### 2. Key Features
+- **Versioning and Compatibility**: Semantic matching (e.g., `^1.0` allows 1.x); schema validation ensures arg/output fit.
+- **Dynamic Registration**: Providers publish to Marketplace; GFM subscribes for updates (e.g., new versions).
+- **Fallbacks**: If no match, GFM yields error or suggests alternatives (e.g., `:image.blur` proxy).
+- **Caching**: Resolved mappings cached per plan/context for reentrancy (resume uses same).
 
-### 3.1. Function Resolution
+**Sample Yield Resolution** (in Plan):
+```
+(call :nlp.sentiment {:text \"Review text\" :lang :en})  ;; Abstract
+```
+- GFM Query: `:nlp.sentiment` → Candidates: OpenAI-v3 (cost 0.01), Local-v2 (cost 0).
+- Ties to RTFS: Yield args validated against manifest schemas before execution.
 
-The GFM's primary task is to resolve a function name to a specific, executable `Capability` provider. This process involves:
-1.  **Querying Sources**: Checking the local `CapabilityMarketplace` first, then a resolution cache, and finally external/decentralized registries.
-2.  **Filtering**: Removing any providers that are not permitted by the current `RuntimeContext`'s security policy.
-3.  **Selection**: Applying a selection strategy to the remaining candidates to choose the single best provider for the current call.
+### 3. Integration with RTFS 2.0 Reentrancy
+- **Resume Handling**: Yield requests include `resume-id` (from chain); GFM re-resolves with same constraints to avoid drift.
+- **Purity Preservation**: GFM is host-side; RTFS only sees the abstract symbol—no provider knowledge.
 
-### 3.2. Provider Selection Strategies
+### 4. Security and Governance
+Kernel intercepts GFM queries: Verify cap existence before Orchestrator proceeds. Logs resolutions to chain as `Action {:type :CapabilityResolution}`.
 
-The GFM is configured with a strategy to decide which provider to use when multiple are available. Standard strategies include:
--   `LowestCost`: Choose the cheapest provider based on SLA data.
--   `FastestResponse`: Choose the provider with the lowest latency.
--   `HighestAvailability`: Choose the most reliable provider.
--   `LoadBalance`: Distribute calls among available providers.
+GFM makes CCOS's capabilities truly global: Abstract in plans, concrete at runtime, reentrant by design.
 
-### 3.3. Decentralization
-
-While the GFM uses the local `CapabilityMarketplace` as its primary source, its true power comes from its ability to query a decentralized network of registries. This allows a CCOS instance to discover and use capabilities provided by other instances across a network, enabling a truly global, collaborative ecosystem. Implementations for this can be based on Git, IPFS, or other distributed technologies.
-
-## 4. Benefits
-
--   **Decoupling**: Plans can be written in a portable way, focusing on *what* they need to do (`:image.sharpen`) rather than *who* should do it (`:acme-corp.image-sharpener-v2`).
--   **Resilience**: If a preferred provider is down, the GFM can automatically failover to an alternative provider without any change to the plan itself.
--   **Optimization**: The GFM can perform runtime optimization, selecting the most cost-effective or performant provider based on real-time conditions and the user's preferences (e.g., a `{"priority": "cost"}` preference in the `Intent`).
--   **Interoperability**: Enables a vast ecosystem where different CCOS instances can share and consume each other's capabilities seamlessly.
+Next: Delegation Engine in 008.
