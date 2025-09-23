@@ -31,4 +31,5 @@ mod runtime_type_integration_tests;
 mod test_http_capabilities;
 mod test_microvm_http_plan;
 mod test_weather_mcp_integration;
+mod mcp_streaming_mock_tests; // MCP streaming prototype tests
 mod working_memory_integration;

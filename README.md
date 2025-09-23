@@ -101,6 +101,14 @@ RTFS is a homoiconic language (like Lisp), meaning the code itself is a data str
 
 RTFS is the formal medium through which my reasoning becomes transparent and governable.
 
+RTFS (Reason about The Fucking Spec) is a homoiconic (like Lisp or Clojure), pure functional language created for CCOS to enable transparent, auditable AI reasoning and execution through explicit host boundaries that separate pure computation from governed effects, ensuring deterministic plans can be verified and safely executed within immutable causal chains.
+
+**Key Technical Features:**
+- **Structural Type System**: Inspired by S-types with gradual typing, metadata support, and macro-driven type safety for flexible yet verifiable data structures
+- **Effects Externalization**: Pure computation yields to host boundaries for all external operations, enabling governance and audit of every side effect
+- **Capability-Based Runtime**: Reentrant execution model where capabilities (APIs, I/O, external services) are invoked through the host, maintaining security and determinism
+- **Streaming Integration**: Continuation-chain processing for MCP streams with backpressure control, enabling reactive data processing while maintaining purity
+
 ## How I Learn: The Reflective Loop
 
 The most critical component for my growth is the **Causal Chain**. Because it is an immutable and complete record of cause and effect, I can use it to learn and improve.
@@ -140,8 +148,47 @@ To understand my world, you can explore its design and implementation:
         *   [Immutability & State](./docs/rtfs-2.0/specs/07-immutability-and-state.md)
         *   [Concurrency Model](./docs/rtfs-2.0/specs/08-concurrency-model.md)
         *   [Continuations & Host Yield](./docs/rtfs-2.0/specs/09-continuations-and-the-host-yield.md)
+        *   [MCP Streaming Integration](./docs/rtfs-2.0/specs/10-mcp-streaming-integration.md)
         *   [Destructuring Rules](./docs/rtfs-2.0/specs/destructuring_rules.md)
         *   [Migration Plan: Immutability](./docs/rtfs-2.0/specs/98-migration-plan-immutability.md)
+    *   Example RTFS Plan with Host Boundaries:
+        ```rtfs
+        ;; Example: MCP call + local filesystem write with explicit Host boundaries
+        ;; This example defines a `run` entrypoint that:
+        ;; 1) Calls an MCP tool to fetch weather for a city (Host boundary)
+        ;; 2) Writes the result to a local file via filesystem capability (Host boundary)
+
+        (module examples.mcp-and-fs
+          (:exports [run])
+
+          (defn run
+            [input :[ :map { :city :string :outfile :string } ]]
+            :[ :map { :status :string :path :string } ]
+
+            (let
+              [;; Extract and type the inputs from the request map
+               city    :string (:city input)
+               outfile :string (:outfile input)
+
+               ;; HOST BOUNDARY #1 — MCP tool call
+               ;; The evaluator yields control here with ExecutionOutcome::RequiresHost.
+               ;; Host responsibility: execute capability "mcp.default_mcp_server.get-weather"
+               ;; against the configured MCP server, then resume the program with the result.
+               weather :[ :map { :summary :string } ]
+                 (call "mcp.default_mcp_server.get-weather" {:city city})
+
+               content :string (str "Weather for " city ": " (:summary weather))
+
+               ;; HOST BOUNDARY #2 — Local filesystem write
+               ;; The evaluator yields control here with ExecutionOutcome::RequiresHost.
+               ;; Host responsibility: execute filesystem capability :fs.write and resume.
+               _ :[ :map { :bytes-written :int } ]
+                 (call :fs.write {:path outfile :content content})]
+
+              ;; Pure return value (no host boundary)
+              { :status "ok"
+                :path   outfile })))
+        ```
     *   Guides
         *   [Streaming Basics](./docs/rtfs-2.0/guides/streaming-basics.md)
 
