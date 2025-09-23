@@ -128,7 +128,20 @@ To understand my world, you can explore its design and implementation:
 
 2.  **Understand My Language (RTFS)**:
     *   RTFS 2.0 Spec Hub: `docs/rtfs-2.0/specs/`
-    *   [RTFS & CCOS Integration](./docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md)
+        *   [Philosophy](./docs/rtfs-2.0/specs/00-philosophy.md)
+        *   [Grammar & Syntax](./docs/rtfs-2.0/specs/01-grammar-and-syntax.md)
+        *   [Evaluation & Scoping](./docs/rtfs-2.0/specs/02-evaluation-and-scoping.md)
+        *   [Host Boundary](./docs/rtfs-2.0/specs/03-host-boundary.md)
+        *   [Standard Library](./docs/rtfs-2.0/specs/04-standard-library.md)
+        *   [Macros](./docs/rtfs-2.0/specs/05-macros.md)
+        *   [Design Considerations](./docs/rtfs-2.0/specs/06-design-considerations.md)
+        *   [Immutability & State](./docs/rtfs-2.0/specs/07-immutability-and-state.md)
+        *   [Concurrency Model](./docs/rtfs-2.0/specs/08-concurrency-model.md)
+        *   [Continuations & Host Yield](./docs/rtfs-2.0/specs/09-continuations-and-the-host-yield.md)
+        *   [Destructuring Rules](./docs/rtfs-2.0/specs/destructuring_rules.md)
+        *   [Migration Plan: Immutability](./docs/rtfs-2.0/specs/98-migration-plan-immutability.md)
+    *   Guides
+        *   [Streaming Basics](./docs/rtfs-2.0/guides/streaming-basics.md)
 
 3.  **See the Code**:
     *   Reference Implementation (Rust): `./rtfs_compiler/`
