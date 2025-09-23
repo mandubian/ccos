@@ -1708,15 +1708,17 @@ impl IrRuntime {
             "some?" => self.ir_some_with_context(args, env, module_registry),
             "sort-by" => self.ir_sort_by_with_context(args, env, module_registry),
             "call" => {
-                // Handle capability calls in IR runtime
-                if args.len() < 2 {
+                // Execute capability calls immediately in IR runtime using the HostInterface
+                // This mirrors the AST evaluator behavior and keeps examples runnable end-to-end.
+                if args.len() < 1 {
                     return Err(RuntimeError::ArityMismatch {
                         function: "call".to_string(),
-                        expected: "at least 2".to_string(),
+                        expected: "at least 1".to_string(),
                         actual: args.len(),
                     });
                 }
-                
+
+                // Accept either keyword or string capability id
                 let capability_id = match &args[0] {
                     Value::Keyword(kw) => kw.0.clone(),
                     Value::String(s) => s.clone(),
@@ -1726,19 +1728,15 @@ impl IrRuntime {
                         operation: "capability call".to_string(),
                     }),
                 };
-                
+
+                // Remaining args are forwarded as-is
                 let call_args = args[1..].to_vec();
-                
-                // Create HostCall for capability invocation
-                let host_call = crate::runtime::execution_outcome::HostCall {
-                    capability_id,
-                    args: call_args,
-                    security_context: self.security_context.clone(),
-                    causal_context: None,
-                    metadata: None,
-                };
-                
-                Ok(ExecutionOutcome::RequiresHost(host_call))
+
+                // Delegate to host directly
+                match self.host.execute_capability(&capability_id, &call_args) {
+                    Ok(v) => Ok(ExecutionOutcome::Complete(v)),
+                    Err(e) => Err(e),
+                }
             }
             "update" => {
                 // Provide a minimal implementation of update usable by IR tests.
