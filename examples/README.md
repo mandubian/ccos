@@ -24,7 +24,14 @@ Notes:
 - Filesystem capability used: `:fs.write`. If your host uses a different name (e.g., `:ccos.file.write`), update the example accordingly.
 
 Running:
-- Ensure your Host registers the MCP tool and filesystem write capabilities.
+- Quick demo with a built-in harness binary:
+	- Build the project, then run: run_mcp_and_fs_example [CITY] [OUTFILE]
+	- Example: run_mcp_and_fs_example Paris /tmp/weather.txt
+	- The harness registers two stub capabilities (MCP weather + fs.write), loads `examples.mcp-and-fs`, calls `run`, and prints the result.
+	- Security context is Controlled and only allows those two demo capabilities.
+
+Advanced:
+- If wiring your own Host, ensure it registers the MCP tool and filesystem write capabilities.
 - Provide an input map like `{ :city "Paris" :outfile "/tmp/weather.txt" }` when invoking the entrypoint.
 
 Troubleshooting:
