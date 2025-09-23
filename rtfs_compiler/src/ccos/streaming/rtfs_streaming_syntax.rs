@@ -1,6 +1,8 @@
 use crate::runtime::streaming::{StreamingCapability, StreamHandle, StreamConfig, BidirectionalConfig};
 use crate::runtime::error::RuntimeResult;
+use crate::runtime::values::Value;
 use tokio::sync::mpsc;
+use crate::ast::{Expression, Keyword, Symbol, MapKey, Literal};
 
 /// Minimal local streaming provider for tests
 pub struct LocalStreamingProvider;
@@ -32,6 +34,58 @@ impl StreamingCapability for LocalStreamingProvider {
         Ok(StreamHandle { stream_id: Uuid::new_v4().to_string(), stop_tx: tx })
     }
 }
+
+// -------------------------------------------------------------------------------------------------
+// Minimal macro lowering for (mcp-stream <endpoint> <processor-fn> <initial-state?>)
+// Produces: (call :mcp.stream.start { :endpoint "..." :processor "..." :initial-state <value> })
+// This is an initial ergonomic helper; in future we may move macro expansion earlier in parse.
+
+/// Attempt to detect and lower the simple (mcp-stream ...) surface form into the canonical
+/// capability call expression expected by the runtime. This keeps RTFS programs concise while
+/// reusing the existing `(call :mcp.stream.start {...})` pathway described in the spec.
+pub fn maybe_lower_mcp_stream_macro(expr: &Expression) -> Expression {
+    // Internal helper to extract symbol name
+    fn symbol_name(e: &Expression) -> Option<String> {
+        if let Expression::Symbol(Symbol(s)) = e { Some(s.clone()) } else { None }
+    }
+    // List structure is raw Vec<Expression>
+    if let Expression::List(items) = expr {
+        if items.is_empty() { return expr.clone(); }
+        if let Some(head) = items.get(0) {
+            if let Some(sym) = symbol_name(head) {
+                if sym == "mcp-stream" {
+                    // Need at least endpoint and processor
+                    if items.len() < 3 { return expr.clone(); }
+                    // Endpoint literal (symbol or string literal currently represented as Literal::String)
+                    let endpoint = match &items[1] {
+                        Expression::Literal(Literal::String(s)) => s.clone(),
+                        Expression::Symbol(Symbol(s)) => s.clone(),
+                        _ => return expr.clone(),
+                    };
+                    let processor = match &items[2] {
+                        Expression::Symbol(Symbol(s)) => s.clone(),
+                        Expression::Literal(Literal::String(s)) => s.clone(),
+                        _ => return expr.clone(),
+                    };
+                    let initial_state = if items.len() > 3 { items[3].clone() } else { Expression::Map(std::collections::HashMap::new()) };
+
+                    // Build map with keyword keys (without leading ':') because MapKey::Keyword wraps raw value
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(MapKey::Keyword(Keyword("endpoint".to_string())), Expression::Literal(Literal::String(endpoint)));
+                    m.insert(MapKey::Keyword(Keyword("processor".to_string())), Expression::Literal(Literal::String(processor)));
+                    m.insert(MapKey::Keyword(Keyword("initial-state".to_string())), initial_state);
+                    let map_expr = Expression::Map(m);
+
+                    // Form: (call :mcp.stream.start { ... })
+                    let call_sym = Expression::Symbol(Symbol("call".to_string()));
+                    let capability_kw = Expression::Literal(Literal::Keyword(Keyword("mcp.stream.start".to_string())));
+                    return Expression::List(vec![call_sym, capability_kw, map_expr]);
+                }
+            }
+        }
+    }
+    expr.clone()
+}
 // RTFS 2.0 Streaming Syntax Implementation Examples
 // This demonstrates how the homoiconic streaming syntax integrates with the capability marketplace
 
@@ -41,7 +95,6 @@ use uuid::Uuid;
 
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::streaming::{StreamType, StreamCallbacks};
-use crate::runtime::values::Value;
 
 /// Direction of data flow in a stream
 #[derive(Debug, Clone)]

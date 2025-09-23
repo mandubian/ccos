@@ -77,9 +77,23 @@ RTFS is homoiconic: its code is represented using its own primary data structure
 -   **Metaprogramming**: RTFS programs can construct and evaluate other RTFS programs, enabling powerful macros and code generation.
 -   **Introspection**: A program's structure can be analyzed and transformed as data.
 
-The type system is also intentionally minimal, focusing on primitives (`Int`, `String`, `Bool`, `Symbol`), collections (`List`, `Map`), and structural types that are sufficient to represent complex data and abstract syntax trees.
+## 6.5. Type System: Inspired by S-types with Structural Types, Macros, and Metadata
 
-## 7. The Role of Macros: Syntactic Sugar for Host Features
+RTFS features a **minimal yet expressive type system** inspired by S-types, designed for safety without complexity. The type system is **structural** rather than nominal, focusing on the shape of data rather than explicit type declarations:
+
+-   **Primitives**: `Int`, `String`, `Bool`, `Symbol` - basic atomic types
+-   **Collections**: `List`, `Map` - composable data structures  
+-   **Structural Types**: Types defined by their structure, e.g., `:[ :map { :name :string :age :int } ]` describes a map with specific key-value type constraints
+-   **Metadata Support**: Types can carry metadata for documentation, validation rules, and runtime behavior hints
+
+The type system integrates deeply with the **macro system** for compile-time type checking and transformation. Macros can:
+-   Generate type-safe code from structural type specifications
+-   Implement type-level computations and validations
+-   Provide syntactic sugar for common type patterns
+
+This approach enables **gradual typing** - programs can be partially typed, with type information used for optimization and safety without requiring full type annotations. The structural nature ensures types compose naturally, making RTFS ideal for representing complex data structures and abstract syntax trees while maintaining runtime flexibility.
+
+## 8. The Role of Macros: Syntactic Sugar for Host Features
 
 While the core language is minimal, it can be syntactically extended through a **macro system**. Macros are compile-time code transformations that allow developers to create more expressive or convenient syntax.
 
@@ -93,7 +107,7 @@ Instead of forcing users to write `(call ...)` for each, a macro `(stream-from .
 
 This preserves the purity of the runtime engine while offering the syntactic convenience of a higher-level feature. The language itself remains unaware of "streams," but the developer experience is greatly improved.
 
-## 8. Execution Model: A Hybrid Compile-Runtime Approach
+## 9. Execution Model: A Hybrid Compile-Runtime Approach
 
 It is important to understand that RTFS is not a purely interpreted language that works from raw text on every execution. It is designed with a **hybrid compile-runtime model** to achieve both high performance and strong security guarantees.
 
@@ -116,7 +130,7 @@ This model provides the best of both worlds:
 -   **Security**: Verifying a well-defined IR is far more reliable than trying to secure a text-based language with complex syntax and macros.
 -   **Portability**: The binary IR can be executed by any compliant RTFS runtime, on any platform, including WebAssembly.
 
-## 9. Conclusion: The Right Roles for an AI-Driven System
+## 10. Conclusion: The Right Roles for an AI-Driven System
 
 The architecture of RTFS 2.0 is a direct result of its intended role as the logical fabric for an AI Cognitive OS like CCOS. The strict separation of concerns is not an arbitrary design choice, but a necessary foundation for a secure and scalable agentic system.
 

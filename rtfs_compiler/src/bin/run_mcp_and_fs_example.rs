@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use rtfs_compiler::ast::{Keyword, MapKey};
 use rtfs_compiler::runtime::{IrRuntime, ModuleRegistry, RuntimeContext, Value, ExecutionOutcome};
-use rtfs_compiler::ir::core::{IrNode, IrType};
+use rtfs_compiler::ir::converter::IrConverter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running examples.mcp-and-fs/run with city='{}', outfile='{}'", city, outfile);
 
     // --- CCOS plumbing: registry, marketplace, causal chain, host, security ---
+    // Set up the capability registry and marketplace for external tools (MCP, filesystem).
     let capability_registry = Arc::new(tokio::sync::RwLock::new(
         rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
     ));
@@ -26,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Register stub MCP tool: mcp.default_mcp_server.get-weather
+    // This simulates an MCP server capability that fetches weather data.
     // Accepts a single map argument {:city "..."} and returns {:summary "..."}
     marketplace
         .register_local_capability(
@@ -53,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Register stub filesystem write capability: fs.write
+    // This simulates a filesystem capability for writing files.
     // Accepts a single map {:path "..." :content "..."} and returns {:bytes-written int}
     marketplace
         .register_local_capability(
@@ -93,13 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    // Security: allow only our two demo capabilities
+    // Security: allow only our two demo capabilities to prevent unauthorized effects.
     let security_ctx = RuntimeContext::controlled(vec![
         "mcp.default_mcp_server.get-weather".to_string(),
         "fs.write".to_string(),
     ]);
 
-    // Causal chain + Host
+    // Causal chain + Host: Set up the immutable audit ledger and the runtime host that manages effects.
     let causal_chain = Arc::new(std::sync::Mutex::new(
         rtfs_compiler::ccos::causal_chain::CausalChain::new().expect("create causal chain"),
     ));
@@ -108,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         marketplace.clone(),
         security_ctx.clone(),
     ));
-    // Provide minimal execution context expected by Host
+    // Provide minimal execution context expected by Host (plan ID, intents, version).
     host.set_execution_context(
         "demo-plan".to_string(),
         vec!["intent-1".to_string()],
@@ -116,60 +119,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Module loading ---
+    // Load the RTFS module to make its functions available in the registry.
     let mut registry = ModuleRegistry::new();
-    // Ensure the module path includes the repo root (one directory above this crate)
+    // Ensure the module path includes the repo root (one directory above this crate).
     let repo_root: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf();
     registry.add_module_path(repo_root);
 
-    // Ensure stdlib is loaded into the registry (needed for env.with_stdlib)
+    // Ensure stdlib is loaded into the registry (needed for env.with_stdlib).
     rtfs_compiler::runtime::stdlib::load_stdlib(&mut registry)
         .map_err(|e| format!("Failed to load stdlib: {}", e))?;
 
-    // Use the IR runtime to load modules
+    // Use the IR runtime to load modules (this compiles and registers the module's exports).
     let mut ir_runtime = IrRuntime::new(host.clone(), security_ctx.clone());
     let _module = registry
         .load_module("examples.mcp-and-fs", &mut ir_runtime)
         .map_err(|e| format!("Failed to load module examples.mcp-and-fs: {}", e))?;
 
-    // Resolve exported function value (should be a Function or placeholder to IR lambda)
-    let run_func_val = registry
-        .resolve_qualified_symbol("examples.mcp-and-fs/run")
-        .map_err(|e| format!("Failed to resolve run export: {}", e))?;
+    // Instead of resolving and binding the function manually, parse RTFS source directly that calls the function.
+    // This demonstrates direct RTFS execution without manual IR construction.
+    let rtfs_source = format!("(examples.mcp-and-fs/run {{:city \"{}\" :outfile \"{}\"}})", city, outfile);
+    println!("Parsing and executing RTFS source: {}", rtfs_source);
 
-    // Prepare IR environment from stdlib and insert the exported function as a variable
+    // Parse the RTFS source into AST expression.
+    let ast = rtfs_compiler::parser::parse_expression(&rtfs_source)
+        .map_err(|e| format!("Failed to parse RTFS: {:?}", e))?;
+
+    // Compile AST to IR using IrConverter.
+    let mut converter = IrConverter::with_module_registry(&registry);
+    let ir = converter.convert(&ast)
+        .map_err(|e| format!("Failed to compile to IR: {:?}", e))?;
+
+    // Prepare IR environment from stdlib (module functions are resolved via qualified symbols in IR).
     let mut env = rtfs_compiler::runtime::environment::IrEnvironment::with_stdlib(&registry)
         .map_err(|e| format!("Failed to create IR environment with stdlib: {}", e))?;
-    // Insert the function value under a temp name and reference it as VariableRef
-    env.define("__run".to_string(), run_func_val.clone());
-    let call_ir = IrNode::Apply {
-        id: 0,
-        function: Box::new(IrNode::VariableRef { id: 0, name: "__run".to_string(), binding_id: 0, ir_type: IrType::Any, source_location: None }),
-        arguments: vec![
-            IrNode::Map {
-                id: 0,
-                entries: vec![
-                    rtfs_compiler::ir::core::IrMapEntry {
-                        key: IrNode::Literal { id: 0, value: rtfs_compiler::ast::Literal::Keyword(Keyword("city".into())), ir_type: IrType::Keyword, source_location: None },
-                        value: IrNode::Literal { id: 0, value: rtfs_compiler::ast::Literal::String(city.clone()), ir_type: IrType::String, source_location: None },
-                    },
-                    rtfs_compiler::ir::core::IrMapEntry {
-                        key: IrNode::Literal { id: 0, value: rtfs_compiler::ast::Literal::Keyword(Keyword("outfile".into())), ir_type: IrType::Keyword, source_location: None },
-                        value: IrNode::Literal { id: 0, value: rtfs_compiler::ast::Literal::String(outfile.clone()), ir_type: IrType::String, source_location: None },
-                    },
-                ],
-                ir_type: IrType::Any,
-                source_location: None,
-            }
-        ],
-        ir_type: IrType::Any,
-        source_location: None,
-    };
 
-    // Execute the Apply node via IR runtime
-    match ir_runtime.execute_node(&call_ir, &mut env, false, &mut registry)? {
+    // Execute the IR node via IR runtime.
+    match ir_runtime.execute_node(&ir, &mut env, false, &mut registry)? {
         ExecutionOutcome::Complete(v) => {
             println!("Result: {:?}", v);
         }
