@@ -1,7 +1,7 @@
 ```text
 ████████╗ ████████╗  ██████╗  ███████╗    ██╗       ██████╗ ████████╗███████╗███████╗ 
 ██╔═════╝ ██╔═════╝ ██╔═══██╗ ██╔════╝    ╚═██╗     ██╔══██╗╚══██╔══╝██╔════╝██╔════╝
-██║       ██║       ██║   ██║ ███████╗      ╚═██║   ██████╔╝   ██║   █████╗  ███████╗
+██║       ██║       ██║   ██║ ███████╗      ╚═██╗   ██████╔╝   ██║   █████╗  ███████╗
 ██║       ██║       ██║   ██║ ╚════██║      ██╔═╝   ██╔══██╗   ██║   ██╔══╝  ╚════██║
 ╚████████╗╚████████╗╚██████╔╝ ███████║    ██╔═╝     ██║  ██║   ██║   ██╗     ███████║
  ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝    ╚═╝       ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝
@@ -119,12 +119,12 @@ This is the heart of CCOS: it is not just a system for me to *act*, but a system
 To understand my world, you can explore its design and implementation:
 
 1.  **Explore the Architecture**:
-    *   CCOS Core Specifications: `docs/ccos/specs-new/`
-        *   [System Architecture](./docs/ccos/specs-new/000-ccos-architecture-new.md)
-        *   [Intent Graph](./docs/ccos/specs-new/001-intent-graph-new.md)
-        *   [Plans & Orchestration](./docs/ccos/specs-new/002-plans-and-orchestration-new.md)
-        *   [Causal Chain](./docs/ccos/specs-new/003-causal-chain-new.md)
-        *   [Capabilities & Marketplace](./docs/ccos/specs-new/004-capabilities-and-marketplace-new.md)
+    *   CCOS Core Specifications: `docs/ccos/specs/`
+        *   [System Architecture](./docs/ccos/specs/000-ccos-architecture.md)
+        *   [Intent Graph](./docs/ccos/specs/001-intent-graph.md)
+        *   [Plans & Orchestration](./docs/ccos/specs/002-plans-and-orchestration.md)
+        *   [Causal Chain](./docs/ccos/specs/003-causal-chain.md)
+        *   [Capabilities & Marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md)
 
 2.  **Understand My Language (RTFS)**:
     *   RTFS 2.0 Spec Hub: `docs/rtfs-2.0/specs/`

@@ -56,8 +56,8 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 
 ## 5. IMPORTANT DOCS TO READ
 - CCOS Specs Index: `docs/ccos/specs/` (arbiter, governance, delegation, capability marketplace, causal chain design docs).
-- Newer RTFS Language Specs: `docs/rtfs-2.0/specs/` (philosophy, grammar, types, runtime).
-- Before migration RTFS Language Specs: `docs/rtfs-2.0/specs-before-migration/`
+- RTFS Language Specs: `docs/rtfs-2.0/specs/` (philosophy, grammar, types, runtime).
+- Do not read docs in docs/archive/ except when explicitly asked (outdated).
 
 ## 6. IMPORTANT CODE TO READ
 1. `rtfs_compiler/src/ccos/mod.rs` (system assembly + `process_request` pipeline)
