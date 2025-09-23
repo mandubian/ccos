@@ -1,84 +1,162 @@
-# CCOS Specification 003: Causal Chain
+# CCOS Specification 003: Causal Chain (RTFS 2.0 Edition)
 
-**Status:** Proposed
-**Version:** 1.0
-**Date:** 2025-07-20
-**Related:**
-- [SEP-000: System Architecture](./000-ccos-architecture.md)
-- [SEP-002: Plans and Orchestration](./002-plans-and-orchestration.md)
+**Status:** Draft for Review  
+**Version:** 1.0  
+**Date:** 2025-09-20  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [002: Plans](./002-plans-and-orchestration-new.md)  
 
-## 1. Abstract
+## Introduction: The Immutable Audit Backbone
 
-The Causal Chain is the immutable, append-only ledger that serves as the system's definitive record of "what happened." It provides a complete, verifiable, and hierarchical audit trail of all significant events, enabling debugging, analysis, and autonomous learning.
+The Causal Chain is CCOS's tamper-proof ledger: An append-only, hashed tree recording every action, yield, and outcome. In RTFS 2.0, it captures pure execution + host effects, enabling 'Causal Chain of Thought'—verifiable reasoning traces. Why essential? Provides replayability for debugging, learning (e.g., optimize plans), and compliance (prove alignment to intents/Constitution).
 
-## 2. Core Principles
+Immutability: Once appended, entries are eternal; updates via new links. Reentrancy: Use as checkpoint store for resume.
 
--   **Immutability**: Once an action is recorded in the chain, it can never be altered or deleted.
--   **Verifiability**: The integrity of the chain is protected by a hash chain. Each action is hashed, and that hash is combined with the hash of the previous action to create a new chain hash. Any modification to a past event would invalidate the entire subsequent chain.
--   **Hierarchy**: The chain is not a flat list. It is a tree structure that mirrors the nested execution of plans, steps, and capability calls, linked via a `parent_action_id`.
+## Core Concepts
 
-## 3. The `Action` Object
+### 1. Action Structure
+Each entry is an `Action`: Hierarchical record of an event.
 
-An `Action` is a record of a single, significant event.
+**Fields** (RTFS Map for storage):
+- `:action-id` (Symbol): UUID.
+- `:parent-action-id` (Symbol, Optional): Links hierarchy.
+- `:plan-id` (Symbol): Associated plan IR hash.
+- `:intent-id` (Symbol): Fulfilling goal.
+- `:step-id` (Symbol): RTFS step (e.g., :load-data).
+- `:type` (Enum): :PlanStarted, :StepYield, :CapabilityCall, :PureEval, :PlanCompleted, etc.
+- `:function-name` (Symbol): e.g., :storage.fetch.
+- `:args` (List<Value>): Yield inputs (sanitized).
+- `:result` (Value): Output (redacted if sensitive).
+- `:success` (Bool): Outcome.
+- `:error` (String, Optional): Failure details.
+- `:cost` (Float): Resources used.
+- `:duration-ms` (Int): Time.
+- `:timestamp` (Timestamp): When logged.
+- `:hash` (String): Merkle-proof (includes prior hash).
+- `:provenance` (Map): {:constitutional-rule :budget-ok, :attestation-id :cap-xyz, :effect-request {...}}.
 
-### 3.1. Fields
+**Sample Action** (from sentiment plan yield):
+```
+{:action-id :act-456
+ :parent-action-id :act-123  ;; Prior pure step
+ :plan-id :plan-v1
+ :intent-id :intent-123
+ :step-id :load-data
+ :type :CapabilityCall
+ :function-name :storage.fetch
+ :args [:bucket \"reviews\" :key \"2025.json\"]
+ :result {:reviews [{\"text\": \"Great product!\"} ]}
+ :success true
+ :cost 0.02
+ :duration-ms 150
+ :timestamp \"2025-09-20T10:05:00Z\"
+ :hash \"sha256:abc...\"  ;; Chains to parent
+ :provenance {:rule :data-access-allowed :request-idempotent true}}
+```
 
--   `action_id` (String, UUID): A unique identifier for this specific action.
--   `parent_action_id` (String, UUID, Optional): The ID of the parent action, which links this action into the execution hierarchy. A top-level plan execution action would have a `null` parent.
--   `plan_id` (String, UUID): The ID of the top-level plan this action is associated with.
--   `intent_id` (String, UUID): The ID of the primary intent this action is helping to fulfill.
--   `action_type` (Enum): The specific type of event being recorded.
--   `function_name` (String): A human-readable name for the action (e.g., the step name, the capability ID).
--   `arguments` (Vec<Value>, Optional): The inputs to the action, if any.
--   `result` (Value, Optional): The output of the action, if any.
--   `success` (Boolean): `true` if the action completed successfully, `false` otherwise.
--   `error_message` (String, Optional): Details of the failure if `success` is `false`.
--   `cost` (Float): The calculated cost of the action (e.g., LLM tokens, API fees).
--   `duration_ms` (Integer): The time taken to execute the action.
--   `timestamp` (Timestamp): The time the action was recorded.
--   `metadata` (Map<String, Value>): An open-ended map for additional context, including a cryptographic signature.
+### 2. Chain as Hierarchical Tree
+Not flat log: Tree mirrors plan structure (plan → steps → yields). Hash chain: Each action hashes (fields + parent hash), ensuring integrity.
 
-### 3.2. Action Types (`action_type`)
+**Tree Sample Diagram** (for above plan):
+```mermaid
+graph TD
+    A0[PlanStarted<br/>:plan-v1 :intent-123]
+    A1[StepStarted: load-data<br/>Pure: let setup]
+    A2[Yield: :storage.fetch<br/>Success: reviews loaded]
+    A3[Resume Pure: map on reviews]
+    A4[Yield Batch: :nlp.sentiment<br/>Results: sentiments]
+    A5[StepCompleted: analyze<br/>Pure: reduce summary]
+    A6[PlanCompleted<br/>Final: summary saved]
 
-This enum categorizes the event being recorded.
+    A0 --> A1
+    A1 --> A2
+    A2 --> A3
+    A3 --> A4
+    A4 --> A5
+    A5 --> A6
 
--   **Plan Lifecycle**:
-    -   `PlanStarted`: The Orchestrator has begun executing a plan.
-    -   `PlanCompleted`: The plan finished successfully.
-    -   `PlanAborted`: The plan was stopped before completion.
-    -   `PlanPaused` / `PlanResumed`: The plan's execution was paused or resumed.
--   **Step Lifecycle**:
-    -   `PlanStepStarted`: A `(step ...)` has begun.
-    -   `PlanStepCompleted`: A step finished successfully.
-    -   `PlanStepFailed`: A step failed.
-    -   `PlanStepRetrying`: The orchestrator is re-attempting a failed step.
--   **Execution**:
-    -   `CapabilityCall`: A `(call ...)` to a capability was made.
-    -   `InternalStep`: A fine-grained event from within the RTFS evaluator (optional, for deep debugging).
+    style A0 fill:#90EE90
+    style A2 fill:#FFE4B5
+    style A4 fill:#FFE4B5
+```
 
-## 4. Causal Chain API
+### 3. Integration with RTFS 2.0 Reentrancy
+Orchestrator logs automatically:
+- Pure evals: Optional fine-grained (for debug).
+- Yields: Mandatory, with `effect_request` (step/intent IDs for provenance).
+- Resumes: Log as `:ResumeFrom {:checkpoint-action :act-2}`.
 
-The Causal Chain component must provide an API for:
+**Reentrant Replay Example**:
+1. Execution to A4 yield → Pause (e.g., error in :nlp).
+2. Chain: Up to A4, with env snapshot (immutable results so far).
+3. Resume: Verify chain hash → Replay pure A1/A3 (deterministic, fast) → Re-issue yield (idempotent key prevents dupes) → Continue to A5.
+4. Learning: Query chain (`:chain.query {:intent :123 :type :YieldFailed}`) → Arbiter generates optimized plan (e.g., batch smaller).
 
--   **Appending Actions**: A method to add a new action to the chain. This is the *only* way to modify the chain. The implementation must handle hash calculation and signing internally.
--   **Querying**: Methods to retrieve actions based on:
-    -   `action_id`
-    -   `plan_id`
-    -   `intent_id`
--   **Traversal**: Methods to reconstruct the execution tree:
-    -   `get_children(action_id)`: Returns all actions whose `parent_action_id` matches the given ID.
-    -   `get_parent(action_id)`: Returns the parent action.
--   **Integrity Verification**: A method to traverse the entire chain and verify that all hash links are valid, confirming that the ledger has not been tampered with.
+### 4. API and Verifiability
+Host capabilities:
+- `:chain.append (action)`: Validate + hash + store.
+- `:chain.query (filter)`: By ID/intent/step; returns subtree.
+- `:chain.verify (from-id)`: Traverse + check hashes.
+- `:chain.replay (action-id, env)`: For reentrancy/testing.
 
-## 5. Core Feature: The Causal Chain of Thought
+RTFS Purity Boost: Yields are explicit, so chain captures full 'thought process'—pure transforms + governed effects—without mutation gaps.
 
-The Causal Chain is not merely a log of *actions*; it is a verifiable record of the system's entire reasoning process. It must not only record *what* happened but provide an unforgeable, cryptographic link to *why* it happened. This is a core, mandatory feature of the CCOS security model.
+This chain turns execution into a queryable story, powering adaptive agents.
 
-To achieve this, the `Action` object's `metadata` field **must** be enriched with direct, verifiable links to the specific context that led to the action:
+### 3.a Delegation Events (Example)
 
--   **`intent_id`**: A direct link to the version of the `Intent` object that was active when the action was taken.
--   **`constitutional_rule_id`**: For any action validated by the Governance Kernel, a link to the specific `ConstitutionalRule(s)` that permitted the action. This is a critical security feature.
--   **`delegation_decision_id`**: A link to the `DelegationInfo` object from the Delegation Engine, explaining why a particular execution target was chosen.
--   **`capability_attestation_id`**: A link to the `Attestation` of the `Capability` that was executed. This proves that the code that ran was the code that was approved.
+Delegation is fully auditable via dedicated action types that nest under the relevant intent/step where the decision occurred. Typical types:
 
-This transforms the Causal Chain from a simple log into a rich, queryable record of the system's reasoning process. It makes behavior transparent and provides the necessary data for high-stakes auditing, ensuring that every action can be traced back to a specific human-approved rule and a specific, verified piece of code.
+- `:DelegationProposed`
+- `:DelegationApproved` / `:DelegationRejected`
+- `:DelegationRevoked` (policy change) 
+- `:DelegationCompleted` (agent returned a result/plan)
+
+Minimal example entries (under the failed yield at `A4` from the tree above):
+```
+{:action-id :act-700
+ :parent-action-id :act-4  ;; The failing yield or step node
+ :plan-id :plan-v1
+ :intent-id :intent-123
+ :step-id :analyze
+ :type :DelegationProposed
+ :delegation {:agent-id :agent.sentiment.v2
+              :rationale "Specialist agent for multilingual reviews"
+              :constraints {:caps [:nlp/* :storage/*]
+                           :max-yields 4
+                           :redactions [:pii]}}
+ :provenance {:rule :delegation-allowed :sensitivity :low}}
+
+{:action-id :act-701
+ :parent-action-id :act-700
+ :type :DelegationApproved
+ :provenance {:arbiter :primary
+              :kernel-decision :budget-ok
+              :attestation-id :agent-sig-abc}}
+
+{:action-id :act-702
+ :parent-action-id :act-701
+ :type :DelegationCompleted
+ :result {:rtfs.plan-source "(defplan analyze ... )"
+          :metrics {:latency-ms 5200 :cost 0.03}}
+ :success true}
+```
+
+Subtree sketch:
+```mermaid
+graph TD
+    A4[Yield Failed: :nlp.sentiment]
+    D0[DelegationProposed]
+    D1[DelegationApproved]
+    D2[DelegationCompleted\nPlan returned]
+
+    A4 --> D0
+    D0 --> D1
+    D1 --> D2
+```
+
+Reentrant replay notes:
+- Delegation entries are effects (host boundary) and are idempotent via a `:request-id` stored in `:provenance` (omitted above for brevity). Replays won’t re-call an external agent if a completed record exists.
+- If a proposal was rejected or revoked between runs, replay halts before execution and surfaces the governance decision deterministically.
+- The returned `:rtfs.plan-source` is revalidated and compiled before execution; its compilation and subsequent yields are logged as normal under the same intent.
+
+Next: Capabilities in 004.

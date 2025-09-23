@@ -1,0 +1,9 @@
+;; RTFS examples for llm-execute
+
+;; Positional form
+(llm-execute "echo-model" "Hello from RTFS")
+
+;; Keyword form with system prompt
+(llm-execute :model "echo-model"
+             :prompt "Summarize the design of CCOS"
+             :system "You are a helpful AI. Answer concisely.")

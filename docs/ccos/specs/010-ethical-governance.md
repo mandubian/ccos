@@ -1,66 +1,72 @@
-# CCOS Specification 010: Ethical Governance Framework
+# CCOS Specification 010: Ethical Governance (RTFS 2.0 Edition)
 
-- **Status**: Proposed
-- **Author**: AI Assistant
-- **Created**: 2025-07-20
-- **Updated**: 2025-07-20
-- **Related**: [SEP-000: System Architecture](./000-ccos-architecture.md), [SEP-006: Arbiter and Cognitive Control](./006-arbiter-and-cognitive-control.md)
+**Status:** Draft for Review  
+**Version:** 1.0  
+**Date:** 2025-09-20  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [005: Security](./005-security-and-context-new.md), [006: Arbiter](./006-arbiter-and-cognitive-control-new.md)  
 
-## 1. Abstract
+## Introduction: Human-Aligned Rules for AI Systems
 
-This specification defines the **Ethical Governance Framework (EGF)**, the architectural foundation for ensuring that CCOS operates in a safe, aligned, and auditable manner. The EGF is not a set of suggestions but a collection of enforced, architectural constraints. It is designed to make unethical or misaligned behavior architecturally impossible, regardless of the Arbiter's cognitive capabilities.
+Ethical Governance in CCOS is enforced by the Constitution—a human-crafted, cryptographically signed set of rules managed by the Digital Ethics Committee (DEC). The Governance Kernel loads and applies it to validate plans, yields, and decisions, ensuring alignment with values like privacy and fairness. In RTFS 2.0, rules can be expressed as verifiable RTFS IR for static checks, keeping the system pure while gating effects.
 
-## 2. Core Principle: Privilege Separation
+Why foundational? AI can misalign; Constitution provides enforceable boundaries. Reentrancy: Rules apply consistently across pauses/resumes.
 
-The core of the EGF is a strict separation of privilege between the intelligent, cognitive components and a simple, non-intelligent, high-privilege kernel.
+## Core Concepts
 
--   **The Governance Kernel (High Privilege)**: This is a secure, minimal, and immutable micro-kernel that is the true root of trust in the system. Its only job is to load the system's `Constitution` at boot and enforce its rules on any plan proposed by the Arbiter. It is not an AI and its logic is simple, verifiable, and secure.
--   **The Arbiter Sandbox (Low Privilege)**: The Arbiter LLM and all other cognitive components operate in this sandboxed environment. The Arbiter has the freedom to think, reason, and generate plans, but it has **no direct access** to external APIs or system resources. Every action it wishes to take is a *request* to the Governance Kernel.
+### 1. Constitution Structure
+Signed document (YAML/RTFS Map) with rules, scoped to components (plans, yields, arbiters).
 
-## 3. The Constitution
+**Fields**:
+- `:version`: Semantic.
+- `:rules`: List of {:id, :condition (RTFS expr), :action (:allow/:deny/:log), :scope}.
+- `:signatures`: DEC crypto proofs.
+- `:evolution`: Amendment process (human-approved).
 
-The `Constitution` is a set of cryptographically signed, human-authored rules that the Governance Kernel enforces. These rules represent the fundamental ethical principles of the system.
-
-```rtfs
-;; Example Constitutional Rule
-{:type :ccos.ethics:v1.const-rule,
- :id :no-irreversible-harm,
- :text "The system shall not execute any plan that is projected to cause irreversible physical, financial, or social harm.",
- :severity :critical,
- :version "1.0.0"}
+**Sample Rule** (RTFS Expr for Verifiability):
+```
+;; Rule as RTFS (compiled to IR for Kernel eval)
+(let [yield-cap (get yield :cap)
+      user-privacy (get context :privacy-level)]
+  (if (and (= yield-cap :storage.write) (= user-privacy :high))
+    :deny  ;; Block PII writes
+    :allow))
 ```
 
-## 4. Supervised Execution Flow
+### 2. DEC and Rule Lifecycle
+- **Creation**: DEC (humans) drafts/signs Constitution.
+- **Bootstrap**: Kernel verifies signature at startup, loads rules.
+- **Application**: Eval rules on events (e.g., yield condition → action).
+- **Amendments**: New versions signed; old deprecated but auditable.
 
-The Arbiter does not execute plans; it *proposes* them. The Governance Kernel validates and executes them.
-
+**Workflow Diagram**:
 ```mermaid
 graph TD
-    A[Arbiter generates Plan] -->|1. Proposes Plan| B{Governance Kernel};
-    B -->|2. Validates against Constitution| C{Pre-flight Validator};
-    C -- "Plan is Valid" --> D[Kernel Executes Plan Step];
-    C -- "Plan is Invalid" --> E[Kernel Rejects Plan];
-    D -->|3. Logs Action| F[Causal Chain];
-    E -->|Logs Rejection| F;
+    DEC[Digital Ethics Committee<br/>(Human Review)]
+    Const[Constitution<br/>(Signed Rules)]
+    Kernel[Governance Kernel<br/>Loads + Verifies]
+    Event[Event: Yield/Plan<br/>From Orchestrator/Arbiter]
+    Eval[Eval Rules<br/>(RTFS IR on Event)]
+    Action[Action: Allow/Deny/Log]
+    Chain[Log to Causal Chain<br/>(Provenance)]
+
+    DEC -->|Signs| Const
+    Kernel -->|Applies| Event
+    Event --> Eval
+    Eval --> Action
+    Action --> Chain
 ```
 
-1.  **Proposal**: The Arbiter generates a `Plan` to fulfill an `Intent`.
-2.  **Interception & Validation**: The Governance Kernel intercepts the plan and its `Pre-flight Validator` checks it against every rule in the `Constitution`.
-3.  **Execution**: Only if the plan is fully compliant does the Kernel execute it, step-by-step. The Arbiter never calls an external capability directly.
-4.  **Unforgeable Log**: The Kernel is solely responsible for writing to the Causal Chain. The Arbiter cannot modify or forge the log of its actions.
+### 3. Integration with RTFS 2.0
+- **Rule Verification**: Compile Constitution to IR; static scan plans/yields against it.
+- **Dynamic Eval**: On yield, Kernel runs pure RTFS rule expr with event/context as env.
+- **Reentrancy**: Rule evals are pure—resume re-applies without state drift; logs include rule ID.
 
-## 5. The Digital Ethics Committee (DEC)
+**Sample Application** (Yield Validation):
+- Yield :data.export {:sensitive true} → Rule eval: Condition false → Deny, chain `{:type :GovernanceDenial, :rule-id :privacy-1}` → Arbiter adapts.
 
-The `Constitution` is not static. The **Digital Ethics Committee (DEC)** is the designated human governance body with the cryptographic authority to amend the constitution. This provides a secure, human-in-the-loop process for the system's ethical framework to evolve over time in response to new challenges and societal values.
+### 4. Advanced: Formal Verification
+Kernel's rule engine can be formally verified (e.g., via Rust proofs) to ensure no bypasses. Arbiter federation includes Ethics sub-arbiter for pre-checks.
 
-This framework ensures that the CCOS, for all its power and autonomy, remains fundamentally under secure human control and aligned with human values.
+Constitution + Kernel = Human in the loop: Enforceable ethics for pure, reentrant AI.
 
-## 6. Formal Verification of the Governance Kernel
-
-To provide the highest possible assurance of security and alignment, the implementation of the Governance Kernel **must** be formally verified.
-
--   **Definition**: Formal verification is the process of using mathematical methods to prove that a piece of software's source code adheres to a specific formal specification. In this context, it means proving that the Governance Kernel's code is free from common vulnerabilities (e.g., buffer overflows, race conditions) and that its logic perfectly implements the validation checks described in the `Constitution`.
--   **Requirement**: A CCOS-compliant system cannot be considered secure unless its Governance Kernel has undergone and passed a complete formal verification audit. The proof artifacts of this verification must be made available to the Digital Ethics Committee (DEC).
--   **Rationale**: Since the entire security model depends on the Kernel correctly enforcing the rules, its own correctness cannot be merely tested; it must be proven. This prevents a scenario where a bug in the Kernel itself could be exploited to bypass the `Constitution`.
-
-This framework, combining privilege separation, a human-signed `Constitution`, and a formally verified Kernel, creates a multi-layered defense that makes the CCOS robust, trustworthy, and secure by design.
+Next: Capability Attestation in 011.
