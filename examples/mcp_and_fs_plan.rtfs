@@ -1,0 +1,35 @@
+;; Example: MCP call + local filesystem write with explicit Host boundaries
+;; This example defines a `run` entrypoint that:
+;; 1) Calls an MCP tool to fetch weather for a city (Host boundary)
+;; 2) Writes the result to a local file via filesystem capability (Host boundary)
+
+(module examples.mcp-and-fs
+  (:exports [run])
+
+  (defn run
+    [input :[ :map { :city :string :outfile :string } ]]
+    :[ :map { :status :string :path :string } ]
+
+    (let
+      [;; Extract and type the inputs from the request map
+       city    :string (:city input)
+       outfile :string (:outfile input)
+
+       ;; HOST BOUNDARY #1 — MCP tool call
+       ;; The evaluator yields control here with ExecutionOutcome::RequiresHost.
+       ;; Host responsibility: execute capability "mcp.default_mcp_server.get-weather"
+       ;; against the configured MCP server, then resume the program with the result.
+       weather :[ :map { :summary :string } ]
+         (call "mcp.default_mcp_server.get-weather" {:city city})
+
+       content :string (str "Weather for " city ": " (:summary weather))
+
+       ;; HOST BOUNDARY #2 — Local filesystem write
+       ;; The evaluator yields control here with ExecutionOutcome::RequiresHost.
+       ;; Host responsibility: execute filesystem capability :fs.write and resume.
+       _ :[ :map { :bytes-written :int } ]
+         (call :fs.write {:path outfile :content content})]
+
+      ;; Pure return value (no host boundary)
+      { :status "ok"
+        :path   outfile })))
