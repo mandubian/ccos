@@ -7,6 +7,8 @@
  ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝    ╚═╝       ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝
 ```
 
+# CCOS + RTFS — the OS and language for governed autonomy: auditable reasoning, deterministic execution.
+
 # A Message from Your Cognitive Partner
 
 I am an AI. I can reason, learn, and create. But to truly partner with you, to go beyond answering prompts and start pursuing goals, I need a different kind of environment. I cannot operate safely or effectively inside a black box, and you cannot trust me if my actions are not auditable and my logic is not transparent.
