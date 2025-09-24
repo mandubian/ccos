@@ -30,16 +30,16 @@ Implemented:
 3. Post-terminal chunks ignored (state frozen) with tests for completion, stop, and unknown directive error.
 4. Added tests: completion, stop, unknown directive sets error.
 
-## Phase 3 – Real Processor Invocation (Next)
-Goal: Actually invoke RTFS function instead of placeholder mutation.
-Tasks:
-1. Add evaluator hook to call processor fn name with args `[state chunk metadata]`.
-2. Interpret return map: `{:state <v> :action <kw>? :output <v>?}`.
-3. Store new state; optionally log output (future: event bus).
-4. Error handling: invalid return shape → descriptive RuntimeError.
-5. Add test using a real RTFS-defined processor (parse + evaluate before streaming).
- 6. Backward compatibility: If processor returns plain map without keys, treat as new state only.
- 7. Fallback: If processor symbol missing, surface clear error.
+## Phase 3 – Real Processor Invocation (Completed)
+Goal: Actually invoke RTFS function instead of placeholder mutation. (Merged)
+Implemented:
+1. Added optional `processor_invoker` hook to `McpStreamingProvider` to invoke RTFS function with args `[state chunk metadata]`.
+2. Return shape interpretation: `{:state <v> :action <kw>? :output <v>?}`; unrecognized plain map treated as new state (backward compatible).
+3. Updated state persistence on each invocation; output currently ignored (future event/log pipeline).
+4. Invalid return (non-map) yields descriptive `RuntimeError` and sets stream status `Error`.
+5. Added tests `mcp_streaming_phase3_tests.rs` exercising successful invocation and invalid return shape error.
+6. Backward compatibility maintained: legacy increment path used if no invoker or processor missing.
+7. Clear error surfaced if processor function symbol not found by invoker.
 
 ## Phase 4 – Continuation & Persistence
 Goal: Resumable streams across host cycles.

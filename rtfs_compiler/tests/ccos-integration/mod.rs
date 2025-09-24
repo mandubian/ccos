@@ -32,4 +32,5 @@ mod test_http_capabilities;
 mod test_microvm_http_plan;
 mod test_weather_mcp_integration;
 mod mcp_streaming_mock_tests; // MCP streaming prototype tests
+mod mcp_streaming_phase3_tests; // MCP streaming Phase 3 real processor invocation tests
 mod working_memory_integration;

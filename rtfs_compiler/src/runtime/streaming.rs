@@ -119,6 +119,9 @@ pub struct McpStreamingProvider {
     pub client_config: McpClientConfig,
     /// Stream processor registry for continuation management
     pub stream_processors: Arc<Mutex<HashMap<String, StreamProcessorRegistration>>>,
+    /// Optional processor invoker hook (Phase 3) allowing real RTFS function invocation
+    /// Signature: (processor_fn, state, chunk, metadata) -> result map
+    processor_invoker: Option<Arc<dyn Fn(&str, &Value, &Value, &Value) -> RuntimeResult<Value> + Send + Sync>>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,7 +159,15 @@ impl McpStreamingProvider {
                 retry_attempts: 3,
             },
             stream_processors: Arc::new(Mutex::new(HashMap::new())),
+            processor_invoker: None,
         }
+    }
+
+    /// Construct with a custom processor invoker (used by Phase 3 tests to supply evaluator)
+    pub fn new_with_invoker(server_url: String, invoker: Arc<dyn Fn(&str, &Value, &Value, &Value) -> RuntimeResult<Value> + Send + Sync>) -> Self {
+        let mut s = Self::new(server_url);
+        s.processor_invoker = Some(invoker);
+        s
     }
 
     /// Register a stream processor for continuation-based processing
@@ -182,38 +193,89 @@ impl McpStreamingProvider {
                 }
                 StreamStatus::Active => {}
             }
-
-            // Placeholder processor behavior: increment :count integer per chunk
-            let mut new_state = registration.current_state.clone();
-            if let Value::Map(m) = &mut new_state {
-                use crate::ast::{MapKey, Keyword};
-                let key = MapKey::Keyword(Keyword("count".to_string()));
-                let current = m.get(&key).and_then(|v| if let Value::Integer(i)=v {Some(*i)} else {None}).unwrap_or(0);
-                m.insert(key, Value::Integer(current + 1));
+            // Phase 3: Real processor invocation if invoker + processor_fn set; else fallback
+            let mut invoked = false;
+            if let Some(invoker) = &self.processor_invoker {
+                if !registration.processor_fn.is_empty() {
+                    match invoker(&registration.processor_fn, &registration.current_state, &chunk, &metadata) {
+                        Ok(result_val) => {
+                            invoked = true;
+                            // Interpret return shape
+                            use crate::ast::{MapKey, Keyword};
+                            match result_val.clone() {
+                                Value::Map(m) => {
+                                    // Recognized keys
+                                    let state_key = MapKey::Keyword(Keyword("state".to_string()));
+                                    let action_key = MapKey::Keyword(Keyword("action".to_string()));
+                                    let output_key = MapKey::Keyword(Keyword("output".to_string()));
+                                    let mut recognized = false;
+                                    if let Some(new_state) = m.get(&state_key) {
+                                        registration.current_state = new_state.clone();
+                                        recognized = true;
+                                    }
+                                    if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
+                                        match action_kw.as_str() {
+                                            "complete" => registration.status = StreamStatus::Completed,
+                                            "stop" => registration.status = StreamStatus::Stopped,
+                                            other => registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other)),
+                                        }
+                                    }
+                                    if m.get(&output_key).is_some() {
+                                        // Future: emit event/log. For now, ignore but mark recognized.
+                                        recognized = true;
+                                    }
+                                    if !recognized {
+                                        // Backward compat: treat entire map as new state
+                                        registration.current_state = Value::Map(m.clone());
+                                    }
+                                }
+                                other => {
+                                    // Mark status error then return error
+                                    registration.status = StreamStatus::Error(format!(
+                                        "Processor '{}' returned invalid shape (expected map)",
+                                        registration.processor_fn
+                                    ));
+                                    return Err(RuntimeError::Generic(format!(
+                                        "Processor '{}' returned invalid shape (expected map), got: {:?}",
+                                        registration.processor_fn, other
+                                    )));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            registration.status = StreamStatus::Error(format!("Processor invocation error: {}", e));
+                            return Err(e);
+                        }
+                    }
+                }
             }
-            registration.current_state = new_state;
 
-            // Directive parsing: look for :action keyword in chunk map
-            if let Value::Map(m) = &chunk {
-                use crate::ast::{MapKey, Keyword};
-                let action_key = MapKey::Keyword(Keyword("action".to_string()));
-                if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
-                    match action_kw.as_str() {
-                        "complete" => {
-                            registration.status = StreamStatus::Completed;
-                        }
-                        "stop" => {
-                            registration.status = StreamStatus::Stopped;
-                        }
-                        other => {
-                            registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other));
+            if !invoked {
+                // Fallback placeholder behavior (Phase 1/2) to maintain backward compatibility
+                let mut new_state = registration.current_state.clone();
+                if let Value::Map(m) = &mut new_state {
+                    use crate::ast::{MapKey, Keyword};
+                    let key = MapKey::Keyword(Keyword("count".to_string()));
+                    let current = m.get(&key).and_then(|v| if let Value::Integer(i)=v {Some(*i)} else {None}).unwrap_or(0);
+                    m.insert(key, Value::Integer(current + 1));
+                }
+                registration.current_state = new_state;
+
+                // Directive parsing from chunk (legacy path)
+                if let Value::Map(m) = &chunk {
+                    use crate::ast::{MapKey, Keyword};
+                    let action_key = MapKey::Keyword(Keyword("action".to_string()));
+                    if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
+                        match action_kw.as_str() {
+                            "complete" => registration.status = StreamStatus::Completed,
+                            "stop" => registration.status = StreamStatus::Stopped,
+                            other => registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other)),
                         }
                     }
                 }
             }
 
             println!("Processing chunk for stream {}: {:?} (state/status: {:?})", stream_id, chunk, registration.status);
-            let _ = metadata; // currently unused
             Ok(())
         } else {
             Err(RuntimeError::Generic(format!("No processor registered for stream: {}", stream_id)))
