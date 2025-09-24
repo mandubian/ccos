@@ -41,12 +41,12 @@ Implemented:
 6. Backward compatibility maintained: legacy increment path used if no invoker or processor missing.
 7. Clear error surfaced if processor function symbol not found by invoker.
 
-## Phase 4 – Continuation & Persistence
-Goal: Resumable streams across host cycles.
-Tasks:
-1. Introduce serialization for (state + minimal continuation token) into a persistence layer.
-2. Provide `resume_stream(stream_id)` API.
-3. Add test: start → persist → simulate restart → resume → continue processing.
+## Phase 4 – Continuation & Persistence (Completed)
+Goal: Resumable streams across host cycles. (Merged)
+Implemented:
+1. Introduced `StreamPersistence` trait with default in-memory implementation; `McpStreamingProvider` persists snapshots (state + continuation token + status) on each chunk.
+2. Added `resume_stream(stream_id)` API that rehydrates provider state from persisted snapshots; provider constructor accepts optional persistence backend.
+3. Tests (`mcp_streaming_phase4_tests.rs`) cover persistence + restart + resume flow and error path for missing snapshot.
 
 ## Phase 5 – Backpressure & Flow Control
 Goal: Regulate chunk ingestion.

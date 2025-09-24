@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 use tokio::sync::mpsc;
 use crate::runtime::{values::Value, error::{RuntimeError, RuntimeResult}};
 
@@ -113,6 +114,54 @@ pub trait StreamingCapability {
 /// Type alias for a thread-safe, shareable streaming capability provider
 pub type StreamingProvider = Arc<dyn StreamingCapability + Send + Sync>;
 
+/// Persisted snapshot of a stream processor registration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamSnapshot {
+    pub stream_id: String,
+    pub processor_fn: String,
+    pub current_state: Value,
+    pub status: StreamStatus,
+    pub continuation: Vec<u8>,
+}
+
+/// Storage trait abstracting persistence of stream snapshots for Phase 4.
+pub trait StreamPersistence: Send + Sync {
+    fn persist_snapshot(&self, snapshot: &StreamSnapshot) -> Result<(), String>;
+    fn load_snapshot(&self, stream_id: &str) -> Result<Option<StreamSnapshot>, String>;
+    fn remove_snapshot(&self, stream_id: &str) -> Result<(), String>;
+}
+
+/// Simple in-memory persistence used for tests and bootstrap scenarios.
+#[derive(Default, Debug, Clone)]
+pub struct InMemoryStreamPersistence {
+    inner: Arc<Mutex<HashMap<String, StreamSnapshot>>>,
+}
+
+impl InMemoryStreamPersistence {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl StreamPersistence for InMemoryStreamPersistence {
+    fn persist_snapshot(&self, snapshot: &StreamSnapshot) -> Result<(), String> {
+        let mut guard = self.inner.lock().map_err(|_| "stream persistence poisoned".to_string())?;
+        guard.insert(snapshot.stream_id.clone(), snapshot.clone());
+        Ok(())
+    }
+
+    fn load_snapshot(&self, stream_id: &str) -> Result<Option<StreamSnapshot>, String> {
+        let guard = self.inner.lock().map_err(|_| "stream persistence poisoned".to_string())?;
+        Ok(guard.get(stream_id).cloned())
+    }
+
+    fn remove_snapshot(&self, stream_id: &str) -> Result<(), String> {
+        let mut guard = self.inner.lock().map_err(|_| "stream persistence poisoned".to_string())?;
+        guard.remove(stream_id);
+        Ok(())
+    }
+}
+
 /// MCP-specific streaming provider for Model Context Protocol endpoints
 pub struct McpStreamingProvider {
     /// Base MCP client configuration
@@ -122,6 +171,8 @@ pub struct McpStreamingProvider {
     /// Optional processor invoker hook (Phase 3) allowing real RTFS function invocation
     /// Signature: (processor_fn, state, chunk, metadata) -> result map
     processor_invoker: Option<Arc<dyn Fn(&str, &Value, &Value, &Value) -> RuntimeResult<Value> + Send + Sync>>,
+    /// Optional persistence backend (Phase 4) for continuation snapshots
+    persistence: Option<Arc<dyn StreamPersistence>>, 
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +193,7 @@ pub struct StreamProcessorRegistration {
 
 /// Lifecycle status for a stream processor registration.
 /// This will expand as richer directives are supported (e.g., backpressure, inject, error details).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamStatus {
     Active,
     Completed,
@@ -160,6 +211,7 @@ impl McpStreamingProvider {
             },
             stream_processors: Arc::new(Mutex::new(HashMap::new())),
             processor_invoker: None,
+            persistence: None,
         }
     }
 
@@ -170,16 +222,54 @@ impl McpStreamingProvider {
         s
     }
 
+    /// Construct with explicit persistence backend and optional processor invoker.
+    pub fn new_with_persistence(server_url: String, persistence: Arc<dyn StreamPersistence>, invoker: Option<Arc<dyn Fn(&str, &Value, &Value, &Value) -> RuntimeResult<Value> + Send + Sync>>) -> Self {
+        let mut s = Self::new(server_url);
+        s.persistence = Some(persistence);
+        s.processor_invoker = invoker;
+        s
+    }
+
     /// Register a stream processor for continuation-based processing
     pub fn register_processor(&self, stream_id: String, processor_fn: String, continuation: Vec<u8>, initial_state: Value) {
         let mut processors = self.stream_processors.lock().unwrap();
-        processors.insert(stream_id, StreamProcessorRegistration {
+        processors.insert(stream_id.clone(), StreamProcessorRegistration {
             processor_fn,
             continuation,
             current_state: initial_state.clone(),
             initial_state,
             status: StreamStatus::Active,
         });
+        if let Some(registration) = processors.get(&stream_id) {
+            self.persist_registration(&stream_id, registration);
+        }
+    }
+
+    fn snapshot_for(&self, stream_id: &str, registration: &StreamProcessorRegistration) -> StreamSnapshot {
+        StreamSnapshot {
+            stream_id: stream_id.to_string(),
+            processor_fn: registration.processor_fn.clone(),
+            current_state: registration.current_state.clone(),
+            status: registration.status.clone(),
+            continuation: registration.continuation.clone(),
+        }
+    }
+
+    fn persist_registration(&self, stream_id: &str, registration: &StreamProcessorRegistration) {
+        if let Some(persistence) = &self.persistence {
+            let snapshot = self.snapshot_for(stream_id, registration);
+            if let Err(err) = persistence.persist_snapshot(&snapshot) {
+                eprintln!("Failed to persist snapshot for stream {}: {}", stream_id, err);
+            }
+        }
+    }
+
+    fn remove_persisted(&self, stream_id: &str) {
+        if let Some(persistence) = &self.persistence {
+            if let Err(err) = persistence.remove_snapshot(stream_id) {
+                eprintln!("Failed to remove persisted snapshot for stream {}: {}", stream_id, err);
+            }
+        }
     }
 
     /// Process a stream chunk by resuming RTFS execution
@@ -275,6 +365,7 @@ impl McpStreamingProvider {
                 }
             }
 
+            self.persist_registration(stream_id, registration);
             println!("Processing chunk for stream {}: {:?} (state/status: {:?})", stream_id, chunk, registration.status);
             Ok(())
         } else {
@@ -292,6 +383,27 @@ impl McpStreamingProvider {
     pub fn get_status(&self, stream_id: &str) -> Option<StreamStatus> {
         let processors = self.stream_processors.lock().unwrap();
         processors.get(stream_id).map(|r| r.status.clone())
+    }
+
+    /// Resume a stream from persisted snapshot (Phase 4)
+    pub fn resume_stream(&self, stream_id: &str) -> RuntimeResult<()> {
+        let persistence = self.persistence.clone().ok_or_else(|| RuntimeError::Generic("Stream persistence backend not configured".into()))?;
+        let snapshot = persistence.load_snapshot(stream_id)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to load snapshot: {}", e)))?
+            .ok_or_else(|| RuntimeError::Generic(format!("No persisted snapshot for stream: {}", stream_id)))?;
+
+        let mut processors = self.stream_processors.lock().unwrap();
+        processors.insert(stream_id.to_string(), StreamProcessorRegistration {
+            processor_fn: snapshot.processor_fn,
+            continuation: snapshot.continuation,
+            initial_state: snapshot.current_state.clone(),
+            current_state: snapshot.current_state,
+            status: snapshot.status,
+        });
+        if let Some(registration) = processors.get(stream_id) {
+            self.persist_registration(stream_id, registration);
+        }
+        Ok(())
     }
 }
 
@@ -311,14 +423,18 @@ impl StreamingCapability for McpStreamingProvider {
         let stream_id = format!("mcp-{}-{}", endpoint.replace('.', "-"), uuid::Uuid::new_v4());
         let (stop_tx, _stop_rx) = mpsc::channel(1);
         let handle = StreamHandle { stream_id: stream_id.clone(), stop_tx };
-        self.register_processor(stream_id, processor_fn, vec![], initial_state);
+        self.register_processor(stream_id.clone(), processor_fn, vec![], initial_state);
         println!("Starting MCP stream to endpoint: {}", endpoint);
         Ok(handle)
     }
 
     fn stop_stream(&self, handle: &StreamHandle) -> RuntimeResult<()> {
         let mut processors = self.stream_processors.lock().unwrap();
-        processors.remove(&handle.stream_id);
+        let removed = processors.remove(&handle.stream_id);
+        drop(processors);
+        if removed.is_some() {
+            self.remove_persisted(&handle.stream_id);
+        }
 
         // TODO: Close MCP connection
         println!("Stopping MCP stream: {}", handle.stream_id);
