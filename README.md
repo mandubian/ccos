@@ -4,6 +4,16 @@
     <img src="assets/title.png" alt="CCOS + RTFS — an OS and language for governed autonomy made by AI with AI (guided by human)." width="100%" />
 </picture>
 
+<!--
+Fallback (previous ASCII) retained here for reference / contributors:
+████████╗ ████████╗  ██████╗  ███████╗    ██╗       ██████╗ ████████╗███████╗███████╗ 
+██╔═════╝ ██╔═════╝ ██╔═══██╗ ██╔════╝    ╚═██╗     ██╔══██╗╚══██╔══╝██╔════╝██╔════╝
+██║       ██║       ██║   ██║ ███████╗      ╚═██╗   ██████╔╝   ██║   █████╗  ███████╗
+██║       ██║       ██║   ██║ ╚════██║      ██╔═╝   ██╔══██╗   ██║   ██╔══╝  ╚════██║
+╚████████╗╚████████╗╚██████╔╝ ███████║    ██╔═╝     ██║  ██║   ██║   ██╗     ███████║
+ ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝    ╚═╝       ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝
+-->
+
 <br/>
 
 An OS and language for governed autonomy made by AI with AI (guided by human).
