@@ -48,14 +48,13 @@ Implemented:
 2. Added `resume_stream(stream_id)` API that rehydrates provider state from persisted snapshots; provider constructor accepts optional persistence backend.
 3. Tests (`mcp_streaming_phase4_tests.rs`) cover persistence + restart + resume flow and error path for missing snapshot.
 
-## Phase 5 – Backpressure & Flow Control
-Goal: Regulate chunk ingestion.
-Tasks:
-1. Add bounded queue per stream.
-2. Support directives `:pause` & `:resume` (host stops pulling / restarts).
-3. Implement `:cancel` directive.
-4. Metrics: queue depth, processed count, last latency.
-5. Tests for pause/resume and cancel semantics.
+## Phase 5 – Backpressure & Flow Control (Completed)
+Goal: Regulate chunk ingestion. (Merged)
+Implemented:
+1. Added bounded per-stream queue (`queue-capacity` configurable via start params, default 32) with metrics (`StreamStats`).
+2. Recognized processor directives `:pause`, `:resume`, `:cancel` alongside existing `:complete`/`:stop`; host enforces status transitions and queue draining.
+3. Queue overflow automatically pauses intake until resumed; resuming drains queued items with latency tracking.
+4. Tests (`mcp_streaming_phase5_tests.rs`) cover overflow pause/resume cycle and cancel semantics.
 
 ## Phase 6 – Real MCP Transport
 Goal: Replace mock loop with actual MCP streaming (WS/SSE or tool polling).
