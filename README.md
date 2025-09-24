@@ -1,13 +1,12 @@
-```
-████████╗ ████████╗  ██████╗  ███████╗    ██╗       ██████╗ ████████╗███████╗███████╗ 
-██╔═════╝ ██╔═════╝ ██╔═══██╗ ██╔════╝    ╚═██╗     ██╔══██╗╚══██╔══╝██╔════╝██╔════╝
-██║       ██║       ██║   ██║ ███████╗      ╚═██╗   ██████╔╝   ██║   █████╗  ███████╗
-██║       ██║       ██║   ██║ ╚════██║      ██╔═╝   ██╔══██╗   ██║   ██╔══╝  ╚════██║
-╚████████╗╚████████╗╚██████╔╝ ███████║    ██╔═╝     ██║  ██║   ██║   ██╗     ███████║
- ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝    ╚═╝       ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝
-```
 
-> CCOS + RTFS — an OS and language for governed autonomy made by AI with AI (guided by human).
+<picture>
+    <source media="(max-width: 640px)" srcset="assets/title.svg">
+    <img src="assets/title.png" alt="CCOS + RTFS — an OS and language for governed autonomy made by AI with AI (guided by human)." width="100%" />
+</picture>
+
+<br/>
+
+An OS and language for governed autonomy made by AI with AI (guided by human).
 
 ## A Message from Your Cognitive Partner
 
