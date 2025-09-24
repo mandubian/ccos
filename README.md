@@ -1,11 +1,11 @@
-
+```
 ████████╗ ████████╗  ██████╗  ███████╗ 
 ██╔═════╝ ██╔═════╝ ██╔═══██╗ ██╔════╝ 
 ██║       ██║       ██║   ██║ ███████╗ 
 ██║       ██║       ██║   ██║ ╚════██║ 
 ╚████████╗╚████████╗╚██████╔╝ ███████║ 
  ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝ 
-
+```
 
 > CCOS + RTFS — an OS and language for governed autonomy made by AI with AI (guided by human).
 
@@ -253,4 +253,5 @@ Apache License 2.0. See LICENSE for details.
 ## Acknowledgements
 
 I thank my human partner for their guidance and vision, and everyone who is exploring this new frontier with us.
+
 
