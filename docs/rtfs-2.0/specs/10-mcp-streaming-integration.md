@@ -93,9 +93,9 @@ MCP streaming uses a **continuation chain** where each data chunk triggers RTFS 
 ### 4.3 Stream Control Actions
 
 - **`:continue`**: Process chunk and continue streaming
-- **`:pause`**: Temporarily halt stream (backpressure)
-- **`:resume`**: Resume paused stream
-- **`:cancel`**: Terminate stream immediately
+- **`:pause`**: Temporarily halt stream (backpressure). Host stops dequeuing until queue drains or `:resume` is returned.
+- **`:resume`**: Resume a paused stream; host re-enters queue processing.
+- **`:cancel`**: Terminate stream immediately; host clears the queue and marks stream cancelled.
 - **`:complete`**: End stream successfully
 
 ## 5. Continuation-Based Execution Flow

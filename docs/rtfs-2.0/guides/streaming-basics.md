@@ -7,13 +7,13 @@ This guide shows how to use streaming from RTFS while keeping RTFS pure. All ope
 
 ## MCP Streaming with Continuation-Based Processing
 
-> **Phase 4 Update (Resumable Streams)**
+> **Phase 4–5 Updates**
 >
-> Streams now persist their logical state and continuation tokens via the host. The `McpStreamingProvider`
-> ships with an in-memory persistence backend and exposes a new `(call :mcp.stream.resume {:stream-id "..."})`
-> capability shim that rehydrates the stream from persisted snapshots. Tests simulate a restart by dropping the
-> provider instance, constructing a new one with the same persistence backend, calling `resume_stream`, and then
-> continuing chunk processing.
+> Streams now persist their logical state + continuation tokens (Phase 4) and support bounded queues with
+> pause/resume/cancel directives (Phase 5). Your stream processor signals these actions by returning
+> `{:action :pause}` / `:resume` / `:cancel` alongside the updated state (or by sending a directive chunk such as
+> `{:action :pause}`). The host records snapshots on each chunk, can `resume_stream` after a restart, and throttles
+> intake when the per-stream queue reaches `queue-capacity` (default 32).
 
 MCP streaming uses a continuation-chain pattern where RTFS processes each data chunk reactively:
 
@@ -29,6 +29,10 @@ MCP streaming uses a continuation-chain pattern where RTFS processes each data c
       {:state {:readings readings}
        :action :continue
        :output {:current_avg (avg readings)}}
+
+      (> (count readings) 50)
+      {:state {:readings readings :status :paused}
+       :action :pause}
 
       ;; Complete collection
       :else

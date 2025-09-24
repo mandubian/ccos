@@ -2,7 +2,8 @@
 // All stream-related types, traits, and aliases for CCOS/RTFS
 
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 use serde::{Serialize, Deserialize};
 use tokio::sync::mpsc;
 use crate::runtime::{values::Value, error::{RuntimeError, RuntimeResult}};
@@ -189,6 +190,31 @@ pub struct StreamProcessorRegistration {
     pub initial_state: Value,      // Original starting state
     pub current_state: Value,      // Mutable logical state updated per chunk (Phase 1 prototype)
     pub status: StreamStatus,      // Directive/status lifecycle tracking (Phase 2 prototype)
+    pub queue_capacity: usize,     // Maximum number of queued chunks (Phase 5)
+    pub stats: StreamStats,        // Basic metrics for introspection (Phase 5)
+    queue: VecDeque<QueuedItem>,   // Pending chunks waiting to be processed (Phase 5)
+}
+
+impl StreamProcessorRegistration {
+    fn enqueue_chunk(&mut self, chunk: Value, metadata: Value) -> bool {
+        if self.queue.len() >= self.queue_capacity {
+            self.status = StreamStatus::Paused;
+            return false;
+        }
+        self.queue.push_back(QueuedItem {
+            chunk,
+            metadata,
+            enqueued_at: Instant::now(),
+        });
+        self.stats.queued_chunks = self.queue.len();
+        true
+    }
+
+    fn dequeue_next(&mut self) -> Option<QueuedItem> {
+        let item = self.queue.pop_front();
+        self.stats.queued_chunks = self.queue.len();
+        item
+    }
 }
 
 /// Lifecycle status for a stream processor registration.
@@ -196,9 +222,25 @@ pub struct StreamProcessorRegistration {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamStatus {
     Active,
+    Paused,
+    Cancelled,
     Completed,
     Stopped,
     Error(String),
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct StreamStats {
+    pub processed_chunks: usize,
+    pub queued_chunks: usize,
+    pub last_latency_ms: Option<u128>,
+}
+
+#[derive(Clone)]
+struct QueuedItem {
+    chunk: Value,
+    metadata: Value,
+    enqueued_at: Instant,
 }
 
 impl McpStreamingProvider {
@@ -239,6 +281,9 @@ impl McpStreamingProvider {
             current_state: initial_state.clone(),
             initial_state,
             status: StreamStatus::Active,
+            queue_capacity: self.default_queue_capacity(),
+            stats: StreamStats::default(),
+            queue: VecDeque::new(),
         });
         if let Some(registration) = processors.get(&stream_id) {
             self.persist_registration(&stream_id, registration);
@@ -276,97 +321,57 @@ impl McpStreamingProvider {
     pub async fn process_chunk(&self, stream_id: &str, chunk: Value, metadata: Value) -> RuntimeResult<()> {
         let mut processors = self.stream_processors.lock().unwrap();
         if let Some(registration) = processors.get_mut(stream_id) {
-            // If stream already terminal, ignore further chunks (idempotent no-op)
             match &registration.status {
-                StreamStatus::Completed | StreamStatus::Stopped | StreamStatus::Error(_) => {
-                    return Ok(()); // Silently ignore for now; could log.
+                StreamStatus::Completed | StreamStatus::Stopped | StreamStatus::Error(_) | StreamStatus::Cancelled => {
+                    return Ok(());
+                }
+                StreamStatus::Paused => {
+                    if let Some(action) = Self::extract_action(&chunk) {
+                        self.handle_directive_chunk(registration, chunk, metadata, action)?;
+                    } else if !registration.enqueue_chunk(chunk, metadata) {
+                        // queue full even while paused; drop chunk silently
+                    }
+                    self.persist_registration(stream_id, registration);
+                    return Ok(());
                 }
                 StreamStatus::Active => {}
             }
-            // Phase 3: Real processor invocation if invoker + processor_fn set; else fallback
-            let mut invoked = false;
-            if let Some(invoker) = &self.processor_invoker {
-                if !registration.processor_fn.is_empty() {
-                    match invoker(&registration.processor_fn, &registration.current_state, &chunk, &metadata) {
-                        Ok(result_val) => {
-                            invoked = true;
-                            // Interpret return shape
-                            use crate::ast::{MapKey, Keyword};
-                            match result_val.clone() {
-                                Value::Map(m) => {
-                                    // Recognized keys
-                                    let state_key = MapKey::Keyword(Keyword("state".to_string()));
-                                    let action_key = MapKey::Keyword(Keyword("action".to_string()));
-                                    let output_key = MapKey::Keyword(Keyword("output".to_string()));
-                                    let mut recognized = false;
-                                    if let Some(new_state) = m.get(&state_key) {
-                                        registration.current_state = new_state.clone();
-                                        recognized = true;
-                                    }
-                                    if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
-                                        match action_kw.as_str() {
-                                            "complete" => registration.status = StreamStatus::Completed,
-                                            "stop" => registration.status = StreamStatus::Stopped,
-                                            other => registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other)),
-                                        }
-                                    }
-                                    if m.get(&output_key).is_some() {
-                                        // Future: emit event/log. For now, ignore but mark recognized.
-                                        recognized = true;
-                                    }
-                                    if !recognized {
-                                        // Backward compat: treat entire map as new state
-                                        registration.current_state = Value::Map(m.clone());
-                                    }
-                                }
-                                other => {
-                                    // Mark status error then return error
-                                    registration.status = StreamStatus::Error(format!(
-                                        "Processor '{}' returned invalid shape (expected map)",
-                                        registration.processor_fn
-                                    ));
-                                    return Err(RuntimeError::Generic(format!(
-                                        "Processor '{}' returned invalid shape (expected map), got: {:?}",
-                                        registration.processor_fn, other
-                                    )));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            registration.status = StreamStatus::Error(format!("Processor invocation error: {}", e));
-                            return Err(e);
-                        }
-                    }
+
+            if let Some(action) = Self::extract_action(&chunk) {
+                self.handle_directive_chunk(registration, chunk.clone(), metadata.clone(), action.clone())?;
+                if matches!(registration.status, StreamStatus::Completed | StreamStatus::Stopped | StreamStatus::Error(_) | StreamStatus::Cancelled) {
+                    self.persist_registration(stream_id, registration);
+                    return Ok(());
+                }
+                if registration.status == StreamStatus::Paused {
+                    self.persist_registration(stream_id, registration);
+                    return Ok(());
+                }
+            } else {
+                if !registration.enqueue_chunk(chunk, metadata) {
+                    return Err(RuntimeError::Generic("Stream queue is full".into()));
                 }
             }
 
-            if !invoked {
-                // Fallback placeholder behavior (Phase 1/2) to maintain backward compatibility
-                let mut new_state = registration.current_state.clone();
-                if let Value::Map(m) = &mut new_state {
-                    use crate::ast::{MapKey, Keyword};
-                    let key = MapKey::Keyword(Keyword("count".to_string()));
-                    let current = m.get(&key).and_then(|v| if let Value::Integer(i)=v {Some(*i)} else {None}).unwrap_or(0);
-                    m.insert(key, Value::Integer(current + 1));
+            while let Some(next_item) = registration.dequeue_next() {
+                let item = next_item;
+                if registration.status == StreamStatus::Paused {
+                    registration.enqueue_chunk(item.chunk, item.metadata);
+                    self.persist_registration(stream_id, registration);
+                    break;
                 }
-                registration.current_state = new_state;
 
-                // Directive parsing from chunk (legacy path)
-                if let Value::Map(m) = &chunk {
-                    use crate::ast::{MapKey, Keyword};
-                    let action_key = MapKey::Keyword(Keyword("action".to_string()));
-                    if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
-                        match action_kw.as_str() {
-                            "complete" => registration.status = StreamStatus::Completed,
-                            "stop" => registration.status = StreamStatus::Stopped,
-                            other => registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other)),
-                        }
-                    }
+                if let Err(e) = self.process_single_chunk(registration, item) {
+                    return Err(e);
+                }
+
+                if matches!(registration.status, StreamStatus::Completed | StreamStatus::Stopped | StreamStatus::Error(_) | StreamStatus::Cancelled) {
+                    break;
                 }
             }
 
             self.persist_registration(stream_id, registration);
-            println!("Processing chunk for stream {}: {:?} (state/status: {:?})", stream_id, chunk, registration.status);
+            println!("Processing chunk for stream {} (status: {:?})", stream_id, registration.status);
             Ok(())
         } else {
             Err(RuntimeError::Generic(format!("No processor registered for stream: {}", stream_id)))
@@ -399,11 +404,157 @@ impl McpStreamingProvider {
             initial_state: snapshot.current_state.clone(),
             current_state: snapshot.current_state,
             status: snapshot.status,
+            queue_capacity: self.default_queue_capacity(),
+            stats: StreamStats::default(),
+            queue: VecDeque::new(),
         });
         if let Some(registration) = processors.get(stream_id) {
             self.persist_registration(stream_id, registration);
         }
         Ok(())
+    }
+
+    fn default_queue_capacity(&self) -> usize {
+        32
+    }
+
+    fn process_single_chunk(
+        &self,
+        registration: &mut StreamProcessorRegistration,
+        item: QueuedItem,
+    ) -> RuntimeResult<()> {
+        let start_time = item.enqueued_at;
+        let chunk = item.chunk;
+        let metadata = item.metadata;
+
+        let mut invoked = false;
+        if let Some(invoker) = &self.processor_invoker {
+            if !registration.processor_fn.is_empty() {
+                match invoker(&registration.processor_fn, &registration.current_state, &chunk, &metadata) {
+                    Ok(result_val) => {
+                        invoked = true;
+                        self.apply_processor_result(registration, result_val)?;
+                    }
+                    Err(e) => {
+                        registration.status = StreamStatus::Error(format!("Processor invocation error: {}", e));
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        if !invoked {
+            let mut new_state = registration.current_state.clone();
+            if let Value::Map(m) = &mut new_state {
+                use crate::ast::{MapKey, Keyword};
+                let key = MapKey::Keyword(Keyword("count".to_string()));
+                let current = m.get(&key).and_then(|v| if let Value::Integer(i)=v {Some(*i)} else {None}).unwrap_or(0);
+                m.insert(key, Value::Integer(current + 1));
+            }
+            registration.current_state = new_state;
+
+            if let Value::Map(m) = &chunk {
+                use crate::ast::{MapKey, Keyword};
+                let action_key = MapKey::Keyword(Keyword("action".to_string()));
+                if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
+                    self.apply_action_directive(registration, action_kw);
+                }
+            }
+        }
+
+        registration.stats.processed_chunks += 1;
+        registration.stats.last_latency_ms = Some(Instant::now().duration_since(start_time).as_millis());
+        Ok(())
+    }
+
+    fn apply_processor_result(&self, registration: &mut StreamProcessorRegistration, result_val: Value) -> RuntimeResult<()> {
+        use crate::ast::{MapKey, Keyword};
+        match result_val {
+            Value::Map(m) => {
+                let state_key = MapKey::Keyword(Keyword("state".to_string()));
+                let action_key = MapKey::Keyword(Keyword("action".to_string()));
+                let output_key = MapKey::Keyword(Keyword("output".to_string()));
+                let mut recognized = false;
+                if let Some(new_state) = m.get(&state_key) {
+                    registration.current_state = new_state.clone();
+                    recognized = true;
+                }
+                if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
+                    self.apply_action_directive(registration, action_kw);
+                }
+                if m.get(&output_key).is_some() {
+                    recognized = true;
+                }
+                if !recognized {
+                    registration.current_state = Value::Map(m.clone());
+                }
+                Ok(())
+            }
+            other => {
+                registration.status = StreamStatus::Error(format!(
+                    "Processor '{}' returned invalid shape (expected map)",
+                    registration.processor_fn
+                ));
+                Err(RuntimeError::Generic(format!(
+                    "Processor '{}' returned invalid shape (expected map), got: {:?}",
+                    registration.processor_fn, other
+                )))
+            }
+        }
+    }
+
+    fn apply_action_directive(&self, registration: &mut StreamProcessorRegistration, action_kw: &str) {
+        match action_kw {
+            "complete" => registration.status = StreamStatus::Completed,
+            "stop" => registration.status = StreamStatus::Stopped,
+            "pause" => registration.status = StreamStatus::Paused,
+            "resume" => registration.status = StreamStatus::Active,
+            "cancel" => registration.status = StreamStatus::Cancelled,
+            other => registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other)),
+        }
+    }
+
+    fn extract_action(chunk: &Value) -> Option<String> {
+        if let Value::Map(m) = chunk {
+            use crate::ast::{MapKey, Keyword};
+            let action_key = MapKey::Keyword(Keyword("action".to_string()));
+            if let Some(Value::Keyword(Keyword(action_kw))) = m.get(&action_key) {
+                return Some(action_kw.clone());
+            }
+        }
+        None
+    }
+
+    fn handle_directive_chunk(
+        &self,
+        registration: &mut StreamProcessorRegistration,
+        chunk: Value,
+        metadata: Value,
+        action: String,
+    ) -> RuntimeResult<()> {
+        match action.as_str() {
+            "pause" => {
+                registration.status = StreamStatus::Paused;
+                self.process_single_chunk(registration, QueuedItem { chunk, metadata, enqueued_at: Instant::now() })
+            }
+            "resume" => {
+                registration.status = StreamStatus::Active;
+                Ok(())
+            }
+            "cancel" => {
+                registration.status = StreamStatus::Cancelled;
+                registration.queue.clear();
+                registration.stats.queued_chunks = 0;
+                Ok(())
+            }
+            "complete" | "stop" => {
+                self.process_single_chunk(registration, QueuedItem { chunk, metadata, enqueued_at: Instant::now() })
+            }
+            other => {
+                registration.status = StreamStatus::Error(format!("Unknown action directive: {}", other));
+                Err(RuntimeError::Generic(format!("Unknown action directive: {}", other)))
+            }
+        }
     }
 }
 
@@ -420,10 +571,16 @@ impl StreamingCapability for McpStreamingProvider {
             .ok_or_else(|| RuntimeError::Generic("Missing required string field 'endpoint'".into()))?;
         let processor_fn = lookup("processor").and_then(|v| if let Value::String(s)=v {Some(s.clone())} else {None}).unwrap_or_default();
         let initial_state = lookup("initial-state").cloned().unwrap_or(Value::Map(std::collections::HashMap::new()));
+        let queue_capacity = lookup("queue-capacity").and_then(|v| if let Value::Integer(i)=v { Some(*i as usize) } else { None });
         let stream_id = format!("mcp-{}-{}", endpoint.replace('.', "-"), uuid::Uuid::new_v4());
         let (stop_tx, _stop_rx) = mpsc::channel(1);
         let handle = StreamHandle { stream_id: stream_id.clone(), stop_tx };
         self.register_processor(stream_id.clone(), processor_fn, vec![], initial_state);
+        if let Some(cap) = queue_capacity {
+            if let Some(reg) = self.stream_processors.lock().unwrap().get_mut(&stream_id) {
+                reg.queue_capacity = cap;
+            }
+        }
         println!("Starting MCP stream to endpoint: {}", endpoint);
         Ok(handle)
     }
