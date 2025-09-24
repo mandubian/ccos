@@ -233,6 +233,8 @@ The Host must provide a stream manager that:
 For long-running streams, the Host must:
 
 - Serialize continuations for persistence across restarts
+- Persist logical processor state alongside continuation tokens
+- Provide a `resume` pathway that rehydrates state and continuation in a new provider instance
 - Implement continuation timeout policies
 - Provide stream status queries
 - Support stream multiplexing (multiple streams per RTFS program)
