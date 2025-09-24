@@ -1,0 +1,17 @@
+<svg viewBox="0 0 750 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">CCOS + RTFS</title>
+  <desc id="desc">Compact banner variant for small screens</desc>
+  <style>
+    text { font-family: "Fira Mono", "Ubuntu Mono", "Liberation Mono", monospace; white-space: pre; font-size: 16px; }
+    @media (max-width: 600px) { text { font-size: 14px; } }
+  </style>
+  <rect width="100%" height="100%" fill="#000"/>
+  <text x="10" y="28" fill="#00d4ff" xml:space="preserve">
+██████╗  ██████╗  ██████╗  ██████╗ 
+██╔══██╗██╔═══██╗██╔═══██╗██╔═══██╗
+██║  ██║██║   ██║██║   ██║██║   ██║
+██║  ██║██║   ██║██║   ██║██║   ██║
+██████╔╝╚██████╔╝╚██████╔╝╚██████╔╝
+╚═════╝  ╚═════╝  ╚═════╝  ╚═════╝ 
+  </text>
+</svg>
