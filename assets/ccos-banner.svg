@@ -1,0 +1,19 @@
+<svg viewBox="0 0 1320 180" xmlns="http://www.w3.org/200/svg" role="img" aria-labelledby="title desc">
+  <title id="title">CCOS + RTFS – Governed Autonomy</title>
+  <desc id="desc">Scalable banner for the Cognitive Computing OS and RTFS language</desc>
+  <style>
+    text { font-family: "Fira Mono", "Ubuntu Mono", "Liberation Mono", monospace; white-space: pre; font-size: 22px; }
+    @media (max-width: 900px) { text { font-size: 18px; } }
+    @media (max-width: 720px) { text { font-size: 16px; } }
+    @media (max-width: 600px) { text { font-size: 14px; } }
+  </style>
+  <rect width="100%" height="100%" fill="#000"/>
+  <text x="12" y="32" fill="#00d4ff" xml:space="preserve">
+████████╗ ████████╗  ██████╗  ███████╗    ██╗       ██████╗ ████████╗███████╗███████╗ 
+██╔═════╝ ██╔═════╝ ██╔═══██╗ ██╔════╝    ╚═██╗     ██╔══██╗╚══██╔══╝██╔════╝██╔════╝
+██║       ██║       ██║   ██║ ███████╗      ╚═██╗   ██████╔╝   ██║   █████╗  ███████╗
+██║       ██║       ██║   ██║ ╚════██║      ██╔═╝   ██╔══██╗   ██║   ██╔══╝  ╚════██║
+╚████████╗╚████████╗╚██████╔╝ ███████║    ██╔═╝     ██║  ██║   ██║   ██╗     ███████║
+ ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝    ╚═╝       ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝
+  </text>
+</svg>

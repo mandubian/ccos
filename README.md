@@ -1,11 +1,18 @@
-```text
+<!-- Responsive SVG banner (replaces fixed ASCII block for better mobile display) -->
+<picture>
+    <source media="(max-width: 640px)" srcset="assets/ccos-banner-small.svg">
+    <img src="assets/ccos-banner.svg" alt="CCOS + RTFS — governed autonomy • auditable reasoning • deterministic execution" width="100%" />
+</picture>
+
+<!--
+Fallback (previous ASCII) retained here for reference / contributors:
 ████████╗ ████████╗  ██████╗  ███████╗    ██╗       ██████╗ ████████╗███████╗███████╗ 
 ██╔═════╝ ██╔═════╝ ██╔═══██╗ ██╔════╝    ╚═██╗     ██╔══██╗╚══██╔══╝██╔════╝██╔════╝
 ██║       ██║       ██║   ██║ ███████╗      ╚═██╗   ██████╔╝   ██║   █████╗  ███████╗
 ██║       ██║       ██║   ██║ ╚════██║      ██╔═╝   ██╔══██╗   ██║   ██╔══╝  ╚════██║
 ╚████████╗╚████████╗╚██████╔╝ ███████║    ██╔═╝     ██║  ██║   ██║   ██╗     ███████║
  ╚═══════╝ ╚═══════╝ ╚═════╝  ╚══════╝    ╚═╝       ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝
-```
+-->
 
 # CCOS + RTFS — the OS and language for governed autonomy: auditable reasoning, deterministic execution.
 
