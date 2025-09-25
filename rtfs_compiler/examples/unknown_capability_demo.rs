@@ -1,7 +1,7 @@
 // Demonstrate rejection when a plan references an unknown capability
 // Run: cargo run --example unknown_capability_demo --manifest-path rtfs_compiler/Cargo.toml
 
-use rtfs_compiler::ccos::{CCOS, types::Plan};
+use rtfs_compiler::ccos::{types::Plan, CCOS};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {

@@ -10,19 +10,14 @@ use validator::ValidationErrors;
 pub struct SourceSpan {
     pub start_line: usize,
     pub start_column: usize,
-    pub end_line: usize, 
+    pub end_line: usize,
     pub end_column: usize,
     pub file_path: Option<String>,
     pub source_text: Option<String>, // The actual source code text
 }
 
 impl SourceSpan {
-    pub fn new(
-        start_line: usize,
-        start_column: usize,
-        end_line: usize,
-        end_column: usize,
-    ) -> Self {
+    pub fn new(start_line: usize, start_column: usize, end_line: usize, end_column: usize) -> Self {
         Self {
             start_line,
             start_column,
@@ -57,7 +52,7 @@ impl SourceSpan {
             end_column: self.end_column,
             file_path: self.file_path.clone(),
             // Source text for a zero-length span is typically empty or a specific marker
-            source_text: Some("".to_string()), 
+            source_text: Some("".to_string()),
         }
     }
 }
@@ -170,13 +165,13 @@ pub enum EnhancedRuntimeError {
         operation: String,
         diagnostic: DiagnosticInfo,
     },
-    
+
     /// Undefined symbol with suggestions
     UndefinedSymbol {
         symbol: Symbol,
         diagnostic: DiagnosticInfo,
     },
-    
+
     /// Arity mismatch with clear parameter information
     ArityMismatch {
         function: String,
@@ -185,19 +180,19 @@ pub enum EnhancedRuntimeError {
         actual: usize,
         diagnostic: DiagnosticInfo,
     },
-    
+
     /// Parse errors with syntax highlighting
     ParseError {
         message: String,
         diagnostic: DiagnosticInfo,
     },
-    
+
     /// IR conversion errors
     IrConversionError {
         message: String,
         diagnostic: DiagnosticInfo,
     },
-    
+
     /// Generic runtime error with diagnostic
     RuntimeError {
         message: String,
@@ -218,11 +213,16 @@ impl EnhancedRuntimeError {
     }
 
     /// Create undefined symbol error with smart suggestions
-    pub fn undefined_symbol(symbol: &Symbol, span: SourceSpan, available_symbols: &[String]) -> Self {
+    pub fn undefined_symbol(
+        symbol: &Symbol,
+        span: SourceSpan,
+        available_symbols: &[String],
+    ) -> Self {
         let suggestions = find_similar_symbols(&symbol.0, available_symbols);
-        
-        let mut diagnostic = DiagnosticInfo::error("E001", &format!("Undefined symbol `{}`", symbol.0))
-            .with_primary_span(span);
+
+        let mut diagnostic =
+            DiagnosticInfo::error("E001", &format!("Undefined symbol `{}`", symbol.0))
+                .with_primary_span(span);
 
         if !suggestions.is_empty() {
             let suggestion_text = if suggestions.len() == 1 {
@@ -230,26 +230,25 @@ impl EnhancedRuntimeError {
             } else {
                 format!("Did you mean one of: {}?", suggestions.join(", "))
             };
-            
-            diagnostic = diagnostic.with_hint(
-                ErrorHint::new(&suggestion_text)
-                    .with_suggestion(&suggestions[0])
-            );
+
+            diagnostic = diagnostic
+                .with_hint(ErrorHint::new(&suggestion_text).with_suggestion(&suggestions[0]));
         }
 
-        Self::UndefinedSymbol { symbol: symbol.clone(), diagnostic }
+        Self::UndefinedSymbol {
+            symbol: symbol.clone(),
+            diagnostic,
+        }
     }
 
     /// Create type error with enhanced context
-    pub fn type_error(
-        expected: &str,
-        actual: &str,
-        operation: &str,
-        span: SourceSpan,
-    ) -> Self {
+    pub fn type_error(expected: &str, actual: &str, operation: &str, span: SourceSpan) -> Self {
         let diagnostic = DiagnosticInfo::error(
             "E002",
-            &format!("Type mismatch in {}: expected {}, found {}", operation, expected, actual)
+            &format!(
+                "Type mismatch in {}: expected {}, found {}",
+                operation, expected, actual
+            ),
         )
         .with_primary_span(span)
         .with_hint(ErrorHint::new(&format!(
@@ -280,9 +279,11 @@ impl EnhancedRuntimeError {
         };
 
         let diagnostic = DiagnosticInfo::error(
-            "E003", 
-            &format!("Function `{}` expects {} arguments, but {} were provided", 
-                     function, expected_str, actual)
+            "E003",
+            &format!(
+                "Function `{}` expects {} arguments, but {} were provided",
+                function, expected_str, actual
+            ),
         )
         .with_primary_span(span)
         .with_hint(ErrorHint::new(&format!(
@@ -306,9 +307,9 @@ fn find_similar_symbols(target: &str, available: &[String]) -> Vec<String> {
         .map(|s| (s, levenshtein_distance(target, s)))
         .filter(|(_, dist)| *dist <= 3 && *dist < target.len()) // Only suggest if reasonable distance
         .collect();
-    
+
     candidates.sort_by_key(|(_, dist)| *dist);
-    
+
     candidates
         .into_iter()
         .take(3) // Limit to top 3 suggestions
@@ -323,24 +324,36 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     let a_len = a_chars.len();
     let b_len = b_chars.len();
 
-    if a_len == 0 { return b_len; }
-    if b_len == 0 { return a_len; }
+    if a_len == 0 {
+        return b_len;
+    }
+    if b_len == 0 {
+        return a_len;
+    }
 
     let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
 
     // Initialize first row and column
-    for i in 0..=a_len { matrix[i][0] = i; }
-    for j in 0..=b_len { matrix[0][j] = j; }
+    for i in 0..=a_len {
+        matrix[i][0] = i;
+    }
+    for j in 0..=b_len {
+        matrix[0][j] = j;
+    }
 
     for i in 1..=a_len {
         for j in 1..=b_len {
-            let cost = if a_chars[i-1] == b_chars[j-1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             matrix[i][j] = std::cmp::min(
                 std::cmp::min(
-                    matrix[i-1][j] + 1,     // deletion
-                    matrix[i][j-1] + 1      // insertion
+                    matrix[i - 1][j] + 1, // deletion
+                    matrix[i][j - 1] + 1, // insertion
                 ),
-                matrix[i-1][j-1] + cost     // substitution
+                matrix[i - 1][j - 1] + cost, // substitution
             );
         }
     }
@@ -368,17 +381,19 @@ impl Default for DiagnosticFormatter {
 impl DiagnosticFormatter {
     pub fn format_diagnostic(&self, diagnostic: &DiagnosticInfo) -> String {
         let mut output = String::new();
-        
+
         // Header with error code and severity
         let severity_str = match diagnostic.severity {
             ErrorSeverity::Error => "error",
-            ErrorSeverity::Warning => "warning", 
+            ErrorSeverity::Warning => "warning",
             ErrorSeverity::Info => "info",
             ErrorSeverity::Hint => "hint",
         };
-        
-        output.push_str(&format!("{}: {}: {}\n", 
-            severity_str, diagnostic.error_code, diagnostic.primary_message));
+
+        output.push_str(&format!(
+            "{}: {}: {}\n",
+            severity_str, diagnostic.error_code, diagnostic.primary_message
+        ));
 
         // Primary span with source code
         if let Some(ref span) = diagnostic.primary_span {
@@ -414,14 +429,18 @@ impl DiagnosticFormatter {
 
     fn format_source_span(&self, span: &SourceSpan, label: &str) -> String {
         let mut output = String::new();
-        
+
         // File location
         if let Some(ref file) = span.file_path {
-            output.push_str(&format!("  --> {}:{}:{}\n", 
-                file, span.start_line, span.start_column));
+            output.push_str(&format!(
+                "  --> {}:{}:{}\n",
+                file, span.start_line, span.start_column
+            ));
         } else {
-            output.push_str(&format!("  --> line {}:{}\n", 
-                span.start_line, span.start_column));
+            output.push_str(&format!(
+                "  --> line {}:{}\n",
+                span.start_line, span.start_column
+            ));
         }
 
         // Source code snippet
@@ -435,39 +454,65 @@ impl DiagnosticFormatter {
     fn format_source_snippet(&self, source: &str, span: &SourceSpan, label: &str) -> String {
         let lines: Vec<&str> = source.lines().collect();
         let mut output = String::new();
-        
+
         let start_line = span.start_line.saturating_sub(1); // Convert to 0-based
         let end_line = span.end_line.saturating_sub(1);
-        
+
         let context_start = start_line.saturating_sub(self.context_lines);
         let context_end = std::cmp::min(end_line + self.context_lines, lines.len());
-        
+
         // Line number width for formatting
         let line_num_width = context_end.to_string().len();
-        
-        for (i, line) in lines.iter().enumerate().take(context_end).skip(context_start) {
+
+        for (i, line) in lines
+            .iter()
+            .enumerate()
+            .take(context_end)
+            .skip(context_start)
+        {
             let line_num = i + 1;
             let is_error_line = i >= start_line && i <= end_line;
-            
+
             if self.show_line_numbers {
                 if is_error_line {
-                    output.push_str(&format!("{:width$} | {}\n", 
-                        line_num, line, width = line_num_width));
-                    
+                    output.push_str(&format!(
+                        "{:width$} | {}\n",
+                        line_num,
+                        line,
+                        width = line_num_width
+                    ));
+
                     // Add caret indicators
-                    let start_col = if i == start_line { span.start_column.saturating_sub(1) } else { 0 };
-                    let end_col = if i == end_line { span.end_column } else { line.len() };
-                    
-                    output.push_str(&format!("{:width$} | {}{}{}\n",
+                    let start_col = if i == start_line {
+                        span.start_column.saturating_sub(1)
+                    } else {
+                        0
+                    };
+                    let end_col = if i == end_line {
+                        span.end_column
+                    } else {
+                        line.len()
+                    };
+
+                    output.push_str(&format!(
+                        "{:width$} | {}{}{}\n",
                         "",
                         " ".repeat(start_col),
                         "^".repeat(std::cmp::max(1, end_col - start_col)),
-                        if !label.is_empty() { format!(" {}", label) } else { String::new() },
+                        if !label.is_empty() {
+                            format!(" {}", label)
+                        } else {
+                            String::new()
+                        },
                         width = line_num_width
                     ));
                 } else {
-                    output.push_str(&format!("{:width$} | {}\n", 
-                        line_num, line, width = line_num_width));
+                    output.push_str(&format!(
+                        "{:width$} | {}\n",
+                        line_num,
+                        line,
+                        width = line_num_width
+                    ));
                 }
             } else {
                 output.push_str(&format!("{}\n", line));
@@ -476,7 +521,7 @@ impl DiagnosticFormatter {
                 }
             }
         }
-        
+
         output
     }
 }
@@ -492,22 +537,39 @@ impl fmt::Display for EnhancedRuntimeError {
 impl From<crate::runtime::error::RuntimeError> for EnhancedRuntimeError {
     fn from(error: crate::runtime::error::RuntimeError) -> Self {
         match error {
-            crate::runtime::error::RuntimeError::TypeError { expected, actual, operation } => {
+            crate::runtime::error::RuntimeError::TypeError {
+                expected,
+                actual,
+                operation,
+            } => {
                 // Create a diagnostic without span for legacy compatibility
-                let diagnostic = DiagnosticInfo::error("E002", 
-                    &format!("Type mismatch in {}: expected {}, got {}", operation, expected, actual));
-                
-                Self::TypeError { expected, actual, operation, diagnostic }
-            },
+                let diagnostic = DiagnosticInfo::error(
+                    "E002",
+                    &format!(
+                        "Type mismatch in {}: expected {}, got {}",
+                        operation, expected, actual
+                    ),
+                );
+
+                Self::TypeError {
+                    expected,
+                    actual,
+                    operation,
+                    diagnostic,
+                }
+            }
             crate::runtime::error::RuntimeError::UndefinedSymbol(symbol) => {
-                let diagnostic = DiagnosticInfo::error("E001", 
-                    &format!("Undefined symbol: {}", symbol.0));
-                
+                let diagnostic =
+                    DiagnosticInfo::error("E001", &format!("Undefined symbol: {}", symbol.0));
+
                 Self::UndefinedSymbol { symbol, diagnostic }
-            },
+            }
             _ => {
                 let diagnostic = DiagnosticInfo::error("E999", &error.to_string());
-                Self::RuntimeError { message: error.to_string(), diagnostic }
+                Self::RuntimeError {
+                    message: error.to_string(),
+                    diagnostic,
+                }
             }
         }
     }
@@ -527,27 +589,31 @@ mod tests {
 
     #[test]
     fn test_find_similar_symbols() {
-        let symbols = vec!["map".to_string(), "reduce".to_string(), "filter".to_string(), "apply".to_string()];
-        
+        let symbols = vec![
+            "map".to_string(),
+            "reduce".to_string(),
+            "filter".to_string(),
+            "apply".to_string(),
+        ];
+
         let suggestions = find_similar_symbols("mpa", &symbols);
         assert!(suggestions.contains(&"map".to_string()));
-        
+
         let suggestions = find_similar_symbols("fiter", &symbols);
         assert!(suggestions.contains(&"filter".to_string()));
     }
 
     #[test]
     fn test_diagnostic_formatting() {
-        let span = SourceSpan::new(1, 5, 1, 8)
-            .with_source_text("(let [x 10] (+ x y))".to_string());
-        
+        let span = SourceSpan::new(1, 5, 1, 8).with_source_text("(let [x 10] (+ x y))".to_string());
+
         let diagnostic = DiagnosticInfo::error("E001", "Undefined symbol `y`")
             .with_primary_span(span)
             .with_hint(ErrorHint::new("Did you mean `x`?").with_suggestion("x"));
-        
+
         let formatter = DiagnosticFormatter::default();
         let output = formatter.format_diagnostic(&diagnostic);
-        
+
         assert!(output.contains("error: E001: Undefined symbol `y`"));
         assert!(output.contains("help: Did you mean `x`?"));
     }

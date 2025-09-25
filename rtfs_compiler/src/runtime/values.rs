@@ -8,9 +8,9 @@ use crate::runtime::error::RuntimeResult;
 use crate::runtime::Evaluator;
 use crate::runtime::IrEnvironment;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
@@ -109,31 +109,37 @@ impl Value {
             (Value::Nil, Value::Nil) => std::cmp::Ordering::Equal,
             (Value::Nil, _) => std::cmp::Ordering::Less,
             (_, Value::Nil) => std::cmp::Ordering::Greater,
-            
+
             (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
             (Value::Boolean(_), _) => std::cmp::Ordering::Less,
             (_, Value::Boolean(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::Integer(a), Value::Integer(b)) => a.cmp(b),
-            (Value::Integer(a), Value::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Integer(a), Value::Float(b)) => (*a as f64)
+                .partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal),
             (Value::Integer(_), _) => std::cmp::Ordering::Less,
-            (Value::Float(a), Value::Integer(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal),
-            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Float(a), Value::Integer(b)) => a
+                .partial_cmp(&(*b as f64))
+                .unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Float(a), Value::Float(b)) => {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            }
             (Value::Float(_), _) => std::cmp::Ordering::Less,
             (_, Value::Integer(_) | Value::Float(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::String(_), _) => std::cmp::Ordering::Less,
             (_, Value::String(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::Keyword(a), Value::Keyword(b)) => a.0.cmp(&b.0),
             (Value::Keyword(_), _) => std::cmp::Ordering::Less,
             (_, Value::Keyword(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::Symbol(a), Value::Symbol(b)) => a.0.cmp(&b.0),
             (Value::Symbol(_), _) => std::cmp::Ordering::Less,
             (_, Value::Symbol(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::Vector(a), Value::Vector(b)) => {
                 // Compare vectors element by element
                 for (a_elem, b_elem) in a.iter().zip(b.iter()) {
@@ -143,10 +149,10 @@ impl Value {
                     }
                 }
                 a.len().cmp(&b.len())
-            },
+            }
             (Value::Vector(_), _) => std::cmp::Ordering::Less,
             (_, Value::Vector(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::List(a), Value::List(b)) => {
                 // Compare lists element by element
                 for (a_elem, b_elem) in a.iter().zip(b.iter()) {
@@ -156,15 +162,15 @@ impl Value {
                     }
                 }
                 a.len().cmp(&b.len())
-            },
+            }
             (Value::List(_), _) => std::cmp::Ordering::Less,
             (_, Value::List(_)) => std::cmp::Ordering::Greater,
-            
+
             (Value::Map(a), Value::Map(b)) => {
                 // Convert maps to sorted vectors for comparison
                 let mut a_items: Vec<_> = a.iter().collect();
                 let mut b_items: Vec<_> = b.iter().collect();
-                
+
                 // Helper function to convert MapKey to string
                 fn map_key_to_string(key: &crate::ast::MapKey) -> String {
                     match key {
@@ -173,27 +179,27 @@ impl Value {
                         crate::ast::MapKey::Integer(i) => format!("i:{}", i),
                     }
                 }
-                
-                a_items.sort_by(|(k1, _), (k2, _)| map_key_to_string(k1).cmp(&map_key_to_string(k2)));
-                b_items.sort_by(|(k1, _), (k2, _)| map_key_to_string(k1).cmp(&map_key_to_string(k2)));
-                
+
+                a_items
+                    .sort_by(|(k1, _), (k2, _)| map_key_to_string(k1).cmp(&map_key_to_string(k2)));
+                b_items
+                    .sort_by(|(k1, _), (k2, _)| map_key_to_string(k1).cmp(&map_key_to_string(k2)));
+
                 // Compare sorted items
                 for (a_item, b_item) in a_items.iter().zip(b_items.iter()) {
                     match map_key_to_string(a_item.0).cmp(&map_key_to_string(b_item.0)) {
-                        std::cmp::Ordering::Equal => {
-                            match a_item.1.compare(b_item.1) {
-                                std::cmp::Ordering::Equal => continue,
-                                other => return other,
-                            }
+                        std::cmp::Ordering::Equal => match a_item.1.compare(b_item.1) {
+                            std::cmp::Ordering::Equal => continue,
+                            other => return other,
                         },
                         other => return other,
                     }
                 }
                 a_items.len().cmp(&b_items.len())
-            },
+            }
             (Value::Map(_), _) => std::cmp::Ordering::Less,
             (_, Value::Map(_)) => std::cmp::Ordering::Greater,
-            
+
             // For other types, use string representation
             _ => self.to_string().cmp(&other.to_string()),
         }
@@ -245,7 +251,8 @@ pub struct BuiltinFunction {
 pub struct BuiltinFunctionWithContext {
     pub name: String,
     pub arity: Arity,
-    pub func: Arc<dyn Fn(Vec<Value>, &Evaluator, &mut Environment) -> RuntimeResult<Value> + Send + Sync>,
+    pub func:
+        Arc<dyn Fn(Vec<Value>, &Evaluator, &mut Environment) -> RuntimeResult<Value> + Send + Sync>,
 }
 
 #[derive(Clone)]
@@ -280,9 +287,9 @@ impl Function {
         params: Vec<IrNode>,
         variadic_param: Option<Box<IrNode>>,
         body: Vec<IrNode>,
-    closure_env: Box<IrEnvironment>,
+        closure_env: Box<IrEnvironment>,
     ) -> Function {
-    Function::Ir(Arc::new(IrLambda {
+        Function::Ir(Arc::new(IrLambda {
             params,
             variadic_param,
             body,
@@ -409,19 +416,19 @@ impl From<Expression> for Value {
                 ))
             }
             Expression::If(_) => {
-                    // For now, return a placeholder for if expressions
+                // For now, return a placeholder for if expressions
                 Value::String("#<if-expression>".to_string())
             }
             Expression::Let(_) => {
-                    // For now, return a placeholder for let expressions
+                // For now, return a placeholder for let expressions
                 Value::String("#<let-expression>".to_string())
             }
             Expression::Do(_) => {
-                    // For now, return a placeholder for do expressions
+                // For now, return a placeholder for do expressions
                 Value::String("#<do-expression>".to_string())
             }
             Expression::Fn(_) => {
-                    // For now, return a placeholder for function expressions
+                // For now, return a placeholder for function expressions
                 Value::String("#<fn-expression>".to_string())
             }
             Expression::Def(def_expr) => {
@@ -433,15 +440,15 @@ impl From<Expression> for Value {
                 Value::String(format!("#<defn: {}>", defn_expr.name.0))
             }
             Expression::DiscoverAgents(_) => {
-                    // For now, return a placeholder for discover-agents expressions
+                // For now, return a placeholder for discover-agents expressions
                 Value::String("#<discover-agents>".to_string())
             }
             Expression::TryCatch(_) => {
-                    // For now, return a placeholder for try-catch expressions
+                // For now, return a placeholder for try-catch expressions
                 Value::String("#<try-catch>".to_string())
             }
             Expression::Parallel(_) => {
-                    // For now, return a placeholder for parallel expressions
+                // For now, return a placeholder for parallel expressions
                 Value::String("#<parallel>".to_string())
             }
             Expression::WithResource(with_expr) => {

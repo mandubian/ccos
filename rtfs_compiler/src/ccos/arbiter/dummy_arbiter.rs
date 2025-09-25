@@ -10,10 +10,15 @@ use crate::runtime::values::Value;
 
 use super::arbiter_config::ArbiterConfig;
 use super::arbiter_engine::ArbiterEngine;
-use super::plan_generation::{PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider};
-use crate::ccos::intent_graph::IntentGraph;
-use crate::ccos::types::{ExecutionResult, Intent, Plan, PlanBody, StorableIntent, IntentStatus, PlanLanguage, PlanStatus, TriggerSource, GenerationContext, IntentId};
+use super::plan_generation::{
+    PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider,
+};
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::intent_graph::IntentGraph;
+use crate::ccos::types::{
+    ExecutionResult, GenerationContext, Intent, IntentId, IntentStatus, Plan, PlanBody,
+    PlanLanguage, PlanStatus, StorableIntent, TriggerSource,
+};
 use tokio::sync::RwLock;
 
 /// A deterministic dummy arbiter for testing purposes.
@@ -36,23 +41,31 @@ impl DummyArbiter {
     /// Generate a deterministic intent based on natural language input.
     fn generate_dummy_intent(&self, nl: &str) -> Intent {
         let lower_nl = nl.to_lowercase();
-        
-    // Simple pattern matching for deterministic responses
-    // Check compound patterns first (more specific)
-    if (lower_nl.contains("hello") || lower_nl.contains("hi") || lower_nl.contains("greet")) && 
-       (lower_nl.contains("add") || lower_nl.contains("sum") || lower_nl.contains("plus") || lower_nl.contains("calculate") || lower_nl.contains("math")) {
+
+        // Simple pattern matching for deterministic responses
+        // Check compound patterns first (more specific)
+        if (lower_nl.contains("hello") || lower_nl.contains("hi") || lower_nl.contains("greet"))
+            && (lower_nl.contains("add")
+                || lower_nl.contains("sum")
+                || lower_nl.contains("plus")
+                || lower_nl.contains("calculate")
+                || lower_nl.contains("math"))
+        {
             // Compound goal: greeting + math operation
             let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
                 .unwrap()
                 .captures_iter(nl)
                 .filter_map(|cap| cap.get(1)?.as_str().parse().ok())
                 .collect();
-            
+
             let mut metadata = HashMap::new();
             if !numbers.is_empty() {
-                metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
+                metadata.insert(
+                    "numbers".to_string(),
+                    Value::String(format!("{:?}", numbers)),
+                );
             }
-            
+
             Intent {
                 intent_id: format!("dummy_compound_{}", uuid::Uuid::new_v4()),
                 name: Some("greet_and_calculate".to_string()),
@@ -61,17 +74,31 @@ impl DummyArbiter {
                 constraints: HashMap::new(),
                 preferences: {
                     let mut map = HashMap::new();
-                    map.insert("friendliness".to_string(), Value::String("high".to_string()));
+                    map.insert(
+                        "friendliness".to_string(),
+                        Value::String("high".to_string()),
+                    );
                     map.insert("precision".to_string(), Value::String("exact".to_string()));
                     map
                 },
-                success_criteria: Some(Value::String("greeting_and_calculation_completed".to_string())),
+                success_criteria: Some(Value::String(
+                    "greeting_and_calculation_completed".to_string(),
+                )),
                 status: IntentStatus::Active,
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                updated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 metadata,
             }
-        } else if lower_nl.contains("sentiment") || lower_nl.contains("analyze") || lower_nl.contains("feeling") {
+        } else if lower_nl.contains("sentiment")
+            || lower_nl.contains("analyze")
+            || lower_nl.contains("feeling")
+        {
             // Sentiment / analysis intent
             let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
                 .unwrap()
@@ -81,7 +108,10 @@ impl DummyArbiter {
 
             let mut metadata = HashMap::new();
             if !numbers.is_empty() {
-                metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
+                metadata.insert(
+                    "numbers".to_string(),
+                    Value::String(format!("{:?}", numbers)),
+                );
             }
 
             Intent {
@@ -92,18 +122,30 @@ impl DummyArbiter {
                 constraints: HashMap::new(),
                 preferences: {
                     let mut map = HashMap::new();
-                    map.insert("sensitivity".to_string(), Value::String("medium".to_string()));
+                    map.insert(
+                        "sensitivity".to_string(),
+                        Value::String("medium".to_string()),
+                    );
                     map
                 },
                 success_criteria: Some(Value::String("sentiment_analysis_completed".to_string())),
                 status: IntentStatus::Active,
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                updated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 metadata,
             }
         } else {
             // Other patterns: check for optimization keywords
-            if lower_nl.contains("optimiz") || lower_nl.contains("performance") || lower_nl.contains("latency") {
+            if lower_nl.contains("optimiz")
+                || lower_nl.contains("performance")
+                || lower_nl.contains("latency")
+            {
                 Intent {
                     intent_id: format!("dummy_optimize_{}", uuid::Uuid::new_v4()),
                     name: Some("optimize_response_time".to_string()),
@@ -112,16 +154,30 @@ impl DummyArbiter {
                     constraints: HashMap::new(),
                     preferences: {
                         let mut map = HashMap::new();
-                        map.insert("priority".to_string(), Value::String("performance".to_string()));
+                        map.insert(
+                            "priority".to_string(),
+                            Value::String("performance".to_string()),
+                        );
                         map
                     },
                     success_criteria: Some(Value::String("optimization_applied".to_string())),
                     status: IntentStatus::Active,
-                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                    updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    updated_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     metadata: HashMap::new(),
                 }
-            } else if lower_nl.contains("add") || lower_nl.contains("sum") || lower_nl.contains("plus") || lower_nl.contains("calculate") || lower_nl.contains("math") {
+            } else if lower_nl.contains("add")
+                || lower_nl.contains("sum")
+                || lower_nl.contains("plus")
+                || lower_nl.contains("calculate")
+                || lower_nl.contains("math")
+            {
                 // Math-only requests
                 let numbers: Vec<i64> = Regex::new(r"\b(\d+)\b")
                     .unwrap()
@@ -131,7 +187,10 @@ impl DummyArbiter {
 
                 let mut metadata = HashMap::new();
                 if !numbers.is_empty() {
-                    metadata.insert("numbers".to_string(), Value::String(format!("{:?}", numbers)));
+                    metadata.insert(
+                        "numbers".to_string(),
+                        Value::String(format!("{:?}", numbers)),
+                    );
                 }
 
                 Intent {
@@ -147,8 +206,14 @@ impl DummyArbiter {
                     },
                     success_criteria: Some(Value::String("calculation_completed".to_string())),
                     status: IntentStatus::Active,
-                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                    updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    updated_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     metadata,
                 }
             } else {
@@ -166,8 +231,14 @@ impl DummyArbiter {
                     },
                     success_criteria: Some(Value::String("assistance_provided".to_string())),
                     status: IntentStatus::Active,
-                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                    updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    updated_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     metadata: HashMap::new(),
                 }
             }
@@ -184,8 +255,9 @@ impl DummyArbiter {
     (step "Analyze Sentiment" (call :ccos.echo "sentiment: positive"))
     (step "Generate Report" (call :ccos.echo "report generated"))
 )
-"#.to_string(),
-                vec!["ccos.echo".to_string()]
+"#
+                .to_string(),
+                vec!["ccos.echo".to_string()],
             ),
             Some("optimize_response_time") => (
                 r#"
@@ -194,16 +266,18 @@ impl DummyArbiter {
     (step "Identify Bottlenecks" (call :ccos.echo "bottlenecks identified"))
     (step "Apply Optimizations" (call :ccos.echo "optimizations applied"))
 )
-"#.to_string(),
-                vec!["ccos.echo".to_string()]
+"#
+                .to_string(),
+                vec!["ccos.echo".to_string()],
             ),
             Some("greet_user") => (
                 r#"
 (do
     (step "Generate Greeting" (call :ccos.echo "Hello! How can I help you today?"))
 )
-"#.to_string(),
-                vec!["ccos.echo".to_string()]
+"#
+                .to_string(),
+                vec!["ccos.echo".to_string()],
             ),
             Some("greet_and_calculate") => {
                 // Extract numbers from metadata
@@ -212,28 +286,36 @@ impl DummyArbiter {
                     _ => "[]".to_string(),
                 };
                 let numbers: Vec<i64> = serde_json::from_str(&numbers_str).unwrap_or_default();
-                
+
                 if numbers.len() >= 2 {
                     // Generate compound plan: greet + add numbers
                     let a = numbers[0];
                     let b = numbers[1];
-                    (format!(r#"
+                    (
+                        format!(
+                            r#"
 (do
     (step "Generate Greeting" (call :ccos.echo "Hello! Let me help you with that calculation."))
     (step "Perform Addition" (call :ccos.math.add {{:args [{:?} {:?}]}}))
     (step "Display Result" (call :ccos.echo "The result is: "))
 )
-"#, a, b),
-                     vec!["ccos.echo".to_string(), "ccos.math.add".to_string()])
+"#,
+                            a, b
+                        ),
+                        vec!["ccos.echo".to_string(), "ccos.math.add".to_string()],
+                    )
                 } else {
                     // Fallback if not enough numbers
-                    (r#"
+                    (
+                        r#"
 (do
     (step "Generate Greeting" (call :ccos.echo "Hello!"))
     (step "Handle Math Request" (call :ccos.echo "Please provide numbers to add"))
 )
-"#.to_string(),
-                     vec!["ccos.echo".to_string()])
+"#
+                        .to_string(),
+                        vec!["ccos.echo".to_string()],
+                    )
                 }
             }
             Some("perform_math_operation") => {
@@ -243,26 +325,34 @@ impl DummyArbiter {
                     _ => "[]".to_string(),
                 };
                 let numbers: Vec<i64> = serde_json::from_str(&numbers_str).unwrap_or_default();
-                
+
                 if numbers.len() >= 2 {
                     // Generate compound plan: add numbers and return result
                     let a = numbers[0];
                     let b = numbers[1];
-                    (format!(r#"
+                    (
+                        format!(
+                            r#"
 (do
     (let [result (call :ccos.math.add {{:args [{:?} {:?}]}})]
       (call :ccos.echo (str "The result of adding {:?} and {:?} is: " result)))
 )
-"#, a, b, a, b),
-                     vec!["ccos.math.add".to_string(), "ccos.echo".to_string()])
+"#,
+                            a, b, a, b
+                        ),
+                        vec!["ccos.math.add".to_string(), "ccos.echo".to_string()],
+                    )
                 } else {
                     // Fallback if not enough numbers
-                    (r#"
+                    (
+                        r#"
 (do
     (step "Handle Math Request" (call :ccos.echo "Please provide at least two numbers to add"))
 )
-"#.to_string(),
-                     vec!["ccos.echo".to_string()])
+"#
+                        .to_string(),
+                        vec!["ccos.echo".to_string()],
+                    )
                 }
             }
             _ => (
@@ -272,9 +362,10 @@ impl DummyArbiter {
     (step "Process Request" (call :ccos.echo "processing your request"))
     (step "Provide Response" (call :ccos.echo "here is your response"))
 )
-"#.to_string(),
-                vec!["ccos.echo".to_string()]
-            )
+"#
+                .to_string(),
+                vec!["ccos.echo".to_string()],
+            ),
         };
 
         Plan {
@@ -284,7 +375,10 @@ impl DummyArbiter {
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(plan_body.trim().to_string()),
             status: PlanStatus::Draft,
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             metadata: HashMap::new(),
             input_schema: None,
             output_schema: None,
@@ -296,10 +390,15 @@ impl DummyArbiter {
 
     /// Store the intent in the intent graph.
     fn store_intent(&self, intent: &Intent) -> Result<(), RuntimeError> {
-        let mut graph = self.intent_graph.lock()
+        let mut graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let storable_intent = StorableIntent {
             intent_id: intent.intent_id.clone(),
             name: intent.name.clone(),
@@ -354,8 +453,7 @@ impl DummyArbiter {
             if step_count > self.config.security_config.max_plan_complexity {
                 return Err(RuntimeError::Generic(format!(
                     "Plan too complex: {} steps (max: {})",
-                    step_count,
-                    self.config.security_config.max_plan_complexity
+                    step_count, self.config.security_config.max_plan_complexity
                 )));
             }
         }
@@ -365,7 +463,7 @@ impl DummyArbiter {
             let capability_regex = Regex::new(r":([a-zA-Z0-9._-]+)").unwrap();
             for cap in capability_regex.captures_iter(body) {
                 let capability = &cap[1];
-                
+
                 // Check blocked prefixes
                 for blocked in &self.config.security_config.blocked_capability_prefixes {
                     if capability.starts_with(blocked) {
@@ -375,9 +473,14 @@ impl DummyArbiter {
                         )));
                     }
                 }
-                
+
                 // Check allowed prefixes (if any are specified)
-                if !self.config.security_config.allowed_capability_prefixes.is_empty() {
+                if !self
+                    .config
+                    .security_config
+                    .allowed_capability_prefixes
+                    .is_empty()
+                {
                     let mut allowed = false;
                     for allowed_prefix in &self.config.security_config.allowed_capability_prefixes {
                         if capability.starts_with(allowed_prefix) {
@@ -400,10 +503,15 @@ impl DummyArbiter {
 
     /// Build a tiny demo graph: root → fetch → analyze → announce
     fn build_demo_graph(&self, goal: &str) -> Result<IntentId, RuntimeError> {
-        let mut graph = self.intent_graph.lock()
+        let mut graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let mk = |name: &str, goal: &str| StorableIntent {
             intent_id: format!("intent-{}", uuid::Uuid::new_v4()),
             name: Some(name.to_string()),
@@ -416,7 +524,12 @@ impl DummyArbiter {
             parent_intent: None,
             child_intents: vec![],
             triggered_by: TriggerSource::HumanRequest,
-            generation_context: GenerationContext { arbiter_version: "dummy-graph-1.0".to_string(), generation_timestamp: now, input_context: HashMap::new(), reasoning_trace: Some("programmatic demo graph".to_string()) },
+            generation_context: GenerationContext {
+                arbiter_version: "dummy-graph-1.0".to_string(),
+                generation_timestamp: now,
+                input_context: HashMap::new(),
+                reasoning_trace: Some("programmatic demo graph".to_string()),
+            },
             status: IntentStatus::Active,
             priority: 1,
             created_at: now,
@@ -458,29 +571,23 @@ impl ArbiterEngine for DummyArbiter {
         _context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         let intent = self.generate_dummy_intent(natural_language);
-        
+
         // Store the intent in the graph
         self.store_intent(&intent)?;
-        
+
         Ok(intent)
     }
 
-    async fn intent_to_plan(
-        &self,
-        intent: &Intent,
-    ) -> Result<Plan, RuntimeError> {
+    async fn intent_to_plan(&self, intent: &Intent) -> Result<Plan, RuntimeError> {
         let plan = self.generate_dummy_plan(intent);
-        
+
         // Validate the plan
         self.validate_plan(&plan)?;
-        
+
         Ok(plan)
     }
 
-    async fn execute_plan(
-        &self,
-    _plan: &Plan,
-    ) -> Result<ExecutionResult, RuntimeError> {
+    async fn execute_plan(&self, _plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
         // For dummy arbiter, we just return a success result
         // In a real implementation, this would execute the RTFS plan
         Ok(ExecutionResult {
@@ -519,7 +626,9 @@ impl ArbiterEngine for DummyArbiter {
             natural_language_goal.replace('"', "\"")
         );
 
-        let mut g = self.intent_graph.lock()
+        let mut g = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
         match crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(&rtfs, &mut g) {
             Ok(root_id) => Ok(root_id),
@@ -538,19 +647,26 @@ impl ArbiterEngine for DummyArbiter {
         // Use the stub plan generator; marketplace isn't strictly needed for the stub
         let provider = StubPlanGenerationProvider;
         // Create a minimal marketplace placeholder for signature compatibility if needed later
-        let plan_res = provider.generate_plan(&Intent {
-            intent_id: intent.intent_id.clone(),
-            name: intent.name.clone(),
-            original_request: intent.original_request.clone(),
-            goal: intent.goal.clone(),
-            constraints: HashMap::new(),
-            preferences: HashMap::new(),
-            success_criteria: None,
-            status: IntentStatus::Active,
-            created_at: intent.created_at,
-            updated_at: intent.updated_at,
-            metadata: HashMap::new(),
-        }, Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))))).await?;
+        let plan_res = provider
+            .generate_plan(
+                &Intent {
+                    intent_id: intent.intent_id.clone(),
+                    name: intent.name.clone(),
+                    original_request: intent.original_request.clone(),
+                    goal: intent.goal.clone(),
+                    constraints: HashMap::new(),
+                    preferences: HashMap::new(),
+                    success_criteria: None,
+                    status: IntentStatus::Active,
+                    created_at: intent.created_at,
+                    updated_at: intent.updated_at,
+                    metadata: HashMap::new(),
+                },
+                Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(
+                    crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+                )))),
+            )
+            .await?;
         Ok(plan_res)
     }
 }
@@ -562,7 +678,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dummy_arbiter_sentiment() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let config = ArbiterConfig::default();
         let arbiter = DummyArbiter::new(config, intent_graph);
 
@@ -577,7 +697,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dummy_arbiter_optimization() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let config = ArbiterConfig::default();
         let arbiter = DummyArbiter::new(config, intent_graph);
 
@@ -592,7 +716,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dummy_arbiter_plan_generation() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let config = ArbiterConfig::default();
         let arbiter = DummyArbiter::new(config, intent_graph);
 
@@ -613,7 +741,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dummy_arbiter_plan_validation() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let mut config = ArbiterConfig::default();
         config.security_config.max_plan_complexity = 1;
         let arbiter = DummyArbiter::new(config, intent_graph);
@@ -631,7 +763,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_dummy_arbiter_execution() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let config = ArbiterConfig::default();
         let arbiter = DummyArbiter::new(config, intent_graph);
 

@@ -1,15 +1,15 @@
 // rtfs_compiler/src/tests/test_utils.rs
 // This file will contain common utilities for setting up test environments.
 
-use crate::ir::converter::IrConverter;
-use crate::parser;
-use crate::runtime::{
-    evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
-    values::Value, execution_outcome::ExecutionOutcome,
-};
 use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::host::RuntimeHost;
+use crate::ir::converter::IrConverter;
+use crate::parser;
+use crate::runtime::{
+    evaluator::Evaluator, execution_outcome::ExecutionOutcome, ir_runtime::IrRuntime,
+    module_runtime::ModuleRegistry, values::Value,
+};
 
 /// Creates a standard module registry for testing.
 pub fn create_test_module_registry() -> ModuleRegistry {
@@ -24,7 +24,9 @@ pub fn create_test_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = crate::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
@@ -41,11 +43,15 @@ pub fn create_test_evaluator() -> Evaluator {
 }
 
 /// Creates a new AST evaluator with a provided RuntimeContext.
-pub fn create_test_evaluator_with_context(ctx: crate::runtime::security::RuntimeContext) -> Evaluator {
+pub fn create_test_evaluator_with_context(
+    ctx: crate::runtime::security::RuntimeContext,
+) -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let host = std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,
@@ -74,13 +80,18 @@ pub fn create_llm_test_evaluator() -> Evaluator {
 pub fn create_test_ir_runtime() -> crate::runtime::ir_runtime::IrRuntime {
     let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let host = std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         crate::runtime::security::RuntimeContext::pure(),
     ));
-    crate::runtime::ir_runtime::IrRuntime::new(host, crate::runtime::security::RuntimeContext::pure())
+    crate::runtime::ir_runtime::IrRuntime::new(
+        host,
+        crate::runtime::security::RuntimeContext::pure(),
+    )
 }
 
 /// A helper to parse, convert to IR, and execute code using the IR runtime.
@@ -123,7 +134,9 @@ pub fn execute_ir_code(
     // Execute the IR program
     match runtime.execute_program(&program_node, module_registry) {
         Ok(ExecutionOutcome::Complete(value)) => Ok(value),
-        Ok(ExecutionOutcome::RequiresHost(_)) => Err("Host call required - not supported in test context".to_string()),
+        Ok(ExecutionOutcome::RequiresHost(_)) => {
+            Err("Host call required - not supported in test context".to_string())
+        }
         Err(e) => Err(format!("Runtime error: {:?}", e)),
     }
 }

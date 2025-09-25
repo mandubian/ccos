@@ -4,24 +4,30 @@
 //! with agent delegation for complex tasks. The delegating arbiter uses LLM to
 //! understand requests and then delegates to specialized agents when appropriate.
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 
+use crate::ccos::arbiter::arbiter_config::{
+    AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig,
+};
+use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
+use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
+use crate::ccos::arbiter::plan_generation::{
+    LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
+};
+use crate::ccos::delegation_keys::{agent, generation};
+use crate::ccos::types::{
+    ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
+};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use regex;
-use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent, ExecutionResult, IntentStatus};
-use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
-use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition};
-use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
-use crate::ccos::arbiter::plan_generation::{PlanGenerationResult, LlmRtfsPlanGenerationProvider, PlanGenerationProvider};
-use crate::ccos::delegation_keys::{generation, agent};
 
 use crate::ast::TopLevel;
+use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
-use serde_json::json;
 
 /// Extract the first top-level `(intent …)` s-expression from the given text.
 /// Returns `None` if no well-formed intent block is found.
@@ -53,9 +59,8 @@ fn extract_intent(text: &str) -> Option<String> {
 fn sanitize_regex_literals(text: &str) -> String {
     // Matches #rx"..." with minimal escaping (no nested quotes inside pattern)
     let re = regex::Regex::new(r#"#rx\"([^\"]*)\""#).unwrap();
-    re.replace_all(text, |caps: &regex::Captures| {
-        format!("\"{}\"", &caps[1])
-    }).into_owned()
+    re.replace_all(text, |caps: &regex::Captures| format!("\"{}\"", &caps[1]))
+        .into_owned()
 }
 
 /// Convert parser Literal to runtime Value (basic subset)
@@ -71,7 +76,7 @@ fn lit_to_val(lit: &crate::ast::Literal) -> Value {
 }
 
 fn expr_to_value(expr: &crate::ast::Expression) -> Value {
-    use crate::ast::{Expression as E};
+    use crate::ast::Expression as E;
     match expr {
         E::Literal(lit) => lit_to_val(lit),
         E::Map(m) => {
@@ -83,7 +88,11 @@ fn expr_to_value(expr: &crate::ast::Expression) -> Value {
         }
         E::Vector(vec) | E::List(vec) => {
             let vals = vec.iter().map(expr_to_value).collect();
-            if matches!(expr, E::Vector(_)) { Value::Vector(vals) } else { Value::List(vals) }
+            if matches!(expr, E::Vector(_)) {
+                Value::Vector(vals)
+            } else {
+                Value::List(vals)
+            }
         }
         E::Symbol(s) => Value::Symbol(crate::ast::Symbol(s.0.clone())),
         E::FunctionCall { callee, arguments } => {
@@ -95,26 +104,31 @@ fn expr_to_value(expr: &crate::ast::Expression) -> Value {
         E::Fn(fn_expr) => {
             // Convert fn expressions to a list representation: (fn params body...)
             let mut fn_list = vec![Value::Symbol(crate::ast::Symbol("fn".to_string()))];
-            
+
             // Add parameters as a vector
             let mut params = Vec::new();
             for param in &fn_expr.params {
-                params.push(Value::Symbol(crate::ast::Symbol(format!("{:?}", param.pattern))));
+                params.push(Value::Symbol(crate::ast::Symbol(format!(
+                    "{:?}",
+                    param.pattern
+                ))));
             }
             fn_list.push(Value::Vector(params));
-            
+
             // Add body expressions
             for body_expr in &fn_expr.body {
                 fn_list.push(expr_to_value(body_expr));
             }
-            
+
             Value::List(fn_list)
         }
         _ => Value::Nil,
     }
 }
 
-fn map_expr_to_string_value(expr: &crate::ast::Expression) -> Option<std::collections::HashMap<String, Value>> {
+fn map_expr_to_string_value(
+    expr: &crate::ast::Expression,
+) -> Option<std::collections::HashMap<String, Value>> {
     use crate::ast::{Expression as E, MapKey};
     if let E::Map(m) = expr {
         let mut out = std::collections::HashMap::new();
@@ -135,10 +149,18 @@ fn map_expr_to_string_value(expr: &crate::ast::Expression) -> Option<std::collec
 fn intent_from_function_call(expr: &crate::ast::Expression) -> Option<Intent> {
     use crate::ast::{Expression as E, Literal, Symbol};
 
-    let E::FunctionCall { callee, arguments } = expr else { return None; };
-    let E::Symbol(Symbol(sym)) = &**callee else { return None; };
-    if sym != "intent" { return None; }
-    if arguments.is_empty() { return None; }
+    let E::FunctionCall { callee, arguments } = expr else {
+        return None;
+    };
+    let E::Symbol(Symbol(sym)) = &**callee else {
+        return None;
+    };
+    if sym != "intent" {
+        return None;
+    }
+    if arguments.is_empty() {
+        return None;
+    }
 
     // The first argument is the intent name/type, can be either a symbol or string literal
     let name = if let E::Symbol(Symbol(name_sym)) = &arguments[0] {
@@ -157,16 +179,30 @@ fn intent_from_function_call(expr: &crate::ast::Expression) -> Option<Intent> {
         }
     }
 
-    let original_request = properties.get("original-request")
-        .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
+    let original_request = properties
+        .get("original-request")
+        .and_then(|expr| {
+            if let E::Literal(Literal::String(s)) = expr {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_default();
-    
-    let goal = properties.get("goal")
-        .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
+
+    let goal = properties
+        .get("goal")
+        .and_then(|expr| {
+            if let E::Literal(Literal::String(s)) = expr {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| original_request.clone());
 
     let mut intent = Intent::new(goal).with_name(name);
-    
+
     if let Some(expr) = properties.get("constraints") {
         if let Some(m) = map_expr_to_string_value(expr) {
             intent.constraints = m;
@@ -183,7 +219,7 @@ fn intent_from_function_call(expr: &crate::ast::Expression) -> Option<Intent> {
         let value = expr_to_value(expr);
         intent.success_criteria = Some(value);
     }
-    
+
     Some(intent)
 }
 
@@ -194,7 +230,8 @@ pub struct DelegatingArbiter {
     llm_provider: Box<dyn LlmProvider>,
     agent_registry: AgentRegistry,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
-    adaptive_threshold_calculator: Option<crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator>,
+    adaptive_threshold_calculator:
+        Option<crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator>,
 }
 
 /// Agent registry for managing available agents
@@ -207,44 +244,54 @@ impl AgentRegistry {
     /// Create a new agent registry
     pub fn new(config: AgentRegistryConfig) -> Self {
         let mut agents = HashMap::new();
-        
+
         // Add agents from configuration
         for agent in &config.agents {
             agents.insert(agent.agent_id.clone(), agent.clone());
         }
-        
+
         Self { config, agents }
     }
-    
+
     /// Find agents that match the given capabilities
-    pub fn find_agents_for_capabilities(&self, required_capabilities: &[String]) -> Vec<&AgentDefinition> {
+    pub fn find_agents_for_capabilities(
+        &self,
+        required_capabilities: &[String],
+    ) -> Vec<&AgentDefinition> {
         let mut candidates = Vec::new();
-        
+
         for agent in self.agents.values() {
-            let matching_capabilities = agent.capabilities.iter()
+            let matching_capabilities = agent
+                .capabilities
+                .iter()
                 .filter(|cap| required_capabilities.contains(cap))
                 .count();
-            
+
             if matching_capabilities > 0 {
                 candidates.push(agent);
             }
         }
-        
+
         // Sort by trust score and cost
         candidates.sort_by(|a, b| {
-            b.trust_score.partial_cmp(&a.trust_score)
+            b.trust_score
+                .partial_cmp(&a.trust_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal))
+                .then(
+                    a.cost
+                        .partial_cmp(&b.cost)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
         });
-        
+
         candidates
     }
-    
+
     /// Get agent by ID
     pub fn get_agent(&self, agent_id: &str) -> Option<&AgentDefinition> {
         self.agents.get(agent_id)
     }
-    
+
     /// List all available agents
     pub fn list_agents(&self) -> Vec<&AgentDefinition> {
         self.agents.values().collect()
@@ -259,15 +306,18 @@ impl DelegatingArbiter {
         intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
     ) -> Result<Self, RuntimeError> {
         // Create LLM provider
-        let llm_provider = LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?;
-        
+        let llm_provider =
+            LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?;
+
         // Create agent registry
         let agent_registry = AgentRegistry::new(delegation_config.agent_registry.clone());
-        
+
         // Create adaptive threshold calculator if configured
-        let adaptive_threshold_calculator = delegation_config.adaptive_threshold.as_ref()
-            .map(|config| crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator::new(config.clone()));
-        
+        let adaptive_threshold_calculator =
+            delegation_config.adaptive_threshold.as_ref().map(|config| {
+                crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator::new(config.clone())
+            });
+
         Ok(Self {
             llm_config,
             delegation_config,
@@ -290,68 +340,105 @@ impl DelegatingArbiter {
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect::<HashMap<String, String>>()
         });
-        
-        let storable_intent = self.llm_provider.generate_intent(natural_language, string_context).await?;
-        
+
+        let storable_intent = self
+            .llm_provider
+            .generate_intent(natural_language, string_context)
+            .await?;
+
         // Log provider and result (best-effort, non-fatal)
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             let entry = json!({"event":"llm_intent_generation","provider": format!("{:?}", self.llm_config.provider_type), "request": natural_language, "intent_id": storable_intent.intent_id});
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
 
-        // Convert StorableIntent to Intent 
+        // Convert StorableIntent to Intent
         let mut intent = Intent::from_storable(storable_intent)?;
 
         // Mark how this intent was generated so downstream code/tests can inspect it
-        intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATING_LLM.to_string()));
+        intent.metadata.insert(
+            generation::GENERATION_METHOD.to_string(),
+            Value::String(generation::methods::DELEGATING_LLM.to_string()),
+        );
 
         // Analyze delegation need and set delegation metadata
-        let delegation_analysis = self.analyze_delegation_need(&intent, context.clone()).await?;
-        
+        let delegation_analysis = self
+            .analyze_delegation_need(&intent, context.clone())
+            .await?;
+
         // Debug: Log delegation analysis
         println!("DEBUG: Delegation analysis: should_delegate={}, confidence={}, required_capabilities={:?}", 
                  delegation_analysis.should_delegate, 
                  delegation_analysis.delegation_confidence,
                  delegation_analysis.required_capabilities);
-        
+
         if delegation_analysis.should_delegate {
             // Find candidate agents
-            let candidate_agents = self.agent_registry.find_agents_for_capabilities(&delegation_analysis.required_capabilities);
-            
+            let candidate_agents = self
+                .agent_registry
+                .find_agents_for_capabilities(&delegation_analysis.required_capabilities);
+
             println!("DEBUG: Found {} candidate agents", candidate_agents.len());
             for agent in &candidate_agents {
-                println!("DEBUG: Agent: {} with capabilities: {:?}", agent.agent_id, agent.capabilities);
+                println!(
+                    "DEBUG: Agent: {} with capabilities: {:?}",
+                    agent.agent_id, agent.capabilities
+                );
             }
-            
+
             if !candidate_agents.is_empty() {
                 // Select the best agent (first one for now)
                 let selected_agent = &candidate_agents[0];
-                
+
                 // Set delegation metadata
-                intent.metadata.insert("delegation.selected_agent".to_string(), Value::String(selected_agent.agent_id.clone()));
-                intent.metadata.insert("delegation.candidates".to_string(), Value::String(
-                    candidate_agents.iter()
-                        .map(|a| a.agent_id.clone())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                
+                intent.metadata.insert(
+                    "delegation.selected_agent".to_string(),
+                    Value::String(selected_agent.agent_id.clone()),
+                );
+                intent.metadata.insert(
+                    "delegation.candidates".to_string(),
+                    Value::String(
+                        candidate_agents
+                            .iter()
+                            .map(|a| a.agent_id.clone())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                );
+
                 // Set intent name to match the selected agent
                 intent.name = Some(selected_agent.agent_id.clone());
-                
+
                 println!("DEBUG: Selected agent: {}", selected_agent.agent_id);
             } else {
-                println!("DEBUG: No candidate agents found for capabilities: {:?}", delegation_analysis.required_capabilities);
+                println!(
+                    "DEBUG: No candidate agents found for capabilities: {:?}",
+                    delegation_analysis.required_capabilities
+                );
             }
         } else {
-            println!("DEBUG: Delegation not recommended, confidence: {}", delegation_analysis.delegation_confidence);
+            println!(
+                "DEBUG: Delegation not recommended, confidence: {}",
+                delegation_analysis.delegation_confidence
+            );
         }
 
         // Append a compact JSONL entry with the generated intent for debugging
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             // Serialize a minimal intent snapshot
             let intent_snapshot = json!({
                 "intent_id": intent.intent_id,
@@ -360,7 +447,12 @@ impl DelegatingArbiter {
                 "metadata": intent.metadata,
             });
             let entry = json!({"event":"llm_intent_parsed","provider": format!("{:?}", self.llm_config.provider_type), "intent": intent_snapshot});
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
 
@@ -374,11 +466,14 @@ impl DelegatingArbiter {
         context: Option<HashMap<String, Value>>,
     ) -> Result<Plan, RuntimeError> {
         // First, analyze if delegation is appropriate
-        let delegation_analysis = self.analyze_delegation_need(intent, context.clone()).await?;
-        
+        let delegation_analysis = self
+            .analyze_delegation_need(intent, context.clone())
+            .await?;
+
         if delegation_analysis.should_delegate {
             // Generate plan with delegation
-            self.generate_delegated_plan(intent, &delegation_analysis, context).await
+            self.generate_delegated_plan(intent, &delegation_analysis, context)
+                .await
         } else {
             // Generate plan without delegation
             self.generate_direct_plan(intent, context).await
@@ -392,34 +487,33 @@ impl DelegatingArbiter {
         context: Option<HashMap<String, Value>>,
     ) -> Result<DelegationAnalysis, RuntimeError> {
         let prompt = self.create_delegation_analysis_prompt(intent, context);
-        
+
         let response = self.llm_provider.generate_text(&prompt).await?;
-        
+
         // Parse delegation analysis
         let mut analysis = self.parse_delegation_analysis(&response)?;
-        
+
         // Apply adaptive threshold if configured
         if let Some(calculator) = &self.adaptive_threshold_calculator {
             // Get base threshold from config
             let base_threshold = self.delegation_config.threshold;
-            
+
             // For now, we'll use a default agent ID for threshold calculation
             // In the future, this could be based on the specific agent being considered
-            let adaptive_threshold = calculator.calculate_threshold("default_agent", base_threshold);
-            
+            let adaptive_threshold =
+                calculator.calculate_threshold("default_agent", base_threshold);
+
             // Adjust delegation decision based on adaptive threshold
-            analysis.should_delegate = analysis.should_delegate && 
-                analysis.delegation_confidence >= adaptive_threshold;
-            
+            analysis.should_delegate =
+                analysis.should_delegate && analysis.delegation_confidence >= adaptive_threshold;
+
             // Update reasoning to include adaptive threshold information
             analysis.reasoning = format!(
-                "{} [Adaptive threshold: {:.3}, Confidence: {:.3}]", 
-                analysis.reasoning, 
-                adaptive_threshold, 
-                analysis.delegation_confidence
+                "{} [Adaptive threshold: {:.3}, Confidence: {:.3}]",
+                analysis.reasoning, adaptive_threshold, analysis.delegation_confidence
             );
         }
-        
+
         Ok(analysis)
     }
 
@@ -431,34 +525,44 @@ impl DelegatingArbiter {
         context: Option<HashMap<String, Value>>,
     ) -> Result<Plan, RuntimeError> {
         // Find suitable agents
-        let candidate_agents = self.agent_registry.find_agents_for_capabilities(&delegation_analysis.required_capabilities);
-        
+        let candidate_agents = self
+            .agent_registry
+            .find_agents_for_capabilities(&delegation_analysis.required_capabilities);
+
         if candidate_agents.is_empty() {
             // No suitable agents found, fall back to direct plan
             return self.generate_direct_plan(intent, context).await;
         }
-        
+
         // Select the best agent
         let selected_agent = &candidate_agents[0];
-        
+
         // Generate delegation plan
         let prompt = self.create_delegation_plan_prompt(intent, selected_agent, context);
-        
+
         let response = self.llm_provider.generate_text(&prompt).await?;
 
         // Log provider, prompt and response
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             let entry = json!({"event":"llm_delegation_plan","provider": format!("{:?}", self.llm_config.provider_type), "agent": selected_agent.agent_id, "prompt": prompt, "response": response});
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
 
-    // Parse delegation plan
-    let plan = self.parse_delegation_plan(&response, intent, selected_agent)?;
-    // Log parsed plan for debugging
-    self.log_parsed_plan(&plan);
-    Ok(plan)
+        // Parse delegation plan
+        let plan = self.parse_delegation_plan(&response, intent, selected_agent)?;
+        // Log parsed plan for debugging
+        self.log_parsed_plan(&plan);
+        Ok(plan)
     }
 
     /// Generate plan without delegation
@@ -474,10 +578,14 @@ impl DelegatingArbiter {
             original_request: intent.original_request.clone(),
             rtfs_intent_source: "".to_string(), // Not used by LlmProvider
             goal: intent.goal.clone(),
-            constraints: intent.constraints.iter()
+            constraints: intent
+                .constraints
+                .iter()
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect(),
-            preferences: intent.preferences.iter()
+            preferences: intent
+                .preferences
+                .iter()
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect(),
             success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
@@ -494,7 +602,9 @@ impl DelegatingArbiter {
             priority: 0,
             created_at: intent.created_at,
             updated_at: intent.updated_at,
-            metadata: intent.metadata.iter()
+            metadata: intent
+                .metadata
+                .iter()
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect(),
         };
@@ -505,25 +615,40 @@ impl DelegatingArbiter {
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect::<HashMap<String, String>>()
         });
-        
-        let plan = self.llm_provider.generate_plan(&storable_intent, string_context).await?;
+
+        let plan = self
+            .llm_provider
+            .generate_plan(&storable_intent, string_context)
+            .await?;
 
         // Log provider and result
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             let entry = json!({"event":"llm_direct_plan","provider": format!("{:?}", self.llm_config.provider_type), "intent_id": intent.intent_id, "plan_id": plan.plan_id});
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
 
-    // Plan generated directly by LLM provider
-    // Log parsed plan for debugging
-    self.log_parsed_plan(&plan);
-    Ok(plan)
+        // Plan generated directly by LLM provider
+        // Log parsed plan for debugging
+        self.log_parsed_plan(&plan);
+        Ok(plan)
     }
 
     /// Create prompt for intent generation
-    fn create_intent_prompt(&self, natural_language: &str, context: Option<HashMap<String, Value>>) -> String {
+    fn create_intent_prompt(
+        &self,
+        natural_language: &str,
+        context: Option<HashMap<String, Value>>,
+    ) -> String {
         format!(
             r#"Convert the following natural language request into a structured Intent using RTFS syntax.
 
@@ -567,14 +692,20 @@ Generate the RTFS Intent:"#,
     }
 
     /// Create prompt for delegation analysis
-    fn create_delegation_analysis_prompt(&self, intent: &Intent, context: Option<HashMap<String, Value>>) -> String {
+    fn create_delegation_analysis_prompt(
+        &self,
+        intent: &Intent,
+        context: Option<HashMap<String, Value>>,
+    ) -> String {
         let available_agents = self.agent_registry.list_agents();
-        let agent_list = available_agents.iter()
-            .map(|agent| format!("- {}: {} (trust: {:.2}, cost: {:.2})", 
-                agent.agent_id, 
-                agent.name, 
-                agent.trust_score, 
-                agent.cost))
+        let agent_list = available_agents
+            .iter()
+            .map(|agent| {
+                format!(
+                    "- {}: {} (trust: {:.2}, cost: {:.2})",
+                    agent.agent_id, agent.name, agent.trust_score, agent.cost
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -582,7 +713,12 @@ Generate the RTFS Intent:"#,
     }
 
     /// Fallback delegation analysis prompt (used when prompt manager is not available)
-    fn create_fallback_delegation_prompt(&self, intent: &Intent, context: Option<HashMap<String, Value>>, agent_list: &str) -> String {
+    fn create_fallback_delegation_prompt(
+        &self,
+        intent: &Intent,
+        context: Option<HashMap<String, Value>>,
+        agent_list: &str,
+    ) -> String {
         format!(
             r#"CRITICAL: You must respond with ONLY a JSON object. Do NOT generate RTFS code or any other format.
 
@@ -661,7 +797,11 @@ Plan:"#,
     }
 
     /// Create prompt for direct plan generation
-    fn create_direct_plan_prompt(&self, intent: &Intent, context: Option<HashMap<String, Value>>) -> String {
+    fn create_direct_plan_prompt(
+        &self,
+        intent: &Intent,
+        context: Option<HashMap<String, Value>>,
+    ) -> String {
         format!(
             r#"Generate an RTFS plan to achieve this intent directly.
 
@@ -727,71 +867,97 @@ Plan:"#,
         _context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         // Extract the first top-level `(intent …)` s-expression from the response
-        let intent_block = extract_intent(response)
-            .ok_or_else(|| RuntimeError::Generic("Could not locate a complete (intent …) block".to_string()))?;
-        
+        let intent_block = extract_intent(response).ok_or_else(|| {
+            RuntimeError::Generic("Could not locate a complete (intent …) block".to_string())
+        })?;
+
         // Sanitize regex literals for parsing
         let sanitized = sanitize_regex_literals(&intent_block);
-        
+
         // Parse using RTFS parser
         let ast_items = crate::parser::parse(&sanitized)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse RTFS intent: {:?}", e)))?;
-        
+
         // Find the first expression and convert to Intent
         if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
-            intent_from_function_call(&expr)
-                .ok_or_else(|| RuntimeError::Generic("Parsed AST expression was not a valid intent definition".to_string()))
+            intent_from_function_call(&expr).ok_or_else(|| {
+                RuntimeError::Generic(
+                    "Parsed AST expression was not a valid intent definition".to_string(),
+                )
+            })
         } else {
-            Err(RuntimeError::Generic("Parsed AST did not contain a top-level expression for the intent".to_string()))
+            Err(RuntimeError::Generic(
+                "Parsed AST did not contain a top-level expression for the intent".to_string(),
+            ))
         }
     }
 
     /// Parse delegation analysis response with robust error handling
-    fn parse_delegation_analysis(&self, response: &str) -> Result<DelegationAnalysis, RuntimeError> {
+    fn parse_delegation_analysis(
+        &self,
+        response: &str,
+    ) -> Result<DelegationAnalysis, RuntimeError> {
         // Clean the response - remove any leading/trailing whitespace and extract JSON
         let cleaned_response = self.extract_json_from_response(response);
-        
+
         // Try to parse the JSON
-        let json_response: serde_json::Value = serde_json::from_str(&cleaned_response)
-            .map_err(|e| {
+        let json_response: serde_json::Value =
+            serde_json::from_str(&cleaned_response).map_err(|e| {
                 // Provide more detailed error information
                 RuntimeError::Generic(format!(
-                    "Failed to parse delegation analysis JSON: {}. Response: '{}'", 
-                    e, 
+                    "Failed to parse delegation analysis JSON: {}. Response: '{}'",
+                    e,
                     response.chars().take(200).collect::<String>()
                 ))
             })?;
-        
+
         // Validate required fields
         if !json_response.is_object() {
-            return Err(RuntimeError::Generic("Delegation analysis response is not a JSON object".to_string()));
+            return Err(RuntimeError::Generic(
+                "Delegation analysis response is not a JSON object".to_string(),
+            ));
         }
-        
-        let should_delegate = json_response["should_delegate"].as_bool()
-            .ok_or_else(|| RuntimeError::Generic("Missing or invalid 'should_delegate' field".to_string()))?;
-        
-        let reasoning = json_response["reasoning"].as_str()
-            .ok_or_else(|| RuntimeError::Generic("Missing or invalid 'reasoning' field".to_string()))?
+
+        let should_delegate = json_response["should_delegate"].as_bool().ok_or_else(|| {
+            RuntimeError::Generic("Missing or invalid 'should_delegate' field".to_string())
+        })?;
+
+        let reasoning = json_response["reasoning"]
+            .as_str()
+            .ok_or_else(|| {
+                RuntimeError::Generic("Missing or invalid 'reasoning' field".to_string())
+            })?
             .to_string();
-        
-        let required_capabilities = json_response["required_capabilities"].as_array()
-            .ok_or_else(|| RuntimeError::Generic("Missing or invalid 'required_capabilities' field".to_string()))?
+
+        let required_capabilities = json_response["required_capabilities"]
+            .as_array()
+            .ok_or_else(|| {
+                RuntimeError::Generic(
+                    "Missing or invalid 'required_capabilities' field".to_string(),
+                )
+            })?
             .iter()
             .filter_map(|v| v.as_str())
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        
-        let delegation_confidence = json_response["delegation_confidence"].as_f64()
-            .ok_or_else(|| RuntimeError::Generic("Missing or invalid 'delegation_confidence' field".to_string()))?;
-        
+
+        let delegation_confidence =
+            json_response["delegation_confidence"]
+                .as_f64()
+                .ok_or_else(|| {
+                    RuntimeError::Generic(
+                        "Missing or invalid 'delegation_confidence' field".to_string(),
+                    )
+                })?;
+
         // Validate confidence range
         if delegation_confidence < 0.0 || delegation_confidence > 1.0 {
             return Err(RuntimeError::Generic(format!(
-                "Delegation confidence must be between 0.0 and 1.0, got: {}", 
+                "Delegation confidence must be between 0.0 and 1.0, got: {}",
                 delegation_confidence
             )));
         }
-        
+
         Ok(DelegationAnalysis {
             should_delegate,
             reasoning,
@@ -803,7 +969,7 @@ Plan:"#,
     /// Extract JSON from LLM response, handling common formatting issues
     fn extract_json_from_response(&self, response: &str) -> String {
         let response = response.trim();
-        
+
         // Look for JSON object boundaries
         if let Some(start) = response.find('{') {
             if let Some(end) = response.rfind('}') {
@@ -812,7 +978,7 @@ Plan:"#,
                 }
             }
         }
-        
+
         // If no JSON object found, return the original response
         response.to_string()
     }
@@ -835,7 +1001,10 @@ Plan:"#,
     }
 
     /// Get performance data for a specific agent
-    pub fn get_agent_performance(&self, agent_id: &str) -> Option<&crate::ccos::adaptive_threshold::AgentPerformance> {
+    pub fn get_agent_performance(
+        &self,
+        agent_id: &str,
+    ) -> Option<&crate::ccos::adaptive_threshold::AgentPerformance> {
         if let Some(calculator) = &self.adaptive_threshold_calculator {
             calculator.get_performance(agent_id)
         } else {
@@ -854,13 +1023,16 @@ Plan:"#,
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
-        
+
         Ok(Plan {
             plan_id: format!("delegating_plan_{}", uuid::Uuid::new_v4()),
-            name: Some(format!("delegated_plan_{}", intent.name.as_ref().unwrap_or(&"unknown".to_string()))),
+            name: Some(format!(
+                "delegated_plan_{}",
+                intent.name.as_ref().unwrap_or(&"unknown".to_string())
+            )),
             intent_ids: vec![intent.intent_id.clone()],
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_content),
@@ -868,9 +1040,18 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DELEGATION.to_string()));
-                meta.insert(agent::DELEGATED_AGENT.to_string(), Value::String(agent.agent_id.clone()));
-                meta.insert(agent::AGENT_TRUST_SCORE.to_string(), Value::Float(agent.trust_score));
+                meta.insert(
+                    generation::GENERATION_METHOD.to_string(),
+                    Value::String(generation::methods::DELEGATION.to_string()),
+                );
+                meta.insert(
+                    agent::DELEGATED_AGENT.to_string(),
+                    Value::String(agent.agent_id.clone()),
+                );
+                meta.insert(
+                    agent::AGENT_TRUST_SCORE.to_string(),
+                    Value::Float(agent.trust_score),
+                );
                 meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost));
                 meta
             },
@@ -888,13 +1069,16 @@ Plan:"#,
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
-        
+
         Ok(Plan {
             plan_id: format!("direct_plan_{}", uuid::Uuid::new_v4()),
-            name: Some(format!("direct_plan_{}", intent.name.as_ref().unwrap_or(&"unknown".to_string()))),
+            name: Some(format!(
+                "direct_plan_{}",
+                intent.name.as_ref().unwrap_or(&"unknown".to_string())
+            )),
             intent_ids: vec![intent.intent_id.clone()],
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_content),
@@ -902,8 +1086,14 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::DIRECT.to_string()));
-                meta.insert("llm_provider".to_string(), Value::String(format!("{:?}", self.llm_config.provider_type)));
+                meta.insert(
+                    generation::GENERATION_METHOD.to_string(),
+                    Value::String(generation::methods::DIRECT.to_string()),
+                );
+                meta.insert(
+                    "llm_provider".to_string(),
+                    Value::String(format!("{:?}", self.llm_config.provider_type)),
+                );
                 meta
             },
             input_schema: None,
@@ -917,9 +1107,17 @@ Plan:"#,
     // Note: This helper returns a Plan constructed from the RTFS body; we log the RTFS body for debugging.
     fn log_parsed_plan(&self, plan: &Plan) {
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             let entry = json!({"event":"llm_plan_parsed","plan_id": plan.plan_id, "rtfs_body": match &plan.body { crate::ccos::types::PlanBody::Rtfs(s) => s, _ => "" }});
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
     }
@@ -939,12 +1137,12 @@ Plan:"#,
                 // copy up to start
                 out.push_str(&rest[..start]);
                 if let Some(end) = rest[start..].find('}') {
-                    let block = &rest[start..start+end+1];
+                    let block = &rest[start..start + end + 1];
                     // quick check for :type "intent"
                     if block.contains(":type \"intent\"") || block.contains(":type 'intent'") {
                         // parse simple key/value pairs inside block
                         // remove surrounding braces and split on ':' keys (best-effort)
-                        let inner = &block[1..block.len()-1];
+                        let inner = &block[1..block.len() - 1];
                         // build a small map of keys to raw values
                         let mut map = std::collections::HashMap::new();
                         // split by whitespace-separated tokens of form :key value
@@ -962,7 +1160,9 @@ Plan:"#,
                                             val.push(' ');
                                             val.push_str(nt);
                                             iter.next();
-                                            if nt.ends_with('"') { break; }
+                                            if nt.ends_with('"') {
+                                                break;
+                                            }
                                         }
                                         map.insert(key, val.trim().to_string());
                                     } else {
@@ -983,7 +1183,9 @@ Plan:"#,
                             }
                             // add other known keys as keyword pairs
                             for (k, v) in map.iter() {
-                                if k == "name" || k == "type" || k == "goal" { continue; }
+                                if k == "name" || k == "type" || k == "goal" {
+                                    continue;
+                                }
                                 let val = v.trim();
                                 intent_form.push_str(&format!(" :{} {}", k, val));
                             }
@@ -994,12 +1196,12 @@ Plan:"#,
                             out.push_str(block);
                         }
                         // advance rest
-                        rest = &rest[start+end+1..];
+                        rest = &rest[start + end + 1..];
                         continue;
                     }
                     // not an intent map, copy as-is
                     out.push_str(block);
-                    rest = &rest[start+end+1..];
+                    rest = &rest[start + end + 1..];
                 } else {
                     // unmatched brace; copy remainder and break
                     out.push_str(rest);
@@ -1027,7 +1229,10 @@ Plan:"#,
                 let trimmed = fenced.trim();
                 // Guard: avoid returning a raw (intent ...) block as a plan
                 if trimmed.starts_with("(intent") {
-                    return Err(RuntimeError::Generic("LLM response contains an intent block, but no plan (do ...) block".to_string()));
+                    return Err(RuntimeError::Generic(
+                        "LLM response contains an intent block, but no plan (do ...) block"
+                            .to_string(),
+                    ));
                 }
                 return Ok(trimmed.to_string());
             }
@@ -1058,7 +1263,9 @@ Plan:"#,
 
                 // Advance remaining slice
                 let consumed = block.len();
-                if consumed >= remaining.len() { break; }
+                if consumed >= remaining.len() {
+                    break;
+                }
                 remaining = &remaining[consumed..];
                 // Skip whitespace/newlines
                 let skip = remaining.find(|c: char| !c.is_whitespace()).unwrap_or(0);
@@ -1080,23 +1287,35 @@ Plan:"#,
 
         // Before returning the error, log a compact record with the raw response to help debugging
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             let entry = json!({
                 "event": "llm_plan_extract_failed",
                 "error": "Could not extract an RTFS plan from LLM response",
                 "response_sample": response.chars().take(200).collect::<String>()
             });
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
 
-        Err(RuntimeError::Generic("Could not extract an RTFS plan from LLM response".to_string()))
+        Err(RuntimeError::Generic(
+            "Could not extract an RTFS plan from LLM response".to_string(),
+        ))
     }
 
     /// Helper: extract a balanced s-expression starting at `start_idx` in `text`
     fn extract_balanced_from(text: &str, start_idx: usize) -> Option<String> {
         let bytes = text.as_bytes();
-        if bytes.get(start_idx) != Some(&b'(') { return None; }
+        if bytes.get(start_idx) != Some(&b'(') {
+            return None;
+        }
         let mut depth = 0usize;
         for (i, ch) in text[start_idx..].char_indices() {
             match ch {
@@ -1116,9 +1335,11 @@ Plan:"#,
 
     /// Store intent in the intent graph
     async fn store_intent(&self, intent: &Intent) -> Result<(), RuntimeError> {
-        let mut graph = self.intent_graph.lock()
+        let mut graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
-        
+
         // Convert to storable intent
         let storable = StorableIntent {
             intent_id: intent.intent_id.clone(),
@@ -1126,14 +1347,17 @@ Plan:"#,
             original_request: intent.original_request.clone(),
             rtfs_intent_source: "delegating_generated".to_string(),
             goal: intent.goal.clone(),
-            constraints: intent.constraints.iter()
+            constraints: intent
+                .constraints
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{}", v)))
                 .collect(),
-            preferences: intent.preferences.iter()
+            preferences: intent
+                .preferences
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{}", v)))
                 .collect(),
-            success_criteria: intent.success_criteria.as_ref()
-                .map(|v| format!("{}", v)),
+            success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
             triggered_by: crate::ccos::types::TriggerSource::HumanRequest,
@@ -1149,10 +1373,13 @@ Plan:"#,
             updated_at: intent.updated_at,
             metadata: HashMap::new(),
         };
-        
-        graph.storage.store_intent(storable).await
+
+        graph
+            .storage
+            .store_intent(storable)
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to store intent: {}", e)))?;
-        
+
         Ok(())
     }
 }
@@ -1173,25 +1400,21 @@ impl ArbiterEngine for DelegatingArbiter {
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
-        let intent = self.generate_intent_with_llm(natural_language, context).await?;
-        
+        let intent = self
+            .generate_intent_with_llm(natural_language, context)
+            .await?;
+
         // Store the intent
         self.store_intent(&intent).await?;
-        
+
         Ok(intent)
     }
 
-    async fn intent_to_plan(
-        &self,
-        intent: &Intent,
-    ) -> Result<Plan, RuntimeError> {
+    async fn intent_to_plan(&self, intent: &Intent) -> Result<Plan, RuntimeError> {
         self.generate_plan_with_delegation(intent, None).await
     }
 
-    async fn execute_plan(
-        &self,
-        plan: &Plan,
-    ) -> Result<ExecutionResult, RuntimeError> {
+    async fn execute_plan(&self, plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
         // For delegating arbiter, we return a placeholder execution result
         // In a real implementation, this would execute the RTFS plan
         Ok(ExecutionResult {
@@ -1200,13 +1423,19 @@ impl ArbiterEngine for DelegatingArbiter {
             metadata: {
                 let mut meta = HashMap::new();
                 meta.insert("plan_id".to_string(), Value::String(plan.plan_id.clone()));
-                meta.insert("delegating_engine".to_string(), Value::String("delegating".to_string()));
-                        if let Some(generation_method) = plan.metadata.get(generation::GENERATION_METHOD) {
-            meta.insert(generation::GENERATION_METHOD.to_string(), generation_method.clone());
-        }
-        if let Some(delegated_agent) = plan.metadata.get(agent::DELEGATED_AGENT) {
-            meta.insert(agent::DELEGATED_AGENT.to_string(), delegated_agent.clone());
-        }
+                meta.insert(
+                    "delegating_engine".to_string(),
+                    Value::String("delegating".to_string()),
+                );
+                if let Some(generation_method) = plan.metadata.get(generation::GENERATION_METHOD) {
+                    meta.insert(
+                        generation::GENERATION_METHOD.to_string(),
+                        generation_method.clone(),
+                    );
+                }
+                if let Some(delegated_agent) = plan.metadata.get(agent::DELEGATED_AGENT) {
+                    meta.insert(agent::DELEGATED_AGENT.to_string(), delegated_agent.clone());
+                }
                 meta
             },
         })
@@ -1216,9 +1445,9 @@ impl ArbiterEngine for DelegatingArbiter {
         &self,
         natural_language_goal: &str,
     ) -> Result<String, RuntimeError> {
-                // Build a precise prompt instructing the model to output a single RTFS (do ...) graph
-              let prompt = format!(
-                        r#"You are the CCOS Arbiter. Convert the natural language goal into an RTFS intent graph.
+        // Build a precise prompt instructing the model to output a single RTFS (do ...) graph
+        let prompt = format!(
+            r#"You are the CCOS Arbiter. Convert the natural language goal into an RTFS intent graph.
 
 STRICT OUTPUT RULES:
 - Output EXACTLY one well-formed RTFS s-expression starting with (do ...). No prose, comments, or extra blocks.
@@ -1247,60 +1476,87 @@ Tiny example (format to imitate, not content):
 
 Now output ONLY the RTFS (do ...) block for the provided goal:
 "#,
-                        goal = natural_language_goal
-                );
+            goal = natural_language_goal
+        );
 
-                let response = self.llm_provider.generate_text(&prompt).await?;
+        let response = self.llm_provider.generate_text(&prompt).await?;
 
-                // Debug: Show raw LLM response
-                println!("🤖 LLM Response for goal '{}':", natural_language_goal);
-                println!("📝 Raw LLM Response:\n{}", response);
-                println!("--- End Raw LLM Response ---");
+        // Debug: Show raw LLM response
+        println!("🤖 LLM Response for goal '{}':", natural_language_goal);
+        println!("📝 Raw LLM Response:\n{}", response);
+        println!("--- End Raw LLM Response ---");
 
-                // Log provider, prompt and raw response
-                let _ = (|| -> Result<(), std::io::Error> {
-                    let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
-                    let entry = json!({"event":"llm_graph_generation","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
-                    writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
-                    Ok(())
-                })();
+        // Log provider, prompt and raw response
+        let _ = (|| -> Result<(), std::io::Error> {
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
+            let entry = json!({"event":"llm_graph_generation","provider": format!("{:?}", self.llm_config.provider_type), "prompt": prompt, "response": response});
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
+            Ok(())
+        })();
 
-                // Reuse the robust RTFS extraction that prefers a balanced (do ...) block
-                let do_block = self.extract_rtfs_from_response(&response)?;
-                
-                // Debug: Show extracted RTFS
-                println!("🔍 Extracted RTFS from LLM response:");
-                println!("📋 RTFS Code:\n{}", do_block);
-                println!("--- End Extracted RTFS ---");
+        // Reuse the robust RTFS extraction that prefers a balanced (do ...) block
+        let do_block = self.extract_rtfs_from_response(&response)?;
 
-                // Populate IntentGraph using the interpreter and return root intent id
-        let mut graph = self.intent_graph
+        // Debug: Show extracted RTFS
+        println!("🔍 Extracted RTFS from LLM response:");
+        println!("📋 RTFS Code:\n{}", do_block);
+        println!("--- End Extracted RTFS ---");
+
+        // Populate IntentGraph using the interpreter and return root intent id
+        let mut graph = self
+            .intent_graph
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
-        let root_id = crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(&do_block, &mut graph)?;
+        let root_id = crate::ccos::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(
+            &do_block, &mut graph,
+        )?;
 
         // Debug: Show the parsed graph structure
         println!("🏗️ Parsed Graph Structure:");
         println!("🎯 Root Intent ID: {}", root_id);
-        
+
         // Show all intents in the graph
-        let all_intents = graph.storage.list_intents(crate::ccos::intent_storage::IntentFilter::default()).await
+        let all_intents = graph
+            .storage
+            .list_intents(crate::ccos::intent_storage::IntentFilter::default())
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to list intents: {}", e)))?;
-        
+
         println!("📊 Total Intents in Graph: {}", all_intents.len());
         for (i, intent) in all_intents.iter().enumerate() {
-            println!("  [{}] ID: {} | Goal: '{}' | Status: {:?}", 
-                i + 1, intent.intent_id, intent.goal, intent.status);
+            println!(
+                "  [{}] ID: {} | Goal: '{}' | Status: {:?}",
+                i + 1,
+                intent.intent_id,
+                intent.goal,
+                intent.status
+            );
         }
-        
+
         // Show all edges in the graph
-        let all_edges = graph.storage.get_edges().await
+        let all_edges = graph
+            .storage
+            .get_edges()
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to get edges: {}", e)))?;
-        
+
         println!("🔗 Total Edges in Graph: {}", all_edges.len());
         for (i, edge) in all_edges.iter().enumerate() {
-            println!("  [{}] {} -> {} (type: {:?})", 
-                i + 1, edge.from, edge.to, edge.edge_type);
+            println!(
+                "  [{}] {} -> {} (type: {:?})",
+                i + 1,
+                edge.from,
+                edge.to,
+                edge.edge_type
+            );
         }
         println!("--- End Parsed Graph Structure ---");
 
@@ -1310,9 +1566,17 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
 
         // Write a compact parsed event with the root id only (avoids cross-thread/runtime complexity)
         let _ = (|| -> Result<(), std::io::Error> {
-            let mut f = OpenOptions::new().create(true).append(true).open("logs/arbiter_llm.log")?;
+            let mut f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("logs/arbiter_llm.log")?;
             let entry = json!({"event":"llm_graph_parsed","root": root_id});
-            writeln!(f, "[{}] {}", chrono::Utc::now().timestamp(), entry.to_string())?;
+            writeln!(
+                f,
+                "[{}] {}",
+                chrono::Utc::now().timestamp(),
+                entry.to_string()
+            )?;
             Ok(())
         })();
         Ok(root_id)
@@ -1324,7 +1588,10 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
     ) -> Result<PlanGenerationResult, RuntimeError> {
         // Use LLM provider-based plan generator
         let provider_cfg = self.llm_config.to_provider_config();
-        let _provider = crate::ccos::arbiter::llm_provider::LlmProviderFactory::create_provider(provider_cfg.clone()).await?;
+        let _provider = crate::ccos::arbiter::llm_provider::LlmProviderFactory::create_provider(
+            provider_cfg.clone(),
+        )
+        .await?;
         let plan_gen_provider = LlmRtfsPlanGenerationProvider::new(provider_cfg);
 
         // Convert storable intent back to runtime Intent (minimal fields)
@@ -1343,15 +1610,26 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
         };
 
         // For now, we don't pass a real marketplace; provider currently doesn't use it.
-        let marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))));
-        plan_gen_provider.generate_plan(&rt_intent, marketplace).await
+        let marketplace = Arc::new(
+            crate::ccos::capability_marketplace::CapabilityMarketplace::new(Arc::new(
+                tokio::sync::RwLock::new(
+                    crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+                ),
+            )),
+        );
+        plan_gen_provider
+            .generate_plan(&rt_intent, marketplace)
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::arbiter::arbiter_config::{LlmConfig, DelegationConfig, AgentRegistryConfig, AgentDefinition, LlmProviderType, RegistryType};
+    use crate::ccos::arbiter::arbiter_config::{
+        AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, LlmProviderType,
+        RegistryType,
+    };
 
     fn create_test_config() -> (LlmConfig, DelegationConfig) {
         let llm_config = LlmConfig {
@@ -1377,7 +1655,10 @@ mod tests {
                     AgentDefinition {
                         agent_id: "sentiment_agent".to_string(),
                         name: "Sentiment Analysis Agent".to_string(),
-                        capabilities: vec!["sentiment_analysis".to_string(), "text_processing".to_string()],
+                        capabilities: vec![
+                            "sentiment_analysis".to_string(),
+                            "text_processing".to_string(),
+                        ],
                         cost: 0.1,
                         trust_score: 0.9,
                         metadata: HashMap::new(),
@@ -1402,9 +1683,9 @@ mod tests {
     async fn test_delegating_arbiter_creation() {
         let (llm_config, delegation_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
+
         let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph).await;
         assert!(arbiter.is_ok());
     }
@@ -1413,14 +1694,15 @@ mod tests {
     async fn test_agent_registry() {
         let (_, delegation_config) = create_test_config();
         let registry = AgentRegistry::new(delegation_config.agent_registry);
-        
+
         // Test finding agents for capabilities
         let agents = registry.find_agents_for_capabilities(&["sentiment_analysis".to_string()]);
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].agent_id, "sentiment_agent");
-        
+
         // Test finding agents for multiple capabilities
-        let agents = registry.find_agents_for_capabilities(&["backup".to_string(), "encryption".to_string()]);
+        let agents = registry
+            .find_agents_for_capabilities(&["backup".to_string(), "encryption".to_string()]);
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].agent_id, "backup_agent");
     }
@@ -1429,16 +1711,18 @@ mod tests {
     async fn test_intent_generation() {
         let (llm_config, delegation_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph).await.unwrap();
-        
-        let intent = arbiter.natural_language_to_intent(
-            "analyze sentiment from user feedback",
-            None
-        ).await.unwrap();
-        
+
+        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph)
+            .await
+            .unwrap();
+
+        let intent = arbiter
+            .natural_language_to_intent("analyze sentiment from user feedback", None)
+            .await
+            .unwrap();
+
         // tolerant check: ensure metadata contains a generation_method string mentioning 'delegat'
         if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {

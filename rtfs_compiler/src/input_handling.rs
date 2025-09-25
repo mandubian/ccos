@@ -81,19 +81,20 @@ pub struct InputContent {
 pub fn read_input_content(config: &InputConfig) -> Result<InputContent, InputError> {
     match config.source {
         InputSource::File => {
-            let file_path = config.file_path.as_ref()
+            let file_path = config
+                .file_path
+                .as_ref()
                 .ok_or_else(|| InputError::MissingFileArgument)?;
-            
+
             if config.verbose {
                 println!("📁 Reading from file: {}", file_path.display());
             }
-            
-            let content = fs::read_to_string(file_path)
-                .map_err(|e| InputError::FileReadError {
-                    path: file_path.clone(),
-                    error: e,
-                })?;
-            
+
+            let content = fs::read_to_string(file_path).map_err(|e| InputError::FileReadError {
+                path: file_path.clone(),
+                error: e,
+            })?;
+
             if config.verbose {
                 println!("📝 File content ({} bytes):", content.len());
                 if content.len() < 500 {
@@ -103,44 +104,46 @@ pub fn read_input_content(config: &InputConfig) -> Result<InputContent, InputErr
                 }
                 println!();
             }
-            
+
             Ok(InputContent {
                 content,
                 source_name: file_path.to_string_lossy().to_string(),
             })
         }
-        
+
         InputSource::String => {
-            let content = config.string_content.as_ref()
+            let content = config
+                .string_content
+                .as_ref()
                 .ok_or_else(|| InputError::MissingStringArgument)?
                 .clone();
-            
+
             if config.verbose {
                 println!("📝 Executing string input ({} bytes):", content.len());
                 println!("{}", content);
                 println!();
             }
-            
+
             Ok(InputContent {
                 content,
                 source_name: "<string>".to_string(),
             })
         }
-        
+
         InputSource::Pipe => {
             if config.verbose {
                 println!("📥 Reading from stdin pipe");
             }
-            
+
             let stdin = io::stdin();
             let mut content = String::new();
-            
+
             for line in stdin.lock().lines() {
                 let line = line.map_err(InputError::StdinReadError)?;
                 content.push_str(&line);
                 content.push('\n');
             }
-            
+
             if config.verbose {
                 println!("📝 Pipe content ({} bytes):", content.len());
                 if content.len() < 500 {
@@ -150,16 +153,14 @@ pub fn read_input_content(config: &InputConfig) -> Result<InputContent, InputErr
                 }
                 println!();
             }
-            
+
             Ok(InputContent {
                 content,
                 source_name: "<stdin>".to_string(),
             })
         }
-        
-        InputSource::Interactive => {
-            Err(InputError::InteractiveNotSupported)
-        }
+
+        InputSource::Interactive => Err(InputError::InteractiveNotSupported),
     }
 }
 
@@ -198,8 +199,13 @@ pub fn detect_input_source(
 ) -> Result<InputSource, InputError> {
     // Check if stdin has content (for pipe detection)
     let stdin_has_content = !atty::is(atty::Stream::Stdin);
-    
-    match (file_path.is_some(), string_content.is_some(), stdin_has_content, is_repl) {
+
+    match (
+        file_path.is_some(),
+        string_content.is_some(),
+        stdin_has_content,
+        is_repl,
+    ) {
         (true, false, false, _) => Ok(InputSource::File),
         (false, true, false, _) => Ok(InputSource::String),
         (false, false, true, _) => Ok(InputSource::Pipe),
@@ -235,10 +241,16 @@ impl std::fmt::Display for InputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InputError::MissingFileArgument => {
-                write!(f, "❌ Error: --file argument required when using --input file")
+                write!(
+                    f,
+                    "❌ Error: --file argument required when using --input file"
+                )
             }
             InputError::MissingStringArgument => {
-                write!(f, "❌ Error: --string argument required when using --input string")
+                write!(
+                    f,
+                    "❌ Error: --string argument required when using --input string"
+                )
             }
             InputError::FileReadError { path, error } => {
                 write!(f, "❌ Error reading file '{}': {}", path.display(), error)
@@ -247,7 +259,10 @@ impl std::fmt::Display for InputError {
                 write!(f, "❌ Error reading from stdin: {}", error)
             }
             InputError::InteractiveNotSupported => {
-                write!(f, "❌ Error: Interactive mode not supported in this context")
+                write!(
+                    f,
+                    "❌ Error: Interactive mode not supported in this context"
+                )
             }
             InputError::NoInputSource => {
                 write!(f, "❌ Error: No input source specified. Use --input file, --input string, or pipe content")
@@ -264,7 +279,6 @@ impl std::error::Error for InputError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_input_config_from_file() {
@@ -287,38 +301,23 @@ mod tests {
     #[test]
     fn test_validate_input_args() {
         // Valid file input
-        assert!(validate_input_args(
-            InputSource::File,
-            &Some(PathBuf::from("test.rtfs")),
-            &None
-        ).is_ok());
+        assert!(
+            validate_input_args(InputSource::File, &Some(PathBuf::from("test.rtfs")), &None)
+                .is_ok()
+        );
 
         // Invalid file input (missing path)
-        assert!(validate_input_args(
-            InputSource::File,
-            &None,
-            &None
-        ).is_err());
+        assert!(validate_input_args(InputSource::File, &None, &None).is_err());
 
         // Valid string input
-        assert!(validate_input_args(
-            InputSource::String,
-            &None,
-            &Some("(+ 1 2)".to_string())
-        ).is_ok());
+        assert!(
+            validate_input_args(InputSource::String, &None, &Some("(+ 1 2)".to_string())).is_ok()
+        );
 
         // Invalid string input (missing content)
-        assert!(validate_input_args(
-            InputSource::String,
-            &None,
-            &None
-        ).is_err());
+        assert!(validate_input_args(InputSource::String, &None, &None).is_err());
 
         // Valid pipe input
-        assert!(validate_input_args(
-            InputSource::Pipe,
-            &None,
-            &None
-        ).is_ok());
+        assert!(validate_input_args(InputSource::Pipe, &None, &None).is_ok());
     }
 }

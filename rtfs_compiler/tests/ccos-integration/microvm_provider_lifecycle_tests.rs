@@ -20,15 +20,15 @@ fn test_mock_provider_lifecycle() {
     let mut provider = providers::mock::MockMicroVMProvider::new();
     assert_eq!(provider.name(), "mock");
     assert!(provider.is_available());
-    
+
     // Test 2: Initial state
     assert!(!provider.initialized);
-    
+
     // Test 3: Initialize
     let init_result = provider.initialize();
     assert!(init_result.is_ok());
     assert!(provider.initialized);
-    
+
     // Test 4: Execute program before initialization (should fail)
     let uninit_provider = providers::mock::MockMicroVMProvider::new();
     let context = ExecutionContext {
@@ -40,13 +40,13 @@ fn test_mock_provider_lifecycle() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = uninit_provider.execute_program(context);
     assert!(result.is_err());
     if let Err(RuntimeError::Generic(msg)) = result {
         assert!(msg.contains("not initialized"));
     }
-    
+
     // Test 5: Execute program after initialization
     let context = ExecutionContext {
         execution_id: "test-exec-2".to_string(),
@@ -57,17 +57,17 @@ fn test_mock_provider_lifecycle() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
-    
+
     let execution_result = result.unwrap();
     if let Value::Integer(value) = execution_result.value {
         assert_eq!(value, 7);
     } else {
         panic!("Expected integer result, got {:?}", execution_result.value);
     }
-    
+
     // Test 6: Execute capability
     let context = ExecutionContext {
         execution_id: "test-exec-3".to_string(),
@@ -78,17 +78,17 @@ fn test_mock_provider_lifecycle() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_capability(context);
     assert!(result.is_ok());
-    
+
     let execution_result = result.unwrap();
     if let Value::String(msg) = &execution_result.value {
         assert!(msg.contains("5 + 6 = 11"));
     } else {
         panic!("Expected string result, got {:?}", execution_result.value);
     }
-    
+
     // Test 7: Cleanup
     let cleanup_result = provider.cleanup();
     assert!(cleanup_result.is_ok());
@@ -99,7 +99,7 @@ fn test_mock_provider_lifecycle() {
 fn test_mock_provider_program_types() {
     let mut provider = providers::mock::MockMicroVMProvider::new();
     provider.initialize().unwrap();
-    
+
     // Test RTFS Source
     let context = ExecutionContext {
         execution_id: "test-rtfs-source".to_string(),
@@ -110,7 +110,7 @@ fn test_mock_provider_program_types() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
     let execution_result = result.unwrap();
@@ -119,7 +119,7 @@ fn test_mock_provider_program_types() {
     } else {
         panic!("Expected integer result, got {:?}", execution_result.value);
     }
-    
+
     // Test External Program
     let context = ExecutionContext {
         execution_id: "test-external".to_string(),
@@ -133,7 +133,7 @@ fn test_mock_provider_program_types() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
     let execution_result = result.unwrap();
@@ -143,20 +143,23 @@ fn test_mock_provider_program_types() {
     } else {
         panic!("Expected string result, got {:?}", execution_result.value);
     }
-    
+
     // Test Native Function
     let context = ExecutionContext {
         execution_id: "test-native".to_string(),
         program: Some(Program::NativeFunction(|args| {
             if args.len() == 2 {
-                if let (Some(Value::Integer(a)), Some(Value::Integer(b))) = 
-                    (args.get(0), args.get(1)) {
+                if let (Some(Value::Integer(a)), Some(Value::Integer(b))) =
+                    (args.get(0), args.get(1))
+                {
                     Ok(Value::Integer(a + b))
                 } else {
                     Err(RuntimeError::Generic("Invalid arguments".to_string()))
                 }
             } else {
-                Err(RuntimeError::Generic("Wrong number of arguments".to_string()))
+                Err(RuntimeError::Generic(
+                    "Wrong number of arguments".to_string(),
+                ))
             }
         })),
         capability_id: None,
@@ -165,7 +168,7 @@ fn test_mock_provider_program_types() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
     let execution_result = result.unwrap();
@@ -180,13 +183,11 @@ fn test_mock_provider_program_types() {
 fn test_mock_provider_security_context() {
     let mut provider = providers::mock::MockMicroVMProvider::new();
     provider.initialize().unwrap();
-    
+
     // Test with security context
-    let runtime_context = RuntimeContext::controlled(vec![
-        "ccos.math.add".to_string(),
-        "ccos.math".to_string(),
-    ]);
-    
+    let runtime_context =
+        RuntimeContext::controlled(vec!["ccos.math.add".to_string(), "ccos.math".to_string()]);
+
     let context = ExecutionContext {
         execution_id: "test-security".to_string(),
         program: Some(Program::RtfsSource("(+ 1 2)".to_string())),
@@ -196,10 +197,10 @@ fn test_mock_provider_security_context() {
         config: config::MicroVMConfig::default(),
         runtime_context: Some(runtime_context),
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
-    
+
     let execution_result = result.unwrap();
     if let Value::Integer(value) = execution_result.value {
         assert_eq!(value, 3);
@@ -212,7 +213,7 @@ fn test_mock_provider_security_context() {
 fn test_mock_provider_metadata() {
     let mut provider = providers::mock::MockMicroVMProvider::new();
     provider.initialize().unwrap();
-    
+
     let context = ExecutionContext {
         execution_id: "test-metadata".to_string(),
         program: Some(Program::RtfsSource("(+ 1 2)".to_string())),
@@ -222,13 +223,13 @@ fn test_mock_provider_metadata() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
-    
+
     let execution_result = result.unwrap();
     let metadata = execution_result.metadata;
-    
+
     // Verify metadata fields
     assert!(metadata.duration > Duration::from_nanos(0));
     assert_eq!(metadata.memory_used_mb, 1);
@@ -241,13 +242,13 @@ fn test_mock_provider_metadata() {
 fn test_mock_provider_config_schema() {
     let provider = providers::mock::MockMicroVMProvider::new();
     let schema = provider.get_config_schema();
-    
+
     // Verify schema structure
     assert!(schema.is_object());
     if let Some(obj) = schema.as_object() {
         assert!(obj.contains_key("type"));
         assert!(obj.contains_key("properties"));
-        
+
         if let Some(properties) = obj.get("properties") {
             if let Some(properties_obj) = properties.as_object() {
                 assert!(properties_obj.contains_key("mock_mode"));
@@ -259,7 +260,7 @@ fn test_mock_provider_config_schema() {
 #[test]
 fn test_mock_provider_error_handling() {
     let provider = providers::mock::MockMicroVMProvider::new();
-    
+
     // Test execution without initialization
     let context = ExecutionContext {
         execution_id: "test-error".to_string(),
@@ -270,16 +271,16 @@ fn test_mock_provider_error_handling() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_err());
-    
+
     if let Err(RuntimeError::Generic(msg)) = result {
         assert!(msg.contains("not initialized"));
     } else {
         panic!("Expected Generic error, got {:?}", result);
     }
-    
+
     // Test capability execution without initialization
     let context = ExecutionContext {
         execution_id: "test-capability-error".to_string(),
@@ -290,10 +291,10 @@ fn test_mock_provider_error_handling() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_capability(context);
     assert!(result.is_err());
-    
+
     if let Err(RuntimeError::Generic(msg)) = result {
         assert!(msg.contains("not initialized"));
     } else {
@@ -305,7 +306,7 @@ fn test_mock_provider_error_handling() {
 fn test_mock_provider_multiple_executions() {
     let mut provider = providers::mock::MockMicroVMProvider::new();
     provider.initialize().unwrap();
-    
+
     // Execute multiple programs
     for i in 0..5 {
         let context = ExecutionContext {
@@ -317,10 +318,10 @@ fn test_mock_provider_multiple_executions() {
             config: config::MicroVMConfig::default(),
             runtime_context: None,
         };
-        
+
         let result = provider.execute_program(context);
         assert!(result.is_ok());
-        
+
         let execution_result = result.unwrap();
         if let Value::Integer(value) = execution_result.value {
             assert_eq!(value, i + i);
@@ -333,19 +334,19 @@ fn test_mock_provider_multiple_executions() {
 #[test]
 fn test_mock_provider_cleanup_and_reinitialize() {
     let mut provider = providers::mock::MockMicroVMProvider::new();
-    
+
     // Initialize
     assert!(provider.initialize().is_ok());
     assert!(provider.initialized);
-    
+
     // Cleanup
     assert!(provider.cleanup().is_ok());
     assert!(!provider.initialized);
-    
+
     // Re-initialize
     assert!(provider.initialize().is_ok());
     assert!(provider.initialized);
-    
+
     // Execute after re-initialization
     let context = ExecutionContext {
         execution_id: "test-reinit".to_string(),
@@ -356,10 +357,10 @@ fn test_mock_provider_cleanup_and_reinitialize() {
         config: config::MicroVMConfig::default(),
         runtime_context: None,
     };
-    
+
     let result = provider.execute_program(context);
     assert!(result.is_ok());
-    
+
     let execution_result = result.unwrap();
     if let Value::Integer(value) = execution_result.value {
         assert_eq!(value, 10);

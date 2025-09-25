@@ -1,7 +1,7 @@
 //! WebAssembly MicroVM Provider
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata};
+use crate::runtime::microvm::core::{ExecutionContext, ExecutionMetadata, ExecutionResult};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
 use std::time::Instant;
@@ -16,12 +16,19 @@ impl WasmMicroVMProvider {
         Self { initialized: false }
     }
 
-    fn execute_simple_wasm_module(&self, source: &str, _context: &ExecutionContext) -> RuntimeResult<Value> {
+    fn execute_simple_wasm_module(
+        &self,
+        source: &str,
+        _context: &ExecutionContext,
+    ) -> RuntimeResult<Value> {
         // TODO: Implement actual WASM compilation and execution
         // This is a placeholder that returns a mock result
-        
+
         // For now, just return a string indicating WASM execution
-        Ok(Value::String(format!("WASM execution result for: {}", source)))
+        Ok(Value::String(format!(
+            "WASM execution result for: {}",
+            source
+        )))
     }
 
     fn create_simple_wasm_module(&self, _source: &str) -> RuntimeResult<Vec<u8>> {
@@ -50,7 +57,9 @@ impl MicroVMProvider for WasmMicroVMProvider {
 
     fn execute_program(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         if !self.initialized {
-            return Err(RuntimeError::Generic("WASM provider not initialized".to_string()));
+            return Err(RuntimeError::Generic(
+                "WASM provider not initialized".to_string(),
+            ));
         }
 
         // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
@@ -60,36 +69,43 @@ impl MicroVMProvider for WasmMicroVMProvider {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "execute_program".to_string(),
                     capability: capability_id.clone(),
-                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                    context: format!(
+                        "Boundary validation failed - capability not in permissions: {:?}",
+                        context.capability_permissions
+                    ),
                 });
             }
         }
 
         let start_time = Instant::now();
-        
+
         let result_value = match context.program {
             Some(ref program) => match program {
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
                     self.execute_simple_wasm_module(&source, &context)?
-                },
+                }
                 crate::runtime::microvm::core::Program::RtfsAst(_) => {
                     Value::String("WASM AST execution not yet implemented".to_string())
-                },
+                }
                 crate::runtime::microvm::core::Program::RtfsBytecode(_) => {
                     Value::String("WASM bytecode execution not yet implemented".to_string())
-                },
+                }
                 crate::runtime::microvm::core::Program::NativeFunction(_) => {
-                    return Err(RuntimeError::Generic("Native functions not supported in WASM provider".to_string()));
-                },
+                    return Err(RuntimeError::Generic(
+                        "Native functions not supported in WASM provider".to_string(),
+                    ));
+                }
                 crate::runtime::microvm::core::Program::ExternalProgram { .. } => {
-                    return Err(RuntimeError::Generic("External programs not supported in WASM provider".to_string()));
-                },
+                    return Err(RuntimeError::Generic(
+                        "External programs not supported in WASM provider".to_string(),
+                    ));
+                }
             },
             None => Value::String("No program provided".to_string()),
         };
 
         let duration = start_time.elapsed();
-        
+
         Ok(ExecutionResult {
             value: result_value,
             metadata: ExecutionMetadata {
@@ -104,7 +120,9 @@ impl MicroVMProvider for WasmMicroVMProvider {
 
     fn execute_capability(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         if !self.initialized {
-            return Err(RuntimeError::Generic("WASM provider not initialized".to_string()));
+            return Err(RuntimeError::Generic(
+                "WASM provider not initialized".to_string(),
+            ));
         }
 
         // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
@@ -114,7 +132,10 @@ impl MicroVMProvider for WasmMicroVMProvider {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "execute_capability".to_string(),
                     capability: capability_id.clone(),
-                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                    context: format!(
+                        "Boundary validation failed - capability not in permissions: {:?}",
+                        context.capability_permissions
+                    ),
                 });
             }
         }

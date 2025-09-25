@@ -1,5 +1,5 @@
 //! L1 Delegation Cache: (Agent, Task) -> Plan memoization
-//! 
+//!
 //! This layer provides fast lookup for delegation decisions, caching the mapping
 //! from agent-task pairs to execution plans. This is the highest-level cache
 //! that operates on semantic concepts rather than low-level data.
@@ -8,15 +8,15 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use super::{CacheLayer, CacheStats, CacheConfig, CacheEntry, CacheError, EvictionPolicy, keygen};
+use super::{keygen, CacheConfig, CacheEntry, CacheError, CacheLayer, CacheStats, EvictionPolicy};
 
 /// Delegation plan with metadata
 #[derive(Debug, Clone)]
 pub struct DelegationPlan {
-    pub target: String,           // Model provider or execution target
-    pub confidence: f64,          // Confidence score (0.0 - 1.0)
-    pub reasoning: String,        // Human-readable reasoning
-    pub created_at: Instant,      // When this plan was created
+    pub target: String,                    // Model provider or execution target
+    pub confidence: f64,                   // Confidence score (0.0 - 1.0)
+    pub reasoning: String,                 // Human-readable reasoning
+    pub created_at: Instant,               // When this plan was created
     pub metadata: HashMap<String, String>, // Additional metadata
 }
 
@@ -30,12 +30,12 @@ impl DelegationPlan {
             metadata: HashMap::new(),
         }
     }
-    
+
     pub fn with_metadata(mut self, key: String, value: String) -> Self {
         self.metadata.insert(key, value);
         self
     }
-    
+
     pub fn is_stale(&self, max_age: Duration) -> bool {
         self.created_at.elapsed() > max_age
     }
@@ -60,7 +60,7 @@ impl L1DelegationCache {
             stats: Arc::new(RwLock::new(stats)),
         }
     }
-    
+
     pub fn with_default_config() -> Self {
         let mut config = CacheConfig::default();
         config.max_size = 1000; // Reasonable default for delegation cache
@@ -68,16 +68,16 @@ impl L1DelegationCache {
         config.eviction_policy = EvictionPolicy::LRU;
         Self::new(config)
     }
-    
+
     /// Get cache statistics directly
     pub fn get_stats(&self) -> CacheStats {
         self.stats.read().unwrap().clone()
     }
-    
+
     /// Get a delegation plan for an agent-task pair
     pub fn get_plan(&self, agent: &str, task: &str) -> Option<DelegationPlan> {
         let key = keygen::delegation_key(agent, task);
-        
+
         if let Some(plan) = CacheLayer::<String, DelegationPlan>::get(self, &key) {
             // Check if plan is stale
             if let Some(ttl) = self.config.ttl {
@@ -87,27 +87,32 @@ impl L1DelegationCache {
                     return None;
                 }
             }
-            
+
             // Update access order for LRU
             self.update_access_order(&key);
             return Some(plan);
         }
-        
+
         None
     }
-    
+
     /// Store a delegation plan for an agent-task pair
-    pub fn put_plan(&self, agent: &str, task: &str, plan: DelegationPlan) -> Result<(), CacheError> {
+    pub fn put_plan(
+        &self,
+        agent: &str,
+        task: &str,
+        plan: DelegationPlan,
+    ) -> Result<(), CacheError> {
         let key = keygen::delegation_key(agent, task);
         self.put(key, plan)
     }
-    
+
     /// Invalidate a specific agent-task pair
     pub fn invalidate_plan(&self, agent: &str, task: &str) -> Result<(), CacheError> {
         let key = keygen::delegation_key(agent, task);
         CacheLayer::<String, DelegationPlan>::invalidate(self, &key)
     }
-    
+
     /// Get all plans for a specific agent
     pub fn get_agent_plans(&self, agent: &str) -> Vec<(String, DelegationPlan)> {
         let cache = self.cache.read().unwrap();
@@ -120,7 +125,7 @@ impl L1DelegationCache {
             })
             .collect()
     }
-    
+
     /// Get all plans for a specific task
     pub fn get_task_plans(&self, task: &str) -> Vec<(String, DelegationPlan)> {
         let cache = self.cache.read().unwrap();
@@ -133,31 +138,31 @@ impl L1DelegationCache {
             })
             .collect()
     }
-    
+
     /// Update access order for LRU eviction
     fn update_access_order(&self, key: &str) {
         let mut order = self.access_order.write().unwrap();
-        
+
         // Remove key from current position
         if let Some(pos) = order.iter().position(|k| k == key) {
             order.remove(pos);
         }
-        
+
         // Add to front (most recently used)
         order.push_front(key.to_string());
     }
-    
+
     /// Evict entries based on the configured policy
     fn evict_if_needed(&self) -> Result<(), CacheError> {
         let mut cache = self.cache.write().unwrap();
         let mut order = self.access_order.write().unwrap();
-        
+
         if cache.len() <= self.config.max_size {
             return Ok(());
         }
-        
+
         let to_evict = cache.len() - self.config.max_size;
-        
+
         match self.config.eviction_policy {
             EvictionPolicy::LRU => {
                 // Remove least recently used entries
@@ -183,7 +188,7 @@ impl L1DelegationCache {
                 use rand::seq::SliceRandom;
                 let mut rng = rand::thread_rng();
                 let to_remove: Vec<&String> = keys.choose_multiple(&mut rng, to_evict).collect();
-                
+
                 for key in to_remove {
                     cache.remove(key);
                     if let Some(pos) = order.iter().position(|k| k == key) {
@@ -200,7 +205,7 @@ impl L1DelegationCache {
                         .filter(|(_, entry)| entry.value.is_stale(ttl))
                         .map(|(key, _)| key.clone())
                         .collect();
-                    
+
                     for key in expired_keys {
                         cache.remove(&key);
                         if let Some(pos) = order.iter().position(|k| k == &key) {
@@ -216,7 +221,7 @@ impl L1DelegationCache {
                     .map(|(key, entry)| (key.clone(), entry.access_count))
                     .collect();
                 entries.sort_by_key(|(_, count)| *count);
-                
+
                 for (key, _) in entries.iter().take(to_evict) {
                     cache.remove(key);
                     if let Some(pos) = order.iter().position(|k| k == key) {
@@ -225,7 +230,7 @@ impl L1DelegationCache {
                 }
             }
         }
-        
+
         Ok(())
     }
 }
@@ -233,14 +238,14 @@ impl L1DelegationCache {
 impl CacheLayer<String, DelegationPlan> for L1DelegationCache {
     fn get(&self, key: &String) -> Option<DelegationPlan> {
         let mut cache = self.cache.write().unwrap();
-        
+
         if let Some(entry) = cache.get_mut(key) {
             entry.access();
             self.update_access_order(key);
-            
+
             let mut stats = self.stats.write().unwrap();
             stats.record_hit();
-            
+
             Some(entry.value.clone())
         } else {
             let mut stats = self.stats.write().unwrap();
@@ -248,66 +253,66 @@ impl CacheLayer<String, DelegationPlan> for L1DelegationCache {
             None
         }
     }
-    
+
     fn put(&self, key: String, value: DelegationPlan) -> Result<(), CacheError> {
         let entry = CacheEntry::new(value);
-        
+
         {
             let mut cache = self.cache.write().unwrap();
             cache.insert(key.clone(), entry);
         }
-        
+
         self.update_access_order(&key);
-        
+
         // Update stats
         {
             let mut stats = self.stats.write().unwrap();
             stats.record_put();
             stats.size = self.cache.read().unwrap().len();
         }
-        
+
         // Evict if needed
         self.evict_if_needed()?;
-        
+
         Ok(())
     }
-    
+
     fn invalidate(&self, key: &String) -> Result<(), CacheError> {
         let mut cache = self.cache.write().unwrap();
         let mut order = self.access_order.write().unwrap();
-        
+
         if cache.remove(key).is_some() {
             if let Some(pos) = order.iter().position(|k| k == key) {
                 order.remove(pos);
             }
-            
+
             let mut stats = self.stats.write().unwrap();
             stats.record_invalidation();
             stats.size = cache.len();
-            
+
             Ok(())
         } else {
             Err(CacheError::KeyNotFound)
         }
     }
-    
+
     fn stats(&self) -> CacheStats {
         self.stats.read().unwrap().clone()
     }
-    
+
     fn clear(&self) -> Result<(), CacheError> {
         let mut cache = self.cache.write().unwrap();
         let mut order = self.access_order.write().unwrap();
-        
+
         cache.clear();
         order.clear();
-        
+
         let mut stats = self.stats.write().unwrap();
         stats.size = 0;
-        
+
         Ok(())
     }
-    
+
     fn config(&self) -> &CacheConfig {
         &self.config
     }
@@ -320,12 +325,14 @@ impl CacheLayer<String, String> for L1DelegationCache {
         // in the delegation cache, but we need this for the CacheManager
         None
     }
-    
+
     fn put(&self, _key: String, _value: String) -> Result<(), CacheError> {
         // This is a compatibility layer - delegation cache uses DelegationPlan
-        Err(CacheError::ConfigError("L1DelegationCache requires DelegationPlan values".to_string()))
+        Err(CacheError::ConfigError(
+            "L1DelegationCache requires DelegationPlan values".to_string(),
+        ))
     }
-    
+
     fn invalidate(&self, key: &String) -> Result<(), CacheError> {
         // Extract agent and task from key and invalidate the plan
         if let Some((agent, task)) = key.split_once("::") {
@@ -334,15 +341,15 @@ impl CacheLayer<String, String> for L1DelegationCache {
             Err(CacheError::KeyNotFound)
         }
     }
-    
+
     fn stats(&self) -> CacheStats {
         self.get_stats()
     }
-    
+
     fn clear(&self) -> Result<(), CacheError> {
         CacheLayer::<String, DelegationPlan>::clear(self)
     }
-    
+
     fn config(&self) -> &CacheConfig {
         CacheLayer::<String, DelegationPlan>::config(self)
     }
@@ -352,7 +359,7 @@ impl CacheLayer<String, String> for L1DelegationCache {
 mod tests {
     use super::*;
     use std::time::Duration;
-    
+
     #[test]
     fn test_delegation_plan() {
         let plan = DelegationPlan::new(
@@ -360,83 +367,81 @@ mod tests {
             0.95,
             "High confidence for simple text processing".to_string(),
         );
-        
+
         assert_eq!(plan.target, "echo-model");
         assert_eq!(plan.confidence, 0.95);
         assert!(!plan.is_stale(Duration::from_secs(1)));
     }
-    
+
     #[test]
     fn test_l1_cache_basic_operations() {
         let cache = L1DelegationCache::with_default_config();
-        
-        let plan = DelegationPlan::new(
-            "echo-model".to_string(),
-            0.9,
-            "Test plan".to_string(),
-        );
-        
+
+        let plan = DelegationPlan::new("echo-model".to_string(), 0.9, "Test plan".to_string());
+
         // Test put and get
         assert!(cache.put_plan("agent1", "task1", plan.clone()).is_ok());
         let retrieved = cache.get_plan("agent1", "task1");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().target, "echo-model");
-        
+
         // Test miss
         let miss = cache.get_plan("agent1", "task2");
         assert!(miss.is_none());
     }
-    
+
     #[test]
     fn test_l1_cache_invalidation() {
         let cache = L1DelegationCache::with_default_config();
-        
-        let plan = DelegationPlan::new(
-            "echo-model".to_string(),
-            0.9,
-            "Test plan".to_string(),
-        );
-        
+
+        let plan = DelegationPlan::new("echo-model".to_string(), 0.9, "Test plan".to_string());
+
         cache.put_plan("agent1", "task1", plan).unwrap();
         assert!(cache.get_plan("agent1", "task1").is_some());
-        
+
         cache.invalidate_plan("agent1", "task1").unwrap();
         assert!(cache.get_plan("agent1", "task1").is_none());
     }
-    
+
     #[test]
     fn test_l1_cache_agent_plans() {
         let cache = L1DelegationCache::with_default_config();
-        
+
         let plan1 = DelegationPlan::new("model1".to_string(), 0.8, "Plan 1".to_string());
         let plan2 = DelegationPlan::new("model2".to_string(), 0.9, "Plan 2".to_string());
-        
+
         cache.put_plan("agent1", "task1", plan1).unwrap();
         cache.put_plan("agent1", "task2", plan2).unwrap();
-        cache.put_plan("agent2", "task1", DelegationPlan::new("model3".to_string(), 0.7, "Plan 3".to_string())).unwrap();
-        
+        cache
+            .put_plan(
+                "agent2",
+                "task1",
+                DelegationPlan::new("model3".to_string(), 0.7, "Plan 3".to_string()),
+            )
+            .unwrap();
+
         let agent_plans = cache.get_agent_plans("agent1");
         assert_eq!(agent_plans.len(), 2);
-        
+
         let task_plans = cache.get_task_plans("task1");
         assert_eq!(task_plans.len(), 2);
     }
-    
+
     #[test]
     fn test_l1_cache_stats() {
         let cache = L1DelegationCache::with_default_config();
-        
+
         let plan = DelegationPlan::new("model1".to_string(), 0.9, "Test plan".to_string());
-        
+
         // Put and get to generate stats
         cache.put_plan("agent1", "task1", plan).unwrap();
         cache.get_plan("agent1", "task1");
         cache.get_plan("agent1", "task2"); // Miss
-        
+
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.puts, 1);
         assert!((stats.hit_rate - 0.5).abs() < f64::EPSILON);
     }
-} 
+}

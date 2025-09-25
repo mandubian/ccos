@@ -4,9 +4,9 @@
 //! supporting multiple backends with graceful fallback to in-memory storage.
 
 use super::intent_graph::Edge;
-use super::types::{IntentId, IntentStatus, StorableIntent};
 use super::storage::ContentAddressableArchive;
 use super::storage_backends::file_archive::FileArchive;
+use super::types::{IntentId, IntentStatus, StorableIntent};
 use crate::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -47,11 +47,19 @@ impl StorageValue {
             Value::Integer(i) => StorageValue::Number(*i as f64),
             Value::Float(f) => StorageValue::Number(*f),
             Value::String(s) => StorageValue::String(s.clone()),
-            Value::Vector(v) => StorageValue::Vector(v.iter().map(StorageValue::from_value).collect()),
-            Value::Map(m) => StorageValue::Map(m.iter().map(|(k, v)| (format!("{:?}", k), StorageValue::from_value(v))).collect()),
+            Value::Vector(v) => {
+                StorageValue::Vector(v.iter().map(StorageValue::from_value).collect())
+            }
+            Value::Map(m) => StorageValue::Map(
+                m.iter()
+                    .map(|(k, v)| (format!("{:?}", k), StorageValue::from_value(v)))
+                    .collect(),
+            ),
             // Skip non-serializable types
             Value::Function(_) => StorageValue::String("<<function>>".to_string()),
-            Value::FunctionPlaceholder(_) => StorageValue::String("<<function_placeholder>>".to_string()),
+            Value::FunctionPlaceholder(_) => {
+                StorageValue::String("<<function_placeholder>>".to_string())
+            }
             // Value::Atom variant removed - no longer exists
             // Handle other Value variants
             Value::Timestamp(t) => StorageValue::String(format!("timestamp:{}", t)),
@@ -59,7 +67,9 @@ impl StorageValue {
             Value::ResourceHandle(rh) => StorageValue::String(format!("resource:{}", rh)),
             Value::Symbol(s) => StorageValue::String(format!("symbol:{:?}", s)),
             Value::Keyword(k) => StorageValue::String(format!("keyword:{:?}", k)),
-            Value::List(l) => StorageValue::Vector(l.iter().map(StorageValue::from_value).collect()),
+            Value::List(l) => {
+                StorageValue::Vector(l.iter().map(StorageValue::from_value).collect())
+            }
             Value::Error(e) => StorageValue::String(format!("error:{}", e.message)),
         }
     }
@@ -81,7 +91,8 @@ pub trait IntentStorage {
     async fn delete_intent(&mut self, id: &IntentId) -> Result<(), StorageError>;
 
     /// List intents matching the given filter
-    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError>;
+    async fn list_intents(&self, filter: IntentFilter)
+        -> Result<Vec<StorableIntent>, StorageError>;
 
     /// Store an edge relationship
     async fn store_edge(&mut self, edge: &Edge) -> Result<(), StorageError>;
@@ -100,10 +111,10 @@ pub trait IntentStorage {
 
     /// Restore data from a backup
     async fn restore(&mut self, path: &Path) -> Result<(), StorageError>;
-    
+
     /// Check if storage backend is healthy and accessible
     async fn health_check(&self) -> Result<(), StorageError>;
-    
+
     /// Clear all intents and edges from storage
     async fn clear_all(&mut self) -> Result<(), StorageError>;
 }
@@ -135,16 +146,16 @@ impl Default for IntentFilter {
 pub enum StorageError {
     #[error("Intent not found: {0}")]
     NotFound(IntentId),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(String),
-    
+
     #[error("Deserialization error: {0}")]
     Deserialization(String),
-    
+
     #[error("Storage error: {0}")]
     Storage(String),
 }
@@ -196,7 +207,10 @@ impl IntentStorage for InMemoryStorage {
         }
     }
 
-    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
+    async fn list_intents(
+        &self,
+        filter: IntentFilter,
+    ) -> Result<Vec<StorableIntent>, StorageError> {
         let intents = self.intents.read().await;
         let results: Vec<StorableIntent> = intents
             .values()
@@ -207,36 +221,40 @@ impl IntentStorage for InMemoryStorage {
                         return false;
                     }
                 }
-                
+
                 if let Some(name_contains) = &filter.name_contains {
-                    if !intent.name.as_ref().map_or(false, |n| n.contains(name_contains)) {
+                    if !intent
+                        .name
+                        .as_ref()
+                        .map_or(false, |n| n.contains(name_contains))
+                    {
                         return false;
                     }
                 }
-                
+
                 if let Some(goal_contains) = &filter.goal_contains {
                     if !intent.goal.contains(goal_contains) {
                         return false;
                     }
                 }
-                
+
                 if let Some(priority_min) = filter.priority_min {
                     if intent.priority < priority_min {
                         return false;
                     }
                 }
-                
+
                 if let Some(priority_max) = filter.priority_max {
                     if intent.priority > priority_max {
                         return false;
                     }
                 }
-                
+
                 true
             })
             .cloned()
             .collect();
-        
+
         Ok(results)
     }
 
@@ -253,7 +271,8 @@ impl IntentStorage for InMemoryStorage {
 
     async fn get_edges_for_intent(&self, intent_id: &IntentId) -> Result<Vec<Edge>, StorageError> {
         let edges = self.edges.read().await;
-        Ok(edges.iter()
+        Ok(edges
+            .iter()
             .filter(|edge| &edge.from == intent_id || &edge.to == intent_id)
             .cloned()
             .collect())
@@ -282,9 +301,17 @@ impl IntentStorage for InMemoryStorage {
             fs::create_dir_all(parent)?;
         }
         let mut tmp = path.to_path_buf();
-        let tmp_name = format!("{}.tmp-{}", path.file_name().and_then(|s| s.to_str()).unwrap_or("backup.json"), std::process::id());
+        let tmp_name = format!(
+            "{}.tmp-{}",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("backup.json"),
+            std::process::id()
+        );
         tmp.set_file_name(tmp_name);
-        if let Some(dir) = path.parent() { tmp = dir.join(tmp.file_name().unwrap()); }
+        if let Some(dir) = path.parent() {
+            tmp = dir.join(tmp.file_name().unwrap());
+        }
         {
             let mut f = fs::File::create(&tmp)?;
             use std::io::Write as _;
@@ -297,7 +324,7 @@ impl IntentStorage for InMemoryStorage {
 
     async fn restore(&mut self, path: &Path) -> Result<(), StorageError> {
         let content = fs::read_to_string(path)?;
-    let backup_data: StorageBackupData = serde_json::from_str(&content)
+        let backup_data: StorageBackupData = serde_json::from_str(&content)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         let mut intents = self.intents.write().await;
@@ -335,25 +362,25 @@ pub struct FileStorage {
 impl FileStorage {
     pub async fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let path = path.as_ref().to_path_buf();
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        
+
         let mut storage = Self {
             in_memory: InMemoryStorage::new(),
             file_path: path.clone(),
         };
-        
+
         // Try to load existing data
         if path.exists() {
             storage.load_from_file().await?;
         }
-        
+
         Ok(storage)
     }
-    
+
     async fn save_to_file(&self) -> Result<(), StorageError> {
         let intents = self.in_memory.intents.read().await;
         let edges = self.in_memory.edges.read().await;
@@ -367,9 +394,18 @@ impl FileStorage {
             fs::create_dir_all(parent)?;
         }
         let mut tmp = self.file_path.clone();
-        let tmp_name = format!("{}.tmp-{}", self.file_path.file_name().and_then(|s| s.to_str()).unwrap_or("storage.json"), std::process::id());
+        let tmp_name = format!(
+            "{}.tmp-{}",
+            self.file_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("storage.json"),
+            std::process::id()
+        );
         tmp.set_file_name(tmp_name);
-        if let Some(dir) = self.file_path.parent() { tmp = dir.join(tmp.file_name().unwrap()); }
+        if let Some(dir) = self.file_path.parent() {
+            tmp = dir.join(tmp.file_name().unwrap());
+        }
         {
             let mut f = fs::File::create(&tmp)?;
             use std::io::Write as _;
@@ -379,7 +415,7 @@ impl FileStorage {
         fs::rename(&tmp, &self.file_path)?;
         Ok(())
     }
-    
+
     async fn load_from_file(&mut self) -> Result<(), StorageError> {
         let content = tokio::fs::read_to_string(&self.file_path).await?;
         let backup_data: StorageBackupData = serde_json::from_str(&content)
@@ -419,7 +455,10 @@ impl IntentStorage for FileStorage {
         Ok(())
     }
 
-    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
+    async fn list_intents(
+        &self,
+        filter: IntentFilter,
+    ) -> Result<Vec<StorableIntent>, StorageError> {
         self.in_memory.list_intents(filter).await
     }
 
@@ -488,77 +527,104 @@ pub struct FileArchiveStorage {
 impl FileArchiveStorage {
     pub async fn new<P: AsRef<Path>>(base_dir: P) -> Result<Self, StorageError> {
         let base_dir = base_dir.as_ref().to_path_buf();
-        println!("🔍 FileArchiveStorage::new called with base_dir: {:?}", base_dir);
-        
+        println!(
+            "🔍 FileArchiveStorage::new called with base_dir: {:?}",
+            base_dir
+        );
+
         let intent_dir = base_dir.join("intents");
         let edge_dir = base_dir.join("edges");
-        println!("🔍 FileArchiveStorage::new creating directories: {:?}, {:?}", intent_dir, edge_dir);
-        
+        println!(
+            "🔍 FileArchiveStorage::new creating directories: {:?}, {:?}",
+            intent_dir, edge_dir
+        );
+
         // Create directories
         tokio::fs::create_dir_all(&intent_dir).await.map_err(|e| {
-            println!("❌ FileArchiveStorage::new failed to create intent directory: {}", e);
+            println!(
+                "❌ FileArchiveStorage::new failed to create intent directory: {}",
+                e
+            );
             StorageError::Storage(format!("Failed to create intent directory: {}", e))
         })?;
         tokio::fs::create_dir_all(&edge_dir).await.map_err(|e| {
-            println!("❌ FileArchiveStorage::new failed to create edge directory: {}", e);
+            println!(
+                "❌ FileArchiveStorage::new failed to create edge directory: {}",
+                e
+            );
             StorageError::Storage(format!("Failed to create edge directory: {}", e))
         })?;
-        
+
         println!("✅ FileArchiveStorage::new directories created successfully");
-        
-        let intent_archive = FileArchive::new(&intent_dir)
-            .map_err(|e| {
-                println!("❌ FileArchiveStorage::new failed to create intent archive: {}", e);
-                StorageError::Storage(format!("Failed to create intent archive: {}", e))
-            })?;
-        let edge_archive = FileArchive::new(&edge_dir)
-            .map_err(|e| {
-                println!("❌ FileArchiveStorage::new failed to create edge archive: {}", e);
-                StorageError::Storage(format!("Failed to create edge archive: {}", e))
-            })?;
-        
+
+        let intent_archive = FileArchive::new(&intent_dir).map_err(|e| {
+            println!(
+                "❌ FileArchiveStorage::new failed to create intent archive: {}",
+                e
+            );
+            StorageError::Storage(format!("Failed to create intent archive: {}", e))
+        })?;
+        let edge_archive = FileArchive::new(&edge_dir).map_err(|e| {
+            println!(
+                "❌ FileArchiveStorage::new failed to create edge archive: {}",
+                e
+            );
+            StorageError::Storage(format!("Failed to create edge archive: {}", e))
+        })?;
+
         println!("✅ FileArchiveStorage::new archives created successfully");
-        
+
         let mut storage = Self {
             intent_archive,
             edge_archive,
             intent_id_to_hash: Arc::new(RwLock::new(HashMap::new())),
             edge_hash_to_edge: Arc::new(RwLock::new(HashMap::new())),
         };
-        
+
         // Load existing data to build indexes
         storage.load_indexes().await.map_err(|e| {
             println!("❌ FileArchiveStorage::new failed to load indexes: {}", e);
             e
         })?;
-        
+
         println!("✅ FileArchiveStorage::new completed successfully");
         Ok(storage)
     }
-    
+
     async fn load_indexes(&mut self) -> Result<(), StorageError> {
         // Load intent indexes
-        let intent_hashes = <FileArchive as ContentAddressableArchive<StorableIntent>>::list_hashes(&self.intent_archive);
+        let intent_hashes = <FileArchive as ContentAddressableArchive<StorableIntent>>::list_hashes(
+            &self.intent_archive,
+        );
         let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
-        
+
         for hash in intent_hashes {
-            if let Ok(Some(intent)) = <FileArchive as ContentAddressableArchive<StorableIntent>>::retrieve(&self.intent_archive, &hash) {
+            if let Ok(Some(intent)) =
+                <FileArchive as ContentAddressableArchive<StorableIntent>>::retrieve(
+                    &self.intent_archive,
+                    &hash,
+                )
+            {
                 intent_id_to_hash.insert(intent.intent_id.clone(), hash);
             }
         }
         drop(intent_id_to_hash);
-        
+
         // Load edge indexes
-        let edge_hashes = <FileArchive as ContentAddressableArchive<Edge>>::list_hashes(&self.edge_archive);
+        let edge_hashes =
+            <FileArchive as ContentAddressableArchive<Edge>>::list_hashes(&self.edge_archive);
         let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
-        
+
         for hash in edge_hashes {
-            if let Ok(Some(edge)) = <FileArchive as ContentAddressableArchive<Edge>>::retrieve(&self.edge_archive, &hash) {
+            if let Ok(Some(edge)) = <FileArchive as ContentAddressableArchive<Edge>>::retrieve(
+                &self.edge_archive,
+                &hash,
+            ) {
                 edge_hash_to_edge.insert(hash, edge);
             }
         }
         drop(edge_hash_to_edge);
-        
+
         Ok(())
     }
 }
@@ -567,28 +633,40 @@ impl FileArchiveStorage {
 impl IntentStorage for FileArchiveStorage {
     async fn store_intent(&mut self, intent: StorableIntent) -> Result<IntentId, StorageError> {
         let intent_id = intent.intent_id.clone();
-        println!("🔍 FileArchiveStorage::store_intent called for intent: {}", intent_id);
-        
-        let hash = self.intent_archive.store(intent)
-            .map_err(|e| {
-                println!("❌ FileArchive::store failed for intent {}: {}", intent_id, e);
-                StorageError::Storage(format!("Failed to store intent: {}", e))
-            })?;
-        
-        println!("✅ FileArchive::store succeeded for intent {} with hash: {}", intent_id, hash);
-        
+        println!(
+            "🔍 FileArchiveStorage::store_intent called for intent: {}",
+            intent_id
+        );
+
+        let hash = self.intent_archive.store(intent).map_err(|e| {
+            println!(
+                "❌ FileArchive::store failed for intent {}: {}",
+                intent_id, e
+            );
+            StorageError::Storage(format!("Failed to store intent: {}", e))
+        })?;
+
+        println!(
+            "✅ FileArchive::store succeeded for intent {} with hash: {}",
+            intent_id, hash
+        );
+
         // Update index
         let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
         intent_id_to_hash.insert(intent_id.clone(), hash);
-        
-        println!("✅ FileArchiveStorage::store_intent completed for intent: {}", intent_id);
+
+        println!(
+            "✅ FileArchiveStorage::store_intent completed for intent: {}",
+            intent_id
+        );
         Ok(intent_id)
     }
 
     async fn get_intent(&self, id: &IntentId) -> Result<Option<StorableIntent>, StorageError> {
         let intent_id_to_hash = self.intent_id_to_hash.read().await;
         if let Some(hash) = intent_id_to_hash.get(id) {
-            self.intent_archive.retrieve(hash)
+            self.intent_archive
+                .retrieve(hash)
                 .map_err(|e| StorageError::Storage(format!("Failed to retrieve intent: {}", e)))
         } else {
             Ok(None)
@@ -597,28 +675,36 @@ impl IntentStorage for FileArchiveStorage {
 
     async fn update_intent(&mut self, intent: StorableIntent) -> Result<(), StorageError> {
         let intent_id = intent.intent_id.clone();
-        println!("🔄 FileArchiveStorage::update_intent called for intent: {}", intent_id);
-        
+        println!(
+            "🔄 FileArchiveStorage::update_intent called for intent: {}",
+            intent_id
+        );
+
         // Remove old version from index and delete the file
         let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
         let old_hash = intent_id_to_hash.remove(&intent_id);
         if let Some(old_hash) = old_hash {
             println!("🗑️ Removing old version with hash: {}", old_hash);
             // Delete the old file
-            <FileArchive as ContentAddressableArchive<StorableIntent>>::delete(&self.intent_archive, &old_hash)
-                .map_err(|e| StorageError::Storage(format!("Failed to delete old intent: {}", e)))?;
+            <FileArchive as ContentAddressableArchive<StorableIntent>>::delete(
+                &self.intent_archive,
+                &old_hash,
+            )
+            .map_err(|e| StorageError::Storage(format!("Failed to delete old intent: {}", e)))?;
             println!("✅ Deleted old file for hash: {}", old_hash);
         }
-        
+
         // Store new version
-        let hash = self.intent_archive.store(intent)
+        let hash = self
+            .intent_archive
+            .store(intent)
             .map_err(|e| StorageError::Storage(format!("Failed to update intent: {}", e)))?;
-        
+
         println!("💾 Stored new version with hash: {}", hash);
-        
+
         // Update index with new hash
         intent_id_to_hash.insert(intent_id, hash);
-        
+
         Ok(())
     }
 
@@ -626,74 +712,100 @@ impl IntentStorage for FileArchiveStorage {
         let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
         if let Some(hash) = intent_id_to_hash.remove(id) {
             // Delete the file
-            <FileArchive as ContentAddressableArchive<StorableIntent>>::delete(&self.intent_archive, &hash)
-                .map_err(|e| StorageError::Storage(format!("Failed to delete intent: {}", e)))?;
+            <FileArchive as ContentAddressableArchive<StorableIntent>>::delete(
+                &self.intent_archive,
+                &hash,
+            )
+            .map_err(|e| StorageError::Storage(format!("Failed to delete intent: {}", e)))?;
             Ok(())
         } else {
             Err(StorageError::NotFound(id.clone()))
         }
     }
 
-    async fn list_intents(&self, filter: IntentFilter) -> Result<Vec<StorableIntent>, StorageError> {
+    async fn list_intents(
+        &self,
+        filter: IntentFilter,
+    ) -> Result<Vec<StorableIntent>, StorageError> {
         let intent_id_to_hash = self.intent_id_to_hash.read().await;
         let mut results = Vec::new();
-        
+
         for hash in intent_id_to_hash.values() {
-            if let Ok(Some(intent)) = <FileArchive as ContentAddressableArchive<StorableIntent>>::retrieve(&self.intent_archive, hash) {
+            if let Ok(Some(intent)) =
+                <FileArchive as ContentAddressableArchive<StorableIntent>>::retrieve(
+                    &self.intent_archive,
+                    hash,
+                )
+            {
                 // Apply filters
                 if let Some(status) = &filter.status {
                     if intent.status != *status {
                         continue;
                     }
                 }
-                
+
                 if let Some(name_contains) = &filter.name_contains {
-                    if !intent.name.as_ref().map_or(false, |n| n.contains(name_contains)) {
+                    if !intent
+                        .name
+                        .as_ref()
+                        .map_or(false, |n| n.contains(name_contains))
+                    {
                         continue;
                     }
                 }
-                
+
                 if let Some(goal_contains) = &filter.goal_contains {
                     if !intent.goal.contains(goal_contains) {
                         continue;
                     }
                 }
-                
+
                 if let Some(priority_min) = filter.priority_min {
                     if intent.priority < priority_min {
                         continue;
                     }
                 }
-                
+
                 if let Some(priority_max) = filter.priority_max {
                     if intent.priority > priority_max {
                         continue;
                     }
                 }
-                
+
                 results.push(intent);
             }
         }
-        
+
         Ok(results)
     }
 
     async fn store_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
-        println!("🔍 FileArchiveStorage::store_edge called for edge: {} -> {}", edge.from, edge.to);
-        
-        let hash = self.edge_archive.store(edge.clone())
-            .map_err(|e| {
-                println!("❌ FileArchive::store failed for edge {} -> {}: {}", edge.from, edge.to, e);
-                StorageError::Storage(format!("Failed to store edge: {}", e))
-            })?;
-        
-        println!("✅ FileArchive::store succeeded for edge {} -> {} with hash: {}", edge.from, edge.to, hash);
-        
+        println!(
+            "🔍 FileArchiveStorage::store_edge called for edge: {} -> {}",
+            edge.from, edge.to
+        );
+
+        let hash = self.edge_archive.store(edge.clone()).map_err(|e| {
+            println!(
+                "❌ FileArchive::store failed for edge {} -> {}: {}",
+                edge.from, edge.to, e
+            );
+            StorageError::Storage(format!("Failed to store edge: {}", e))
+        })?;
+
+        println!(
+            "✅ FileArchive::store succeeded for edge {} -> {} with hash: {}",
+            edge.from, edge.to, hash
+        );
+
         // Update index
         let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
         edge_hash_to_edge.insert(hash, edge.clone());
-        
-        println!("✅ FileArchiveStorage::store_edge completed for edge: {} -> {}", edge.from, edge.to);
+
+        println!(
+            "✅ FileArchiveStorage::store_edge completed for edge: {} -> {}",
+            edge.from, edge.to
+        );
         Ok(())
     }
 
@@ -704,7 +816,8 @@ impl IntentStorage for FileArchiveStorage {
 
     async fn get_edges_for_intent(&self, intent_id: &IntentId) -> Result<Vec<Edge>, StorageError> {
         let edge_hash_to_edge = self.edge_hash_to_edge.read().await;
-        Ok(edge_hash_to_edge.values()
+        Ok(edge_hash_to_edge
+            .values()
             .filter(|edge| &edge.from == intent_id || &edge.to == intent_id)
             .cloned()
             .collect())
@@ -712,10 +825,11 @@ impl IntentStorage for FileArchiveStorage {
 
     async fn delete_edge(&mut self, edge: &Edge) -> Result<(), StorageError> {
         let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
-        let hash_to_remove = edge_hash_to_edge.iter()
+        let hash_to_remove = edge_hash_to_edge
+            .iter()
             .find(|(_, e)| e == &edge)
             .map(|(hash, _)| hash.clone());
-        
+
         if let Some(hash) = hash_to_remove {
             edge_hash_to_edge.remove(&hash);
             Ok(())
@@ -728,23 +842,34 @@ impl IntentStorage for FileArchiveStorage {
         // Create a backup of all intents and edges
         let intents = self.list_intents(IntentFilter::default()).await?;
         let edges = self.get_edges().await?;
-        
+
         let backup_data = StorageBackupData::new(
-            intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
-            edges
+            intents
+                .into_iter()
+                .map(|i| (i.intent_id.clone(), i))
+                .collect(),
+            edges,
         );
 
         let json = serde_json::to_string_pretty(&backup_data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        
+
         // Atomic write
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let mut tmp = path.to_path_buf();
-        let tmp_name = format!("{}.tmp-{}", path.file_name().and_then(|s| s.to_str()).unwrap_or("backup.json"), std::process::id());
+        let tmp_name = format!(
+            "{}.tmp-{}",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("backup.json"),
+            std::process::id()
+        );
         tmp.set_file_name(tmp_name);
-        if let Some(dir) = path.parent() { tmp = dir.join(tmp.file_name().unwrap()); }
+        if let Some(dir) = path.parent() {
+            tmp = dir.join(tmp.file_name().unwrap());
+        }
         {
             let mut f = fs::File::create(&tmp)?;
             use std::io::Write as _;
@@ -762,12 +887,12 @@ impl IntentStorage for FileArchiveStorage {
 
         // Clear existing data
         self.clear_all().await?;
-        
+
         // Restore intents
         for (_, intent) in backup_data.intents {
             self.store_intent(intent).await?;
         }
-        
+
         // Restore edges
         for edge in backup_data.edges {
             self.store_edge(&edge).await?;
@@ -778,7 +903,8 @@ impl IntentStorage for FileArchiveStorage {
 
     async fn health_check(&self) -> Result<(), StorageError> {
         // Check that we can access the archives
-        let _stats = <FileArchive as ContentAddressableArchive<StorableIntent>>::stats(&self.intent_archive);
+        let _stats =
+            <FileArchive as ContentAddressableArchive<StorableIntent>>::stats(&self.intent_archive);
         let _stats = <FileArchive as ContentAddressableArchive<Edge>>::stats(&self.edge_archive);
         Ok(())
     }
@@ -788,11 +914,11 @@ impl IntentStorage for FileArchiveStorage {
         let mut intent_id_to_hash = self.intent_id_to_hash.write().await;
         intent_id_to_hash.clear();
         drop(intent_id_to_hash);
-        
+
         let mut edge_hash_to_edge = self.edge_hash_to_edge.write().await;
         edge_hash_to_edge.clear();
         drop(edge_hash_to_edge);
-        
+
         // Note: FileArchive doesn't have a clear method, so we just clear the indexes
         // The files will remain but won't be accessible
         Ok(())
@@ -851,7 +977,9 @@ impl StorageBackupData {
 
     /// Render a human-readable RTFS snapshot alongside the JSON backup
     fn render_rtfs(intents: &HashMap<IntentId, StorableIntent>, edges: &Vec<Edge>) -> String {
-        fn esc(s: &str) -> String { s.replace('\\', "\\\\").replace('"', "\\\"") }
+        fn esc(s: &str) -> String {
+            s.replace('\\', "\\\\").replace('"', "\\\"")
+        }
 
         let mut out = String::new();
         out.push_str(";; Intent Graph Snapshot (hybrid backup)\n");
@@ -864,10 +992,15 @@ impl StorageBackupData {
                 esc(&intent.goal),
                 intent.status,
                 intent.priority,
-                match &intent.name { Some(n) => format!(" :name \"{}\"", esc(n)), None => String::new() },
+                match &intent.name {
+                    Some(n) => format!(" :name \"{}\"", esc(n)),
+                    None => String::new(),
+                },
                 if !intent.rtfs_intent_source.is_empty() {
                     format!(" :rtfs-intent \"{}\"", esc(&intent.rtfs_intent_source))
-                } else { String::new() }
+                } else {
+                    String::new()
+                }
             ));
         }
         out.push_str("  )\n");
@@ -878,7 +1011,10 @@ impl StorageBackupData {
                 esc(&e.from),
                 esc(&e.to),
                 e.edge_type,
-                match e.weight { Some(w) => format!(" :weight {}", w), None => String::new() }
+                match e.weight {
+                    Some(w) => format!(" :weight {}", w),
+                    None => String::new(),
+                }
             ));
         }
         out.push_str("  )\n");
@@ -895,24 +1031,20 @@ impl StorageFactory {
     pub async fn create(config: StorageConfig) -> Box<dyn IntentStorage> {
         match config {
             StorageConfig::InMemory => Self::in_memory(),
-            StorageConfig::File { path } => {
-                match Self::file(path).await {
-                    Ok(storage) => storage,
-                    Err(e) => {
-                        eprintln!("Note: Using in-memory storage for fallback strategy. File storage failed: {}", e);
-                        Self::with_fallback()
-                    }
+            StorageConfig::File { path } => match Self::file(path).await {
+                Ok(storage) => storage,
+                Err(e) => {
+                    eprintln!("Note: Using in-memory storage for fallback strategy. File storage failed: {}", e);
+                    Self::with_fallback()
                 }
-            }
-            StorageConfig::FileArchive { base_dir } => {
-                match Self::file_archive(base_dir).await {
-                    Ok(storage) => storage,
-                    Err(e) => {
-                        eprintln!("Note: Using in-memory storage for fallback strategy. File archive storage failed: {}", e);
-                        Self::with_fallback()
-                    }
+            },
+            StorageConfig::FileArchive { base_dir } => match Self::file_archive(base_dir).await {
+                Ok(storage) => storage,
+                Err(e) => {
+                    eprintln!("Note: Using in-memory storage for fallback strategy. File archive storage failed: {}", e);
+                    Self::with_fallback()
                 }
-            }
+            },
         }
     }
 
@@ -920,17 +1052,19 @@ impl StorageFactory {
     pub fn in_memory() -> Box<dyn IntentStorage> {
         Box::new(InMemoryStorage::new())
     }
-    
+
     /// Create a file-based storage backend
     pub async fn file<P: AsRef<Path>>(path: P) -> Result<Box<dyn IntentStorage>, StorageError> {
         Ok(Box::new(FileStorage::new(path).await?))
     }
-    
+
     /// Create a file archive storage backend
-    pub async fn file_archive<P: AsRef<Path>>(base_dir: P) -> Result<Box<dyn IntentStorage>, StorageError> {
+    pub async fn file_archive<P: AsRef<Path>>(
+        base_dir: P,
+    ) -> Result<Box<dyn IntentStorage>, StorageError> {
         Ok(Box::new(FileArchiveStorage::new(base_dir).await?))
     }
-    
+
     /// Create storage with fallback strategy (starts as in-memory, can be upgraded later)
     pub fn with_fallback() -> Box<dyn IntentStorage> {
         // For now, just return in-memory since async construction in sync context is complex
@@ -942,7 +1076,7 @@ impl StorageFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::types::{IntentStatus};
+    use crate::ccos::types::IntentStatus;
     use tempfile::tempdir;
 
     fn create_test_intent(goal: &str) -> StorableIntent {
@@ -994,10 +1128,10 @@ mod tests {
     #[tokio::test]
     async fn test_intent_filter() {
         let mut storage = InMemoryStorage::new();
-        
+
         let mut intent1 = create_test_intent("Active task");
         intent1.status = IntentStatus::Active;
-        
+
         let mut intent2 = create_test_intent("Completed task");
         intent2.status = IntentStatus::Completed;
 
@@ -1031,7 +1165,7 @@ mod tests {
         };
 
         let storage = StorageFactory::create(invalid_config).await;
-        
+
         // Should fall back to in-memory storage
         assert!(storage.health_check().await.is_ok());
     }
@@ -1050,15 +1184,18 @@ mod tests {
         storage.backup(&backup_path).await.unwrap();
         assert!(backup_path.exists());
 
-    // Validate hybrid fields present
-    let content = std::fs::read_to_string(&backup_path).unwrap();
-    let v: serde_json::Value = serde_json::from_str(&content).unwrap();
-    assert_eq!(v["version"], serde_json::json!("1.1"));
-    assert!(v.get("manifest").is_some());
-    assert_eq!(v["manifest"]["created_by"], serde_json::json!("rtfs_compiler"));
-    assert!(v.get("rtfs").is_some());
-    let rtfs_str = v["rtfs"].as_str().unwrap();
-    assert!(rtfs_str.contains("(intent-graph"));
+        // Validate hybrid fields present
+        let content = std::fs::read_to_string(&backup_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v["version"], serde_json::json!("1.1"));
+        assert!(v.get("manifest").is_some());
+        assert_eq!(
+            v["manifest"]["created_by"],
+            serde_json::json!("rtfs_compiler")
+        );
+        assert!(v.get("rtfs").is_some());
+        let rtfs_str = v["rtfs"].as_str().unwrap();
+        assert!(rtfs_str.contains("(intent-graph"));
 
         // Create new storage and restore
         let mut new_storage = InMemoryStorage::new();

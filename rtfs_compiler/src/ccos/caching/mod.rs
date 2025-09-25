@@ -1,13 +1,13 @@
 //! Multi-Layered Cognitive Caching System
-//! 
+//!
 //! This module implements the advanced caching architecture for RTFS 2.0,
 //! providing four layers of intelligent caching:
-//! 
+//!
 //! - **L1 Delegation Cache**: `(Agent, Task) -> Plan` memoization
 //! - **L2 Inference Cache**: Hybrid storage for LLM inference results
 //! - **L3 Semantic Cache**: AI-driven vector search for semantic equivalence
 //! - **L4 Content-Addressable RTFS**: Bytecode-level caching and reuse
-//! 
+//!
 //! This transforms caching from a simple performance optimization into a core
 //! feature of the system's intelligence.
 
@@ -16,10 +16,10 @@ pub mod l2_inference;
 pub mod l3_semantic;
 pub mod l4_content_addressable;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 
 /// Core trait for all cache layers in the multi-layered architecture
 pub trait CacheLayer<K, V>: Send + Sync + std::fmt::Debug
@@ -29,19 +29,19 @@ where
 {
     /// Retrieve a value from the cache
     fn get(&self, key: &K) -> Option<V>;
-    
+
     /// Store a value in the cache
     fn put(&self, key: K, value: V) -> Result<(), CacheError>;
-    
+
     /// Remove a value from the cache
     fn invalidate(&self, key: &K) -> Result<(), CacheError>;
-    
+
     /// Get cache statistics
     fn stats(&self) -> CacheStats;
-    
+
     /// Clear all entries from the cache
     fn clear(&self) -> Result<(), CacheError>;
-    
+
     /// Get cache configuration
     fn config(&self) -> &CacheConfig;
 }
@@ -72,7 +72,7 @@ impl CacheStats {
             last_updated: Instant::now(),
         }
     }
-    
+
     pub fn update_hit_rate(&mut self) {
         let total_requests = self.hits + self.misses;
         if total_requests > 0 {
@@ -80,21 +80,21 @@ impl CacheStats {
         }
         self.last_updated = Instant::now();
     }
-    
+
     pub fn record_hit(&mut self) {
         self.hits += 1;
         self.update_hit_rate();
     }
-    
+
     pub fn record_miss(&mut self) {
         self.misses += 1;
         self.update_hit_rate();
     }
-    
+
     pub fn record_put(&mut self) {
         self.puts += 1;
     }
-    
+
     pub fn record_invalidation(&mut self) {
         self.invalidations += 1;
     }
@@ -127,11 +127,11 @@ impl Default for CacheConfig {
 /// Cache eviction policies
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EvictionPolicy {
-    LRU,        // Least Recently Used
-    LFU,        // Least Frequently Used
-    FIFO,       // First In, First Out
-    Random,     // Random eviction
-    TTL,        // Time To Live based
+    LRU,    // Least Recently Used
+    LFU,    // Least Frequently Used
+    FIFO,   // First In, First Out
+    Random, // Random eviction
+    TTL,    // Time To Live based
 }
 
 /// Cache entry with metadata
@@ -153,12 +153,12 @@ impl<V> CacheEntry<V> {
             access_count: 1,
         }
     }
-    
+
     pub fn access(&mut self) {
         self.last_accessed = Instant::now();
         self.access_count += 1;
     }
-    
+
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.last_accessed.elapsed() > ttl
     }
@@ -169,19 +169,19 @@ impl<V> CacheEntry<V> {
 pub enum CacheError {
     #[error("Cache is full")]
     CacheFull,
-    
+
     #[error("Key not found")]
     KeyNotFound,
-    
+
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
-    
+
     #[error("Storage error: {0}")]
     StorageError(String),
-    
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
-    
+
     #[error("Async operation failed: {0}")]
     AsyncError(String),
 }
@@ -206,51 +206,51 @@ impl CacheManager {
             stats: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     pub fn with_l1_cache(mut self, cache: Arc<dyn CacheLayer<String, String>>) -> Self {
         self.l1_cache = Some(cache);
         self
     }
-    
+
     pub fn with_l2_cache(mut self, cache: Arc<dyn CacheLayer<String, String>>) -> Self {
         self.l2_cache = Some(cache);
         self
     }
-    
+
     pub fn with_l3_cache(mut self, cache: Arc<dyn CacheLayer<String, String>>) -> Self {
         self.l3_cache = Some(cache);
         self
     }
-    
+
     pub fn with_l4_cache(mut self, cache: Arc<dyn CacheLayer<String, String>>) -> Self {
         self.l4_cache = Some(cache);
         self
     }
-    
+
     pub fn get_l1_cache(&self) -> Option<&Arc<dyn CacheLayer<String, String>>> {
         self.l1_cache.as_ref()
     }
-    
+
     pub fn get_l2_cache(&self) -> Option<&Arc<dyn CacheLayer<String, String>>> {
         self.l2_cache.as_ref()
     }
-    
+
     pub fn get_l3_cache(&self) -> Option<&Arc<dyn CacheLayer<String, String>>> {
         self.l3_cache.as_ref()
     }
-    
+
     pub fn get_l4_cache(&self) -> Option<&Arc<dyn CacheLayer<String, String>>> {
         self.l4_cache.as_ref()
     }
-    
+
     pub fn get_stats(&self, layer: &str) -> Option<CacheStats> {
         self.stats.read().unwrap().get(layer).cloned()
     }
-    
+
     pub fn update_stats(&self, layer: &str, stats: CacheStats) {
         self.stats.write().unwrap().insert(layer.to_string(), stats);
     }
-    
+
     pub fn get_all_stats(&self) -> HashMap<String, CacheStats> {
         self.stats.read().unwrap().clone()
     }
@@ -264,42 +264,42 @@ impl Default for CacheManager {
 
 /// Cache key generation utilities
 pub mod keygen {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
-    
+    use std::hash::{Hash, Hasher};
+
     /// Generate a hash-based cache key from any hashable type
     pub fn hash_key<T: Hash>(value: &T) -> String {
         let mut hasher = DefaultHasher::new();
         value.hash(&mut hasher);
         format!("{:x}", hasher.finish())
     }
-    
+
     /// Generate a composite key from multiple components
     pub fn composite_key(components: &[&str]) -> String {
         components.join("::")
     }
-    
+
     /// Generate a delegation cache key: (Agent, Task) -> Plan
     pub fn delegation_key(agent: &str, task: &str) -> String {
         composite_key(&[agent, task])
     }
-    
+
     /// Generate an inference cache key for model calls
     pub fn inference_key(model_id: &str, input: &str) -> String {
         let input_hash = hash_input(input);
         composite_key(&[model_id, &input_hash])
     }
-    
+
     /// Hash an input string for cache key generation
     pub fn hash_input(input: &str) -> String {
         hash_key(&input)
     }
-    
+
     /// Generate a semantic cache key
     pub fn semantic_key(embedding_hash: &str) -> String {
         format!("semantic:{}", embedding_hash)
     }
-    
+
     /// Generate a content-addressable RTFS key
     pub fn content_addressable_key(bytecode_hash: &str) -> String {
         format!("rtfs:{}", bytecode_hash)
@@ -309,33 +309,33 @@ pub mod keygen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_cache_stats() {
         let mut stats = CacheStats::new(100);
         assert_eq!(stats.hits, 0);
         assert_eq!(stats.misses, 0);
         assert_eq!(stats.hit_rate, 0.0);
-        
+
         stats.record_hit();
         stats.record_miss();
         stats.record_hit();
-        
+
         assert_eq!(stats.hits, 2);
         assert_eq!(stats.misses, 1);
-        assert!((stats.hit_rate - 2.0/3.0).abs() < f64::EPSILON);
+        assert!((stats.hit_rate - 2.0 / 3.0).abs() < f64::EPSILON);
     }
-    
+
     #[test]
     fn test_cache_entry() {
         let entry = CacheEntry::new("test_value");
         assert_eq!(entry.access_count, 1);
-        
+
         let mut entry = entry;
         entry.access();
         assert_eq!(entry.access_count, 2);
     }
-    
+
     #[test]
     fn test_key_generation() {
         assert_eq!(keygen::composite_key(&["a", "b", "c"]), "a::b::c");
@@ -345,4 +345,4 @@ mod tests {
         assert_eq!(keygen::semantic_key("emb123"), "semantic:emb123");
         assert_eq!(keygen::content_addressable_key("bc123"), "rtfs:bc123");
     }
-} 
+}

@@ -3,9 +3,7 @@
 //! This example demonstrates how to use the LLM arbiter with OpenRouter,
 //! which provides access to multiple LLM models through a unified API.
 
-use rtfs_compiler::ccos::arbiter::{
-    ArbiterConfig, ArbiterFactory, LlmConfig, LlmProviderType
-};
+use rtfs_compiler::ccos::arbiter::{ArbiterConfig, ArbiterFactory, LlmConfig, LlmProviderType};
 use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use std::sync::{Arc, Mutex};
 
@@ -43,8 +41,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("✅ OpenRouter API key found!");
-    println!("   Using model: {}", config.llm_config.as_ref().unwrap().model);
-    println!("   Base URL: {}", config.llm_config.as_ref().unwrap().base_url.as_ref().unwrap());
+    println!(
+        "   Using model: {}",
+        config.llm_config.as_ref().unwrap().model
+    );
+    println!(
+        "   Base URL: {}",
+        config
+            .llm_config
+            .as_ref()
+            .unwrap()
+            .base_url
+            .as_ref()
+            .unwrap()
+    );
     println!();
 
     run_demo(config).await?;
@@ -55,21 +65,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_demo(config: ArbiterConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Create intent graph
     let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
-    
+
     // Create arbiter
     let arbiter = ArbiterFactory::create_arbiter(config, intent_graph, None).await?;
-    
+
     // Demo requests
     let requests = vec![
         "Analyze user sentiment from recent interactions",
         "Optimize system performance for high load",
         "Generate a weekly report on system metrics",
     ];
-    
+
     for (i, request) in requests.iter().enumerate() {
         println!("📝 Request {}: {}", i + 1, request);
         println!("   Processing...");
-        
+
         match arbiter.process_natural_language(request, None).await {
             Ok(result) => {
                 println!("   ✅ Success!");
@@ -84,14 +94,14 @@ async fn run_demo(config: ArbiterConfig) -> Result<(), Box<dyn std::error::Error
         }
         println!();
     }
-    
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_openrouter_config() {
         let config = ArbiterConfig {
@@ -112,10 +122,21 @@ mod tests {
             security_config: rtfs_compiler::ccos::arbiter::SecurityConfig::default(),
             template_config: None,
         };
-        
+
         // assert_eq!(config.llm_config.as_ref().unwrap().model, "anthropic/claude-3.5-sonnet");
-        assert_eq!(config.llm_config.as_ref().unwrap().model, "moonshotai/kimi-k2:free");
-        assert_eq!(config.llm_config.as_ref().unwrap().base_url.as_ref().unwrap(), "https://openrouter.ai/api/v1");
+        assert_eq!(
+            config.llm_config.as_ref().unwrap().model,
+            "moonshotai/kimi-k2:free"
+        );
+        assert_eq!(
+            config
+                .llm_config
+                .as_ref()
+                .unwrap()
+                .base_url
+                .as_ref()
+                .unwrap(),
+            "https://openrouter.ai/api/v1"
+        );
     }
 }
-

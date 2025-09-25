@@ -4,7 +4,7 @@ use rtfs_compiler::parser::parse_with_enhanced_errors;
 
 fn main() {
     println!("Testing Enhanced Parser Error Reporting\n");
-    
+
     // Test cases for different error types
     let test_cases = [
         ("Mismatched Parentheses", "(let [x 5]"),
@@ -18,14 +18,14 @@ fn main() {
 
     for (test_name, source) in &test_cases {
         println!("=== {} ===", test_name);
-        
+
         match parse_with_enhanced_errors(source, Some("test.rtfs")) {
             Ok(_) => println!("✅ Parsed successfully (unexpected)"),
             Err(error) => {
                 println!("{}", error.format_with_context());
             }
         }
-        
+
         println!();
     }
 

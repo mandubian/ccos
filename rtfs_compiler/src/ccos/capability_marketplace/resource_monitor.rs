@@ -1,14 +1,13 @@
-use crate::runtime::error::RuntimeResult;
 use crate::ccos::capability_marketplace::types::{
-    ResourceConstraints, ResourceUsage, ResourceMeasurement, ResourceType, 
-    ResourceViolation, ResourceMonitoringConfig
+    ResourceConstraints, ResourceMeasurement, ResourceMonitoringConfig, ResourceType,
+    ResourceUsage, ResourceViolation,
 };
+use crate::runtime::error::RuntimeResult;
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use chrono::Utc;
 use std::time::Instant;
-
+use tokio::sync::RwLock;
 
 /// Resource monitoring service that can handle various resource types
 /// including GPU, CO2 emissions, and custom resources
@@ -24,10 +23,10 @@ pub struct ResourceMonitor {
 pub trait ResourceProvider: Send + Sync {
     /// Get the resource type this provider handles
     fn resource_type(&self) -> ResourceType;
-    
+
     /// Measure current resource usage
     async fn measure(&self, capability_id: &str) -> RuntimeResult<ResourceMeasurement>;
-    
+
     /// Get resource name for logging
     fn name(&self) -> &str;
 }
@@ -40,12 +39,12 @@ impl ResourceProvider for CpuResourceProvider {
     fn resource_type(&self) -> ResourceType {
         ResourceType::Cpu
     }
-    
+
     async fn measure(&self, _capability_id: &str) -> RuntimeResult<ResourceMeasurement> {
         // In a real implementation, this would use system APIs to measure CPU usage
         // For now, we'll simulate with a placeholder
         let cpu_usage = get_cpu_usage().await?;
-        
+
         Ok(ResourceMeasurement {
             value: cpu_usage,
             unit: "%".to_string(),
@@ -54,7 +53,7 @@ impl ResourceProvider for CpuResourceProvider {
             limit_value: None,
         })
     }
-    
+
     fn name(&self) -> &str {
         "CPU"
     }
@@ -68,11 +67,11 @@ impl ResourceProvider for MemoryResourceProvider {
     fn resource_type(&self) -> ResourceType {
         ResourceType::Memory
     }
-    
+
     async fn measure(&self, _capability_id: &str) -> RuntimeResult<ResourceMeasurement> {
         // In a real implementation, this would measure memory usage
         let memory_usage = get_memory_usage().await?;
-        
+
         Ok(ResourceMeasurement {
             value: memory_usage,
             unit: "MB".to_string(),
@@ -81,7 +80,7 @@ impl ResourceProvider for MemoryResourceProvider {
             limit_value: None,
         })
     }
-    
+
     fn name(&self) -> &str {
         "Memory"
     }
@@ -95,11 +94,11 @@ impl ResourceProvider for GpuResourceProvider {
     fn resource_type(&self) -> ResourceType {
         ResourceType::GpuMemory
     }
-    
+
     async fn measure(&self, _capability_id: &str) -> RuntimeResult<ResourceMeasurement> {
         // In a real implementation, this would use CUDA/OpenCL APIs or system tools
         let gpu_memory = get_gpu_memory_usage().await?;
-        
+
         Ok(ResourceMeasurement {
             value: gpu_memory,
             unit: "MB".to_string(),
@@ -108,7 +107,7 @@ impl ResourceProvider for GpuResourceProvider {
             limit_value: None,
         })
     }
-    
+
     fn name(&self) -> &str {
         "GPU Memory"
     }
@@ -122,11 +121,11 @@ impl ResourceProvider for GpuUtilizationProvider {
     fn resource_type(&self) -> ResourceType {
         ResourceType::GpuUtilization
     }
-    
+
     async fn measure(&self, _capability_id: &str) -> RuntimeResult<ResourceMeasurement> {
         // In a real implementation, this would measure GPU utilization
         let gpu_utilization = get_gpu_utilization().await?;
-        
+
         Ok(ResourceMeasurement {
             value: gpu_utilization,
             unit: "%".to_string(),
@@ -135,7 +134,7 @@ impl ResourceProvider for GpuUtilizationProvider {
             limit_value: None,
         })
     }
-    
+
     fn name(&self) -> &str {
         "GPU Utilization"
     }
@@ -149,14 +148,14 @@ impl ResourceProvider for Co2EmissionsProvider {
     fn resource_type(&self) -> ResourceType {
         ResourceType::Co2Emissions
     }
-    
+
     async fn measure(&self, capability_id: &str) -> RuntimeResult<ResourceMeasurement> {
         // Estimate CO2 emissions based on energy consumption and grid carbon intensity
         let energy_consumption = get_energy_consumption(capability_id).await?;
         let carbon_intensity = get_carbon_intensity().await?; // gCO2/kWh
-        
+
         let co2_emissions = energy_consumption * carbon_intensity;
-        
+
         Ok(ResourceMeasurement {
             value: co2_emissions,
             unit: "g".to_string(),
@@ -165,7 +164,7 @@ impl ResourceProvider for Co2EmissionsProvider {
             limit_value: None,
         })
     }
-    
+
     fn name(&self) -> &str {
         "CO2 Emissions"
     }
@@ -200,10 +199,10 @@ impl ResourceProvider for CustomResourceProvider {
     fn resource_type(&self) -> ResourceType {
         self.resource_type.clone()
     }
-    
+
     async fn measure(&self, capability_id: &str) -> RuntimeResult<ResourceMeasurement> {
         let value = (self.measurement_fn)(capability_id)?;
-        
+
         Ok(ResourceMeasurement {
             value,
             unit: self.unit.clone(),
@@ -212,7 +211,7 @@ impl ResourceProvider for CustomResourceProvider {
             limit_value: None,
         })
     }
-    
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -226,22 +225,23 @@ impl ResourceMonitor {
             historical_data: Arc::new(RwLock::new(Vec::new())),
             resource_providers: HashMap::new(),
         };
-        
+
         // Register default resource providers
         monitor.register_provider(Box::new(CpuResourceProvider));
         monitor.register_provider(Box::new(MemoryResourceProvider));
         monitor.register_provider(Box::new(GpuResourceProvider));
         monitor.register_provider(Box::new(GpuUtilizationProvider));
         monitor.register_provider(Box::new(Co2EmissionsProvider));
-        
+
         monitor
     }
-    
+
     /// Register a custom resource provider
     pub fn register_provider(&mut self, provider: Box<dyn ResourceProvider>) {
-        self.resource_providers.insert(provider.resource_type(), provider);
+        self.resource_providers
+            .insert(provider.resource_type(), provider);
     }
-    
+
     /// Monitor resource usage for a capability
     pub async fn monitor_capability(
         &self,
@@ -250,7 +250,7 @@ impl ResourceMonitor {
     ) -> RuntimeResult<ResourceUsage> {
         let mut resources = HashMap::new();
         let start_time = Instant::now();
-        
+
         // Measure all required resources
         for resource_type in constraints.get_monitored_resources() {
             if let Some(provider) = self.resource_providers.get(&resource_type) {
@@ -259,45 +259,50 @@ impl ResourceMonitor {
                         resources.insert(resource_type, measurement);
                     }
                     Err(e) => {
-                        eprintln!("Failed to measure {} for {}: {}", provider.name(), capability_id, e);
+                        eprintln!(
+                            "Failed to measure {} for {}: {}",
+                            provider.name(),
+                            capability_id,
+                            e
+                        );
                     }
                 }
             }
         }
-        
+
         let usage = ResourceUsage {
             timestamp: Utc::now(),
             capability_id: capability_id.to_string(),
             resources,
         };
-        
+
         // Store current usage
         {
             let mut current = self.current_usage.write().await;
             current.insert(capability_id.to_string(), usage.clone());
         }
-        
+
         // Store historical data if enabled
         if self.config.collect_history {
             let mut history = self.historical_data.write().await;
             history.push(usage.clone());
-            
+
             // Clean up old data if retention is configured
             if let Some(retention_seconds) = self.config.history_retention_seconds {
                 let cutoff = Utc::now() - chrono::Duration::seconds(retention_seconds as i64);
                 history.retain(|usage| usage.timestamp > cutoff);
             }
         }
-        
+
         eprintln!(
             "Resource monitoring completed for {} in {:?}",
             capability_id,
             start_time.elapsed()
         );
-        
+
         Ok(usage)
     }
-    
+
     /// Check if resource usage violates constraints
     pub async fn check_violations(
         &self,
@@ -306,25 +311,33 @@ impl ResourceMonitor {
     ) -> RuntimeResult<Vec<ResourceViolation>> {
         let usage = self.monitor_capability(capability_id, constraints).await?;
         let violations = constraints.check_resource_limits(&usage);
-        
+
         // Log violations
         for violation in &violations {
             if violation.is_hard_violation() {
-                eprintln!("Hard resource violation for {}: {}", capability_id, violation.to_string());
+                eprintln!(
+                    "Hard resource violation for {}: {}",
+                    capability_id,
+                    violation.to_string()
+                );
             } else {
-                eprintln!("Soft resource violation for {}: {}", capability_id, violation.to_string());
+                eprintln!(
+                    "Soft resource violation for {}: {}",
+                    capability_id,
+                    violation.to_string()
+                );
             }
         }
-        
+
         Ok(violations)
     }
-    
+
     /// Get current resource usage for a capability
     pub async fn get_current_usage(&self, capability_id: &str) -> Option<ResourceUsage> {
         let current = self.current_usage.read().await;
         current.get(capability_id).cloned()
     }
-    
+
     /// Get historical resource usage
     pub async fn get_historical_usage(&self, capability_id: &str) -> Vec<ResourceUsage> {
         let history = self.historical_data.read().await;
@@ -334,7 +347,7 @@ impl ResourceMonitor {
             .cloned()
             .collect()
     }
-    
+
     /// Start continuous monitoring for a capability
     /// Note: This method is not implemented due to ResourceMonitor not being cloneable
     /// In a real implementation, you would use Arc<ResourceMonitor> or a different approach

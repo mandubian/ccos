@@ -39,9 +39,9 @@ impl<DE: DelegationEngine> DelegationEngine for L4AwareDelegationEngine<DE> {
         let interface_hash = ctx.fn_symbol;
         let embedding_ref = ctx.semantic_hash.as_deref();
 
-        if let Some(meta) = self
-            .l4_client
-            .query(interface_hash, embedding_ref, self.similarity_threshold)
+        if let Some(meta) =
+            self.l4_client
+                .query(interface_hash, embedding_ref, self.similarity_threshold)
         {
             return ExecTarget::L4CacheHit {
                 storage_pointer: meta.storage_pointer,
@@ -52,4 +52,4 @@ impl<DE: DelegationEngine> DelegationEngine for L4AwareDelegationEngine<DE> {
         // Fallback to the wrapped engine
         self.inner.decide(ctx)
     }
-} 
+}

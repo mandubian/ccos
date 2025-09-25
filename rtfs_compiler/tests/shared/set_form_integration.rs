@@ -1,14 +1,18 @@
-use rtfs_compiler::runtime::evaluator::Evaluator;
-use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-use rtfs_compiler::runtime::host_interface::HostInterface;
-use rtfs_compiler::runtime::error::RuntimeResult;
-use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::ast::Symbol;
+use rtfs_compiler::runtime::error::RuntimeResult;
+use rtfs_compiler::runtime::evaluator::Evaluator;
+use rtfs_compiler::runtime::host_interface::HostInterface;
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+use rtfs_compiler::runtime::values::Value;
 use std::sync::Arc;
 
 // Minimal HostInterface stub
 struct StubHost;
-impl std::fmt::Debug for StubHost { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "StubHost") } }
+impl std::fmt::Debug for StubHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StubHost")
+    }
+}
 
 impl HostInterface for StubHost {
     fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value> {
@@ -17,7 +21,11 @@ impl HostInterface for StubHost {
             "ccos.state.kv.put" => {
                 // For kv.put, return the value that was stored
                 if let Some(Value::Map(map)) = args.first() {
-                    if let Some(Value::String(value)) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword("value".to_string()))) {
+                    if let Some(Value::String(value)) =
+                        map.get(&rtfs_compiler::ast::MapKey::Keyword(
+                            rtfs_compiler::ast::Keyword("value".to_string()),
+                        ))
+                    {
                         return Ok(Value::String(value.clone()));
                     }
                 }
@@ -26,7 +34,9 @@ impl HostInterface for StubHost {
             "ccos.state.kv.get" => {
                 // For kv.get, return the stored value
                 if let Some(Value::Map(map)) = args.first() {
-                    if let Some(Value::String(key)) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword("key".to_string()))) {
+                    if let Some(Value::String(key)) = map.get(&rtfs_compiler::ast::MapKey::Keyword(
+                        rtfs_compiler::ast::Keyword("key".to_string()),
+                    )) {
                         if key == "k" {
                             return Ok(Value::String("v".to_string()));
                         }
@@ -34,7 +44,7 @@ impl HostInterface for StubHost {
                 }
                 Ok(Value::Nil)
             }
-            _ => Ok(Value::Nil)
+            _ => Ok(Value::Nil),
         }
     }
 
@@ -42,7 +52,11 @@ impl HostInterface for StubHost {
         Ok("step-0".to_string())
     }
 
-    fn notify_step_completed(&self, _step_action_id: &str, _result: &rtfs_compiler::ccos::types::ExecutionResult) -> RuntimeResult<()> {
+    fn notify_step_completed(
+        &self,
+        _step_action_id: &str,
+        _result: &rtfs_compiler::ccos::types::ExecutionResult,
+    ) -> RuntimeResult<()> {
         Ok(())
     }
 
@@ -50,7 +64,12 @@ impl HostInterface for StubHost {
         Ok(())
     }
 
-    fn set_execution_context(&self, _plan_id: String, _intent_ids: Vec<String>, _parent_action_id: String) {
+    fn set_execution_context(
+        &self,
+        _plan_id: String,
+        _intent_ids: Vec<String>,
+        _parent_action_id: String,
+    ) {
         // no-op
     }
 
@@ -85,11 +104,15 @@ async fn test_set_keyword_coercion() -> RuntimeResult<()> {
     let retrieve_program = r#"(do (step "retrieve" (call :ccos.state.kv.get {:key "k"})))"#;
 
     // Parse and evaluate store
-    let store_items = rtfs_compiler::parser::parse(store_program).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
+    let store_items = rtfs_compiler::parser::parse(store_program).map_err(|e| {
+        rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e))
+    })?;
     let store_result = ev.eval_toplevel(&store_items)?;
-    
+
     // Parse and evaluate retrieve
-    let retrieve_items = rtfs_compiler::parser::parse(retrieve_program).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e)))?;
+    let retrieve_items = rtfs_compiler::parser::parse(retrieve_program).map_err(|e| {
+        rtfs_compiler::runtime::error::RuntimeError::Generic(format!("parse error: {:?}", e))
+    })?;
     let retrieve_result = ev.eval_toplevel(&retrieve_items)?;
 
     // Check that retrieve returns the stored value
@@ -99,7 +122,7 @@ async fn test_set_keyword_coercion() -> RuntimeResult<()> {
             panic!("Expected complete result, got RequiresHost");
         }
     };
-    
+
     if let Value::String(s) = got {
         assert_eq!(s, "v");
     } else {

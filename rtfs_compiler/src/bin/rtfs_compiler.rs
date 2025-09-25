@@ -2,18 +2,18 @@
 // Command-line RTFS compiler with RTFS 2.0 support, optimization levels and performance reporting
 
 use clap::{Parser, ValueEnum};
+use rtfs_compiler::ccos::host::RuntimeHost;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Instant;
 use std::sync::Arc;
-use rtfs_compiler::ccos::host::RuntimeHost;
+use std::time::Instant;
 
 // Import the RTFS compiler modules
 // Note: We need to reference the parent crate since this is a binary
 extern crate rtfs_compiler;
 use rtfs_compiler::{
     ast::TopLevel,
-    input_handling::{InputConfig, InputSource, read_input_content, validate_input_args},
+    input_handling::{read_input_content, validate_input_args, InputConfig, InputSource},
     ir::converter::IrConverter,
     ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     parser::parse_with_enhanced_errors,
@@ -117,21 +117,28 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
-                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-                let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
-                
-                let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+                    rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+                ));
+                let capability_marketplace = std::sync::Arc::new(
+                    rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+                        registry.clone(),
+                    ),
+                );
+
+                let causal_chain = Arc::new(std::sync::Mutex::new(
+                    rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+                ));
                 let host = std::sync::Arc::new(RuntimeHost::new(
                     causal_chain,
                     capability_marketplace,
                     rtfs_compiler::runtime::security::RuntimeContext::full(),
                 ));
-                let evaluator =
-                    rtfs_compiler::runtime::Evaluator::new(
-                        std::sync::Arc::new(module_registry),
-                        rtfs_compiler::runtime::security::RuntimeContext::full(),
-                        host,
-                    );
+                let evaluator = rtfs_compiler::runtime::Evaluator::new(
+                    std::sync::Arc::new(module_registry),
+                    rtfs_compiler::runtime::security::RuntimeContext::full(),
+                    host,
+                );
                 Box::new(rtfs_compiler::runtime::TreeWalkingStrategy::new(evaluator))
             }
             RuntimeType::Ir => {
@@ -178,9 +185,7 @@ fn main() {
             let content = args.string.expect("String content should be validated");
             InputConfig::from_string(content, args.verbose)
         }
-        InputSource::Pipe => {
-            InputConfig::from_pipe(args.verbose)
-        }
+        InputSource::Pipe => InputConfig::from_pipe(args.verbose),
         InputSource::Interactive => {
             eprintln!("❌ Error: Interactive mode is not supported in rtfs-compiler. Use rtfs-repl instead.");
             std::process::exit(1);
@@ -205,7 +210,10 @@ fn main() {
 
     // Phase 1: Parsing
     let parse_start = Instant::now();
-    let parsed_items = match parse_with_enhanced_errors(&input_content.content, Some(&input_content.source_name)) {
+    let parsed_items = match parse_with_enhanced_errors(
+        &input_content.content,
+        Some(&input_content.source_name),
+    ) {
         Ok(items) => items,
         Err(e) => {
             eprintln!("{}", e);
@@ -280,20 +288,25 @@ fn main() {
             if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
                 eprintln!("Warning: Failed to load standard library: {:?}", e);
             }
-                let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-                let causal_chain = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
-                let capability_marketplace = Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-                let host = std::sync::Arc::new(RuntimeHost::new(
-                    causal_chain,
-                    capability_marketplace,
-                    rtfs_compiler::runtime::security::RuntimeContext::full(),
-                ));
-                let mut evaluator =
-                    rtfs_compiler::runtime::Evaluator::new(
-                        std::sync::Arc::new(module_registry),
-                        rtfs_compiler::runtime::security::RuntimeContext::full(),
-                        host.clone(),
-                    );
+            let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+                rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+            ));
+            let causal_chain = Arc::new(std::sync::Mutex::new(
+                rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+            ));
+            let capability_marketplace = Arc::new(
+                rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+            );
+            let host = std::sync::Arc::new(RuntimeHost::new(
+                causal_chain,
+                capability_marketplace,
+                rtfs_compiler::runtime::security::RuntimeContext::full(),
+            ));
+            let mut evaluator = rtfs_compiler::runtime::Evaluator::new(
+                std::sync::Arc::new(module_registry),
+                rtfs_compiler::runtime::security::RuntimeContext::full(),
+                host.clone(),
+            );
 
             // TODO: Call host.prepare_execution() when method is implemented
 
@@ -330,7 +343,8 @@ fn main() {
                             if args.verbose {
                                 println!("📊 Result: {:?}", value);
                             }
-                            all_results.push(rtfs_compiler::runtime::ExecutionOutcome::Complete(value));
+                            all_results
+                                .push(rtfs_compiler::runtime::ExecutionOutcome::Complete(value));
                         }
                         Err(e) => {
                             eprintln!("❌ Runtime error for expression {}: {:?}", i + 1, e);
@@ -373,14 +387,17 @@ fn main() {
                         RuntimeType::Ir | RuntimeType::Fallback => {
                             // Convert expression to IR for IR-based runtimes
                             let ir_start = Instant::now();
-                            
+
                             // Create module registry and load standard library for IR conversion
                             let mut module_registry = ModuleRegistry::new();
-                            if let Err(e) = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry) {
+                            if let Err(e) =
+                                rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry)
+                            {
                                 eprintln!("Warning: Failed to load standard library for IR conversion: {:?}", e);
                             }
-                            
-                            let mut ir_converter = IrConverter::with_module_registry(&module_registry);
+
+                            let mut ir_converter =
+                                IrConverter::with_module_registry(&module_registry);
                             let ir_node = match ir_converter.convert_expression(expr.clone()) {
                                 Ok(ir) => ir,
                                 Err(e) => {

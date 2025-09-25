@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
-use crate::ccos::types::{ExecutionResult, Intent, Plan, StorableIntent, IntentId};
 use super::plan_generation::PlanGenerationResult;
+use crate::ccos::types::{ExecutionResult, Intent, IntentId, Plan, StorableIntent};
 
 /// High-level interface exposed by all Arbiter implementations.
 ///
@@ -79,4 +79,4 @@ pub trait ArbiterEngine {
             "generate_plan_for_intent not implemented for this ArbiterEngine".to_string(),
         ))
     }
-} 
+}

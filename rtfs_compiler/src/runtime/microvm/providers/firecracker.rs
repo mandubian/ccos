@@ -1,8 +1,8 @@
 //! Firecracker MicroVM Provider
-//! 
+//!
 //! This provider implements high-security VM-level isolation using AWS Firecracker.
 //! It provides the strongest security boundary for RTFS program execution.
-//! 
+//!
 //! Enhanced with:
 //! - Real VM lifecycle management
 //! - Resource monitoring and limits
@@ -11,17 +11,19 @@
 //! - Network isolation
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata, Program};
+use crate::runtime::microvm::core::{
+    ExecutionContext, ExecutionMetadata, ExecutionResult, Program,
+};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
-use std::time::{Duration, Instant};
+use serde_json::{json, Value as JsonValue};
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::fs;
-use std::io::{Write, BufRead, BufReader};
-use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
-use serde_json::{json, Value as JsonValue};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Enhanced Firecracker VM configuration with security and performance features
@@ -209,7 +211,7 @@ impl FirecrackerVM {
     pub fn new(config: FirecrackerConfig) -> Self {
         let id = Uuid::new_v4().to_string();
         let socket_path = PathBuf::from(format!("/tmp/firecracker-{}.sock", id));
-        
+
         Self {
             id,
             config,
@@ -226,17 +228,19 @@ impl FirecrackerVM {
     /// Create and start the VM with enhanced security and monitoring
     pub fn start(&mut self) -> RuntimeResult<()> {
         let start_time = Instant::now();
-        
+
         // Validate required files exist
         if !self.config.kernel_path.exists() {
             return Err(RuntimeError::Generic(format!(
-                "Kernel image not found: {:?}", self.config.kernel_path
+                "Kernel image not found: {:?}",
+                self.config.kernel_path
             )));
         }
-        
+
         if !self.config.rootfs_path.exists() {
             return Err(RuntimeError::Generic(format!(
-                "Root filesystem not found: {:?}", self.config.rootfs_path
+                "Root filesystem not found: {:?}",
+                self.config.rootfs_path
             )));
         }
 
@@ -250,7 +254,8 @@ impl FirecrackerVM {
             self.create_firecracker_command()?
         };
 
-        let _child = cmd.spawn()
+        let _child = cmd
+            .spawn()
             .map_err(|e| RuntimeError::Generic(format!("Failed to start Firecracker: {}", e)))?;
 
         // Wait for socket to be created
@@ -266,32 +271,57 @@ impl FirecrackerVM {
         if self.config.attestation_config.enabled {
             self.verify_attestation()?;
         }
-        
+
         // Start the VM
         self.start_vm()?;
-        
+
         self.running = true;
         self.start_time = Some(start_time);
         self.performance_metrics.startup_time = start_time.elapsed();
-        
+
         // Start resource monitoring
         self.start_resource_monitoring()?;
-        
+
         Ok(())
     }
 
     /// Create jailer command for enhanced security
     fn create_jailer_command(&self) -> RuntimeResult<Command> {
         let mut cmd = Command::new("firecracker-jailer");
-        
-        cmd.arg("--id").arg(&self.id)
-           .arg("--exec-file").arg("firecracker")
-           .arg("--uid").arg(self.config.security_features.jailer_uid.unwrap_or(1000).to_string())
-           .arg("--gid").arg(self.config.security_features.jailer_gid.unwrap_or(1000).to_string())
-           .arg("--chroot-base-dir").arg(self.config.security_features.jailer_chroot_base.as_ref().unwrap())
-           .arg("--netns").arg(self.config.security_features.jailer_netns.as_ref().unwrap())
-           .arg("--daemonize")
-           .arg("--api-sock").arg(&self.socket_path);
+
+        cmd.arg("--id")
+            .arg(&self.id)
+            .arg("--exec-file")
+            .arg("firecracker")
+            .arg("--uid")
+            .arg(
+                self.config
+                    .security_features
+                    .jailer_uid
+                    .unwrap_or(1000)
+                    .to_string(),
+            )
+            .arg("--gid")
+            .arg(
+                self.config
+                    .security_features
+                    .jailer_gid
+                    .unwrap_or(1000)
+                    .to_string(),
+            )
+            .arg("--chroot-base-dir")
+            .arg(
+                self.config
+                    .security_features
+                    .jailer_chroot_base
+                    .as_ref()
+                    .unwrap(),
+            )
+            .arg("--netns")
+            .arg(self.config.security_features.jailer_netns.as_ref().unwrap())
+            .arg("--daemonize")
+            .arg("--api-sock")
+            .arg(&self.socket_path);
 
         Ok(cmd)
     }
@@ -299,9 +329,10 @@ impl FirecrackerVM {
     /// Create standard Firecracker command
     fn create_firecracker_command(&self) -> RuntimeResult<Command> {
         let mut cmd = Command::new("firecracker");
-        cmd.arg("--api-sock").arg(&self.socket_path)
-           .stdout(Stdio::piped())
-           .stderr(Stdio::piped());
+        cmd.arg("--api-sock")
+            .arg(&self.socket_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         Ok(cmd)
     }
 
@@ -331,8 +362,9 @@ impl FirecrackerVM {
         // Create jailer directory structure
         if let Some(chroot_base) = &self.config.security_features.jailer_chroot_base {
             let jail_path = chroot_base.join(&self.id);
-            fs::create_dir_all(&jail_path)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to create jail directory: {}", e)))?;
+            fs::create_dir_all(&jail_path).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to create jail directory: {}", e))
+            })?;
         }
 
         // Set up network namespace if specified
@@ -347,14 +379,16 @@ impl FirecrackerVM {
     fn wait_for_socket(&self) -> RuntimeResult<()> {
         let max_wait = Duration::from_secs(10);
         let start = Instant::now();
-        
+
         while !self.socket_path.exists() {
             if start.elapsed() > max_wait {
-                return Err(RuntimeError::Generic("Timeout waiting for Firecracker socket".to_string()));
+                return Err(RuntimeError::Generic(
+                    "Timeout waiting for Firecracker socket".to_string(),
+                ));
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        
+
         Ok(())
     }
 
@@ -412,7 +446,7 @@ impl FirecrackerVM {
             "kernel_image_path": self.config.kernel_path.to_string_lossy(),
             "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
         });
-        
+
         self.api_call("PUT", "/boot-source", &boot_source)?;
 
         // Configure drives (rootfs)
@@ -422,7 +456,7 @@ impl FirecrackerVM {
             "is_root_device": true,
             "is_read_only": false
         });
-        
+
         self.api_call("PUT", "/drives/rootfs", &drive_config)?;
 
         // Configure machine (CPU and memory)
@@ -431,7 +465,7 @@ impl FirecrackerVM {
             "mem_size_mib": self.config.memory_size_mb,
             "ht_enabled": false
         });
-        
+
         self.api_call("PUT", "/machine-config", &machine_config)?;
 
         // Configure vsock if enabled
@@ -441,7 +475,7 @@ impl FirecrackerVM {
                     "vsock_id": "vsock0",
                     "guest_cid": cid
                 });
-                
+
                 self.api_call("PUT", "/vsocks/vsock0", &vsock_config)?;
             }
         }
@@ -465,7 +499,7 @@ impl FirecrackerVM {
                 "host_dev_name": tap_device,
                 "guest_mac": "AA:FC:00:00:00:01"
             });
-            
+
             self.api_call("PUT", "/network-interfaces/net0", &network_config)?;
         }
         Ok(())
@@ -497,8 +531,9 @@ impl FirecrackerVM {
 
     /// Make API call to Firecracker with enhanced error handling
     fn api_call(&mut self, method: &str, path: &str, data: &JsonValue) -> RuntimeResult<()> {
-        let mut stream = UnixStream::connect(&self.socket_path)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to connect to Firecracker API: {}", e)))?;
+        let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to connect to Firecracker API: {}", e))
+        })?;
 
         let request = format!(
             "{} {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -508,18 +543,23 @@ impl FirecrackerVM {
             data.to_string()
         );
 
-        stream.write_all(request.as_bytes())
-            .map_err(|e| RuntimeError::Generic(format!("Failed to write to Firecracker API: {}", e)))?;
+        stream.write_all(request.as_bytes()).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write to Firecracker API: {}", e))
+        })?;
 
         // Read response with enhanced parsing
         let mut response = String::new();
         let mut reader = BufReader::new(stream);
-        reader.read_line(&mut response)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to read Firecracker API response: {}", e)))?;
+        reader.read_line(&mut response).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to read Firecracker API response: {}", e))
+        })?;
 
         // Enhanced response validation
         if !response.contains("200") && !response.contains("204") {
-            return Err(RuntimeError::Generic(format!("Firecracker API error: {}", response)));
+            return Err(RuntimeError::Generic(format!(
+                "Firecracker API error: {}",
+                response
+            )));
         }
 
         Ok(())
@@ -530,23 +570,23 @@ impl FirecrackerVM {
         if self.running {
             // Update final resource usage
             self.update_resource_usage()?;
-            
+
             // Send shutdown signal
             let _ = self.api_call("PUT", "/actions", &json!({"action_type": "SendCtrlAltDel"}));
-            
+
             // Wait for shutdown with timeout
             let shutdown_timeout = Duration::from_secs(10);
             let start = Instant::now();
-            
+
             while self.running && start.elapsed() < shutdown_timeout {
                 std::thread::sleep(Duration::from_millis(100));
             }
-            
+
             // Force kill if still running
             if self.running {
                 let _ = self.api_call("PUT", "/actions", &json!({"action_type": "InstanceKill"}));
             }
-            
+
             self.running = false;
         }
         Ok(())
@@ -555,23 +595,24 @@ impl FirecrackerVM {
     /// Clean up VM resources with enhanced cleanup
     pub fn cleanup(&mut self) -> RuntimeResult<()> {
         self.stop()?;
-        
+
         // Clean up jailer resources
         if self.security_context.jailer_active {
             self.cleanup_jailer()?;
         }
-        
+
         // Remove socket file
         if self.socket_path.exists() {
-            fs::remove_file(&self.socket_path)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to remove socket file: {}", e)))?;
+            fs::remove_file(&self.socket_path).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to remove socket file: {}", e))
+            })?;
         }
-        
+
         // Clean up network namespace
         if let Some(_netns) = &self.config.security_features.jailer_netns {
             // In a real implementation, this would clean up the network namespace
         }
-        
+
         Ok(())
     }
 
@@ -580,8 +621,9 @@ impl FirecrackerVM {
         if let Some(chroot_base) = &self.config.security_features.jailer_chroot_base {
             let jail_path = chroot_base.join(&self.id);
             if jail_path.exists() {
-                fs::remove_dir_all(&jail_path)
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to remove jail directory: {}", e)))?;
+                fs::remove_dir_all(&jail_path).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to remove jail directory: {}", e))
+                })?;
             }
         }
         Ok(())
@@ -591,44 +633,45 @@ impl FirecrackerVM {
     pub fn update_resource_usage(&mut self) -> RuntimeResult<()> {
         // In a real implementation, this would query the VM for actual resource usage
         // For now, we'll simulate resource usage based on time running
-        
+
         if let Some(start_time) = self.start_time {
             let uptime = start_time.elapsed();
             self.resource_usage.cpu_time = uptime;
             self.resource_usage.memory_used_mb = self.config.memory_size_mb / 2; // Simulate 50% usage
             self.resource_usage.last_update = Instant::now();
         }
-        
+
         Ok(())
     }
 
     /// Check resource limits and enforce them
     pub fn check_resource_limits(&mut self) -> RuntimeResult<bool> {
         self.update_resource_usage()?;
-        
+
         let usage = &self.resource_usage;
         let limits = &self.config.resource_limits;
-        
+
         // Check CPU time limit
         if usage.cpu_time > limits.max_cpu_time {
-            self.security_context.security_violations.push(
-                format!("CPU time limit exceeded: {} > {}", 
-                    usage.cpu_time.as_secs(), limits.max_cpu_time.as_secs())
-            );
+            self.security_context.security_violations.push(format!(
+                "CPU time limit exceeded: {} > {}",
+                usage.cpu_time.as_secs(),
+                limits.max_cpu_time.as_secs()
+            ));
             return Ok(false);
         }
-        
+
         // Check memory limit
         if usage.memory_used_mb > limits.max_memory_mb {
-            self.security_context.security_violations.push(
-                format!("Memory limit exceeded: {}MB > {}MB", 
-                    usage.memory_used_mb, limits.max_memory_mb)
-            );
+            self.security_context.security_violations.push(format!(
+                "Memory limit exceeded: {}MB > {}MB",
+                usage.memory_used_mb, limits.max_memory_mb
+            ));
             return Ok(false);
         }
-        
+
         // Check other limits...
-        
+
         Ok(true)
     }
 
@@ -752,12 +795,16 @@ impl FirecrackerMicroVMProvider {
     fn deploy_rtfs_runtime(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
         // Verify VM security context before deployment
         if !vm.security_context.attestation_verified && self.config.attestation_config.enabled {
-            return Err(RuntimeError::Generic("VM attestation not verified".to_string()));
+            return Err(RuntimeError::Generic(
+                "VM attestation not verified".to_string(),
+            ));
         }
 
         // Check resource limits before deployment
         if !vm.check_resource_limits()? {
-            return Err(RuntimeError::Generic("VM resource limits exceeded".to_string()));
+            return Err(RuntimeError::Generic(
+                "VM resource limits exceeded".to_string(),
+            ));
         }
 
         // In a real implementation, this would:
@@ -765,18 +812,22 @@ impl FirecrackerMicroVMProvider {
         // 2. Set up execution environment with security policies
         // 3. Configure runtime parameters for isolation
         // 4. Verify runtime integrity
-        
+
         // For now, we'll simulate this with security checks
         Ok(())
     }
 
     /// Execute RTFS program in VM with enhanced monitoring
-    fn execute_rtfs_in_vm(&self, vm: &mut FirecrackerVM, program: &Program) -> RuntimeResult<Value> {
+    fn execute_rtfs_in_vm(
+        &self,
+        vm: &mut FirecrackerVM,
+        program: &Program,
+    ) -> RuntimeResult<Value> {
         let execution_start = Instant::now();
-        
+
         // Pre-execution security checks
         self.perform_security_checks(vm)?;
-        
+
         // Pre-execution resource checks
         self.perform_resource_checks(vm)?;
 
@@ -788,31 +839,46 @@ impl FirecrackerMicroVMProvider {
                     // Extract numbers from simple arithmetic expressions
                     let parts: Vec<&str> = source.split_whitespace().collect();
                     if parts.len() >= 3 {
-                        if let (Ok(a), Ok(b)) = (parts[1].parse::<i64>(), parts[2].trim_end_matches(')').parse::<i64>()) {
+                        if let (Ok(a), Ok(b)) = (
+                            parts[1].parse::<i64>(),
+                            parts[2].trim_end_matches(')').parse::<i64>(),
+                        ) {
                             return Ok(Value::Integer(a + b));
                         }
                     }
                 }
-                
-                Ok(Value::String(format!("Firecracker VM execution result: {}", source)))
-            },
+
+                Ok(Value::String(format!(
+                    "Firecracker VM execution result: {}",
+                    source
+                )))
+            }
             Program::ExternalProgram { path, args } => {
                 // In production, this would execute the external program inside the VM
                 // with enhanced security monitoring
-                Ok(Value::String(format!("External program executed in VM: {} {:?}", path, args)))
-            },
+                Ok(Value::String(format!(
+                    "External program executed in VM: {} {:?}",
+                    path, args
+                )))
+            }
             Program::NativeFunction(_) => {
                 // Native functions would be executed in the VM context with security checks
-                Ok(Value::String("Native function executed in Firecracker VM".to_string()))
-            },
+                Ok(Value::String(
+                    "Native function executed in Firecracker VM".to_string(),
+                ))
+            }
             Program::RtfsBytecode(_) => {
                 // Bytecode would be executed by the RTFS runtime in the VM
-                Ok(Value::String("RTFS bytecode executed in Firecracker VM".to_string()))
-            },
+                Ok(Value::String(
+                    "RTFS bytecode executed in Firecracker VM".to_string(),
+                ))
+            }
             Program::RtfsAst(_) => {
                 // AST would be executed by the RTFS runtime in the VM
-                Ok(Value::String("RTFS AST executed in Firecracker VM".to_string()))
-            },
+                Ok(Value::String(
+                    "RTFS AST executed in Firecracker VM".to_string(),
+                ))
+            }
         };
 
         // Post-execution monitoring
@@ -826,14 +892,21 @@ impl FirecrackerMicroVMProvider {
     /// Perform security checks before execution
     fn perform_security_checks(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
         // Check if VM is in a secure state
-        if !vm.security_context.seccomp_filter_applied && self.config.security_features.seccomp_enabled {
-            return Err(RuntimeError::Generic("Security filter not applied".to_string()));
+        if !vm.security_context.seccomp_filter_applied
+            && self.config.security_features.seccomp_enabled
+        {
+            return Err(RuntimeError::Generic(
+                "Security filter not applied".to_string(),
+            ));
         }
 
         // Check for security violations
         if !vm.security_context.security_violations.is_empty() {
             let violations = vm.security_context.security_violations.join(", ");
-            return Err(RuntimeError::Generic(format!("Security violations detected: {}", violations)));
+            return Err(RuntimeError::Generic(format!(
+                "Security violations detected: {}",
+                violations
+            )));
         }
 
         // Update security monitor
@@ -849,7 +922,9 @@ impl FirecrackerMicroVMProvider {
     fn perform_resource_checks(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
         // Check resource limits
         if !vm.check_resource_limits()? {
-            return Err(RuntimeError::Generic("Resource limits exceeded".to_string()));
+            return Err(RuntimeError::Generic(
+                "Resource limits exceeded".to_string(),
+            ));
         }
 
         // Update resource monitor
@@ -874,19 +949,19 @@ impl FirecrackerMicroVMProvider {
     /// Update resource usage
     fn update_resource_usage(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
         vm.update_resource_usage()?;
-        
+
         if let Ok(mut monitor) = self.resource_monitor.lock() {
             monitor.total_cpu_time = vm.resource_usage.cpu_time;
             monitor.total_memory_mb = vm.resource_usage.memory_used_mb;
         }
-        
+
         Ok(())
     }
 
     /// Calculate security score for VM
     fn calculate_security_score(&self, vm: &FirecrackerVM) -> f64 {
         let mut score: f64 = 1.0;
-        
+
         // Deduct points for security issues
         if !vm.security_context.seccomp_filter_applied {
             score -= 0.2;
@@ -900,7 +975,7 @@ impl FirecrackerMicroVMProvider {
         if !vm.security_context.security_violations.is_empty() {
             score -= 0.3;
         }
-        
+
         score.max(0.0)
     }
 
@@ -925,7 +1000,7 @@ impl FirecrackerMicroVMProvider {
         let mut new_vm = FirecrackerVM::new(self.config.clone());
         new_vm.start()?;
         self.vm_pool.push(new_vm);
-        
+
         Ok(self.vm_pool.last_mut().unwrap())
     }
 
@@ -933,7 +1008,8 @@ impl FirecrackerMicroVMProvider {
     fn is_vm_healthy(&self, vm: &FirecrackerVM) -> bool {
         // Check if VM has been running too long
         if let Some(start_time) = vm.start_time {
-            if start_time.elapsed() > Duration::from_secs(3600) { // 1 hour
+            if start_time.elapsed() > Duration::from_secs(3600) {
+                // 1 hour
                 return false;
             }
         }
@@ -953,12 +1029,17 @@ impl FirecrackerMicroVMProvider {
 
     /// Get monitoring statistics
     pub fn get_monitoring_stats(&self) -> RuntimeResult<MonitoringStats> {
-        let resource_monitor = self.resource_monitor.lock()
+        let resource_monitor = self
+            .resource_monitor
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to access resource monitor".to_string()))?;
-        let security_monitor = self.security_monitor.lock()
+        let security_monitor = self
+            .security_monitor
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to access security monitor".to_string()))?;
-        let performance_monitor = self.performance_monitor.lock()
-            .map_err(|_| RuntimeError::Generic("Failed to access performance monitor".to_string()))?;
+        let performance_monitor = self.performance_monitor.lock().map_err(|_| {
+            RuntimeError::Generic("Failed to access performance monitor".to_string())
+        })?;
 
         Ok(MonitoringStats {
             resource_stats: resource_monitor.clone(),
@@ -1030,19 +1111,23 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
 
     fn initialize(&mut self) -> RuntimeResult<()> {
         if !self.is_available() {
-            return Err(RuntimeError::Generic("Firecracker not available on this system".to_string()));
+            return Err(RuntimeError::Generic(
+                "Firecracker not available on this system".to_string(),
+            ));
         }
 
         // Validate configuration
         if !self.config.kernel_path.exists() {
             return Err(RuntimeError::Generic(format!(
-                "Kernel image not found: {:?}", self.config.kernel_path
+                "Kernel image not found: {:?}",
+                self.config.kernel_path
             )));
         }
 
         if !self.config.rootfs_path.exists() {
             return Err(RuntimeError::Generic(format!(
-                "Root filesystem not found: {:?}", self.config.rootfs_path
+                "Root filesystem not found: {:?}",
+                self.config.rootfs_path
             )));
         }
 
@@ -1051,7 +1136,8 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
             if let Some(filter_path) = &self.config.security_features.seccomp_filter_path {
                 if !filter_path.exists() {
                     return Err(RuntimeError::Generic(format!(
-                        "Seccomp filter not found: {:?}", filter_path
+                        "Seccomp filter not found: {:?}",
+                        filter_path
                     )));
                 }
             }
@@ -1060,8 +1146,9 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
         // Initialize jailer if enabled
         if self.config.security_features.jailer_enabled {
             if let Some(chroot_base) = &self.config.security_features.jailer_chroot_base {
-                fs::create_dir_all(chroot_base)
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to create jailer base directory: {}", e)))?;
+                fs::create_dir_all(chroot_base).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to create jailer base directory: {}", e))
+                })?;
             }
         }
 
@@ -1071,7 +1158,9 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
 
     fn execute_program(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         if !self.initialized {
-            return Err(RuntimeError::Generic("Firecracker provider not initialized".to_string()));
+            return Err(RuntimeError::Generic(
+                "Firecracker provider not initialized".to_string(),
+            ));
         }
 
         let start_time = Instant::now();
@@ -1083,7 +1172,10 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "execute_program".to_string(),
                     capability: capability_id.clone(),
-                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                    context: format!(
+                        "Boundary validation failed - capability not in permissions: {:?}",
+                        context.capability_permissions
+                    ),
                 });
             }
         }
@@ -1091,7 +1183,7 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
         // Get a VM from the pool (we need mutable access, so we'll clone the provider)
         let mut provider = FirecrackerMicroVMProvider::with_config(self.config.clone());
         provider.initialized = true;
-        
+
         let vm = provider.get_vm()?;
 
         // Deploy RTFS runtime to VM with enhanced security
@@ -1101,7 +1193,9 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
         let result = if let Some(ref program) = context.program {
             self.execute_rtfs_in_vm(vm, program)?
         } else {
-            return Err(RuntimeError::Generic("No program specified for execution".to_string()));
+            return Err(RuntimeError::Generic(
+                "No program specified for execution".to_string(),
+            ));
         };
 
         let duration = start_time.elapsed();
@@ -1146,7 +1240,7 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
                     "default": "/opt/firecracker/vmlinux"
                 },
                 "rootfs_path": {
-                    "type": "string", 
+                    "type": "string",
                     "description": "Path to the root filesystem (ext4)",
                     "default": "/opt/firecracker/rootfs.ext4"
                 },
@@ -1267,29 +1361,33 @@ impl Drop for FirecrackerMicroVMProvider {
 
 impl FirecrackerMicroVMProvider {
     /// Get enhanced metadata from monitoring systems
-    fn get_enhanced_metadata(&self, vm: &FirecrackerVM, duration: Duration) -> RuntimeResult<ExecutionMetadata> {
+    fn get_enhanced_metadata(
+        &self,
+        vm: &FirecrackerVM,
+        duration: Duration,
+    ) -> RuntimeResult<ExecutionMetadata> {
         // Get resource usage
         let resource_usage = vm.get_resource_usage();
-        
+
         // Get security context
         let security_context = vm.get_security_context();
-        
+
         // Get performance metrics
         let performance_metrics = vm.get_performance_metrics();
-        
+
         // Calculate enhanced metrics
         let memory_used_mb = resource_usage.memory_used_mb as u64;
         let cpu_time = performance_metrics.execution_latency;
-        
+
         // Get monitoring stats
         let monitoring_stats = self.get_monitoring_stats()?;
-        
+
         Ok(ExecutionMetadata {
             duration,
             memory_used_mb,
             cpu_time,
             network_requests: Vec::new(), // Enhanced monitoring would track these
-            file_operations: Vec::new(), // Enhanced monitoring would track these
+            file_operations: Vec::new(),  // Enhanced monitoring would track these
         })
     }
 }

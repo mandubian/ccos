@@ -1,6 +1,6 @@
 //! Search and traversal components for Intent Graph
 
-use super::super::types::{StorableIntent, IntentId, IntentStatus};
+use super::super::types::{IntentId, IntentStatus, StorableIntent};
 use super::storage::IntentGraphStorage;
 use crate::runtime::error::RuntimeError;
 use std::collections::{HashMap, HashSet};
@@ -31,7 +31,7 @@ impl SemanticSearchEngine {
 
         // Get all intents for scoring
         let all_intents = storage.get_all_intents_sync();
-        
+
         for intent in all_intents {
             let score = self.calculate_relevance_score(&query_lower, &intent);
             if score > 0.0 {
@@ -44,7 +44,11 @@ impl SemanticSearchEngine {
 
         // Apply limit if specified
         let results: Vec<IntentId> = if let Some(limit) = limit {
-            scored_intents.into_iter().take(limit).map(|(id, _)| id).collect()
+            scored_intents
+                .into_iter()
+                .take(limit)
+                .map(|(id, _)| id)
+                .collect()
         } else {
             scored_intents.into_iter().map(|(id, _)| id).collect()
         };
@@ -65,7 +69,7 @@ impl SemanticSearchEngine {
         // Individual word matches in goal
         let query_words: Vec<&str> = query.split_whitespace().collect();
         let goal_words: Vec<&str> = goal_lower.split_whitespace().collect();
-        
+
         for query_word in &query_words {
             if goal_words.iter().any(|w| w.contains(query_word)) {
                 score += 0.3;
@@ -112,9 +116,10 @@ impl SemanticSearchEngine {
             if intent.intent_id == target_intent.intent_id {
                 continue; // Skip self
             }
-            
+
             let similarity = self.calculate_intent_similarity(target_intent, &intent);
-            if similarity > 0.1 { // Minimum similarity threshold
+            if similarity > 0.1 {
+                // Minimum similarity threshold
                 similarities.push((intent.intent_id.clone(), similarity));
             }
         }
@@ -122,11 +127,19 @@ impl SemanticSearchEngine {
         // Sort by similarity (descending)
         similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        Ok(similarities.into_iter().take(limit).map(|(id, _)| id).collect())
+        Ok(similarities
+            .into_iter()
+            .take(limit)
+            .map(|(id, _)| id)
+            .collect())
     }
 
     /// Calculate similarity between two intents
-    fn calculate_intent_similarity(&self, intent_a: &StorableIntent, intent_b: &StorableIntent) -> f64 {
+    fn calculate_intent_similarity(
+        &self,
+        intent_a: &StorableIntent,
+        intent_b: &StorableIntent,
+    ) -> f64 {
         let goal_a = intent_a.goal.to_lowercase();
         let goal_b = intent_b.goal.to_lowercase();
 
@@ -268,7 +281,7 @@ impl GraphTraversalEngine {
                 // Reconstruct path
                 let mut path = Vec::new();
                 let mut current = to.clone();
-                
+
                 while let Some(p) = parent.get(&current) {
                     path.push(current.clone());
                     current = p.clone();

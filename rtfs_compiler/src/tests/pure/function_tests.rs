@@ -1,16 +1,16 @@
 #[cfg(test)]
 mod function_tests {
-    
+
+    use crate::ccos::capabilities::registry::CapabilityRegistry;
+    use crate::ccos::capability_marketplace::CapabilityMarketplace;
+    use crate::ccos::delegation::{ExecTarget, StaticDelegationEngine};
+    use crate::ccos::host::RuntimeHost;
     use crate::{
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
-    use crate::ccos::delegation::{StaticDelegationEngine, ExecTarget};
-    use crate::ccos::capabilities::registry::CapabilityRegistry;
-    use crate::ccos::capability_marketplace::CapabilityMarketplace;
-    use crate::ccos::host::RuntimeHost;
-    use std::sync::Arc;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_function_definitions() {
@@ -127,7 +127,10 @@ mod function_tests {
     fn test_delegation_engine_integration() {
         // Set up a StaticDelegationEngine that delegates "delegate-me" to a model that exists
         let mut static_map = HashMap::new();
-        static_map.insert("delegate-me".to_string(), ExecTarget::LocalModel("echo-model".to_string()));
+        static_map.insert(
+            "delegate-me".to_string(),
+            ExecTarget::LocalModel("echo-model".to_string()),
+        );
         let de = Arc::new(StaticDelegationEngine::new(static_map));
 
         // Define and call the delegated function
@@ -138,11 +141,17 @@ mod function_tests {
         let result = parse_and_evaluate_with_de(code, de.clone());
         // Test that delegation works and returns the model ID
         println!("DEBUG: Test result: {:?}", result);
-        assert!(result.is_ok(), "Expected delegation to work and return model ID");
+        assert!(
+            result.is_ok(),
+            "Expected delegation to work and return model ID"
+        );
         let value = result.unwrap();
         // The echo model should return the model ID as a string
-        assert!(matches!(&value, crate::runtime::values::Value::String(s) if s == "echo-model"), 
-                "Expected delegated call to return model ID 'echo-model', got: {:?}", value);
+        assert!(
+            matches!(&value, crate::runtime::values::Value::String(s) if s == "echo-model"),
+            "Expected delegated call to return model ID 'echo-model', got: {:?}",
+            value
+        );
 
         // Now test a function that is not delegated (should work)
         let static_map = HashMap::new();
@@ -164,14 +173,20 @@ mod function_tests {
         let de = Arc::new(StaticDelegationEngine::new(HashMap::new()));
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
         ));
-    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), crate::runtime::security::RuntimeContext::pure(), host);
+        let mut evaluator = Evaluator::new(
+            std::sync::Arc::new(module_registry),
+            crate::runtime::security::RuntimeContext::pure(),
+            host,
+        );
         println!("Symbols in environment: {:?}", evaluator.env.symbol_names());
         println!(
             "Map lookupable: {:?}",
@@ -188,29 +203,39 @@ mod function_tests {
         match evaluator.eval_toplevel(&parsed)? {
             crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
             crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+                Err(crate::runtime::error::RuntimeError::Generic(
+                    "Host call required in pure test".to_string(),
+                ))
             }
         }
     }
 
-    fn parse_and_evaluate_with_de(input: &str, de: Arc<dyn crate::ccos::delegation::DelegationEngine>) -> RuntimeResult<Value> {
+    fn parse_and_evaluate_with_de(
+        input: &str,
+        de: Arc<dyn crate::ccos::delegation::DelegationEngine>,
+    ) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
         ));
-    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
+        let mut evaluator =
+            Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed)? {
             crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
             crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+                Err(crate::runtime::error::RuntimeError::Generic(
+                    "Host call required in pure test".to_string(),
+                ))
             }
         }
     }

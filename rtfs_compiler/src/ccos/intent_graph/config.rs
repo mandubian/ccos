@@ -35,7 +35,7 @@ impl IntentGraphConfig {
             storage_config: StorageConfig::InMemory,
         }
     }
-    
+
     pub fn to_storage_config(&self) -> StorageConfig {
         self.storage_config.clone()
     }

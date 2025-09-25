@@ -12,26 +12,28 @@
 //! - Tooling functions (file I/O, HTTP, etc.)
 //! - CCOS capability functions
 
-use crate::ast::{Symbol, Keyword, MapKey};
+use crate::ast::{Keyword, MapKey, Symbol};
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
-use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::ExecutionOutcome;
 use std::sync::Arc;
 // Removed RwLock - no longer needed after atom removal
-use crate::runtime::module_runtime::{ModuleRegistry, Module, ModuleMetadata, ModuleExport, ExportType};
+use crate::ir::core::{IrNode, IrType};
 use crate::runtime::environment::IrEnvironment;
-use crate::ir::core::{IrType, IrNode};
+use crate::runtime::module_runtime::{
+    ExportType, Module, ModuleExport, ModuleMetadata, ModuleRegistry,
+};
 use std::collections::HashMap;
 use std::fs;
 // removed Rc: use Arc for shared ownership
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The Standard Library for the RTFS runtime.
-/// 
+///
 /// This struct is responsible for creating the global environment and loading
 /// all the built-in functions. It now composes the secure standard library
 /// with impure functions.
@@ -39,7 +41,7 @@ pub struct StandardLibrary;
 
 impl StandardLibrary {
     /// Creates a new global environment and populates it with the standard library functions.
-    /// 
+    ///
     /// This function composes the secure and insecure parts of the standard library.
     /// It starts with a secure environment and then adds the impure functions.
     pub fn create_global_environment() -> Environment {
@@ -83,7 +85,7 @@ impl StandardLibrary {
     }
 
     /// Loads the tooling functions into the environment.
-    /// 
+    ///
     /// These functions provide access to external resources like the file system,
     /// network, and system clock. They are considered "impure" because they
     /// can have side-effects.
@@ -125,16 +127,32 @@ impl StandardLibrary {
                 arity: Arity::Fixed(1),
                 func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch { function: "http/get".to_string(), expected: "1".to_string(), actual: args.len() });
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "http/get".to_string(),
+                            expected: "1".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     let url = match &args[0] {
                         Value::String(s) => s.clone(),
-                        other => return Err(RuntimeError::TypeError { expected: "string".to_string(), actual: other.type_name().to_string(), operation: "http/get".to_string() }),
+                        other => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "string".to_string(),
+                                actual: other.type_name().to_string(),
+                                operation: "http/get".to_string(),
+                            })
+                        }
                     };
                     let mut map: HashMap<MapKey, Value> = HashMap::new();
-                    map.insert(MapKey::Keyword(Keyword("status".into())), Value::Integer(200));
+                    map.insert(
+                        MapKey::Keyword(Keyword("status".into())),
+                        Value::Integer(200),
+                    );
                     map.insert(MapKey::Keyword(Keyword("url".into())), Value::String(url));
-                    map.insert(MapKey::Keyword(Keyword("body".into())), Value::String("ok".into()));
+                    map.insert(
+                        MapKey::Keyword(Keyword("body".into())),
+                        Value::String("ok".into()),
+                    );
                     Ok(Value::Map(map))
                 }),
             })),
@@ -148,15 +166,28 @@ impl StandardLibrary {
                 arity: Arity::Fixed(1),
                 func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch { function: "db/query".to_string(), expected: "1".to_string(), actual: args.len() });
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "db/query".to_string(),
+                            expected: "1".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     let sql = match &args[0] {
                         Value::String(s) => s.clone(),
-                        other => return Err(RuntimeError::TypeError { expected: "string".to_string(), actual: other.type_name().to_string(), operation: "db/query".to_string() }),
+                        other => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "string".to_string(),
+                                actual: other.type_name().to_string(),
+                                operation: "db/query".to_string(),
+                            })
+                        }
                     };
                     let mut row1: HashMap<MapKey, Value> = HashMap::new();
                     row1.insert(MapKey::Keyword(Keyword("row".into())), Value::Integer(1));
-                    row1.insert(MapKey::Keyword(Keyword("sql".into())), Value::String(sql.clone()));
+                    row1.insert(
+                        MapKey::Keyword(Keyword("sql".into())),
+                        Value::String(sql.clone()),
+                    );
                     let mut row2: HashMap<MapKey, Value> = HashMap::new();
                     row2.insert(MapKey::Keyword(Keyword("row".into())), Value::Integer(2));
                     row2.insert(MapKey::Keyword(Keyword("sql".into())), Value::String(sql));
@@ -322,7 +353,7 @@ impl StandardLibrary {
             })),
         );
 
-    // Control flow functions are evaluator special-forms; do not re-register here.
+        // Control flow functions are evaluator special-forms; do not re-register here.
 
         // Collection helpers: keys
         env.define(
@@ -360,9 +391,11 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "update".to_string(),
                 arity: Arity::Variadic(3), // allow 3 or 4, runtime validates upper bound
-                func: Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
-                    Self::update(args, evaluator, env)
-                }),
+                func: Arc::new(
+                    |args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                        Self::update(args, evaluator, env)
+                    },
+                ),
             })),
         );
 
@@ -385,8 +418,12 @@ impl StandardLibrary {
                 name: "numbers".to_string(),
                 arity: Arity::Fixed(2),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 { 
-                        return Err(RuntimeError::ArityMismatch { function: "numbers".to_string(), expected: "2".to_string(), actual: args.len() });
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "numbers".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     let start = args[0].as_number().ok_or_else(|| RuntimeError::TypeError {
                         expected: "number".to_string(),
@@ -398,7 +435,7 @@ impl StandardLibrary {
                         actual: args[1].type_name().to_string(),
                         operation: "numbers".to_string(),
                     })?;
-                    
+
                     let mut result = Vec::new();
                     let start_int = start as i64;
                     let end_int = end as i64;
@@ -417,8 +454,12 @@ impl StandardLibrary {
                 name: "connect-db".to_string(),
                 arity: Arity::Fixed(1),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 1 { 
-                        return Err(RuntimeError::ArityMismatch { function: "connect-db".to_string(), expected: "1".to_string(), actual: args.len() });
+                    if args.len() != 1 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "connect-db".to_string(),
+                            expected: "1".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     // Return a mock connection string
                     Ok(Value::String("mock-db-connection".to_string()))
@@ -446,8 +487,12 @@ impl StandardLibrary {
                 name: "Point".to_string(),
                 arity: Arity::Fixed(2),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 { 
-                        return Err(RuntimeError::ArityMismatch { function: "Point".to_string(), expected: "2".to_string(), actual: args.len() });
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "Point".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     // Return a map representing a Point
                     let mut point = HashMap::new();
@@ -465,8 +510,12 @@ impl StandardLibrary {
                 name: "for".to_string(),
                 arity: Arity::Fixed(3),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 3 { 
-                        return Err(RuntimeError::ArityMismatch { function: "for".to_string(), expected: "3".to_string(), actual: args.len() });
+                    if args.len() != 3 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "for".to_string(),
+                            expected: "3".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     // For now, return a simple result
                     // In a full implementation, this would need special handling in the evaluator
@@ -482,13 +531,17 @@ impl StandardLibrary {
                 name: "map".to_string(),
                 arity: Arity::Fixed(2),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 { 
-                        return Err(RuntimeError::ArityMismatch { function: "map".to_string(), expected: "2".to_string(), actual: args.len() });
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "map".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
                     }
-                    
+
                     let function = &args[0];
                     let collection = &args[1];
-                    
+
                     match collection {
                         Value::Vector(v) => {
                             let mut result = Vec::new();
@@ -504,8 +557,14 @@ impl StandardLibrary {
                             for (k, v) in m {
                                 // For maps, we can iterate over key-value pairs
                                 let mut pair = HashMap::new();
-                                pair.insert(MapKey::Keyword(Keyword("key".to_string())), Value::String("key".to_string()));
-                                pair.insert(MapKey::Keyword(Keyword("value".to_string())), Value::String(k.to_string()));
+                                pair.insert(
+                                    MapKey::Keyword(Keyword("key".to_string())),
+                                    Value::String("key".to_string()),
+                                );
+                                pair.insert(
+                                    MapKey::Keyword(Keyword("value".to_string())),
+                                    Value::String(k.to_string()),
+                                );
                                 result.push(Value::Map(pair));
                             }
                             Ok(Value::Vector(result))
@@ -522,7 +581,7 @@ impl StandardLibrary {
     }
 
     /// Loads the secure standard library functions into the environment.
-    /// 
+    ///
     /// These functions are pure and safe to execute in any context.
     fn load_secure_functions(env: &mut Environment) {
         // Basic I/O functions
@@ -565,7 +624,7 @@ impl StandardLibrary {
             })),
         );
 
-    // Control flow functions are evaluator special-forms; do not re-register here.
+        // Control flow functions are evaluator special-forms; do not re-register here.
 
         // Collection helpers: keys
         env.define(
@@ -593,9 +652,11 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "map-indexed".to_string(),
                 arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
-                    Self::map_indexed(args, evaluator, env)
-                }),
+                func: std::sync::Arc::new(
+                    |args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                        Self::map_indexed(args, evaluator, env)
+                    },
+                ),
             })),
         );
 
@@ -605,9 +666,11 @@ impl StandardLibrary {
             Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
                 name: "remove".to_string(),
                 arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
-                    Self::remove(args, evaluator, env)
-                }),
+                func: std::sync::Arc::new(
+                    |args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
+                        Self::remove(args, evaluator, env)
+                    },
+                ),
             })),
         );
 
@@ -629,16 +692,24 @@ impl StandardLibrary {
                 arity: Arity::Fixed(1),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch { function: "getMessage".to_string(), expected: "1".to_string(), actual: args.len() });
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "getMessage".to_string(),
+                            expected: "1".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     match &args[0] {
                         Value::Error(err) => Ok(Value::String(err.message.clone())),
-                        other => Err(RuntimeError::TypeError { expected: "error".to_string(), actual: other.type_name().to_string(), operation: "getMessage".to_string() })
+                        other => Err(RuntimeError::TypeError {
+                            expected: "error".to_string(),
+                            actual: other.type_name().to_string(),
+                            operation: "getMessage".to_string(),
+                        }),
                     }
                 }),
             })),
         );
-    // 'for' is an evaluator special-form; not registered here.
+        // 'for' is an evaluator special-form; not registered here.
         env.define(
             &Symbol("process-data".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -655,7 +726,7 @@ impl StandardLibrary {
                 func: std::sync::Arc::new(Self::read_file),
             })),
         );
-    // set! is an evaluator special-form; not registered here.
+        // set! is an evaluator special-form; not registered here.
         env.define(
             &Symbol("deftype".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -673,13 +744,20 @@ impl StandardLibrary {
                 arity: Arity::Variadic(1),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.is_empty() {
-                        return Err(RuntimeError::ArityMismatch { function: "Exception.".to_string(), expected: "1+".to_string(), actual: args.len() });
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "Exception.".to_string(),
+                            expected: "1+".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     let msg = match &args[0] {
                         Value::String(s) => s.clone(),
                         other => other.to_string(),
                     };
-                    Ok(Value::Error(crate::runtime::values::ErrorValue { message: msg, stack_trace: None }))
+                    Ok(Value::Error(crate::runtime::values::ErrorValue {
+                        message: msg,
+                        stack_trace: None,
+                    }))
                 }),
             })),
         );
@@ -691,8 +769,12 @@ impl StandardLibrary {
                 name: "numbers".to_string(),
                 arity: Arity::Fixed(2),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 { 
-                        return Err(RuntimeError::ArityMismatch { function: "numbers".to_string(), expected: "2".to_string(), actual: args.len() });
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "numbers".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     let start = args[0].as_number().ok_or_else(|| RuntimeError::TypeError {
                         expected: "number".to_string(),
@@ -704,7 +786,7 @@ impl StandardLibrary {
                         actual: args[1].type_name().to_string(),
                         operation: "numbers".to_string(),
                     })?;
-                    
+
                     let mut result = Vec::new();
                     let start_int = start as i64;
                     let end_int = end as i64;
@@ -723,8 +805,12 @@ impl StandardLibrary {
                 name: "connect-db".to_string(),
                 arity: Arity::Fixed(1),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 1 { 
-                        return Err(RuntimeError::ArityMismatch { function: "connect-db".to_string(), expected: "1".to_string(), actual: args.len() });
+                    if args.len() != 1 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "connect-db".to_string(),
+                            expected: "1".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     // Return a mock connection string
                     Ok(Value::String("mock-db-connection".to_string()))
@@ -752,8 +838,12 @@ impl StandardLibrary {
                 name: "Point".to_string(),
                 arity: Arity::Fixed(2),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 { 
-                        return Err(RuntimeError::ArityMismatch { function: "Point".to_string(), expected: "2".to_string(), actual: args.len() });
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "Point".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     // Return a map representing a Point
                     let mut point = HashMap::new();
@@ -771,8 +861,12 @@ impl StandardLibrary {
                 name: "for".to_string(),
                 arity: Arity::Fixed(3),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 3 { 
-                        return Err(RuntimeError::ArityMismatch { function: "for".to_string(), expected: "3".to_string(), actual: args.len() });
+                    if args.len() != 3 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "for".to_string(),
+                            expected: "3".to_string(),
+                            actual: args.len(),
+                        });
                     }
                     // For now, return a simple result
                     // In a full implementation, this would need special handling in the evaluator
@@ -788,13 +882,17 @@ impl StandardLibrary {
                 name: "map".to_string(),
                 arity: Arity::Fixed(2),
                 func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 { 
-                        return Err(RuntimeError::ArityMismatch { function: "map".to_string(), expected: "2".to_string(), actual: args.len() });
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "map".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
                     }
-                    
+
                     let function = &args[0];
                     let collection = &args[1];
-                    
+
                     match collection {
                         Value::Vector(v) => {
                             let mut result = Vec::new();
@@ -810,8 +908,14 @@ impl StandardLibrary {
                             for (k, v) in m {
                                 // For maps, we can iterate over key-value pairs
                                 let mut pair = HashMap::new();
-                                pair.insert(MapKey::Keyword(Keyword("key".to_string())), Value::String("key".to_string()));
-                                pair.insert(MapKey::Keyword(Keyword("value".to_string())), Value::String(k.to_string()));
+                                pair.insert(
+                                    MapKey::Keyword(Keyword("key".to_string())),
+                                    Value::String("key".to_string()),
+                                );
+                                pair.insert(
+                                    MapKey::Keyword(Keyword("value".to_string())),
+                                    Value::String(k.to_string()),
+                                );
                                 result.push(Value::Map(pair));
                             }
                             Ok(Value::Vector(result))
@@ -828,7 +932,7 @@ impl StandardLibrary {
     }
 
     /// Loads the CCOS capability functions into the environment.
-    /// 
+    ///
     /// These functions are specific to the CCOS and provide high-level
     /// orchestration capabilities.
     fn load_capability_functions(env: &mut Environment) {
@@ -846,7 +950,7 @@ impl StandardLibrary {
     // --- Tooling Function Implementations ---
 
     /// `(tool.open-file "path/to/file")`
-    /// 
+    ///
     /// Reads the content of a file and returns it as a string.
     fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -875,7 +979,7 @@ impl StandardLibrary {
     }
 
     /// `(tool.http-fetch "http://example.com")`
-    /// 
+    ///
     /// Fetches content from a URL and returns it as a string.
     /// Note: This is a blocking operation.
     fn tool_http_fetch(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -914,7 +1018,7 @@ impl StandardLibrary {
     }
 
     /// `(tool.log "message" 1 2 3)`
-    /// 
+    ///
     /// Prints the given arguments to the console.
     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
         let output = args
@@ -927,7 +1031,7 @@ impl StandardLibrary {
     }
 
     /// `(tool.time-ms)`
-    /// 
+    ///
     /// Returns the current system time in milliseconds since the UNIX epoch.
     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 0 {
@@ -988,7 +1092,7 @@ impl StandardLibrary {
     }
 
     /// `(tool/serialize-json data)`
-    /// 
+    ///
     /// Converts an RTFS value to JSON string representation.
     fn tool_serialize_json(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -1004,12 +1108,15 @@ impl StandardLibrary {
 
         match serde_json::to_string(&json_val) {
             Ok(s) => Ok(Value::String(s)),
-            Err(e) => Err(RuntimeError::Generic(format!("JSON serialization error: {}", e))),
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "JSON serialization error: {}",
+                e
+            ))),
         }
     }
 
     /// `(tool/parse-json json-string)`
-    /// 
+    ///
     /// Parses a JSON string and converts it to an RTFS value.
     fn tool_parse_json(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -1047,7 +1154,9 @@ impl StandardLibrary {
             Value::Integer(i) => Ok(serde_json::Value::Number(serde_json::Number::from(*i))),
             Value::Float(f) => match serde_json::Number::from_f64(*f) {
                 Some(n) => Ok(serde_json::Value::Number(n)),
-                None => Err(RuntimeError::Generic("Invalid float value for JSON".to_string())),
+                None => Err(RuntimeError::Generic(
+                    "Invalid float value for JSON".to_string(),
+                )),
             },
             Value::String(s) => Ok(serde_json::Value::String(s.clone())),
             Value::Vector(vec) => {
@@ -1056,7 +1165,7 @@ impl StandardLibrary {
                     json_array.push(Self::rtfs_value_to_json(item)?);
                 }
                 Ok(serde_json::Value::Array(json_array))
-            },
+            }
             Value::Map(map) => {
                 let mut json_object = serde_json::Map::new();
                 for (key, value) in map {
@@ -1068,8 +1177,11 @@ impl StandardLibrary {
                     json_object.insert(key_str, Self::rtfs_value_to_json(value)?);
                 }
                 Ok(serde_json::Value::Object(json_object))
-            },
-            _ => Err(RuntimeError::Generic(format!("Cannot serialize {} to JSON", value.type_name()))),
+            }
+            _ => Err(RuntimeError::Generic(format!(
+                "Cannot serialize {} to JSON",
+                value.type_name()
+            ))),
         }
     }
 
@@ -1086,7 +1198,7 @@ impl StandardLibrary {
                 } else {
                     Err(RuntimeError::Generic("Invalid JSON number".to_string()))
                 }
-            },
+            }
             serde_json::Value::String(s) => Ok(Value::String(s.clone())),
             serde_json::Value::Array(arr) => {
                 let mut rtfs_vec = Vec::new();
@@ -1094,7 +1206,7 @@ impl StandardLibrary {
                     rtfs_vec.push(Self::json_value_to_rtfs(item)?);
                 }
                 Ok(Value::Vector(rtfs_vec))
-            },
+            }
             serde_json::Value::Object(obj) => {
                 let mut rtfs_map = std::collections::HashMap::new();
                 for (key, value) in obj {
@@ -1102,19 +1214,18 @@ impl StandardLibrary {
                     rtfs_map.insert(map_key, Self::json_value_to_rtfs(value)?);
                 }
                 Ok(Value::Map(rtfs_map))
-            },
+            }
         }
     }
 
     /// `(println args...)`
-    /// 
+    ///
     /// Prints the given arguments to the console with a newline.
     fn println(args: Vec<Value>) -> RuntimeResult<Value> {
         let output = if args.is_empty() {
             String::new()
         } else {
-            args
-                .iter()
+            args.iter()
                 .map(|v| v.to_string())
                 .collect::<Vec<String>>()
                 .join(" ")
@@ -1124,7 +1235,7 @@ impl StandardLibrary {
     }
 
     /// `(thread/sleep milliseconds)`
-    /// 
+    ///
     /// Sleeps for the specified number of milliseconds.
     fn thread_sleep(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -1159,7 +1270,7 @@ impl StandardLibrary {
     }
 
     /// `(file-exists? filename)`
-    /// 
+    ///
     /// Checks if a file exists and returns a boolean.
     fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -1186,7 +1297,7 @@ impl StandardLibrary {
     }
 
     /// `(get-env variable-name)`
-    /// 
+    ///
     /// Gets an environment variable and returns its value as a string, or nil if not found.
     fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -1215,7 +1326,7 @@ impl StandardLibrary {
     }
 
     /// `(read-lines filename)`
-    /// 
+    ///
     /// Reads all lines from a file and returns them as a vector of strings.
     fn read_lines(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -1275,7 +1386,7 @@ impl StandardLibrary {
     }
 
     /// `(step message-or-level message [data])`
-    /// 
+    ///
     /// Logs a step/debug message with optional level and data.
     /// Returns nil (side-effect function for logging/debugging).
     fn step(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -1290,10 +1401,10 @@ impl StandardLibrary {
 
         // Parse arguments based on patterns:
         // (step "message") - simple message
-        // (step :level "message") - message with level 
+        // (step :level "message") - message with level
         // (step "message" data) - message with data
         // (step :level "message" data) - message with level and data
-        
+
         let (level, message, data) = match args.len() {
             1 => {
                 // (step "message")
@@ -1336,14 +1447,19 @@ impl StandardLibrary {
 
         // Format log message
         let log_message = if let Some(data) = data {
-            format!("[{}] {}: {}", level.to_uppercase(), message, data.to_string())
+            format!(
+                "[{}] {}: {}",
+                level.to_uppercase(),
+                message,
+                data.to_string()
+            )
         } else {
             format!("[{}] {}", level.to_uppercase(), message)
         };
 
         // Print the log message (in a real implementation, this would go to a proper logger)
         println!("{}", log_message);
-        
+
         Ok(Value::Nil)
     }
 
@@ -1443,7 +1559,11 @@ impl StandardLibrary {
         let map_val = &args[0];
         let key_val = &args[1];
         let f_val = &args[2];
-        let extra_args: Vec<Value> = if args.len() > 3 { args[3..].to_vec() } else { Vec::new() };
+        let extra_args: Vec<Value> = if args.len() > 3 {
+            args[3..].to_vec()
+        } else {
+            Vec::new()
+        };
 
         // Support update for both maps and vectors
         let mut new_map_opt: Option<std::collections::HashMap<crate::ast::MapKey, Value>> = None;
@@ -1479,12 +1599,16 @@ impl StandardLibrary {
             let current = new_map.get(&map_key).cloned().unwrap_or(Value::Nil);
             // Resolve function-like value (direct function/keyword or string lookup)
             let f_to_call = match f_val {
-                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => f_val.clone(),
+                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
+                    f_val.clone()
+                }
                 Value::String(name) => {
                     // Resolve by symbol name in current environment
                     if let Some(resolved) = env.lookup(&crate::ast::Symbol(name.clone())) {
                         match resolved {
-                            Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => resolved,
+                            Value::Function(_)
+                            | Value::FunctionPlaceholder(_)
+                            | Value::Keyword(_) => resolved,
                             other => {
                                 return Err(RuntimeError::TypeError {
                                     expected: "function".to_string(),
@@ -1514,9 +1638,18 @@ impl StandardLibrary {
                 args_for_call.extend(extra_args.clone());
                 match evaluator.call_function(f_to_call, &args_for_call, env)? {
                     ExecutionOutcome::Complete(v) => v,
-                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.capability_id))),
+                    ExecutionOutcome::RequiresHost(hc) => {
+                        return Err(RuntimeError::Generic(format!(
+                            "Host call required in stdlib 'update': {}",
+                            hc.capability_id
+                        )))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'update'".to_string())),
+                    ExecutionOutcome::RequiresHostEffect(_) => {
+                        return Err(RuntimeError::Generic(
+                            "Host effect required in stdlib 'update'".to_string(),
+                        ))
+                    }
                 }
             };
             new_map.insert(map_key, new_value);
@@ -1546,11 +1679,15 @@ impl StandardLibrary {
             let current = new_vec[index].clone();
             // Resolve function-like value (direct function/keyword or string lookup)
             let f_to_call = match f_val {
-                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => f_val.clone(),
+                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
+                    f_val.clone()
+                }
                 Value::String(name) => {
                     if let Some(resolved) = env.lookup(&crate::ast::Symbol(name.clone())) {
                         match resolved {
-                            Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => resolved,
+                            Value::Function(_)
+                            | Value::FunctionPlaceholder(_)
+                            | Value::Keyword(_) => resolved,
                             other => {
                                 return Err(RuntimeError::TypeError {
                                     expected: "function".to_string(),
@@ -1580,9 +1717,18 @@ impl StandardLibrary {
                 args_for_call.extend(extra_args.clone());
                 match evaluator.call_function(f_to_call, &args_for_call, env)? {
                     ExecutionOutcome::Complete(v) => v,
-                    ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'update': {}", hc.capability_id))),
+                    ExecutionOutcome::RequiresHost(hc) => {
+                        return Err(RuntimeError::Generic(format!(
+                            "Host call required in stdlib 'update': {}",
+                            hc.capability_id
+                        )))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'update'".to_string())),
+                    ExecutionOutcome::RequiresHostEffect(_) => {
+                        return Err(RuntimeError::Generic(
+                            "Host effect required in stdlib 'update'".to_string(),
+                        ))
+                    }
                 }
             };
             new_vec[index] = new_value;
@@ -1643,7 +1789,7 @@ impl StandardLibrary {
     /// `(str ...)` - Converts all arguments to strings and concatenates them
     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
         let mut result = String::new();
-        
+
         // Convert all arguments to strings and concatenate them
         for arg in args {
             match arg {
@@ -1684,9 +1830,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -1704,9 +1848,18 @@ impl StandardLibrary {
                     let args_for_call = vec![Value::Integer(index as i64), element.clone()];
                     match evaluator.call_function(f.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map-indexed': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'map-indexed'".to_string())),
+                        ExecutionOutcome::RequiresHost(hc) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Host call required in stdlib 'map-indexed': {}",
+                                hc.capability_id
+                            )))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in stdlib 'map-indexed'".to_string(),
+                            ))
+                        }
                     }
                 }
                 _ => {
@@ -1722,7 +1875,9 @@ impl StandardLibrary {
 
         match collection {
             Value::Vector(_) => Ok(Value::Vector(result)),
-            Value::String(_) => Ok(Value::String(result.into_iter().map(|v| v.to_string()).collect())),
+            Value::String(_) => Ok(Value::String(
+                result.into_iter().map(|v| v.to_string()).collect(),
+            )),
             Value::List(_) => Ok(Value::List(result)),
             _ => unreachable!(),
         }
@@ -1747,9 +1902,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -1765,15 +1918,25 @@ impl StandardLibrary {
             let should_keep = match pred {
                 Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
                     let args_for_call = vec![element.clone()];
-                    let pred_result = match evaluator.call_function(pred.clone(), &args_for_call, env)? {
-                        ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'remove': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'remove'".to_string())),
-                    };
+                    let pred_result =
+                        match evaluator.call_function(pred.clone(), &args_for_call, env)? {
+                            ExecutionOutcome::Complete(v) => v,
+                            ExecutionOutcome::RequiresHost(hc) => {
+                                return Err(RuntimeError::Generic(format!(
+                                    "Host call required in stdlib 'remove': {}",
+                                    hc.capability_id
+                                )))
+                            }
+                            #[cfg(feature = "effect-boundary")]
+                            ExecutionOutcome::RequiresHostEffect(_) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host effect required in stdlib 'remove'".to_string(),
+                                ))
+                            }
+                        };
                     match pred_result {
                         Value::Boolean(b) => !b, // Keep elements where predicate returns false
-                        _ => true, // Keep if predicate doesn't return boolean
+                        _ => true,               // Keep if predicate doesn't return boolean
                     }
                 }
                 _ => {
@@ -1791,7 +1954,9 @@ impl StandardLibrary {
 
         match collection {
             Value::Vector(_) => Ok(Value::Vector(result)),
-            Value::String(_) => Ok(Value::String(result.into_iter().map(|v| v.to_string()).collect())),
+            Value::String(_) => Ok(Value::String(
+                result.into_iter().map(|v| v.to_string()).collect(),
+            )),
             Value::List(_) => Ok(Value::List(result)),
             _ => unreachable!(),
         }
@@ -1816,9 +1981,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -1830,28 +1993,37 @@ impl StandardLibrary {
         };
 
         for element in elements {
-                    let result = match pred {
-                        Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
-                            let args_for_call = vec![element.clone()];
-                            match evaluator.call_function(pred.clone(), &args_for_call, env)? {
-                                ExecutionOutcome::Complete(v) => v,
-                                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'some?': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'some?'".to_string())),
-                            }
+            let result = match pred {
+                Value::Function(_) | Value::FunctionPlaceholder(_) | Value::Keyword(_) => {
+                    let args_for_call = vec![element.clone()];
+                    match evaluator.call_function(pred.clone(), &args_for_call, env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(hc) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Host call required in stdlib 'some?': {}",
+                                hc.capability_id
+                            )))
                         }
-                        _ => {
-                            return Err(RuntimeError::TypeError {
-                                expected: "function".to_string(),
-                                actual: pred.type_name().to_string(),
-                                operation: "some?".to_string(),
-                            })
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in stdlib 'some?'".to_string(),
+                            ))
                         }
-                    };
-                    match result {
-                        Value::Boolean(true) => return Ok(Value::Boolean(true)),
-                        _ => continue,
                     }
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: pred.type_name().to_string(),
+                        operation: "some?".to_string(),
+                    })
+                }
+            };
+            match result {
+                Value::Boolean(true) => return Ok(Value::Boolean(true)),
+                _ => continue,
+            }
         }
 
         Ok(Value::Boolean(false))
@@ -1876,9 +2048,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -1895,9 +2065,18 @@ impl StandardLibrary {
                     let args_for_call = vec![element.clone()];
                     match evaluator.call_function(pred.clone(), &args_for_call, env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'every?': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'every?'".to_string())),
+                        ExecutionOutcome::RequiresHost(hc) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Host call required in stdlib 'every?': {}",
+                                hc.capability_id
+                            )))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in stdlib 'every?'".to_string(),
+                            ))
+                        }
                     }
                 }
                 _ => {
@@ -1939,8 +2118,6 @@ impl StandardLibrary {
             }
         }
     }
-
-
 
     /// `(first collection)` - Returns the first element of a collection
     fn first(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2156,7 +2333,7 @@ impl StandardLibrary {
 
         let mut result = Vec::new();
         let mut current = start;
-        
+
         if step > 0 {
             while current < end {
                 result.push(Value::Integer(current));
@@ -2173,11 +2350,7 @@ impl StandardLibrary {
     }
 
     /// `(map function collection)` - Applies a function to each element of a collection
-    fn map(
-        args: Vec<Value>,
-        evaluator: &Evaluator,
-        env: &mut Environment,
-    ) -> RuntimeResult<Value> {
+    fn map(args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "map".to_string(),
@@ -2191,9 +2364,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -2208,9 +2379,18 @@ impl StandardLibrary {
         for element in elements {
             match evaluator.call_function(function.clone(), &[element], env)? {
                 ExecutionOutcome::Complete(v) => result.push(v),
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'map': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'map'".to_string())),
+                ExecutionOutcome::RequiresHost(hc) => {
+                    return Err(RuntimeError::Generic(format!(
+                        "Host call required in stdlib 'map': {}",
+                        hc.capability_id
+                    )))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHostEffect(_) => {
+                    return Err(RuntimeError::Generic(
+                        "Host effect required in stdlib 'map'".to_string(),
+                    ))
+                }
             }
         }
 
@@ -2242,9 +2422,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             Value::Map(map) => {
                 // For maps, convert to vector of [key value] pairs
@@ -2270,12 +2448,22 @@ impl StandardLibrary {
 
         let mut result = Vec::new();
         for element in elements {
-            let should_include = match evaluator.call_function(predicate.clone(), &[element.clone()], env)? {
-                ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'filter': {}", hc.capability_id))),
+            let should_include =
+                match evaluator.call_function(predicate.clone(), &[element.clone()], env)? {
+                    ExecutionOutcome::Complete(v) => v,
+                    ExecutionOutcome::RequiresHost(hc) => {
+                        return Err(RuntimeError::Generic(format!(
+                            "Host call required in stdlib 'filter': {}",
+                            hc.capability_id
+                        )))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'filter'".to_string())),
-            };
+                    ExecutionOutcome::RequiresHostEffect(_) => {
+                        return Err(RuntimeError::Generic(
+                            "Host effect required in stdlib 'filter'".to_string(),
+                        ))
+                    }
+                };
             match should_include {
                 Value::Boolean(true) => result.push(element),
                 Value::Boolean(false) => {}
@@ -2351,7 +2539,9 @@ impl StandardLibrary {
             return if args.len() == 3 {
                 Ok(args[1].clone())
             } else {
-                Err(RuntimeError::new("reduce on empty collection with no initial value"))
+                Err(RuntimeError::new(
+                    "reduce on empty collection with no initial value",
+                ))
             };
         }
 
@@ -2362,11 +2552,24 @@ impl StandardLibrary {
         };
 
         for value in rest {
-            accumulator = match evaluator.call_function(function.clone(), &[accumulator.clone(), value.clone()], env)? {
+            accumulator = match evaluator.call_function(
+                function.clone(),
+                &[accumulator.clone(), value.clone()],
+                env,
+            )? {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'reduce': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'reduce'".to_string())),
+                ExecutionOutcome::RequiresHost(hc) => {
+                    return Err(RuntimeError::Generic(format!(
+                        "Host call required in stdlib 'reduce': {}",
+                        hc.capability_id
+                    )))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHostEffect(_) => {
+                    return Err(RuntimeError::Generic(
+                        "Host effect required in stdlib 'reduce'".to_string(),
+                    ))
+                }
             };
         }
 
@@ -2380,13 +2583,13 @@ impl StandardLibrary {
             2 => {
                 let comparator = &args[0];
                 let collection = &args[1];
-                
+
                 // Check if comparator is a function or a keyword like '>'
                 let reverse = match comparator {
                     Value::Keyword(k) => k.0 == ">",
                     _ => false,
                 };
-                
+
                 (collection, reverse)
             }
             _ => {
@@ -2453,9 +2656,7 @@ impl StandardLibrary {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -2471,9 +2672,18 @@ impl StandardLibrary {
         for element in elements {
             let key = match evaluator.call_function(key_fn.clone(), &[element.clone()], env)? {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Err(RuntimeError::Generic(format!("Host call required in stdlib 'sort-by': {}", hc.capability_id))),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in stdlib 'sort-by'".to_string())),
+                ExecutionOutcome::RequiresHost(hc) => {
+                    return Err(RuntimeError::Generic(format!(
+                        "Host call required in stdlib 'sort-by': {}",
+                        hc.capability_id
+                    )))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHostEffect(_) => {
+                    return Err(RuntimeError::Generic(
+                        "Host effect required in stdlib 'sort-by'".to_string(),
+                    ))
+                }
             };
             pairs.push((element, key));
         }
@@ -2506,9 +2716,7 @@ impl StandardLibrary {
         let collection = &args[0];
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -2531,7 +2739,7 @@ impl StandardLibrary {
                 Value::Nil => crate::ast::MapKey::String("nil".to_string()),
                 _ => crate::ast::MapKey::String(element.to_string()),
             };
-            
+
             let count = freq_map.entry(key).or_insert(Value::Integer(0));
             if let Value::Integer(n) = count {
                 *count = Value::Integer(*n + 1);
@@ -2540,7 +2748,6 @@ impl StandardLibrary {
 
         Ok(Value::Map(freq_map))
     }
-
 
     /// `(distinct collection)` - Returns collection with duplicates removed
     fn distinct(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2555,9 +2762,7 @@ impl StandardLibrary {
         let collection = &args[0];
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -2577,13 +2782,13 @@ impl StandardLibrary {
 
         match collection {
             Value::Vector(_) => Ok(Value::Vector(result)),
-            Value::String(_) => Ok(Value::String(result.into_iter().map(|v| v.to_string()).collect())),
+            Value::String(_) => Ok(Value::String(
+                result.into_iter().map(|v| v.to_string()).collect(),
+            )),
             Value::List(_) => Ok(Value::List(result)),
             _ => unreachable!(),
         }
     }
-
-
 
     /// `(contains? collection item)` - Returns true if collection contains item
     fn contains(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2637,10 +2842,16 @@ impl StandardLibrary {
         for arg in args {
             match arg {
                 Value::Map(m) => {
-                    for (k, v) in m { out.insert(k, v); }
+                    for (k, v) in m {
+                        out.insert(k, v);
+                    }
                 }
                 other => {
-                    return Err(RuntimeError::TypeError { expected: "map".into(), actual: other.type_name().into(), operation: "merge".into() });
+                    return Err(RuntimeError::TypeError {
+                        expected: "map".into(),
+                        actual: other.type_name().into(),
+                        operation: "merge".into(),
+                    });
                 }
             }
         }
@@ -2656,15 +2867,21 @@ impl StandardLibrary {
     fn coordinate_work_stub(args: Vec<Value>) -> RuntimeResult<Value> {
         // Echo back a simple map {:status :ok :inputs n}
         let mut m = HashMap::new();
-        m.insert(MapKey::Keyword(Keyword("status".into())), Value::Keyword(Keyword("ok".into())));
-        m.insert(MapKey::Keyword(Keyword("inputs".into())), Value::Integer(args.len() as i64));
+        m.insert(
+            MapKey::Keyword(Keyword("status".into())),
+            Value::Keyword(Keyword("ok".into())),
+        );
+        m.insert(
+            MapKey::Keyword(Keyword("inputs".into())),
+            Value::Integer(args.len() as i64),
+        );
         Ok(Value::Map(m))
     }
 
     // --- CCOS Capability Function Implementations ---
 
     /// `(call :capability-id arg1 arg2 ...)` or `(call "capability-name" arg1 arg2 ...)`
-    /// 
+    ///
     /// Dynamically invokes a CCOS capability. This is the main entry point
     /// for RTFS to interact with the broader CCOS environment.
     /// Supports both keyword syntax (:capability-id) and string syntax ("capability-name")
@@ -2696,101 +2913,131 @@ impl StandardLibrary {
         let capability_args = &args[1..];
 
         // Delegate the actual capability execution to the host
-        evaluator.host.execute_capability(&capability_name, capability_args)
+        evaluator
+            .host
+            .execute_capability(&capability_name, capability_args)
     }
-
 }
 
 /// Register default capabilities in the marketplace
-pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
+pub async fn register_default_capabilities(
+    marketplace: &CapabilityMarketplace,
+) -> RuntimeResult<()> {
     // Register ccos.echo capability
-    marketplace.register_local_capability(
-        "ccos.echo".to_string(),
-        "Echo Capability".to_string(),
-        "Echoes the input value back".to_string(),
-        Arc::new(|input| {
-            match input {
-                // New calling convention: map with :args and optional :context
-                Value::Map(map) => {
-                    let args_val = map.get(&MapKey::Keyword(Keyword("args".to_string()))).cloned().unwrap_or(Value::List(vec![]));
-                    match args_val {
-                        Value::List(args) => {
-                            if args.len() == 1 {
-                                Ok(args[0].clone())
-                            } else {
-                                Err(RuntimeError::ArityMismatch {
-                                    function: "ccos.echo".to_string(),
-                                    expected: "1".to_string(),
-                                    actual: args.len(),
-                                })
-                            }
-                        }
-                        other => Err(RuntimeError::TypeError {
-                            expected: "list".to_string(),
-                            actual: other.type_name().to_string(),
-                            operation: "ccos.echo".to_string(),
-                        })
-                    }
-                }
-                // Backward compatibility: still accept a plain list
-                Value::List(args) => {
-                    if args.len() == 1 {
-                        Ok(args[0].clone())
-                    } else {
-                        Err(RuntimeError::ArityMismatch {
-                            function: "ccos.echo".to_string(),
-                            expected: "1".to_string(),
-                            actual: args.len(),
-                        })
-                    }
-                }
-                _ => Err(RuntimeError::TypeError {
-                    expected: "map or list".to_string(),
-                    actual: input.type_name().to_string(),
-                    operation: "ccos.echo".to_string(),
-                })
-            }
-        }),
-    ).await.map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.echo: {:?}", e)))?;
-
-    // Register ccos.math.add capability
-    marketplace.register_local_capability(
-        "ccos.math.add".to_string(),
-        "Math Add Capability".to_string(),
-        "Adds numeric values".to_string(),
-        Arc::new(|input| {
-            match input {
-                // New calling convention: map with :args containing the argument list
-                Value::Map(map) => {
-                    if let Some(args_val) = map.get(&MapKey::Keyword(Keyword("args".to_string()))) {
+    marketplace
+        .register_local_capability(
+            "ccos.echo".to_string(),
+            "Echo Capability".to_string(),
+            "Echoes the input value back".to_string(),
+            Arc::new(|input| {
+                match input {
+                    // New calling convention: map with :args and optional :context
+                    Value::Map(map) => {
+                        let args_val = map
+                            .get(&MapKey::Keyword(Keyword("args".to_string())))
+                            .cloned()
+                            .unwrap_or(Value::List(vec![]));
                         match args_val {
                             Value::List(args) => {
-                                let mut sum = 0i64;
-                                for arg in args {
-                                    match arg {
-                                        Value::Integer(n) => sum += n,
-                                        other => {
-                                            return Err(RuntimeError::TypeError {
-                                                expected: "integer".to_string(),
-                                                actual: other.type_name().to_string(),
-                                                operation: "ccos.math.add".to_string(),
-                                            })
-                                        }
-                                    }
+                                if args.len() == 1 {
+                                    Ok(args[0].clone())
+                                } else {
+                                    Err(RuntimeError::ArityMismatch {
+                                        function: "ccos.echo".to_string(),
+                                        expected: "1".to_string(),
+                                        actual: args.len(),
+                                    })
                                 }
-                                Ok(Value::Integer(sum))
                             }
                             other => Err(RuntimeError::TypeError {
                                 expected: "list".to_string(),
                                 actual: other.type_name().to_string(),
-                                operation: "ccos.math.add".to_string(),
+                                operation: "ccos.echo".to_string(),
+                            }),
+                        }
+                    }
+                    // Backward compatibility: still accept a plain list
+                    Value::List(args) => {
+                        if args.len() == 1 {
+                            Ok(args[0].clone())
+                        } else {
+                            Err(RuntimeError::ArityMismatch {
+                                function: "ccos.echo".to_string(),
+                                expected: "1".to_string(),
+                                actual: args.len(),
                             })
                         }
-                    } else {
-                        // Fallback: treat map values as integers (backward compatibility)
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "map or list".to_string(),
+                        actual: input.type_name().to_string(),
+                        operation: "ccos.echo".to_string(),
+                    }),
+                }
+            }),
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.echo: {:?}", e)))?;
+
+    // Register ccos.math.add capability
+    marketplace
+        .register_local_capability(
+            "ccos.math.add".to_string(),
+            "Math Add Capability".to_string(),
+            "Adds numeric values".to_string(),
+            Arc::new(|input| {
+                match input {
+                    // New calling convention: map with :args containing the argument list
+                    Value::Map(map) => {
+                        if let Some(args_val) =
+                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
+                        {
+                            match args_val {
+                                Value::List(args) => {
+                                    let mut sum = 0i64;
+                                    for arg in args {
+                                        match arg {
+                                            Value::Integer(n) => sum += n,
+                                            other => {
+                                                return Err(RuntimeError::TypeError {
+                                                    expected: "integer".to_string(),
+                                                    actual: other.type_name().to_string(),
+                                                    operation: "ccos.math.add".to_string(),
+                                                })
+                                            }
+                                        }
+                                    }
+                                    Ok(Value::Integer(sum))
+                                }
+                                other => Err(RuntimeError::TypeError {
+                                    expected: "list".to_string(),
+                                    actual: other.type_name().to_string(),
+                                    operation: "ccos.math.add".to_string(),
+                                }),
+                            }
+                        } else {
+                            // Fallback: treat map values as integers (backward compatibility)
+                            let mut sum = 0i64;
+                            for (_key, value) in map {
+                                match value {
+                                    Value::Integer(n) => sum += n,
+                                    other => {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "integer".to_string(),
+                                            actual: other.type_name().to_string(),
+                                            operation: "ccos.math.add".to_string(),
+                                        })
+                                    }
+                                }
+                            }
+                            Ok(Value::Integer(sum))
+                        }
+                    }
+                    // Backward compatibility: direct list of arguments
+                    Value::List(args) => {
                         let mut sum = 0i64;
-                        for (_key, value) in map {
-                            match value {
+                        for arg in args {
+                            match arg {
                                 Value::Integer(n) => sum += n,
                                 other => {
                                     return Err(RuntimeError::TypeError {
@@ -2803,32 +3050,16 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
                         }
                         Ok(Value::Integer(sum))
                     }
+                    other => Err(RuntimeError::TypeError {
+                        expected: "map or list".to_string(),
+                        actual: other.type_name().to_string(),
+                        operation: "ccos.math.add".to_string(),
+                    }),
                 }
-                // Backward compatibility: direct list of arguments
-                Value::List(args) => {
-                    let mut sum = 0i64;
-                    for arg in args {
-                        match arg {
-                            Value::Integer(n) => sum += n,
-                            other => {
-                                return Err(RuntimeError::TypeError {
-                                    expected: "integer".to_string(),
-                                    actual: other.type_name().to_string(),
-                                    operation: "ccos.math.add".to_string(),
-                                })
-                            }
-                        }
-                    }
-                    Ok(Value::Integer(sum))
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "map or list".to_string(),
-                    actual: other.type_name().to_string(),
-                    operation: "ccos.math.add".to_string(),
-                })
-            }
-        }),
-    ).await.map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
+            }),
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
 
     Ok(())
 }
@@ -2838,13 +3069,13 @@ pub async fn register_default_capabilities(marketplace: &CapabilityMarketplace) 
 pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
     // Create the standard library environment to get all functions
     let env = StandardLibrary::create_global_environment();
-    
+
     // Get all function names
     let function_names = env.symbol_names();
-    
+
     // Group functions by module namespace (e.g., "tool", "thread")
     let mut module_functions: HashMap<String, Vec<(String, Value)>> = HashMap::new();
-    
+
     for name in function_names {
         if let Some(value) = env.lookup(&Symbol(name.clone())) {
             // Special case for division operator to avoid namespace parsing
@@ -2857,7 +3088,7 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
                 // Split by '/' to get module name and function name
                 let module_name = name[..slash_index].to_string();
                 let function_name = name[slash_index + 1..].to_string();
-                
+
                 // Skip if either module or function name is empty (malformed)
                 if !module_name.is_empty() && !function_name.is_empty() {
                     module_functions
@@ -2886,7 +3117,7 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
         };
 
         let mut exports = HashMap::new();
-        
+
         for (function_name, value) in functions {
             let export = ModuleExport {
                 original_name: function_name.clone(),
@@ -2917,4 +3148,3 @@ pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
 
     Ok(())
 }
-

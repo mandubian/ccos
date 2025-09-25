@@ -4,7 +4,7 @@ use rtfs_compiler::parser::parse_with_enhanced_errors;
 
 fn main() {
     println!("=== Delimiter Mismatch Detection Demo ===\n");
-    
+
     // Test bracket/parenthesis mismatch
     println!("1. Testing bracket/parenthesis mismatch:");
     let source1 = "[1 2 3)"; // [ opened but ) closed
@@ -13,7 +13,7 @@ fn main() {
     } else {
         println!("No error detected (parser may handle this gracefully)\n");
     }
-    
+
     // Test nested delimiter mismatch
     println!("2. Testing nested delimiter mismatch:");
     let source2 = "(let [x (+ 1 2] y)"; // ( opened but ] closed
@@ -22,7 +22,7 @@ fn main() {
     } else {
         println!("No error detected (parser may handle this gracefully)\n");
     }
-    
+
     // Test unclosed delimiter in multiline
     println!("3. Testing unclosed delimiter in multiline:");
     let source3 = r#"

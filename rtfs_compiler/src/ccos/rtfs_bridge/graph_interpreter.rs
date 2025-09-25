@@ -6,7 +6,9 @@ use crate::runtime::error::RuntimeError;
 
 use crate::ccos::intent_graph::IntentGraph;
 use crate::ccos::rtfs_bridge::extract_intent_from_rtfs;
-use crate::ccos::types::{EdgeType, GenerationContext, Intent, IntentId, IntentStatus, StorableIntent, TriggerSource};
+use crate::ccos::types::{
+    EdgeType, GenerationContext, Intent, IntentId, IntentStatus, StorableIntent, TriggerSource,
+};
 
 /// Build an IntentGraph from a small RTFS graph DSL and return the root intent id.
 ///
@@ -21,7 +23,10 @@ use crate::ccos::types::{EdgeType, GenerationContext, Intent, IntentId, IntentSt
 /// Edge forms supported:
 ///   (edge {:from "child" :to "parent" :type :IsSubgoalOf})
 ///   (edge :DependsOn "from" "to")
-pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<IntentId, RuntimeError> {
+pub fn build_graph_from_rtfs(
+    rtfs: &str,
+    graph: &mut IntentGraph,
+) -> Result<IntentId, RuntimeError> {
     // Parse either a full program with multiple top-level items or a single expression
     let items = match parse(rtfs) {
         Ok(tops) => tops
@@ -31,10 +36,8 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
                 _ => None,
             })
             .collect::<Vec<_>>(),
-        Err(_) => vec![parse_expression(rtfs).map_err(|e| RuntimeError::Generic(format!(
-            "Failed to parse RTFS graph: {:?}",
-            e
-        )))?],
+        Err(_) => vec![parse_expression(rtfs)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse RTFS graph: {:?}", e)))?],
     };
 
     let mut name_to_id: HashMap<String, IntentId> = HashMap::new();
@@ -47,10 +50,8 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
 
     // Helper: insert an intent Expression into the graph
     let mut insert_intent_expr = |expr: &Expression| -> Result<(), RuntimeError> {
-        let intent: Intent = extract_intent_from_rtfs(expr).map_err(|e| RuntimeError::Generic(format!(
-            "Invalid intent form: {}",
-            e
-        )))?;
+        let intent: Intent = extract_intent_from_rtfs(expr)
+            .map_err(|e| RuntimeError::Generic(format!("Invalid intent form: {}", e)))?;
         let name = intent
             .name
             .clone()
@@ -90,8 +91,8 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
         };
         let id = storable.intent_id.clone();
         graph.store_intent(storable)?;
-    name_to_id.insert(name.clone(), id.clone());
-    name_to_id_lower.insert(name.to_lowercase(), id);
+        name_to_id.insert(name.clone(), id.clone());
+        name_to_id_lower.insert(name.to_lowercase(), id);
         inserted_names_in_order.push(name);
         Ok(())
     };
@@ -104,19 +105,34 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
                 let cname = if let Expression::Symbol(sym) = &**callee {
                     sym.0.as_str()
                 } else {
-                    return Err(RuntimeError::Generic("edge form: callee must be symbol".to_string()));
+                    return Err(RuntimeError::Generic(
+                        "edge form: callee must be symbol".to_string(),
+                    ));
                 };
                 if cname != "edge" {
-                    return Err(RuntimeError::Generic(format!("Unsupported form '{}', expected 'edge'", cname)));
+                    return Err(RuntimeError::Generic(format!(
+                        "Unsupported form '{}', expected 'edge'",
+                        cname
+                    )));
                 }
 
                 if let Some(Expression::Map(m)) = arguments.first() {
                     // Map form
                     // Accept both string and keyword keys
-                    let from = get_string(m, ":from").or_else(|| get_string(m, "from")).ok_or_else(|| RuntimeError::Generic("edge {:from ...} missing".to_string()))?;
-                    let to = get_string(m, ":to").or_else(|| get_string(m, "to")).ok_or_else(|| RuntimeError::Generic("edge {:to ...} missing".to_string()))?;
+                    let from = get_string(m, ":from")
+                        .or_else(|| get_string(m, "from"))
+                        .ok_or_else(|| {
+                            RuntimeError::Generic("edge {:from ...} missing".to_string())
+                        })?;
+                    let to = get_string(m, ":to")
+                        .or_else(|| get_string(m, "to"))
+                        .ok_or_else(|| {
+                            RuntimeError::Generic("edge {:to ...} missing".to_string())
+                        })?;
                     let et = get_edge_type(map_get(m, ":type").or_else(|| map_get(m, "type")));
-                    let et = et.ok_or_else(|| RuntimeError::Generic("edge {:type ...} invalid".to_string()))?;
+                    let et = et.ok_or_else(|| {
+                        RuntimeError::Generic("edge {:type ...} invalid".to_string())
+                    })?;
                     if matches!(et, EdgeType::IsSubgoalOf) {
                         subgoal_from_names.insert(from.clone());
                     }
@@ -127,7 +143,8 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
                     let et = get_edge_type(arguments.get(0));
                     let from = expr_to_string(arguments.get(1).unwrap());
                     let to = expr_to_string(arguments.get(2).unwrap());
-                    let et = et.ok_or_else(|| RuntimeError::Generic("edge type invalid".to_string()))?;
+                    let et =
+                        et.ok_or_else(|| RuntimeError::Generic("edge type invalid".to_string()))?;
                     if matches!(et, EdgeType::IsSubgoalOf) {
                         subgoal_from_names.insert(from.clone());
                     }
@@ -137,7 +154,9 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
                     Err(RuntimeError::Generic("edge form invalid".to_string()))
                 }
             }
-            _ => Err(RuntimeError::Generic("edge form must be a function call".to_string())),
+            _ => Err(RuntimeError::Generic(
+                "edge form must be a function call".to_string(),
+            )),
         }
     };
 
@@ -146,7 +165,9 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
     for item in items {
         match item {
             Expression::Do(d) => {
-                for e in d.expressions { seq.push(e); }
+                for e in d.expressions {
+                    seq.push(e);
+                }
             }
             other => seq.push(other),
         }
@@ -154,11 +175,15 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
 
     // First pass: insert intents
     for e in &seq {
-        if is_intent_form(e) { insert_intent_expr(e)?; }
+        if is_intent_form(e) {
+            insert_intent_expr(e)?;
+        }
     }
     // Second pass: parse edges
     for e in &seq {
-        if is_edge_form(e) { parse_edge_expr(e)?; }
+        if is_edge_form(e) {
+            parse_edge_expr(e)?;
+        }
     }
 
     // Create edges now that ids are known
@@ -168,12 +193,16 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
             .get(&from_name)
             .cloned()
             .or_else(|| name_to_id_lower.get(&from_name.to_lowercase()).cloned())
-            .ok_or_else(|| RuntimeError::Generic(format!("Unknown intent name for edge : {}", from_name)))?;
+            .ok_or_else(|| {
+                RuntimeError::Generic(format!("Unknown intent name for edge : {}", from_name))
+            })?;
         let to_id = name_to_id
             .get(&to_name)
             .cloned()
             .or_else(|| name_to_id_lower.get(&to_name.to_lowercase()).cloned())
-            .ok_or_else(|| RuntimeError::Generic(format!("Unknown intent name for edge : {}", to_name)))?;
+            .ok_or_else(|| {
+                RuntimeError::Generic(format!("Unknown intent name for edge : {}", to_name))
+            })?;
         graph.create_edge(from_id, to_id, et)?;
     }
 
@@ -182,15 +211,25 @@ pub fn build_graph_from_rtfs(rtfs: &str, graph: &mut IntentGraph) -> Result<Inte
         .iter()
         .find(|n| !subgoal_from_names.contains(*n))
         .cloned()
-        .unwrap_or_else(|| inserted_names_in_order.first().cloned().unwrap_or_else(|| "".to_string()));
-    let root_id = name_to_id.get(&root_name).cloned().ok_or_else(|| RuntimeError::Generic("No intents found in RTFS graph".to_string()))?;
+        .unwrap_or_else(|| {
+            inserted_names_in_order
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "".to_string())
+        });
+    let root_id = name_to_id
+        .get(&root_name)
+        .cloned()
+        .ok_or_else(|| RuntimeError::Generic("No intents found in RTFS graph".to_string()))?;
 
     Ok(root_id)
 }
 
 fn is_intent_form(expr: &Expression) -> bool {
     match expr {
-        Expression::FunctionCall { callee, .. } => matches!(&**callee, Expression::Symbol(s) if s.0 == "intent" || s.0 == "ccos/intent"),
+        Expression::FunctionCall { callee, .. } => {
+            matches!(&**callee, Expression::Symbol(s) if s.0 == "intent" || s.0 == "ccos/intent")
+        }
         Expression::Map(map) => {
             // Support both string and keyword keys for :type
             match map
@@ -217,8 +256,7 @@ fn map_get<'a>(map: &'a HashMap<MapKey, Expression>, key: &str) -> Option<&'a Ex
     // Accept both ":key" as String and keyword :key
     let kstr = key.to_string();
     let trimmed = key.trim_start_matches(':');
-    map
-        .get(&MapKey::String(kstr))
+    map.get(&MapKey::String(kstr))
         .or_else(|| map.get(&MapKey::Keyword(Keyword(trimmed.to_string()))))
 }
 
@@ -233,7 +271,8 @@ fn expr_to_string(e: &Expression) -> String {
 
 fn get_edge_type(e: Option<&Expression>) -> Option<EdgeType> {
     match e? {
-        Expression::Literal(Literal::Keyword(Keyword(k))) | Expression::Symbol(crate::ast::Symbol(k)) => match k.as_str() {
+        Expression::Literal(Literal::Keyword(Keyword(k)))
+        | Expression::Symbol(crate::ast::Symbol(k)) => match k.as_str() {
             ":DependsOn" | "DependsOn" => Some(EdgeType::DependsOn),
             ":IsSubgoalOf" | "IsSubgoalOf" => Some(EdgeType::IsSubgoalOf),
             ":ConflictsWith" | "ConflictsWith" => Some(EdgeType::ConflictsWith),

@@ -49,14 +49,19 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
         threshold: 0.65,
         max_candidates: 3,
         min_skill_hits: None,
-        agent_registry: rtfs_compiler::ccos::arbiter::arbiter_config::AgentRegistryConfig::default(),
+        agent_registry: rtfs_compiler::ccos::arbiter::arbiter_config::AgentRegistryConfig::default(
+        ),
         adaptive_threshold: None,
     };
 
-    let intent_graph = Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::intent_graph::IntentGraph::new().unwrap()));
+    let intent_graph = Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::intent_graph::IntentGraph::new().unwrap(),
+    ));
 
     // Construct the delegating arbiter (async constructor)
-    let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph).await.unwrap();
+    let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph)
+        .await
+        .unwrap();
 
     // 3. Create a dummy Intent manually (skip NL phase for simplicity)
     let intent = Intent::new("test goal".to_string()).with_name("stub_intent".to_string());
@@ -66,8 +71,11 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
 
     // 5. Ensure the plan body is valid RTFS that the parser accepts
     if let PlanBody::Rtfs(code) = &plan.body {
-    assert!(rtfs_compiler::parser::parse_expression(&code).is_ok(), "Generated RTFS failed to parse");
+        assert!(
+            rtfs_compiler::parser::parse_expression(&code).is_ok(),
+            "Generated RTFS failed to parse"
+        );
     } else {
         panic!("Plan body is not textual RTFS");
     }
-} 
+}

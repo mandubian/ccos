@@ -1,14 +1,16 @@
 use crate::ast::TypeExpr;
-use crate::runtime::streaming::{StreamType, BidirectionalConfig, DuplexChannels, StreamConfig, StreamingProvider};
 use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::runtime::error::RuntimeResult;
-use crate::runtime::values::Value;
 use crate::runtime::security::RuntimeContext;
-use chrono::{DateTime, Utc, Timelike, Datelike};
+use crate::runtime::streaming::{
+    BidirectionalConfig, DuplexChannels, StreamConfig, StreamType, StreamingProvider,
+};
+use crate::runtime::values::Value;
+use chrono::{DateTime, Datelike, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapabilityAttestation {
@@ -147,24 +149,24 @@ pub enum ResourceType {
     Cpu,
     ExecutionTime,
     ConcurrentCalls,
-    
+
     // AI/ML specific resources
     GpuMemory,
     GpuUtilization,
     GpuComputeUnits,
-    
+
     // Environmental resources
     Co2Emissions,
     EnergyConsumption,
-    
+
     // Network resources
     NetworkBandwidth,
     NetworkLatency,
-    
+
     // Storage resources
     DiskSpace,
     DiskIO,
-    
+
     // Custom resource type
     Custom(String),
 }
@@ -265,7 +267,7 @@ impl ResourceConstraints {
                 },
             );
         }
-        
+
         if let Some(utilization) = gpu_utilization_percent {
             self.extended_limits.insert(
                 "gpu_utilization".to_string(),
@@ -277,7 +279,7 @@ impl ResourceConstraints {
                 },
             );
         }
-        
+
         self
     }
 
@@ -298,7 +300,7 @@ impl ResourceConstraints {
                 },
             );
         }
-        
+
         if let Some(energy) = energy_consumption_kwh {
             self.extended_limits.insert(
                 "energy_consumption".to_string(),
@@ -310,7 +312,7 @@ impl ResourceConstraints {
                 },
             );
         }
-        
+
         self
     }
 
@@ -451,7 +453,8 @@ impl CapabilityIsolationPolicy {
 
     /// Create a namespace-based policy
     pub fn with_namespace_policy(mut self, namespace: &str, policy: NamespacePolicy) -> Self {
-        self.namespace_policies.insert(namespace.to_string(), policy);
+        self.namespace_policies
+            .insert(namespace.to_string(), policy);
         self
     }
 
@@ -498,7 +501,7 @@ impl CapabilityIsolationPolicy {
     pub fn check_time_constraints(&self) -> bool {
         if let Some(time_constraints) = &self.time_constraints {
             let now = chrono::Utc::now();
-            
+
             // Check hours
             if let Some(allowed_hours) = &time_constraints.allowed_hours {
                 let current_hour = now.hour() as u8;
@@ -523,7 +526,7 @@ impl CapabilityIsolationPolicy {
         if pattern == "*" {
             return true;
         }
-        
+
         if pattern.contains('*') {
             // Simple glob matching - convert * to .* for regex
             let regex_pattern = pattern.replace('*', ".*");
@@ -531,7 +534,7 @@ impl CapabilityIsolationPolicy {
                 return regex.is_match(capability_id);
             }
         }
-        
+
         capability_id == pattern
     }
 }
@@ -605,7 +608,8 @@ pub struct CapabilityMarketplace {
     pub(crate) capability_registry: Arc<RwLock<CapabilityRegistry>>,
     pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<crate::runtime::type_validator::TypeValidator>,
-    pub(crate) executor_registry: std::collections::HashMap<std::any::TypeId, super::executors::ExecutorVariant>,
+    pub(crate) executor_registry:
+        std::collections::HashMap<std::any::TypeId, super::executors::ExecutorVariant>,
     pub(crate) isolation_policy: CapabilityIsolationPolicy,
     pub(crate) causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
     pub(crate) resource_monitor: Option<Arc<super::resource_monitor::ResourceMonitor>>,
@@ -617,10 +621,10 @@ pub struct CapabilityMarketplace {
 pub trait CapabilityDiscovery: Send + Sync {
     /// Discover capabilities and return their manifests
     async fn discover(&self) -> RuntimeResult<Vec<CapabilityManifest>>;
-    
+
     /// Get the name of this discovery provider
     fn name(&self) -> &str;
-    
+
     /// Get this object as Any for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -628,8 +632,12 @@ pub trait CapabilityDiscovery: Send + Sync {
 /// Trait for capability executors
 pub trait CapabilityExecutor: Send + Sync {
     /// Execute a capability with the given input
-    fn execute(&self, input: Value, context: RuntimeContext) -> impl std::future::Future<Output = RuntimeResult<Value>> + Send;
-    
+    fn execute(
+        &self,
+        input: Value,
+        context: RuntimeContext,
+    ) -> impl std::future::Future<Output = RuntimeResult<Value>> + Send;
+
     /// Get the capability ID this executor handles
     fn capability_id(&self) -> &str;
 }

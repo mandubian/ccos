@@ -2,7 +2,7 @@
 //!
 //! This module provides configuration management for MicroVM providers and security policies.
 
-use super::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
+use super::config::{FileSystemPolicy, MicroVMConfig, NetworkPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -22,7 +22,7 @@ pub struct MicroVMSettings {
 impl Default for MicroVMSettings {
     fn default() -> Self {
         let mut capability_configs = HashMap::new();
-        
+
         // Network capabilities get more restrictive settings
         capability_configs.insert(
             "ccos.network.http-fetch".to_string(),
@@ -36,11 +36,16 @@ impl Default for MicroVMSettings {
                 ]),
                 fs_policy: FileSystemPolicy::None,
                 env_vars: HashMap::new(),
-            }
+            },
         );
-        
+
         // File I/O capabilities get sandboxed filesystem access
-        for capability in ["ccos.io.open-file", "ccos.io.read-line", "ccos.io.write-line", "ccos.io.close-file"] {
+        for capability in [
+            "ccos.io.open-file",
+            "ccos.io.read-line",
+            "ccos.io.write-line",
+            "ccos.io.close-file",
+        ] {
             capability_configs.insert(
                 capability.to_string(),
                 MicroVMConfig {
@@ -53,10 +58,10 @@ impl Default for MicroVMSettings {
                         "/workspace".to_string(),
                     ]),
                     env_vars: HashMap::new(),
-                }
+                },
             );
         }
-        
+
         Self {
             default_provider: "mock".to_string(),
             provider_configs: HashMap::new(),
@@ -72,22 +77,23 @@ impl MicroVMSettings {
         let settings: MicroVMSettings = toml::from_str(&content)?;
         Ok(settings)
     }
-    
+
     pub fn save_to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
     }
-    
+
     pub fn get_config_for_capability(&self, capability_id: &str) -> MicroVMConfig {
         self.capability_configs
             .get(capability_id)
             .cloned()
             .unwrap_or_else(|| self.default_config.clone())
     }
-    
+
     pub fn set_config_for_capability(&mut self, capability_id: &str, config: MicroVMConfig) {
-        self.capability_configs.insert(capability_id.to_string(), config);
+        self.capability_configs
+            .insert(capability_id.to_string(), config);
     }
 }
 
@@ -106,16 +112,16 @@ impl Default for EnvironmentMicroVMConfig {
     fn default() -> Self {
         let mut development = MicroVMSettings::default();
         development.default_provider = "mock".to_string();
-        
+
         let mut production = MicroVMSettings::default();
         production.default_provider = "firecracker".to_string();
-        
+
         let mut testing = MicroVMSettings::default();
         testing.default_provider = "mock".to_string();
         // More restrictive settings for testing
         testing.default_config.timeout = Duration::from_secs(5);
         testing.default_config.memory_limit_mb = 32;
-        
+
         Self {
             development,
             production,

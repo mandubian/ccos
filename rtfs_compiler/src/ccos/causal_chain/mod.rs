@@ -24,16 +24,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub mod ledger;
-pub mod signing;
-pub mod provenance;
 pub mod metrics;
+pub mod provenance;
+pub mod signing;
 
+use super::types::{
+    Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId,
+};
 use crate::ccos::causal_chain::ledger::ImmutableLedger;
-use crate::ccos::causal_chain::signing::CryptographicSigning;
-use crate::ccos::causal_chain::provenance::ProvenanceTracker;
-use crate::ccos::causal_chain::metrics::{PerformanceMetrics, CapabilityMetrics, FunctionMetrics};
+use crate::ccos::causal_chain::metrics::{CapabilityMetrics, FunctionMetrics, PerformanceMetrics};
 use crate::ccos::causal_chain::provenance::ActionProvenance;
-use super::types::{Action, ActionId, ActionType, CapabilityId, ExecutionResult, Intent, IntentId, PlanId};
+use crate::ccos::causal_chain::provenance::ProvenanceTracker;
+use crate::ccos::causal_chain::signing::CryptographicSigning;
 
 /// Simple in-memory log buffer for structured JSON logs (test-friendly)
 #[derive(Debug)]
@@ -44,10 +46,15 @@ struct LogBuffer {
 
 impl LogBuffer {
     fn new(capacity: usize) -> Self {
-        Self { entries: Vec::with_capacity(capacity.min(1024)), capacity }
+        Self {
+            entries: Vec::with_capacity(capacity.min(1024)),
+            capacity,
+        }
     }
     fn push(&mut self, entry: String) {
-        if self.entries.len() >= self.capacity { self.entries.remove(0); }
+        if self.entries.len() >= self.capacity {
+            self.entries.remove(0);
+        }
         self.entries.push(entry);
     }
     fn recent(&self, max: usize) -> Vec<String> {
@@ -74,19 +81,34 @@ impl CausalChain {
         let mut actions: Vec<&Action> = self.get_all_actions().iter().collect();
 
         if let Some(ref intent_id) = query.intent_id {
-            actions = actions.into_iter().filter(|a| &a.intent_id == intent_id).collect();
+            actions = actions
+                .into_iter()
+                .filter(|a| &a.intent_id == intent_id)
+                .collect();
         }
         if let Some(ref plan_id) = query.plan_id {
-            actions = actions.into_iter().filter(|a| &a.plan_id == plan_id).collect();
+            actions = actions
+                .into_iter()
+                .filter(|a| &a.plan_id == plan_id)
+                .collect();
         }
         if let Some(ref action_type) = query.action_type {
-            actions = actions.into_iter().filter(|a| &a.action_type == action_type).collect();
+            actions = actions
+                .into_iter()
+                .filter(|a| &a.action_type == action_type)
+                .collect();
         }
         if let Some((start, end)) = query.time_range {
-            actions = actions.into_iter().filter(|a| a.timestamp >= start && a.timestamp <= end).collect();
+            actions = actions
+                .into_iter()
+                .filter(|a| a.timestamp >= start && a.timestamp <= end)
+                .collect();
         }
         if let Some(ref parent_id) = query.parent_action_id {
-            actions = actions.into_iter().filter(|a| a.parent_action_id.as_ref() == Some(parent_id)).collect();
+            actions = actions
+                .into_iter()
+                .filter(|a| a.parent_action_id.as_ref() == Some(parent_id))
+                .collect();
         }
         actions
     }
@@ -107,7 +129,12 @@ impl CausalChain {
             provenance: ProvenanceTracker::new(),
             metrics: PerformanceMetrics::new(),
             event_sinks: Vec::new(),
-            logs: LogBuffer::new(std::env::var("CCOS_LOG_BUFFER_CAPACITY").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(256)),
+            logs: LogBuffer::new(
+                std::env::var("CCOS_LOG_BUFFER_CAPACITY")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(256),
+            ),
         })
     }
 
@@ -210,7 +237,9 @@ impl CausalChain {
 
             // Record metrics and cost
             self.metrics.record_action(&result_action)?;
-            self.metrics.cost_tracking.record_action_cost(&result_action);
+            self.metrics
+                .cost_tracking
+                .record_action_cost(&result_action);
 
             // Notify event sinks
             self.notify_sinks(&result_action);
@@ -333,11 +362,7 @@ impl CausalChain {
         action_type: super::types::ActionType,
     ) -> Result<Action, RuntimeError> {
         // Create lifecycle action
-        let action = Action::new(
-            action_type,
-            plan_id.clone(),
-            intent_id.clone(),
-        );
+        let action = Action::new(action_type, plan_id.clone(), intent_id.clone());
 
         // Sign
         let signature = self.signing.sign_action(&action);
@@ -350,8 +375,8 @@ impl CausalChain {
         self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
 
-    // Log structured line
-    self.log_action_json(&signed_action, "plan_event");
+        // Log structured line
+        self.log_action_json(&signed_action, "plan_event");
 
         // Notify event sinks
         self.notify_sinks(&signed_action);
@@ -409,13 +434,20 @@ impl CausalChain {
 
         // Add metadata
         if let Some(trigger) = triggered_by {
-            action.metadata.insert("triggered_by".to_string(), Value::String(trigger.to_string()));
+            action.metadata.insert(
+                "triggered_by".to_string(),
+                Value::String(trigger.to_string()),
+            );
         }
-        action.metadata.insert("goal".to_string(), Value::String(goal.to_string()));
+        action
+            .metadata
+            .insert("goal".to_string(), Value::String(goal.to_string()));
 
         // Sign and record
         let signature = self.signing.sign_action(&action);
-        action.metadata.insert("signature".to_string(), Value::String(signature));
+        action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
 
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
@@ -446,20 +478,36 @@ impl CausalChain {
         ]);
 
         // Add rich metadata for audit trail
-        action.metadata.insert("old_status".to_string(), Value::String(old_status.to_string()));
-        action.metadata.insert("new_status".to_string(), Value::String(new_status.to_string()));
-        action.metadata.insert("reason".to_string(), Value::String(reason.to_string()));
-        
+        action.metadata.insert(
+            "old_status".to_string(),
+            Value::String(old_status.to_string()),
+        );
+        action.metadata.insert(
+            "new_status".to_string(),
+            Value::String(new_status.to_string()),
+        );
+        action
+            .metadata
+            .insert("reason".to_string(), Value::String(reason.to_string()));
+
         if let Some(triggering_id) = triggering_action_id {
-            action.metadata.insert("triggering_action_id".to_string(), Value::String(triggering_id.to_string()));
+            action.metadata.insert(
+                "triggering_action_id".to_string(),
+                Value::String(triggering_id.to_string()),
+            );
         }
 
         // Add timestamp for audit trail correlation
-        action.metadata.insert("transition_timestamp".to_string(), Value::String(action.timestamp.to_string()));
+        action.metadata.insert(
+            "transition_timestamp".to_string(),
+            Value::String(action.timestamp.to_string()),
+        );
 
         // Sign and record
         let signature = self.signing.sign_action(&action);
-        action.metadata.insert("signature".to_string(), Value::String(signature));
+        action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
 
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
@@ -491,24 +539,38 @@ impl CausalChain {
         ]);
 
         // Add relationship metadata
-        action.metadata.insert("from_intent".to_string(), Value::String(from_intent.clone()));
-        action.metadata.insert("to_intent".to_string(), Value::String(to_intent.clone()));
-        action.metadata.insert("relationship_type".to_string(), Value::String(relationship_type.to_string()));
-        
+        action.metadata.insert(
+            "from_intent".to_string(),
+            Value::String(from_intent.clone()),
+        );
+        action
+            .metadata
+            .insert("to_intent".to_string(), Value::String(to_intent.clone()));
+        action.metadata.insert(
+            "relationship_type".to_string(),
+            Value::String(relationship_type.to_string()),
+        );
+
         if let Some(w) = weight {
-            action.metadata.insert("weight".to_string(), Value::Float(w));
+            action
+                .metadata
+                .insert("weight".to_string(), Value::Float(w));
         }
 
         // Add any additional metadata
         if let Some(meta) = metadata {
             for (key, value) in meta {
-                action.metadata.insert(format!("rel_{}", key), value.clone());
+                action
+                    .metadata
+                    .insert(format!("rel_{}", key), value.clone());
             }
         }
 
         // Sign and record
         let signature = self.signing.sign_action(&action);
-        action.metadata.insert("signature".to_string(), Value::String(signature));
+        action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
 
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
@@ -532,12 +594,19 @@ impl CausalChain {
         .with_args(vec![Value::String(reason.to_string())]);
 
         // Add metadata
-        action.metadata.insert("reason".to_string(), Value::String(reason.to_string()));
-        action.metadata.insert("archived_at".to_string(), Value::String(action.timestamp.to_string()));
+        action
+            .metadata
+            .insert("reason".to_string(), Value::String(reason.to_string()));
+        action.metadata.insert(
+            "archived_at".to_string(),
+            Value::String(action.timestamp.to_string()),
+        );
 
         // Sign and record
         let signature = self.signing.sign_action(&action);
-        action.metadata.insert("signature".to_string(), Value::String(signature));
+        action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
 
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
@@ -561,12 +630,19 @@ impl CausalChain {
         .with_args(vec![Value::String(reason.to_string())]);
 
         // Add metadata
-        action.metadata.insert("reason".to_string(), Value::String(reason.to_string()));
-        action.metadata.insert("reactivated_at".to_string(), Value::String(action.timestamp.to_string()));
+        action
+            .metadata
+            .insert("reason".to_string(), Value::String(reason.to_string()));
+        action.metadata.insert(
+            "reactivated_at".to_string(),
+            Value::String(action.timestamp.to_string()),
+        );
 
         // Sign and record
         let signature = self.signing.sign_action(&action);
-        action.metadata.insert("signature".to_string(), Value::String(signature));
+        action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
 
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
@@ -607,8 +683,8 @@ impl CausalChain {
         self.ledger.append_action(&signed_action)?;
         self.metrics.record_action(&signed_action)?;
 
-    // Log structured line
-    self.log_action_json(&signed_action, "capability_call");
+        // Log structured line
+        self.log_action_json(&signed_action, "capability_call");
 
         Ok(signed_action)
     }
@@ -616,16 +692,16 @@ impl CausalChain {
     pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {
         // Append to ledger
         self.ledger.append_action(action)?;
-        
-    // Record metrics
+
+        // Record metrics
         self.metrics.record_action(action)?;
-        
-    // Notify event sinks
+
+        // Notify event sinks
         self.notify_sinks(action);
-        
-    // Log structured line
-    self.log_action_json(action, "action_appended");
-        
+
+        // Log structured line
+        self.log_action_json(action, "action_appended");
+
         Ok(action.action_id.clone())
     }
 
@@ -648,7 +724,12 @@ impl CausalChain {
     }
 
     /// Record a delegation lifecycle event (helper for M4)
-    pub fn record_delegation_event(&mut self, intent_id: &IntentId, event_kind: &str, metadata: std::collections::HashMap<String, Value>) -> Result<(), RuntimeError> {
+    pub fn record_delegation_event(
+        &mut self,
+        intent_id: &IntentId,
+        event_kind: &str,
+        metadata: std::collections::HashMap<String, Value>,
+    ) -> Result<(), RuntimeError> {
         let mut action = Action {
             action_id: uuid::Uuid::new_v4().to_string(),
             parent_action_id: None,
@@ -660,12 +741,17 @@ impl CausalChain {
             result: None,
             cost: None,
             duration_ms: None,
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
             metadata,
         };
         // Sign & attach
         let signature = self.signing.sign_action(&action);
-        action.metadata.insert("signature".to_string(), Value::String(signature));
+        action
+            .metadata
+            .insert("signature".to_string(), Value::String(signature));
         // Append, record metrics (internal step), notify sinks
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
@@ -681,7 +767,9 @@ impl CausalChain {
     }
 
     /// Get Working Memory ingest latency metrics
-    pub fn get_wm_ingest_latency_metrics(&self) -> &crate::ccos::causal_chain::metrics::WmIngestLatencyMetrics {
+    pub fn get_wm_ingest_latency_metrics(
+        &self,
+    ) -> &crate::ccos::causal_chain::metrics::WmIngestLatencyMetrics {
         self.metrics.get_wm_ingest_latency_metrics()
     }
 }
@@ -704,21 +792,53 @@ mod tests {
 
         // Simulate privileged system providing real audit metadata
         let mut audit_metadata = HashMap::new();
-        audit_metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-777".to_string()));
-        audit_metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-abc123".to_string()));
-        audit_metadata.insert("capability_attestation_id".to_string(), Value::String("attest-xyz789".to_string()));
-        audit_metadata.insert("triggered_by".to_string(), Value::String("system-orchestrator".to_string()));
-        audit_metadata.insert("audit_trail".to_string(), Value::String("audit-log-999".to_string()));
+        audit_metadata.insert(
+            "constitutional_rule_id".to_string(),
+            Value::String("rule-777".to_string()),
+        );
+        audit_metadata.insert(
+            "delegation_decision_id".to_string(),
+            Value::String("deleg-abc123".to_string()),
+        );
+        audit_metadata.insert(
+            "capability_attestation_id".to_string(),
+            Value::String("attest-xyz789".to_string()),
+        );
+        audit_metadata.insert(
+            "triggered_by".to_string(),
+            Value::String("system-orchestrator".to_string()),
+        );
+        audit_metadata.insert(
+            "audit_trail".to_string(),
+            Value::String("audit-log-999".to_string()),
+        );
 
-        let action = chain.create_action(intent, Some(audit_metadata.clone())).unwrap();
+        let action = chain
+            .create_action(intent, Some(audit_metadata.clone()))
+            .unwrap();
         assert_eq!(action.function_name.as_ref().unwrap(), "execute_intent");
 
         // Check audit metadata
-        assert_eq!(action.metadata.get("constitutional_rule_id"), Some(&Value::String("rule-777".to_string())));
-        assert_eq!(action.metadata.get("delegation_decision_id"), Some(&Value::String("deleg-abc123".to_string())));
-        assert_eq!(action.metadata.get("capability_attestation_id"), Some(&Value::String("attest-xyz789".to_string())));
-        assert_eq!(action.metadata.get("triggered_by"), Some(&Value::String("system-orchestrator".to_string())));
-        assert_eq!(action.metadata.get("audit_trail"), Some(&Value::String("audit-log-999".to_string())));
+        assert_eq!(
+            action.metadata.get("constitutional_rule_id"),
+            Some(&Value::String("rule-777".to_string()))
+        );
+        assert_eq!(
+            action.metadata.get("delegation_decision_id"),
+            Some(&Value::String("deleg-abc123".to_string()))
+        );
+        assert_eq!(
+            action.metadata.get("capability_attestation_id"),
+            Some(&Value::String("attest-xyz789".to_string()))
+        );
+        assert_eq!(
+            action.metadata.get("triggered_by"),
+            Some(&Value::String("system-orchestrator".to_string()))
+        );
+        assert_eq!(
+            action.metadata.get("audit_trail"),
+            Some(&Value::String("audit-log-999".to_string()))
+        );
 
         let result = ExecutionResult {
             success: true,
@@ -738,7 +858,10 @@ mod tests {
             parent_action_id: None,
         };
         let results = chain.query_actions(&query);
-        assert!(results.iter().any(|a| a.metadata.get("constitutional_rule_id") == Some(&Value::String("rule-777".to_string()))));
+        assert!(results
+            .iter()
+            .any(|a| a.metadata.get("constitutional_rule_id")
+                == Some(&Value::String("rule-777".to_string()))));
     }
 
     #[test]
@@ -746,11 +869,26 @@ mod tests {
         let mut chain = CausalChain::new().unwrap();
         let intent = Intent::new("Test goal".to_string());
         let mut audit_metadata = HashMap::new();
-        audit_metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-888".to_string()));
-        audit_metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-xyz888".to_string()));
-        audit_metadata.insert("capability_attestation_id".to_string(), Value::String("attest-abc888".to_string()));
-        audit_metadata.insert("triggered_by".to_string(), Value::String("test-integrity".to_string()));
-        audit_metadata.insert("audit_trail".to_string(), Value::String("audit-log-888".to_string()));
+        audit_metadata.insert(
+            "constitutional_rule_id".to_string(),
+            Value::String("rule-888".to_string()),
+        );
+        audit_metadata.insert(
+            "delegation_decision_id".to_string(),
+            Value::String("deleg-xyz888".to_string()),
+        );
+        audit_metadata.insert(
+            "capability_attestation_id".to_string(),
+            Value::String("attest-abc888".to_string()),
+        );
+        audit_metadata.insert(
+            "triggered_by".to_string(),
+            Value::String("test-integrity".to_string()),
+        );
+        audit_metadata.insert(
+            "audit_trail".to_string(),
+            Value::String("audit-log-888".to_string()),
+        );
         let action = chain.create_action(intent, Some(audit_metadata)).unwrap();
 
         let result = ExecutionResult {
@@ -769,11 +907,26 @@ mod tests {
         let mut chain = CausalChain::new().unwrap();
         let intent = Intent::new("Test goal".to_string());
         let mut audit_metadata = HashMap::new();
-        audit_metadata.insert("constitutional_rule_id".to_string(), Value::String("rule-999".to_string()));
-        audit_metadata.insert("delegation_decision_id".to_string(), Value::String("deleg-xyz999".to_string()));
-        audit_metadata.insert("capability_attestation_id".to_string(), Value::String("attest-abc999".to_string()));
-        audit_metadata.insert("triggered_by".to_string(), Value::String("test-metrics".to_string()));
-        audit_metadata.insert("audit_trail".to_string(), Value::String("audit-log-999".to_string()));
+        audit_metadata.insert(
+            "constitutional_rule_id".to_string(),
+            Value::String("rule-999".to_string()),
+        );
+        audit_metadata.insert(
+            "delegation_decision_id".to_string(),
+            Value::String("deleg-xyz999".to_string()),
+        );
+        audit_metadata.insert(
+            "capability_attestation_id".to_string(),
+            Value::String("attest-abc999".to_string()),
+        );
+        audit_metadata.insert(
+            "triggered_by".to_string(),
+            Value::String("test-metrics".to_string()),
+        );
+        audit_metadata.insert(
+            "audit_trail".to_string(),
+            Value::String("audit-log-999".to_string()),
+        );
         let action = chain.create_action(intent, Some(audit_metadata)).unwrap();
 
         let result = ExecutionResult {

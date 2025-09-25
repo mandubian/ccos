@@ -4,15 +4,17 @@
 //! using pattern matching and predefined RTFS templates. This is useful for
 //! common, well-defined tasks that don't require LLM reasoning.
 
-use std::collections::HashMap;
 use async_trait::async_trait;
 use regex::Regex;
+use std::collections::HashMap;
 
+use crate::ccos::arbiter::arbiter_config::{IntentPattern, PlanTemplate, TemplateConfig};
+use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
+use crate::ccos::types::{
+    Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
+};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
-use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, IntentStatus, StorableIntent};
-use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
-use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate};
 
 /// Template-based arbiter that uses pattern matching and predefined templates
 pub struct TemplateArbiter {
@@ -31,7 +33,7 @@ impl TemplateArbiter {
         // Load intent patterns and plan templates from configuration
         let intent_patterns = config.intent_patterns.clone();
         let plan_templates = config.plan_templates.clone();
-        
+
         Ok(Self {
             config,
             intent_patterns,
@@ -43,7 +45,7 @@ impl TemplateArbiter {
     /// Match natural language input against intent patterns
     fn match_intent_pattern(&self, natural_language: &str) -> Option<&IntentPattern> {
         let lower_nl = natural_language.to_lowercase();
-        
+
         for pattern in &self.intent_patterns {
             // Check regex pattern
             if let Ok(regex) = Regex::new(&pattern.pattern) {
@@ -52,7 +54,7 @@ impl TemplateArbiter {
                 }
             }
         }
-        
+
         None
     }
 
@@ -65,7 +67,7 @@ impl TemplateArbiter {
                 return Some(template);
             }
         }
-        
+
         None
     }
 
@@ -80,14 +82,14 @@ impl TemplateArbiter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Convert context to string format for template substitution
         let context_str = context.map(|ctx| {
             ctx.into_iter()
                 .map(|(k, v)| (k, format!("{}", v)))
                 .collect::<HashMap<String, String>>()
         });
-        
+
         // Apply template substitution to goal
         let mut goal = pattern.goal_template.clone();
         if let Some(ctx) = &context_str {
@@ -95,7 +97,7 @@ impl TemplateArbiter {
                 goal = goal.replace(&format!("{{{}}}", key), value);
             }
         }
-        
+
         Intent {
             intent_id: format!("template_intent_{}", uuid::Uuid::new_v4()),
             name: Some(pattern.intent_name.clone()),
@@ -134,29 +136,32 @@ impl TemplateArbiter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Convert context to string format for template substitution
         let context_str = context.map(|ctx| {
             ctx.into_iter()
                 .map(|(k, v)| (k, format!("{}", v)))
                 .collect::<HashMap<String, String>>()
         });
-        
+
         // Apply template substitution to RTFS content
         let mut rtfs_content = template.rtfs_template.clone();
-        
+
         // Substitute intent variables
         rtfs_content = rtfs_content.replace("{intent_id}", &intent.intent_id);
-        rtfs_content = rtfs_content.replace("{intent_name}", intent.name.as_ref().unwrap_or(&"".to_string()));
+        rtfs_content = rtfs_content.replace(
+            "{intent_name}",
+            intent.name.as_ref().unwrap_or(&"".to_string()),
+        );
         rtfs_content = rtfs_content.replace("{goal}", &intent.goal);
-        
+
         // Substitute context variables
         if let Some(ctx) = &context_str {
             for (key, value) in ctx {
                 rtfs_content = rtfs_content.replace(&format!("{{{}}}", key), value);
             }
         }
-        
+
         Plan {
             plan_id: format!("template_plan_{}", uuid::Uuid::new_v4()),
             name: Some(template.name.clone()),
@@ -176,9 +181,11 @@ impl TemplateArbiter {
 
     /// Store intent in the intent graph
     async fn store_intent(&self, intent: &Intent) -> Result<(), RuntimeError> {
-        let mut graph = self.intent_graph.lock()
+        let mut graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
-        
+
         // Convert to storable intent
         let storable = StorableIntent {
             intent_id: intent.intent_id.clone(),
@@ -186,14 +193,17 @@ impl TemplateArbiter {
             original_request: intent.original_request.clone(),
             rtfs_intent_source: "template_generated".to_string(),
             goal: intent.goal.clone(),
-            constraints: intent.constraints.iter()
+            constraints: intent
+                .constraints
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{}", v)))
                 .collect(),
-            preferences: intent.preferences.iter()
+            preferences: intent
+                .preferences
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{}", v)))
                 .collect(),
-            success_criteria: intent.success_criteria.as_ref()
-                .map(|v| format!("{}", v)),
+            success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
             triggered_by: crate::ccos::types::TriggerSource::HumanRequest,
@@ -209,10 +219,13 @@ impl TemplateArbiter {
             updated_at: intent.updated_at,
             metadata: HashMap::new(),
         };
-        
-        graph.storage.store_intent(storable).await
+
+        graph
+            .storage
+            .store_intent(storable)
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to store intent: {}", e)))?;
-        
+
         Ok(())
     }
 }
@@ -227,10 +240,10 @@ impl ArbiterEngine for TemplateArbiter {
         // Try to match against intent patterns
         if let Some(pattern) = self.match_intent_pattern(natural_language) {
             let intent = self.generate_intent_from_pattern(pattern, natural_language, context);
-            
+
             // Store the intent
             self.store_intent(&intent).await?;
-            
+
             Ok(intent)
         } else {
             // No pattern match found
@@ -241,13 +254,12 @@ impl ArbiterEngine for TemplateArbiter {
         }
     }
 
-    async fn intent_to_plan(
-        &self,
-        intent: &Intent,
-    ) -> Result<Plan, RuntimeError> {
-        let intent_name = intent.name.as_ref()
+    async fn intent_to_plan(&self, intent: &Intent) -> Result<Plan, RuntimeError> {
+        let intent_name = intent
+            .name
+            .as_ref()
             .ok_or_else(|| RuntimeError::Generic("Intent has no name".to_string()))?;
-        
+
         // Find matching plan template
         if let Some(template) = self.find_plan_template(intent_name) {
             Ok(self.generate_plan_from_template(template, intent, None))
@@ -271,7 +283,10 @@ impl ArbiterEngine for TemplateArbiter {
             metadata: {
                 let mut meta = HashMap::new();
                 meta.insert("plan_id".to_string(), Value::String(plan.plan_id.clone()));
-                meta.insert("template_engine".to_string(), Value::String("template".to_string()));
+                meta.insert(
+                    "template_engine".to_string(),
+                    Value::String("template".to_string()),
+                );
                 meta
             },
         })
@@ -281,7 +296,9 @@ impl ArbiterEngine for TemplateArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior};
+    use crate::ccos::arbiter::arbiter_config::{
+        FallbackBehavior, IntentPattern, PlanTemplate, TemplateConfig,
+    };
 
     fn create_test_config() -> TemplateConfig {
         TemplateConfig {
@@ -312,7 +329,9 @@ mod tests {
     (step "Analyze Sentiment" (call :ccos.echo "analyzing sentiment"))
     (step "Generate Report" (call :ccos.echo "generating sentiment report"))
 )
-                    "#.trim().to_string(),
+                    "#
+                    .trim()
+                    .to_string(),
                     variables: vec!["analyze_sentiment".to_string(), "source".to_string()],
                 },
                 PlanTemplate {
@@ -323,7 +342,9 @@ mod tests {
     (step "Create Backup" (call :ccos.echo "creating encrypted backup"))
     (step "Verify Backup" (call :ccos.echo "verifying backup integrity"))
 )
-                    "#.trim().to_string(),
+                    "#
+                    .trim()
+                    .to_string(),
                     variables: vec!["backup_data".to_string(), "data_type".to_string()],
                 },
             ],
@@ -335,9 +356,9 @@ mod tests {
     async fn test_template_arbiter_creation() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
+
         let arbiter = TemplateArbiter::new(config, intent_graph);
         assert!(arbiter.is_ok());
     }
@@ -346,11 +367,11 @@ mod tests {
     async fn test_intent_pattern_matching() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
+
         let arbiter = TemplateArbiter::new(config, intent_graph).unwrap();
-        
+
         // Test sentiment analysis pattern
         let pattern = arbiter.match_intent_pattern("analyze user sentiment from chat logs");
         assert!(pattern.is_some());
@@ -366,7 +387,7 @@ mod tests {
             let p = pattern.unwrap();
             assert_eq!(p.intent_name.clone(), "backup_data");
         }
-        
+
         // Test no match
         let pattern = arbiter.match_intent_pattern("random request");
         assert!(pattern.is_none());
@@ -376,20 +397,20 @@ mod tests {
     async fn test_intent_generation() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
+
         let arbiter = TemplateArbiter::new(config, intent_graph).unwrap();
-        
+
         let mut context = HashMap::new();
         context.insert("source".to_string(), Value::String("chat_logs".to_string()));
-        
-        let intent = arbiter.natural_language_to_intent(
-            "analyze user sentiment from chat logs",
-            Some(context)
-        ).await.unwrap();
-        
-    assert!(intent.name.is_some() && intent.name.as_ref().unwrap().contains("sentiment"));
+
+        let intent = arbiter
+            .natural_language_to_intent("analyze user sentiment from chat logs", Some(context))
+            .await
+            .unwrap();
+
+        assert!(intent.name.is_some() && intent.name.as_ref().unwrap().contains("sentiment"));
         assert!(intent.goal.contains("chat_logs"));
         assert!(intent.constraints.contains_key("accuracy"));
     }
@@ -398,11 +419,11 @@ mod tests {
     async fn test_plan_generation() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
+
         let arbiter = TemplateArbiter::new(config, intent_graph).unwrap();
-        
+
         let intent = Intent {
             intent_id: "test_intent".to_string(),
             name: Some("analyze_sentiment".to_string()),
@@ -416,7 +437,7 @@ mod tests {
             updated_at: 0,
             metadata: HashMap::new(),
         };
-        
+
         let plan = arbiter.intent_to_plan(&intent).await.unwrap();
         assert_eq!(plan.name, Some("sentiment_analysis_plan".to_string()));
         assert!(matches!(plan.body, PlanBody::Rtfs(_)));

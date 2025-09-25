@@ -49,14 +49,18 @@ impl Environment {
     }
 
     pub fn symbol_names(&self) -> Vec<String> {
-        let mut names = self.bindings.keys().map(|s| s.0.clone()).collect::<Vec<_>>();
-        
+        let mut names = self
+            .bindings
+            .keys()
+            .map(|s| s.0.clone())
+            .collect::<Vec<_>>();
+
         // Also collect names from parent environments to ensure we get all stdlib functions
-    if let Some(parent) = &self.parent {
+        if let Some(parent) = &self.parent {
             let mut parent_names = parent.symbol_names();
             names.append(&mut parent_names);
         }
-        
+
         // Remove duplicates while preserving current environment's bindings taking precedence
         names.sort();
         names.dedup();
@@ -95,7 +99,12 @@ impl IrEnvironment {
     pub fn with_stdlib(module_registry: &ModuleRegistry) -> Result<Self, RuntimeError> {
         let mut env = Self::new();
         if let Some(stdlib_module) = module_registry.get_module("stdlib") {
-            for (name, export) in stdlib_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
+            for (name, export) in stdlib_module
+                .exports
+                .read()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+                .iter()
+            {
                 env.define(name.clone(), export.value.clone());
             }
         }

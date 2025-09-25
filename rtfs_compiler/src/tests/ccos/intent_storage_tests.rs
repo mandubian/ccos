@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod intent_storage_tests {
     use crate::ccos::intent_storage::*;
-    use crate::ccos::types::{StorableIntent, IntentStatus};
+    use crate::ccos::types::{IntentStatus, StorableIntent};
     use tempfile::tempdir;
 
     async fn create_test_intent(goal: &str) -> StorableIntent {
@@ -41,13 +41,13 @@ mod intent_storage_tests {
         let mut storage = FileStorage::new(storage_path.clone()).await.unwrap();
         let intent = create_test_intent("File persistence test").await;
         let intent_id = intent.intent_id.clone();
-        
+
         storage.store_intent(intent.clone()).await.unwrap();
 
         // Create new storage instance and verify persistence
         let new_storage = FileStorage::new(storage_path).await.unwrap();
         let retrieved = new_storage.get_intent(&intent_id).await.unwrap();
-        
+
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().goal, "File persistence test");
     }
@@ -69,10 +69,10 @@ mod intent_storage_tests {
     #[tokio::test]
     async fn test_intent_filtering() {
         let mut storage = InMemoryStorage::new();
-        
+
         let mut intent1 = create_test_intent("Active task").await;
         intent1.status = IntentStatus::Active;
-        
+
         let mut intent2 = create_test_intent("Completed task").await;
         intent2.status = IntentStatus::Completed;
 
@@ -102,7 +102,7 @@ mod intent_storage_tests {
 #[cfg(test)]
 mod intent_graph_update_integration {
     use crate::ccos::intent_graph::IntentGraph;
-    use crate::ccos::types::{StorableIntent, ExecutionResult, IntentStatus};
+    use crate::ccos::types::{ExecutionResult, IntentStatus, StorableIntent};
     use crate::runtime::values::Value;
 
     #[test]
@@ -112,30 +112,36 @@ mod intent_graph_update_integration {
         // Store intent
         let intent = StorableIntent::new("Integration test goal".to_string());
         let id = intent.intent_id.clone();
-        graph.store_intent(intent.clone()).expect("store_intent failed");
+        graph
+            .store_intent(intent.clone())
+            .expect("store_intent failed");
 
         // Update to success
-        let success = ExecutionResult { success: true, value: Value::String("ok".to_string()), metadata: Default::default() };
-    graph.update_intent_with_audit(
-            graph.get_intent(&id).unwrap(),
-            &success,
-            None,
-            None,
-        ).expect("update_intent failed");
+        let success = ExecutionResult {
+            success: true,
+            value: Value::String("ok".to_string()),
+            metadata: Default::default(),
+        };
+        graph
+            .update_intent_with_audit(graph.get_intent(&id).unwrap(), &success, None, None)
+            .expect("update_intent failed");
         let got = graph.get_intent(&id).expect("get_intent failed");
         assert_eq!(got.status, IntentStatus::Completed);
 
         // New intent -> fail
         let intent2 = StorableIntent::new("Integration test goal 2".to_string());
         let id2 = intent2.intent_id.clone();
-        graph.store_intent(intent2.clone()).expect("store_intent failed");
-        let fail = ExecutionResult { success: false, value: Value::String("err".to_string()), metadata: Default::default() };
-    graph.update_intent_with_audit(
-            graph.get_intent(&id2).unwrap(),
-            &fail,
-            None,
-            None,
-        ).expect("update_intent failed");
+        graph
+            .store_intent(intent2.clone())
+            .expect("store_intent failed");
+        let fail = ExecutionResult {
+            success: false,
+            value: Value::String("err".to_string()),
+            metadata: Default::default(),
+        };
+        graph
+            .update_intent_with_audit(graph.get_intent(&id2).unwrap(), &fail, None, None)
+            .expect("update_intent failed");
         let got2 = graph.get_intent(&id2).expect("get_intent failed");
         assert_eq!(got2.status, IntentStatus::Failed);
     }
@@ -143,9 +149,9 @@ mod intent_graph_update_integration {
 
 #[cfg(test)]
 mod intent_graph_backup_restore_integration {
-    use crate::ccos::intent_graph::IntentGraph;
     use crate::ccos::intent_graph::config::IntentGraphConfig;
-    use crate::ccos::types::{StorableIntent, EdgeType};
+    use crate::ccos::intent_graph::IntentGraph;
+    use crate::ccos::types::{EdgeType, StorableIntent};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -155,7 +161,10 @@ mod intent_graph_backup_restore_integration {
         let backup_path = dir.path().join("graph_backup.json");
 
         // Create graph with file-backed storage
-        let mut graph = IntentGraph::new_async(IntentGraphConfig::with_file_storage(store_path.clone())).await.expect("create graph");
+        let mut graph =
+            IntentGraph::new_async(IntentGraphConfig::with_file_storage(store_path.clone()))
+                .await
+                .expect("create graph");
 
         // Create two intents and store
         let intent_a = StorableIntent::new("Backup intent A".to_string());
@@ -167,14 +176,22 @@ mod intent_graph_backup_restore_integration {
         graph.storage.store_intent(intent_b).await.expect("store b");
 
         // Add an edge A -> B
-        graph.storage.create_edge(id_a.clone(), id_b.clone(), EdgeType::DependsOn).await.expect("create edge");
+        graph
+            .storage
+            .create_edge(id_a.clone(), id_b.clone(), EdgeType::DependsOn)
+            .await
+            .expect("create edge");
 
         // Create backup
         graph.storage.backup(&backup_path).await.expect("backup");
         assert!(backup_path.exists());
 
         // New fresh graph backed by a different file
-        let mut graph2 = IntentGraph::new_async(IntentGraphConfig::with_file_storage(dir.path().join("graph_store_restored.json"))).await.expect("create graph2");
+        let mut graph2 = IntentGraph::new_async(IntentGraphConfig::with_file_storage(
+            dir.path().join("graph_store_restored.json"),
+        ))
+        .await
+        .expect("create graph2");
 
         // Restore into graph2
         graph2.storage.restore(&backup_path).await.expect("restore");
@@ -189,7 +206,11 @@ mod intent_graph_backup_restore_integration {
         assert_eq!(got_b.unwrap().goal, "Backup intent B");
 
         // Verify edge exists
-        let edges_for_a = graph2.storage.get_edges_for_intent(&id_a).await.expect("edges a");
+        let edges_for_a = graph2
+            .storage
+            .get_edges_for_intent(&id_a)
+            .await
+            .expect("edges a");
         assert!(edges_for_a.iter().any(|e| e.to == id_b && e.from == id_a));
     }
 }

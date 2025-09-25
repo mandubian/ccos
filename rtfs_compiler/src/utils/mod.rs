@@ -1,7 +1,7 @@
 //! Utility functions for RTFS value formatting and display
 
-use crate::runtime::values::Value;
 use crate::ast::MapKey;
+use crate::runtime::values::Value;
 
 /// Format a MapKey in proper RTFS syntax
 pub fn format_map_key(key: &MapKey) -> String {
@@ -24,8 +24,11 @@ pub fn format_rtfs_value_pretty(value: &Value) -> String {
             if map.is_empty() {
                 "{}".to_string()
             } else {
-                let entries: Vec<String> = map.iter()
-                    .map(|(k, v)| format!("  {} {}", format_map_key(k), format_rtfs_value_pretty(v)))
+                let entries: Vec<String> = map
+                    .iter()
+                    .map(|(k, v)| {
+                        format!("  {} {}", format_map_key(k), format_rtfs_value_pretty(v))
+                    })
                     .collect();
                 format!("{{\n{}\n}}", entries.join("\n"))
             }
@@ -34,7 +37,8 @@ pub fn format_rtfs_value_pretty(value: &Value) -> String {
             if vec.is_empty() {
                 "[]".to_string()
             } else {
-                let entries: Vec<String> = vec.iter()
+                let entries: Vec<String> = vec
+                    .iter()
                     .map(|v| format!("  {}", format_rtfs_value_pretty(v)))
                     .collect();
                 format!("[\n{}\n]", entries.join("\n"))
@@ -44,12 +48,11 @@ pub fn format_rtfs_value_pretty(value: &Value) -> String {
             if list.is_empty() {
                 "()".to_string()
             } else {
-                let entries: Vec<String> = list.iter()
-                    .map(|v| format_rtfs_value_pretty(v))
-                    .collect();
+                let entries: Vec<String> =
+                    list.iter().map(|v| format_rtfs_value_pretty(v)).collect();
                 format!("({})", entries.join(" "))
             }
         }
-        _ => format_rtfs_value(value)
+        _ => format_rtfs_value(value),
     }
 }

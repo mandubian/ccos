@@ -1,6 +1,8 @@
-use rtfs_compiler::runtime::microvm::providers::{MicroVMProvider, process::ProcessMicroVMProvider};
+use rtfs_compiler::runtime::microvm::config::{FileSystemPolicy, MicroVMConfig, NetworkPolicy};
 use rtfs_compiler::runtime::microvm::core::ExecutionContext;
-use rtfs_compiler::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
+use rtfs_compiler::runtime::microvm::providers::{
+    process::ProcessMicroVMProvider, MicroVMProvider,
+};
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
 
@@ -75,5 +77,3 @@ fn allow_fs_read_when_readonly_path_matches() {
     let res = provider.execute_program(ctx);
     assert!(res.is_ok(), "read should be allowed on read-only path");
 }
-
-

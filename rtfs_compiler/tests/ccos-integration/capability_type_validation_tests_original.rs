@@ -1,7 +1,9 @@
-use rtfs_compiler::ast::{TypeExpr, PrimitiveType, TypePredicate, Literal, Keyword, MapTypeEntry, MapKey};
-use rtfs_compiler::runtime::{Value, RuntimeResult, RuntimeError};
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ast::{
+    Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, TypeExpr, TypePredicate,
+};
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::runtime::{RuntimeError, RuntimeResult, Value};
 use std::collections::HashMap; // HashMap for capability input param assembly
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -10,15 +12,16 @@ use tokio::sync::RwLock;
 async fn test_capability_registration_with_type_validation() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
-    
+
     // Define a simple calculator capability with type constraints
     let add_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> {
         if let Value::Map(map) = input {
             let a_key = MapKey::Keyword(Keyword::new("a"));
             let b_key = MapKey::Keyword(Keyword::new("b"));
-            
-            if let (Some(Value::Integer(a)), Some(Value::Integer(b))) = 
-                (map.get(&a_key), map.get(&b_key)) {
+
+            if let (Some(Value::Integer(a)), Some(Value::Integer(b))) =
+                (map.get(&a_key), map.get(&b_key))
+            {
                 Ok(Value::Integer(a + b))
             } else {
                 Err(RuntimeError::new("Missing or invalid a/b parameters"))
@@ -27,7 +30,7 @@ async fn test_capability_registration_with_type_validation() {
             Err(RuntimeError::new("Input must be a map"))
         }
     });
-    
+
     // Define input schema: [:map [:a :int] [:b :int]]
     let input_schema = TypeExpr::Map {
         entries: vec![
@@ -44,22 +47,24 @@ async fn test_capability_registration_with_type_validation() {
         ],
         wildcard: None,
     };
-    
+
     // Define output schema: :int
     let output_schema = TypeExpr::Primitive(PrimitiveType::Int);
-    
+
     // Register the capability with type validation
-    let result = marketplace.register_local_capability_with_schema(
-        "math.add".to_string(),
-        "Add Two Numbers".to_string(),
-        "Adds two integers together".to_string(),
-        add_handler,
-        Some(input_schema),
-        Some(output_schema),
-    ).await;
-    
+    let result = marketplace
+        .register_local_capability_with_schema(
+            "math.add".to_string(),
+            "Add Two Numbers".to_string(),
+            "Adds two integers together".to_string(),
+            add_handler,
+            Some(input_schema),
+            Some(output_schema),
+        )
+        .await;
+
     assert!(result.is_ok());
-    
+
     // Test that the capability was registered
     let capability = marketplace.get_capability("math.add").await;
     assert!(capability.is_some());
@@ -74,27 +79,30 @@ async fn test_capability_registration_with_type_validation() {
 async fn test_capability_execution_with_valid_input() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
-    
+
     // Register a simple echo capability
-    let echo_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> {
-        Ok(input.clone())
-    });
-    
+    let echo_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> { Ok(input.clone()) });
+
     let string_schema = TypeExpr::Primitive(PrimitiveType::String);
-    
-    marketplace.register_local_capability_with_schema(
-        "util.echo".to_string(),
-        "Echo".to_string(),
-        "Returns the input unchanged".to_string(),
-        echo_handler,
-        Some(string_schema.clone()),
-        Some(string_schema),
-    ).await.unwrap();
-    
+
+    marketplace
+        .register_local_capability_with_schema(
+            "util.echo".to_string(),
+            "Echo".to_string(),
+            "Returns the input unchanged".to_string(),
+            echo_handler,
+            Some(string_schema.clone()),
+            Some(string_schema),
+        )
+        .await
+        .unwrap();
+
     // Test execution with valid input
     let valid_input = Value::String("hello world".to_string());
-    let result = marketplace.execute_capability("util.echo", &valid_input).await;
-    
+    let result = marketplace
+        .execute_capability("util.echo", &valid_input)
+        .await;
+
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), valid_input);
 }
@@ -103,7 +111,7 @@ async fn test_capability_execution_with_valid_input() {
 async fn test_capability_execution_with_invalid_input() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
-    
+
     // Register a capability that expects strings
     let string_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> {
         if let Value::String(s) = input {
@@ -112,28 +120,33 @@ async fn test_capability_execution_with_invalid_input() {
             Err(RuntimeError::new("Expected string input"))
         }
     });
-    
+
     let string_schema = TypeExpr::Primitive(PrimitiveType::String);
-    
-    marketplace.register_local_capability_with_schema(
-        "string.uppercase".to_string(),
-        "Uppercase".to_string(),
-        "Converts string to uppercase".to_string(),
-        string_handler,
-        Some(string_schema.clone()),
-        Some(string_schema),
-    ).await.unwrap();
-    
+
+    marketplace
+        .register_local_capability_with_schema(
+            "string.uppercase".to_string(),
+            "Uppercase".to_string(),
+            "Converts string to uppercase".to_string(),
+            string_handler,
+            Some(string_schema.clone()),
+            Some(string_schema),
+        )
+        .await
+        .unwrap();
+
     // Test execution with invalid input (integer instead of string)
     let invalid_input = Value::Integer(42);
     let mut params = std::collections::HashMap::new();
     params.insert("input".to_string(), invalid_input.clone());
     // Use validation path to trigger schema enforcement
-    let result = marketplace.execute_with_validation("string.uppercase", &params).await;
-    
+    let result = marketplace
+        .execute_with_validation("string.uppercase", &params)
+        .await;
+
     // Should fail due to input validation
     assert!(result.is_err());
-    
+
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("Input validation failed"));
 }
@@ -142,7 +155,7 @@ async fn test_capability_execution_with_invalid_input() {
 async fn test_capability_with_refined_types() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
-    
+
     // Register a capability that expects positive integers
     let positive_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> {
         if let Value::Integer(n) = input {
@@ -151,38 +164,47 @@ async fn test_capability_with_refined_types() {
             Err(RuntimeError::new("Expected integer input"))
         }
     });
-    
+
     // Input schema: [:and :int [:> 0]] (positive integer)
     let positive_int_schema = TypeExpr::Refined {
         base_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
         predicates: vec![TypePredicate::GreaterThan(Literal::Integer(0))],
     };
-    
+
     let int_schema = TypeExpr::Primitive(PrimitiveType::Int);
-    
-    marketplace.register_local_capability_with_schema(
-        "math.square".to_string(),
-        "Square Positive Number".to_string(),
-        "Returns the square of a positive integer".to_string(),
-        positive_handler,
-        Some(positive_int_schema),
-        Some(int_schema),
-    ).await.unwrap();
-    
+
+    marketplace
+        .register_local_capability_with_schema(
+            "math.square".to_string(),
+            "Square Positive Number".to_string(),
+            "Returns the square of a positive integer".to_string(),
+            positive_handler,
+            Some(positive_int_schema),
+            Some(int_schema),
+        )
+        .await
+        .unwrap();
+
     // Test with valid positive integer
     let valid_input = Value::Integer(5);
-    let result = marketplace.execute_capability("math.square", &valid_input).await;
+    let result = marketplace
+        .execute_capability("math.square", &valid_input)
+        .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), Value::Integer(25));
-    
+
     // Test with invalid zero
     let zero_input = Value::Integer(0);
-    let result = marketplace.execute_capability("math.square", &zero_input).await;
+    let result = marketplace
+        .execute_capability("math.square", &zero_input)
+        .await;
     assert!(result.is_err());
-    
+
     // Test with invalid negative
     let negative_input = Value::Integer(-5);
-    let result = marketplace.execute_capability("math.square", &negative_input).await;
+    let result = marketplace
+        .execute_capability("math.square", &negative_input)
+        .await;
     assert!(result.is_err());
 }
 
@@ -190,24 +212,36 @@ async fn test_capability_with_refined_types() {
 async fn test_capability_with_complex_map_schema() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
-    
+
     // Register a user creation capability
     let create_user_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> {
         if let Value::Map(map) = input {
             let name_key = MapKey::Keyword(Keyword::new("name"));
             let email_key = MapKey::Keyword(Keyword::new("email"));
             let age_key = MapKey::Keyword(Keyword::new("age"));
-            
-            if let (Some(Value::String(name)), Some(Value::String(email)), Some(Value::Integer(age))) = 
-                (map.get(&name_key), map.get(&email_key), map.get(&age_key)) {
-                
+
+            if let (
+                Some(Value::String(name)),
+                Some(Value::String(email)),
+                Some(Value::Integer(age)),
+            ) = (map.get(&name_key), map.get(&email_key), map.get(&age_key))
+            {
                 let mut result = HashMap::new();
                 result.insert(MapKey::Keyword(Keyword::new("id")), Value::Integer(12345));
-                result.insert(MapKey::Keyword(Keyword::new("name")), Value::String(name.clone()));
-                result.insert(MapKey::Keyword(Keyword::new("email")), Value::String(email.clone()));
+                result.insert(
+                    MapKey::Keyword(Keyword::new("name")),
+                    Value::String(name.clone()),
+                );
+                result.insert(
+                    MapKey::Keyword(Keyword::new("email")),
+                    Value::String(email.clone()),
+                );
                 result.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(*age));
-                result.insert(MapKey::Keyword(Keyword::new("created")), Value::Boolean(true));
-                
+                result.insert(
+                    MapKey::Keyword(Keyword::new("created")),
+                    Value::Boolean(true),
+                );
+
                 Ok(Value::Map(result))
             } else {
                 Err(RuntimeError::new("Missing or invalid user data"))
@@ -216,7 +250,7 @@ async fn test_capability_with_complex_map_schema() {
             Err(RuntimeError::new("Input must be a map"))
         }
     });
-    
+
     // Input schema: [:map [:name [:and :string [:min-length 1]]] [:email [:and :string [:matches-regex "^.+@.+\\..+$"]]] [:age [:and :int [:>= 18]]]]
     let input_schema = TypeExpr::Map {
         entries: vec![
@@ -247,7 +281,7 @@ async fn test_capability_with_complex_map_schema() {
         ],
         wildcard: None,
     };
-    
+
     // Output schema: [:map [:id :int] [:name :string] [:email :string] [:age :int] [:created :bool]]
     let output_schema = TypeExpr::Map {
         entries: vec![
@@ -279,65 +313,100 @@ async fn test_capability_with_complex_map_schema() {
         ],
         wildcard: None,
     };
-    
-    marketplace.register_local_capability_with_schema(
-        "user.create".to_string(),
-        "Create User".to_string(),
-        "Creates a new user with validation".to_string(),
-        create_user_handler,
-        Some(input_schema),
-        Some(output_schema),
-    ).await.unwrap();
-    
+
+    marketplace
+        .register_local_capability_with_schema(
+            "user.create".to_string(),
+            "Create User".to_string(),
+            "Creates a new user with validation".to_string(),
+            create_user_handler,
+            Some(input_schema),
+            Some(output_schema),
+        )
+        .await
+        .unwrap();
+
     // Test with valid user data
     let mut valid_user_data = HashMap::new();
-    valid_user_data.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Alice".to_string()));
-    valid_user_data.insert(MapKey::Keyword(Keyword::new("email")), Value::String("alice@example.com".to_string()));
+    valid_user_data.insert(
+        MapKey::Keyword(Keyword::new("name")),
+        Value::String("Alice".to_string()),
+    );
+    valid_user_data.insert(
+        MapKey::Keyword(Keyword::new("email")),
+        Value::String("alice@example.com".to_string()),
+    );
     valid_user_data.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(25));
-    
+
     let valid_input = Value::Map(valid_user_data);
-    let result = marketplace.execute_capability("user.create", &valid_input).await;
-    
+    let result = marketplace
+        .execute_capability("user.create", &valid_input)
+        .await;
+
     assert!(result.is_ok());
-    
+
     if let Ok(Value::Map(result_map)) = result {
         assert!(result_map.contains_key(&MapKey::Keyword(Keyword::new("id"))));
         assert!(result_map.contains_key(&MapKey::Keyword(Keyword::new("created"))));
     } else {
         panic!("Expected map result");
     }
-    
+
     // Test with invalid email
     let mut invalid_email_data = HashMap::new();
-    invalid_email_data.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Bob".to_string()));
-    invalid_email_data.insert(MapKey::Keyword(Keyword::new("email")), Value::String("not-an-email".to_string())); // Invalid email
+    invalid_email_data.insert(
+        MapKey::Keyword(Keyword::new("name")),
+        Value::String("Bob".to_string()),
+    );
+    invalid_email_data.insert(
+        MapKey::Keyword(Keyword::new("email")),
+        Value::String("not-an-email".to_string()),
+    ); // Invalid email
     invalid_email_data.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(30));
-    
+
     let invalid_input = Value::Map(invalid_email_data);
-    let result = marketplace.execute_capability("user.create", &invalid_input).await;
-    
+    let result = marketplace
+        .execute_capability("user.create", &invalid_input)
+        .await;
+
     assert!(result.is_err());
-    
+
     // Test with age too young
     let mut too_young_data = HashMap::new();
-    too_young_data.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Charlie".to_string()));
-    too_young_data.insert(MapKey::Keyword(Keyword::new("email")), Value::String("charlie@example.com".to_string()));
+    too_young_data.insert(
+        MapKey::Keyword(Keyword::new("name")),
+        Value::String("Charlie".to_string()),
+    );
+    too_young_data.insert(
+        MapKey::Keyword(Keyword::new("email")),
+        Value::String("charlie@example.com".to_string()),
+    );
     too_young_data.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(16)); // Too young
-    
+
     let too_young_input = Value::Map(too_young_data);
-    let result = marketplace.execute_capability("user.create", &too_young_input).await;
-    
+    let result = marketplace
+        .execute_capability("user.create", &too_young_input)
+        .await;
+
     assert!(result.is_err());
-    
+
     // Test with empty name
     let mut empty_name_data = HashMap::new();
-    empty_name_data.insert(MapKey::Keyword(Keyword::new("name")), Value::String("".to_string())); // Empty name
-    empty_name_data.insert(MapKey::Keyword(Keyword::new("email")), Value::String("david@example.com".to_string()));
+    empty_name_data.insert(
+        MapKey::Keyword(Keyword::new("name")),
+        Value::String("".to_string()),
+    ); // Empty name
+    empty_name_data.insert(
+        MapKey::Keyword(Keyword::new("email")),
+        Value::String("david@example.com".to_string()),
+    );
     empty_name_data.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(25));
-    
+
     let empty_name_input = Value::Map(empty_name_data);
-    let result = marketplace.execute_capability("user.create", &empty_name_input).await;
-    
+    let result = marketplace
+        .execute_capability("user.create", &empty_name_input)
+        .await;
+
     assert!(result.is_err());
 }
 
@@ -345,7 +414,7 @@ async fn test_capability_with_complex_map_schema() {
 async fn test_capability_output_validation() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
-    
+
     // Register a capability that sometimes returns wrong output type (for testing)
     let bad_output_handler = Arc::new(|input: &Value| -> RuntimeResult<Value> {
         if let Value::Boolean(should_be_correct) = input {
@@ -359,33 +428,44 @@ async fn test_capability_output_validation() {
             Err(RuntimeError::new("Expected boolean input"))
         }
     });
-    
+
     let bool_schema = TypeExpr::Primitive(PrimitiveType::Bool);
     let string_schema = TypeExpr::Primitive(PrimitiveType::String);
-    
-    marketplace.register_local_capability_with_schema(
-        "test.output".to_string(),
-        "Test Output Validation".to_string(),
-        "Tests output type validation".to_string(),
-        bad_output_handler,
-        Some(bool_schema),
-        Some(string_schema),
-    ).await.unwrap();
-    
+
+    marketplace
+        .register_local_capability_with_schema(
+            "test.output".to_string(),
+            "Test Output Validation".to_string(),
+            "Tests output type validation".to_string(),
+            bad_output_handler,
+            Some(bool_schema),
+            Some(string_schema),
+        )
+        .await
+        .unwrap();
+
     // Test with correct output (validated path)
     let mut ok_params = std::collections::HashMap::new();
     ok_params.insert("input".to_string(), Value::Boolean(true));
-    let result = marketplace.execute_with_validation("test.output", &ok_params).await;
-    assert!(result.is_ok(), "Expected success for correct output, got {:?}", result);
-    
+    let result = marketplace
+        .execute_with_validation("test.output", &ok_params)
+        .await;
+    assert!(
+        result.is_ok(),
+        "Expected success for correct output, got {:?}",
+        result
+    );
+
     // Test with incorrect output (handler returns wrong type)
     let mut bad_params = std::collections::HashMap::new();
     bad_params.insert("input".to_string(), Value::Boolean(false));
-    let result = marketplace.execute_with_validation("test.output", &bad_params).await;
-    
+    let result = marketplace
+        .execute_with_validation("test.output", &bad_params)
+        .await;
+
     // Should fail due to output validation
     assert!(result.is_err());
-    
+
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("Output validation failed"));
 }

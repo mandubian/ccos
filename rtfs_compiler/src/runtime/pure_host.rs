@@ -1,12 +1,12 @@
 //! Pure host implementation for RTFS-only testing and standalone usage
-//! 
+//!
 //! This provides a minimal implementation of HostInterface that doesn't
 //! depend on CCOS components like CausalChain or CapabilityMarketplace.
 
-use std::sync::Arc;
+use crate::runtime::error::RuntimeResult;
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::values::Value;
-use crate::runtime::error::RuntimeResult;
+use std::sync::Arc;
 
 /// A pure host implementation that provides minimal functionality
 /// for RTFS testing without CCOS dependencies
@@ -25,7 +25,7 @@ impl HostInterface for PureHost {
         // 1. Return a default value
         // 2. Return an error indicating capability not available
         // 3. Implement a few basic capabilities for testing
-        
+
         // For now, return an error to make it clear that capabilities
         // are not available in pure mode
         Err(crate::runtime::error::RuntimeError::Generic(
@@ -38,7 +38,11 @@ impl HostInterface for PureHost {
         Ok("pure-step-action-id".to_string())
     }
 
-    fn notify_step_completed(&self, _step_action_id: &str, _result: &crate::ccos::types::ExecutionResult) -> RuntimeResult<()> {
+    fn notify_step_completed(
+        &self,
+        _step_action_id: &str,
+        _result: &crate::ccos::types::ExecutionResult,
+    ) -> RuntimeResult<()> {
         // Pure mode: no-op for step notifications
         Ok(())
     }
@@ -48,7 +52,12 @@ impl HostInterface for PureHost {
         Ok(())
     }
 
-    fn set_execution_context(&self, _plan_id: String, _intent_ids: Vec<String>, _parent_action_id: String) {
+    fn set_execution_context(
+        &self,
+        _plan_id: String,
+        _intent_ids: Vec<String>,
+        _parent_action_id: String,
+    ) {
         // Pure mode: no-op for execution context
     }
 

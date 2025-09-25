@@ -1,13 +1,13 @@
 //! rtfs_compiler/tests/readme_scenario_test.rs
 
-use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::runtime::evaluator::Evaluator;
-use rtfs_compiler::runtime::environment::Environment;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
-use rtfs_compiler::parser::parse;
-use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ast::Keyword;
+use rtfs_compiler::ast::MapKey;
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::parser::parse;
+use rtfs_compiler::runtime::environment::Environment;
+use rtfs_compiler::runtime::evaluator::Evaluator;
+use rtfs_compiler::runtime::values::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -16,24 +16,26 @@ async fn test_readme_scenario() {
     // 1. Setup the environment and capability marketplace
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let _marketplace = CapabilityMarketplace::new(registry.clone());
-    
+
     // Skip demo provider registration for now - will be handled by marketplace
-    
+
     let _env = Environment::new();
-    
+
     // Create required components for evaluator
-    use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
-  use std::sync::Arc as StdArc;
-    use rtfs_compiler::runtime::security::RuntimeContext;
-    use rtfs_compiler::ccos::host::RuntimeHost;
     use rtfs_compiler::ccos::causal_chain::CausalChain;
+    use rtfs_compiler::ccos::host::RuntimeHost;
+    use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
+    use rtfs_compiler::runtime::security::RuntimeContext;
+    use std::sync::Arc as StdArc;
     use std::sync::Mutex;
-    
-  let module_registry = StdArc::new(ModuleRegistry::new());
+
+    let module_registry = StdArc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
-    
+
     // Create a minimal host interface
-    let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+    let causal_chain = Arc::new(Mutex::new(
+        CausalChain::new().expect("Failed to create causal chain"),
+    ));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
     let runtime_host = RuntimeHost::new(
         causal_chain,
@@ -41,14 +43,10 @@ async fn test_readme_scenario() {
         security_context.clone(),
     );
     let host = std::sync::Arc::new(runtime_host);
-    
+
     // Create evaluator
-    let evaluator = Evaluator::new(
-        module_registry,
-        security_context,
-        host
-    );
-    
+    let evaluator = Evaluator::new(module_registry, security_context, host);
+
     let plan_str = "(do
         (let [
           ;; Simple test data
@@ -87,12 +85,16 @@ async fn test_readme_scenario() {
             assert!(map.contains_key(&MapKey::Keyword(Keyword("press-release-draft".to_string()))));
             assert!(map.contains_key(&MapKey::Keyword(Keyword("notification-status".to_string()))));
 
-            let notification_status = map.get(&MapKey::Keyword(Keyword("notification-status".to_string()))).unwrap();
+            let notification_status = map
+                .get(&MapKey::Keyword(Keyword("notification-status".to_string())))
+                .unwrap();
             // In our simplified implementation, we expect a map with status and method
             if let Value::Map(status_map) = notification_status {
                 assert!(status_map.contains_key(&MapKey::Keyword(Keyword("status".to_string()))));
                 assert!(status_map.contains_key(&MapKey::Keyword(Keyword("method".to_string()))));
-                let status = status_map.get(&MapKey::Keyword(Keyword("status".to_string()))).unwrap();
+                let status = status_map
+                    .get(&MapKey::Keyword(Keyword("status".to_string())))
+                    .unwrap();
                 assert_eq!(*status, Value::Keyword(Keyword("success".to_string())));
             } else {
                 panic!("Expected notification-status to be a map");

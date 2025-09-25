@@ -2,8 +2,8 @@
 // Typed, canonical representation of RTFS programs
 
 use crate::ast::{Keyword, Literal, MapKey};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// Unique identifier for IR nodes (for scope resolution and linking)
 pub type NodeId = u64;
@@ -272,8 +272,6 @@ pub enum IrNode {
         source_location: Option<SourceLocation>,
     },
 
-
-
     DiscoverAgents {
         id: NodeId,
         criteria: Box<IrNode>,
@@ -494,7 +492,9 @@ impl IrNode {
             IrNode::LogStep {
                 source_location, ..
             } => source_location.as_ref(),
-            IrNode::Step { source_location, .. } => source_location.as_ref(),
+            IrNode::Step {
+                source_location, ..
+            } => source_location.as_ref(),
             IrNode::Module {
                 source_location, ..
             } => source_location.as_ref(),

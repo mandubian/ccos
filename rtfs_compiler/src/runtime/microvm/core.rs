@@ -1,8 +1,8 @@
 //! Core MicroVM Types
 
-use crate::runtime::values::Value;
-use crate::runtime::security::RuntimeContext;
 use crate::ast::Expression;
+use crate::runtime::security::RuntimeContext;
+use crate::runtime::values::Value;
 use std::time::Duration;
 
 /// Program representation for MicroVM execution
@@ -15,10 +15,7 @@ pub enum Program {
     /// Native function pointer (for trusted code)
     NativeFunction(fn(Vec<Value>) -> crate::runtime::error::RuntimeResult<Value>),
     /// External program (for process-based isolation)
-    ExternalProgram {
-        path: String,
-        args: Vec<String>,
-    },
+    ExternalProgram { path: String, args: Vec<String> },
     /// RTFS source code to parse and execute
     RtfsSource(String),
 }
@@ -28,24 +25,35 @@ impl Program {
     pub fn is_network_operation(&self) -> bool {
         match self {
             Program::RtfsSource(source) => source.contains("http") || source.contains("network"),
-            Program::RtfsAst(ast) => format!("{:?}", ast).contains("http") || format!("{:?}", ast).contains("network"),
+            Program::RtfsAst(ast) => {
+                format!("{:?}", ast).contains("http") || format!("{:?}", ast).contains("network")
+            }
             Program::ExternalProgram { path, args } => {
-                path.contains("curl") || path.contains("wget") || 
-                args.iter().any(|arg| arg.contains("http") || arg.contains("network"))
-            },
+                path.contains("curl")
+                    || path.contains("wget")
+                    || args
+                        .iter()
+                        .any(|arg| arg.contains("http") || arg.contains("network"))
+            }
             _ => false,
         }
     }
-    
+
     /// Check if this program performs file operations
     pub fn is_file_operation(&self) -> bool {
         match self {
             Program::RtfsSource(source) => source.contains("file") || source.contains("io"),
-            Program::RtfsAst(ast) => format!("{:?}", ast).contains("file") || format!("{:?}", ast).contains("io"),
+            Program::RtfsAst(ast) => {
+                format!("{:?}", ast).contains("file") || format!("{:?}", ast).contains("io")
+            }
             Program::ExternalProgram { path, args } => {
-                path.contains("cat") || path.contains("ls") || path.contains("cp") ||
-                args.iter().any(|arg| arg.contains("file") || arg.contains("io"))
-            },
+                path.contains("cat")
+                    || path.contains("ls")
+                    || path.contains("cp")
+                    || args
+                        .iter()
+                        .any(|arg| arg.contains("file") || arg.contains("io"))
+            }
             _ => false,
         }
     }
@@ -59,7 +67,7 @@ impl Program {
             Program::NativeFunction(_) => "Native function".to_string(),
             Program::ExternalProgram { path, args } => {
                 format!("External program: {} {:?}", path, args)
-            },
+            }
         }
     }
 }

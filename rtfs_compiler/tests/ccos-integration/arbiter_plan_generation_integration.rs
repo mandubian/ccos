@@ -1,12 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use rtfs_compiler::ccos::arbiter::plan_generation::{PlanGenerationProvider, StubPlanGenerationProvider};
+use rtfs_compiler::ccos::arbiter::plan_generation::{
+    PlanGenerationProvider, StubPlanGenerationProvider,
+};
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
-use rtfs_compiler::ccos::types::IntentStatus;
 use rtfs_compiler::ccos::orchestrator::{self};
+use rtfs_compiler::ccos::types::IntentStatus;
 use rtfs_compiler::ccos::types::{Intent, StorableIntent};
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::stdlib::register_default_capabilities;
 
@@ -18,7 +20,10 @@ async fn stub_plan_generation_and_execution_works() {
 
     // Marketplace + stdlib
     let registry = Default::default();
-    let marketplace = Arc::new(CapabilityMarketplace::with_causal_chain(registry, Some(causal_chain.clone())));
+    let marketplace = Arc::new(CapabilityMarketplace::with_causal_chain(
+        registry,
+        Some(causal_chain.clone()),
+    ));
     register_default_capabilities(&marketplace).await.unwrap();
 
     // Seed an intent in the graph
@@ -27,7 +32,8 @@ async fn stub_plan_generation_and_execution_works() {
     {
         let mut ig = intent_graph.lock().unwrap();
         ig.store_intent(storable_intent.clone()).unwrap();
-        ig.set_intent_status(&intent_id, IntentStatus::Active).unwrap();
+        ig.set_intent_status(&intent_id, IntentStatus::Active)
+            .unwrap();
     }
 
     // Generate plan via stub provider
@@ -46,26 +52,44 @@ async fn stub_plan_generation_and_execution_works() {
         updated_at: 0,
         metadata: Default::default(),
     };
-    let result = generator.generate_plan(&runtime_intent, marketplace.clone()).await.unwrap();
+    let result = generator
+        .generate_plan(&runtime_intent, marketplace.clone())
+        .await
+        .unwrap();
     // Verify IR JSON is present and shaped as expected
     if let Some(ir) = result.ir_json.clone() {
-        let steps = ir.get("steps").and_then(|v| v.as_array()).expect("ir steps array");
+        let steps = ir
+            .get("steps")
+            .and_then(|v| v.as_array())
+            .expect("ir steps array");
         assert_eq!(steps.len(), 2, "expected 2 steps in IR");
-        let caps: Vec<String> = steps.iter().map(|s| s.get("capability").and_then(|c| c.as_str()).unwrap_or("").to_string()).collect();
+        let caps: Vec<String> = steps
+            .iter()
+            .map(|s| {
+                s.get("capability")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
         assert!(caps.contains(&":ccos.echo".to_string()));
         assert!(caps.contains(&":ccos.math.add".to_string()));
     } else {
         panic!("stub provider should include IR JSON");
     }
-    if let Some(diag) = result.diagnostics.clone() { assert!(diag.contains("ir-equivalence:"), "expected diagnostics to include ir-equivalence flag, got: {}", diag); }
+    if let Some(diag) = result.diagnostics.clone() {
+        assert!(
+            diag.contains("ir-equivalence:"),
+            "expected diagnostics to include ir-equivalence flag, got: {}",
+            diag
+        );
+    }
     let plan = result.plan;
 
     // Execute plan
-    let runtime_ctx = RuntimeContext::controlled(vec![
-        "ccos.echo".to_string(),
-        "ccos.math.add".to_string(),
-    ]);
-    
+    let runtime_ctx =
+        RuntimeContext::controlled(vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]);
+
     // let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), marketplace.clone());
     let orchestrator = orchestrator::Orchestrator::new(
         causal_chain.clone(),
@@ -73,7 +97,10 @@ async fn stub_plan_generation_and_execution_works() {
         marketplace.clone(),
         Arc::new(rtfs_compiler::ccos::plan_archive::PlanArchive::new()),
     );
-    let exec = orchestrator.execute_plan(&plan, &runtime_ctx).await.unwrap();
+    let exec = orchestrator
+        .execute_plan(&plan, &runtime_ctx)
+        .await
+        .unwrap();
 
     // Assert intent transitioned to Completed
     {
@@ -87,8 +114,12 @@ async fn stub_plan_generation_and_execution_works() {
     {
         let cc = causal_chain.lock().unwrap();
         let actions = cc.get_all_actions();
-        let has_plan_started = actions.iter().any(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanStarted);
-        let has_cap_call = actions.iter().any(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::CapabilityCall);
+        let has_plan_started = actions
+            .iter()
+            .any(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanStarted);
+        let has_cap_call = actions
+            .iter()
+            .any(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::CapabilityCall);
         assert!(has_plan_started, "missing PlanStarted action");
         assert!(has_cap_call, "missing CapabilityCall action");
     }

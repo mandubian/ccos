@@ -1,16 +1,15 @@
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 /// Unified Storage Abstraction for CCOS
 ///
 /// This module provides a content-addressable, immutable storage system
 /// with integrity verification and consistent interfaces across all CCOS entities.
-
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::fmt::Debug;
-use sha2::{Digest, Sha256};
-use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 /// Core trait for entities that can be archived in our unified storage system.
-/// 
+///
 /// This trait enables content-addressable storage with automatic integrity verification.
 /// All archived entities must be serializable to ensure thread-safety and persistence.
 pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> {
@@ -21,10 +20,10 @@ pub trait Archivable: Debug + Clone + Serialize + for<'de> Deserialize<'de> {
         hasher.update(serialized.as_bytes());
         format!("{:x}", hasher.finalize())
     }
-    
+
     /// Unique identifier for this entity
     fn entity_id(&self) -> String;
-    
+
     /// Human-readable description for debugging
     fn entity_type(&self) -> &'static str;
 }
@@ -37,10 +36,16 @@ use std::collections::HashMap as StdHashMap;
 pub trait IndexableArchive {
     /// Save plan and intent indices as sidecar files. Keys/values are strings here to keep the trait
     /// simple and backend-agnostic.
-    fn save_plan_intent_indices(&self, plan_index: &StdHashMap<String, String>, intent_index: &StdHashMap<String, Vec<String>>) -> Result<(), String>;
+    fn save_plan_intent_indices(
+        &self,
+        plan_index: &StdHashMap<String, String>,
+        intent_index: &StdHashMap<String, Vec<String>>,
+    ) -> Result<(), String>;
 
     /// Load plan and intent indices if both are present. Returns Ok(None) when sidecars are missing.
-    fn load_plan_intent_indices(&self) -> Result<Option<(StdHashMap<String, String>, StdHashMap<String, Vec<String>>)>, String>;
+    fn load_plan_intent_indices(
+        &self,
+    ) -> Result<Option<(StdHashMap<String, String>, StdHashMap<String, Vec<String>>)>, String>;
 }
 
 /// A wrapper that composes a content-addressable archive and provides in-memory indices
@@ -74,9 +79,15 @@ where
         A: IndexableArchive,
     {
         if let Some((plan_map, intent_map)) = self.inner.load_plan_intent_indices()? {
-            let mut pi = self.plan_index.lock().map_err(|_| "plan index poisoned".to_string())?;
+            let mut pi = self
+                .plan_index
+                .lock()
+                .map_err(|_| "plan index poisoned".to_string())?;
             *pi = plan_map;
-            let mut ii = self.intent_index.lock().map_err(|_| "intent index poisoned".to_string())?;
+            let mut ii = self
+                .intent_index
+                .lock()
+                .map_err(|_| "intent index poisoned".to_string())?;
             *ii = intent_map;
             return Ok(true);
         }
@@ -88,31 +99,49 @@ where
     where
         A: IndexableArchive,
     {
-        let pi = self.plan_index.lock().map_err(|_| "plan index poisoned".to_string())?;
-        let ii = self.intent_index.lock().map_err(|_| "intent index poisoned".to_string())?;
+        let pi = self
+            .plan_index
+            .lock()
+            .map_err(|_| "plan index poisoned".to_string())?;
+        let ii = self
+            .intent_index
+            .lock()
+            .map_err(|_| "intent index poisoned".to_string())?;
         self.inner.save_plan_intent_indices(&*pi, &*ii)
     }
 
     /// Expose read-only access for PlanArchive to use
     pub fn plan_index_clone(&self) -> StdHashMap<String, String> {
-        self.plan_index.lock().map(|m| m.clone()).unwrap_or_default()
+        self.plan_index
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
     }
 
     pub fn intent_index_clone(&self) -> StdHashMap<String, Vec<String>> {
-        self.intent_index.lock().map(|m| m.clone()).unwrap_or_default()
+        self.intent_index
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
     }
 
     /// Insert or update a single plan_id -> hash mapping in the wrapper's in-memory index.
     /// Returns Err when the lock is poisoned.
     pub fn insert_plan_mapping(&self, plan_id: String, hash: String) -> Result<(), String> {
-        let mut pi = self.plan_index.lock().map_err(|_| "plan index poisoned".to_string())?;
+        let mut pi = self
+            .plan_index
+            .lock()
+            .map_err(|_| "plan index poisoned".to_string())?;
         pi.insert(plan_id, hash);
         Ok(())
     }
 
     /// Add a mapping from intent_id -> hash (appends to list). Returns Err when the lock is poisoned.
     pub fn add_intent_mapping(&self, intent_id: String, hash: String) -> Result<(), String> {
-        let mut ii = self.intent_index.lock().map_err(|_| "intent index poisoned".to_string())?;
+        let mut ii = self
+            .intent_index
+            .lock()
+            .map_err(|_| "intent index poisoned".to_string())?;
         ii.entry(intent_id).or_insert_with(Vec::new).push(hash);
         Ok(())
     }
@@ -130,42 +159,54 @@ where
         Ok(hash)
     }
 
-    fn retrieve(&self, hash: &str) -> Result<Option<T>, String> { self.inner.retrieve(hash) }
+    fn retrieve(&self, hash: &str) -> Result<Option<T>, String> {
+        self.inner.retrieve(hash)
+    }
 
-    fn exists(&self, hash: &str) -> bool { self.inner.exists(hash) }
+    fn exists(&self, hash: &str) -> bool {
+        self.inner.exists(hash)
+    }
 
-    fn delete(&self, hash: &str) -> Result<(), String> { self.inner.delete(hash) }
+    fn delete(&self, hash: &str) -> Result<(), String> {
+        self.inner.delete(hash)
+    }
 
-    fn stats(&self) -> ArchiveStats { self.inner.stats() }
+    fn stats(&self) -> ArchiveStats {
+        self.inner.stats()
+    }
 
-    fn verify_integrity(&self) -> Result<bool, String> { self.inner.verify_integrity() }
+    fn verify_integrity(&self) -> Result<bool, String> {
+        self.inner.verify_integrity()
+    }
 
-    fn list_hashes(&self) -> Vec<String> { self.inner.list_hashes() }
+    fn list_hashes(&self) -> Vec<String> {
+        self.inner.list_hashes()
+    }
 }
 
 /// Thread-safe, content-addressable archive for immutable entities.
-/// 
+///
 /// This trait provides the core storage interface used by all CCOS archives.
 /// Implementations must be thread-safe and support concurrent access.
 pub trait ContentAddressableArchive<T: Archivable> {
     /// Store an entity, returning its content hash
     fn store(&self, entity: T) -> Result<String, String>;
-    
+
     /// Retrieve an entity by content hash
     fn retrieve(&self, hash: &str) -> Result<Option<T>, String>;
-    
+
     /// Check if an entity exists by content hash
     fn exists(&self, hash: &str) -> bool;
-    
+
     /// Delete an entity by content hash
     fn delete(&self, hash: &str) -> Result<(), String>;
-    
+
     /// Get storage statistics
     fn stats(&self) -> ArchiveStats;
-    
+
     /// Verify integrity of stored data
     fn verify_integrity(&self) -> Result<bool, String>;
-    
+
     /// List all stored hashes
     fn list_hashes(&self) -> Vec<String>;
 }
@@ -180,8 +221,8 @@ pub struct ArchiveStats {
 }
 
 /// Thread-safe in-memory implementation of content-addressable archive.
-/// 
-/// Uses Arc<Mutex<...>> for thread safety. Suitable for testing and 
+///
+/// Uses Arc<Mutex<...>> for thread safety. Suitable for testing and
 /// single-process scenarios.
 #[derive(Debug)]
 pub struct InMemoryArchive<T: Archivable> {
@@ -219,12 +260,12 @@ impl<T: Archivable> InMemoryArchive<T> {
 impl<T: Archivable> ContentAddressableArchive<T> for InMemoryArchive<T> {
     fn store(&self, entity: T) -> Result<String, String> {
         let hash = entity.content_hash();
-        
+
         // Calculate size for statistics
         let size_bytes = serde_json::to_string(&entity)
             .map_err(|e| format!("Serialization error: {}", e))?
             .len();
-        
+
         let metadata = EntityMetadata {
             stored_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -232,62 +273,79 @@ impl<T: Archivable> ContentAddressableArchive<T> for InMemoryArchive<T> {
                 .as_secs(),
             size_bytes,
         };
-        
+
         // Store with thread safety
         {
-            let mut storage = self.storage.lock()
+            let mut storage = self
+                .storage
+                .lock()
                 .map_err(|_| "Storage lock poisoned".to_string())?;
             storage.insert(hash.clone(), entity);
         }
-        
+
         {
-            let mut meta = self.metadata.lock()
+            let mut meta = self
+                .metadata
+                .lock()
                 .map_err(|_| "Metadata lock poisoned".to_string())?;
             meta.insert(hash.clone(), metadata);
         }
-        
+
         Ok(hash)
     }
-    
+
     fn retrieve(&self, hash: &str) -> Result<Option<T>, String> {
-        let storage = self.storage.lock()
+        let storage = self
+            .storage
+            .lock()
             .map_err(|_| "Storage lock poisoned".to_string())?;
         Ok(storage.get(hash).cloned())
     }
-    
+
     fn exists(&self, hash: &str) -> bool {
-        self.storage.lock()
+        self.storage
+            .lock()
             .map(|storage| storage.contains_key(hash))
             .unwrap_or(false)
     }
-    
+
     fn delete(&self, hash: &str) -> Result<(), String> {
         // Remove from storage
         {
-            let mut storage = self.storage.lock()
+            let mut storage = self
+                .storage
+                .lock()
                 .map_err(|_| "Storage lock poisoned".to_string())?;
             storage.remove(hash);
         }
-        
+
         // Remove from metadata
         {
-            let mut metadata = self.metadata.lock()
+            let mut metadata = self
+                .metadata
+                .lock()
                 .map_err(|_| "Metadata lock poisoned".to_string())?;
             metadata.remove(hash);
         }
-        
+
         Ok(())
     }
-    
+
     fn stats(&self) -> ArchiveStats {
-        let storage = self.storage.lock().unwrap_or_else(|_| panic!("Storage lock poisoned"));
-        let metadata = self.metadata.lock().unwrap_or_else(|_| panic!("Metadata lock poisoned"));
-        
+        let storage = self
+            .storage
+            .lock()
+            .unwrap_or_else(|_| panic!("Storage lock poisoned"));
+        let metadata = self
+            .metadata
+            .lock()
+            .unwrap_or_else(|_| panic!("Metadata lock poisoned"));
+
         let total_entities = storage.len();
         let total_size_bytes = metadata.values().map(|m| m.size_bytes).sum();
-        
+
         let timestamps: Vec<u64> = metadata.values().map(|m| m.stored_at).collect();
-        
+
         ArchiveStats {
             total_entities,
             total_size_bytes,
@@ -295,23 +353,26 @@ impl<T: Archivable> ContentAddressableArchive<T> for InMemoryArchive<T> {
             newest_timestamp: timestamps.iter().max().copied(),
         }
     }
-    
+
     fn verify_integrity(&self) -> Result<bool, String> {
-        let storage = self.storage.lock()
+        let storage = self
+            .storage
+            .lock()
             .map_err(|_| "Storage lock poisoned".to_string())?;
-        
+
         for (hash, entity) in storage.iter() {
             let computed_hash = entity.content_hash();
             if computed_hash != *hash {
                 return Ok(false);
             }
         }
-        
+
         Ok(true)
     }
-    
+
     fn list_hashes(&self) -> Vec<String> {
-        self.storage.lock()
+        self.storage
+            .lock()
             .map(|storage| storage.keys().cloned().collect())
             .unwrap_or_default()
     }
@@ -322,110 +383,114 @@ mod tests {
     use super::*;
     use crate::ccos::storage_backends::file_archive::FileArchive;
     use tempfile::tempdir;
-    
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestEntity {
         id: String,
         name: String,
         value: i32,
     }
-    
+
     impl Archivable for TestEntity {
         fn entity_id(&self) -> String {
             self.id.clone()
         }
-        
+
         fn entity_type(&self) -> &'static str {
             "TestEntity"
         }
     }
-    
+
     #[test]
     fn test_basic_storage() {
         let archive = InMemoryArchive::<TestEntity>::new();
-        
+
         let entity = TestEntity {
             id: "test-1".to_string(),
             name: "Test Entity".to_string(),
             value: 42,
         };
-        
+
         // Store entity
-        let hash = archive.store(entity.clone()).expect("Failed to store entity");
+        let hash = archive
+            .store(entity.clone())
+            .expect("Failed to store entity");
         assert!(!hash.is_empty());
-        
+
         // Retrieve entity
         let retrieved = archive.retrieve(&hash).expect("Failed to retrieve entity");
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
-        
+
         assert_eq!(retrieved.id, entity.id);
         assert_eq!(retrieved.name, entity.name);
         assert_eq!(retrieved.value, entity.value);
     }
-    
+
     #[test]
     fn test_content_addressing() {
         let archive = InMemoryArchive::<TestEntity>::new();
-        
+
         let entity1 = TestEntity {
             id: "test-1".to_string(),
             name: "Test Entity".to_string(),
             value: 42,
         };
-        
+
         let entity2 = TestEntity {
             id: "test-1".to_string(),
             name: "Test Entity".to_string(),
             value: 42,
         };
-        
+
         // Same content should produce same hash
         let hash1 = archive.store(entity1).expect("Failed to store entity1");
         let hash2 = archive.store(entity2).expect("Failed to store entity2");
-        
+
         assert_eq!(hash1, hash2);
-        
+
         // Only one entity should be stored (deduplicated by content)
         let stats = archive.stats();
         assert_eq!(stats.total_entities, 1);
     }
-    
+
     #[test]
     fn test_integrity_verification() {
         let archive = InMemoryArchive::<TestEntity>::new();
-        
+
         let entity = TestEntity {
             id: "test-1".to_string(),
             name: "Test Entity".to_string(),
             value: 42,
         };
-        
+
         archive.store(entity).expect("Failed to store entity");
-        
-        let integrity_ok = archive.verify_integrity().expect("Failed to verify integrity");
+
+        let integrity_ok = archive
+            .verify_integrity()
+            .expect("Failed to verify integrity");
         assert!(integrity_ok);
     }
-    
+
     #[test]
     fn test_statistics() {
         let archive = InMemoryArchive::<TestEntity>::new();
-        
+
         let entity1 = TestEntity {
             id: "test-1".to_string(),
             name: "Test Entity 1".to_string(),
             value: 42,
         };
-        
+
         let entity2 = TestEntity {
             id: "test-2".to_string(),
             name: "Test Entity 2".to_string(),
             value: 100,
         };
-        
+
         archive.store(entity1).expect("Failed to store entity1");
         archive.store(entity2).expect("Failed to store entity2");
-        
+
         let stats = archive.stats();
         assert_eq!(stats.total_entities, 2);
         assert!(stats.total_size_bytes > 0);

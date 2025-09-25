@@ -6,32 +6,41 @@
 //! execute them (e). For now this first iteration implements Generate Graph.
 
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::{
     backend::CrosstermBackend,
-    widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, Clear},
-    layout::{Layout, Constraint, Direction, Rect},
-    style::{Style, Color, Modifier},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
-use tokio::sync::{broadcast, mpsc};
 use serde_json;
+use tokio::sync::{broadcast, mpsc};
 
-use rtfs_compiler::ccos::{CCOS, runtime_service, types::{IntentId, IntentStatus, Plan, PlanBody}};
 use rtfs_compiler::ccos::arbiter::arbiter_engine::ArbiterEngine;
+use rtfs_compiler::ccos::{
+    runtime_service,
+    types::{IntentId, IntentStatus, Plan, PlanBody},
+    CCOS,
+};
 
 #[derive(Parser)]
 struct Args {
     #[arg(long, help = "Initial goal to load (optional)")]
     goal: Option<String>,
-    #[arg(long, help = "Run in headless mode: emit JSON messages to stdout and exit")]
+    #[arg(
+        long,
+        help = "Run in headless mode: emit JSON messages to stdout and exit"
+    )]
     headless: bool,
 }
 
@@ -60,10 +69,10 @@ struct AppState {
     // LLM operation tracking - current operations and history
     llm_operations: HashMap<String, u64>, // operation_type -> start_timestamp
     llm_operation_history: Vec<LLMOperationRecord>, // history of all operations
-    
+
     // Plan execution tracking - current executions and history
     current_executions: HashMap<String, u64>, // intent_id -> start_timestamp
-    execution_history: Vec<ExecutionRecord>, // history of all executions
+    execution_history: Vec<ExecutionRecord>,  // history of all executions
     // Spinner state for background activity indicator
     spinner_index: usize,
 }
@@ -78,11 +87,22 @@ enum Tab {
     Capabilities,
 }
 
-impl Default for Tab { fn default() -> Self { Tab::Graph } }
+impl Default for Tab {
+    fn default() -> Self {
+        Tab::Graph
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
-enum ViewMode { Summary, Detailed }
-impl Default for ViewMode { fn default() -> Self { ViewMode::Summary } }
+enum ViewMode {
+    Summary,
+    Detailed,
+}
+impl Default for ViewMode {
+    fn default() -> Self {
+        ViewMode::Summary
+    }
+}
 
 #[derive(Clone)]
 struct IntentNode {
@@ -136,13 +156,26 @@ struct ExecutionRecord {
 }
 
 #[derive(Clone, Copy)]
-enum NavDirection { Up, Down }
+enum NavDirection {
+    Up,
+    Down,
+}
 
 fn navigate_graph(app: &mut AppState, direction: NavDirection) {
-    if app.display_order.is_empty() { return; }
+    if app.display_order.is_empty() {
+        return;
+    }
     match direction {
-        NavDirection::Up => { if app.selected_intent_index > 0 { app.selected_intent_index -= 1; } }
-        NavDirection::Down => { if app.selected_intent_index < app.display_order.len() - 1 { app.selected_intent_index += 1; } }
+        NavDirection::Up => {
+            if app.selected_intent_index > 0 {
+                app.selected_intent_index -= 1;
+            }
+        }
+        NavDirection::Down => {
+            if app.selected_intent_index < app.display_order.len() - 1 {
+                app.selected_intent_index += 1;
+            }
+        }
     }
 }
 
@@ -158,15 +191,23 @@ fn toggle_expand_current(app: &mut AppState) {
     if app.selected_intent_index < app.display_order.len() {
         if let Some(intent_id) = app.display_order.get(app.selected_intent_index) {
             let intent_id = intent_id.clone();
-            if app.expanded_nodes.contains(&intent_id) { app.expanded_nodes.remove(&intent_id); } else { app.expanded_nodes.insert(intent_id); }
+            if app.expanded_nodes.contains(&intent_id) {
+                app.expanded_nodes.remove(&intent_id);
+            } else {
+                app.expanded_nodes.insert(intent_id);
+            }
         }
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
 
     // Use a current-thread runtime with LocalSet so we can keep non-Send parts local
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
     let local = tokio::task::LocalSet::new();
 
     let _ = local.block_on(&rt, async move {
@@ -998,7 +1039,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse(
 
         res
     });
-    
+
     Ok(())
 }
 
@@ -1009,11 +1050,37 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
             app.current_intent = Some(intent_id.clone());
             app.running = true;
             app.log_lines.push(format!("🎯 Started: {}", goal));
-            let root_node = IntentNode { intent_id: intent_id.clone(), name: "Root Goal".to_string(), goal, status: IntentStatus::Active, children: vec![], parent: None, created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), _metadata: HashMap::new(), };
+            let root_node = IntentNode {
+                intent_id: intent_id.clone(),
+                name: "Root Goal".to_string(),
+                goal,
+                status: IntentStatus::Active,
+                children: vec![],
+                parent: None,
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                _metadata: HashMap::new(),
+            };
             app.intent_graph.insert(intent_id.clone(), root_node);
             app.root_intent_id = Some(intent_id);
         }
-        E::Status { intent_id, status } => { app.status_lines.push(status.clone()); if app.status_lines.len() > 200 { app.status_lines.drain(0..app.status_lines.len()-200); } if let Some(node) = app.intent_graph.get_mut(&intent_id) { if status.contains("Executing") { node.status = IntentStatus::Executing; } else if status.contains("Completed") { node.status = IntentStatus::Completed; } else if status.contains("Failed") { node.status = IntentStatus::Failed; } } }
+        E::Status { intent_id, status } => {
+            app.status_lines.push(status.clone());
+            if app.status_lines.len() > 200 {
+                app.status_lines.drain(0..app.status_lines.len() - 200);
+            }
+            if let Some(node) = app.intent_graph.get_mut(&intent_id) {
+                if status.contains("Executing") {
+                    node.status = IntentStatus::Executing;
+                } else if status.contains("Completed") {
+                    node.status = IntentStatus::Completed;
+                } else if status.contains("Failed") {
+                    node.status = IntentStatus::Failed;
+                }
+            }
+        }
         E::Step { intent_id, desc } => {
             // Append step description to plan info if present and log
             app.log_lines.push(format!("⚙️  {}", desc));
@@ -1021,30 +1088,53 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 plan_info.execution_steps.push(desc.clone());
                 plan_info.status = "Executing".to_string();
             }
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
         E::Result { intent_id, result } => {
             app.running = false;
             // Result is now a pre-formatted RTFS string
             app.last_result = Some(result.clone());
-            app.log_lines.push(format!("🏁 Execution completed: {}", result));
+            app.log_lines
+                .push(format!("🏁 Execution completed: {}", result));
             // Try to infer success from the result string (simple heuristic)
-            let success = !result.to_lowercase().contains("error") && !result.to_lowercase().contains("failed");
+            let success = !result.to_lowercase().contains("error")
+                && !result.to_lowercase().contains("failed");
             if let Some(node) = app.intent_graph.get_mut(&intent_id) {
-                node.status = if success { IntentStatus::Completed } else { IntentStatus::Failed };
+                node.status = if success {
+                    IntentStatus::Completed
+                } else {
+                    IntentStatus::Failed
+                };
             }
             if let Some(plan_info) = app.plans_by_intent.get_mut(&intent_id) {
-                plan_info.status = if success { "Completed".to_string() } else { "Failed".to_string() };
+                plan_info.status = if success {
+                    "Completed".to_string()
+                } else {
+                    "Failed".to_string()
+                };
             }
             // Record execution in the AppState execution history so it shows under the intent
             app.stop_execution(&intent_id, success, Some(result.clone()), None);
         }
-        E::GraphGenerated { root_id, nodes: _nodes, edges: _edges } => {
+        E::GraphGenerated {
+            root_id,
+            nodes: _nodes,
+            edges: _edges,
+        } => {
             // Runtime reported a generated graph; record a light-weight log so TUI users see it.
-            app.log_lines.push(format!("🧭 Runtime generated graph root: {}", root_id));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            app.log_lines
+                .push(format!("🧭 Runtime generated graph root: {}", root_id));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
-        E::PlanGenerated { intent_id, plan_id, rtfs_code } => {
+        E::PlanGenerated {
+            intent_id,
+            plan_id,
+            rtfs_code,
+        } => {
             // Store a minimal PlanInfo so plans generated by background services are visible in the TUI
             let plan_info = PlanInfo {
                 plan_id: plan_id.clone(),
@@ -1055,57 +1145,160 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 execution_steps: vec![],
             };
             app.plans_by_intent.insert(intent_id.clone(), plan_info);
-            app.log_lines.push(format!("📋 Plan generated for {}: {}", intent_id, plan_id));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            app.log_lines
+                .push(format!("📋 Plan generated for {}: {}", intent_id, plan_id));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
-        E::StepLog { step, status, message, details } => {
+        E::StepLog {
+            step,
+            status,
+            message,
+            details,
+        } => {
             // Bridge detailed step logs into the TUI's log pane
-            app.log_lines.push(format!("🪵 StepLog {} [{}]: {} ({:?})", step, status, message, details));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            app.log_lines.push(format!(
+                "🪵 StepLog {} [{}]: {} ({:?})",
+                step, status, message, details
+            ));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
         E::ReadyForNext { next_step } => {
-            app.log_lines.push(format!("➡️ Ready for next step: {}", next_step));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            app.log_lines
+                .push(format!("➡️ Ready for next step: {}", next_step));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
-        E::Error { message } => { app.running = false; app.log_lines.push(format!("❌ Error: {}", message)); }
+        E::Error { message } => {
+            app.running = false;
+            app.log_lines.push(format!("❌ Error: {}", message));
+        }
         E::Heartbeat => {}
-        E::Stopped => { app.running = false; app.log_lines.push("⏹️  Stopped".into()); }
+        E::Stopped => {
+            app.running = false;
+            app.log_lines.push("⏹️  Stopped".into());
+        }
     }
 }
 
 fn ui(f: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let size = f.size();
-    let tabs = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Length(3), Constraint::Min(5), Constraint::Length(1)]).split(size);
-    let tab_titles = vec!["1:Graph", "2:Status", "3:Logs", "4:Debug", "5:Plans", "6:Capabilities"]; let tab_block = Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).title("Tabs • Ctrl+D:Toggle Debug • ?:Help"); let tab_items: Vec<ListItem> = tab_titles.iter().enumerate().map(|(i, &title)| { let style = match (app.current_tab, i) { (Tab::Graph, 0) | (Tab::Status, 1) | (Tab::Logs, 2) | (Tab::Debug, 3) | (Tab::Plans, 4) | (Tab::Capabilities, 5) => { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } _ => Style::default().fg(Color::White), }; ListItem::new(title).style(style) }).collect(); let tab_list = List::new(tab_items).block(tab_block); f.render_widget(tab_list, tabs[0]);
+    let tabs = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .split(size);
+    let tab_titles = vec![
+        "1:Graph",
+        "2:Status",
+        "3:Logs",
+        "4:Debug",
+        "5:Plans",
+        "6:Capabilities",
+    ];
+    let tab_block = Block::default()
+        .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+        .title("Tabs • Ctrl+D:Toggle Debug • ?:Help");
+    let tab_items: Vec<ListItem> = tab_titles
+        .iter()
+        .enumerate()
+        .map(|(i, &title)| {
+            let style = match (app.current_tab, i) {
+                (Tab::Graph, 0)
+                | (Tab::Status, 1)
+                | (Tab::Logs, 2)
+                | (Tab::Debug, 3)
+                | (Tab::Plans, 4)
+                | (Tab::Capabilities, 5) => Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::White),
+            };
+            ListItem::new(title).style(style)
+        })
+        .collect();
+    let tab_list = List::new(tab_items).block(tab_block);
+    f.render_widget(tab_list, tabs[0]);
 
-    let input_title = match app.current_tab { Tab::Graph => "🎯 Goal Input (type) • s=Start c=Cancel r=Reset q=Quit • g=GenerateGraph • a=AutoPlans", Tab::Status => "📊 Status View", Tab::Logs => "📝 Application Logs", Tab::Debug => "🔧 Debug Logs", Tab::Plans => "📋 Plan Details", Tab::Capabilities => "⚙️ Capability Calls", };
-    let input = Paragraph::new(if matches!(app.current_tab, Tab::Graph) { app.goal_input.as_str() } else { "" }).block(Block::default().title(input_title).borders(Borders::ALL)).wrap(Wrap { trim: true }); f.render_widget(input, tabs[1]);
+    let input_title = match app.current_tab {
+        Tab::Graph => {
+            "🎯 Goal Input (type) • s=Start c=Cancel r=Reset q=Quit • g=GenerateGraph • a=AutoPlans"
+        }
+        Tab::Status => "📊 Status View",
+        Tab::Logs => "📝 Application Logs",
+        Tab::Debug => "🔧 Debug Logs",
+        Tab::Plans => "📋 Plan Details",
+        Tab::Capabilities => "⚙️ Capability Calls",
+    };
+    let input = Paragraph::new(if matches!(app.current_tab, Tab::Graph) {
+        app.goal_input.as_str()
+    } else {
+        ""
+    })
+    .block(Block::default().title(input_title).borders(Borders::ALL))
+    .wrap(Wrap { trim: true });
+    f.render_widget(input, tabs[1]);
 
     // Render spinner inside the Goal input widget on the right for better visibility
-    if matches!(app.current_tab, Tab::Graph) && (app.is_llm_operation_running() || app.is_execution_running()) {
+    if matches!(app.current_tab, Tab::Graph)
+        && (app.is_llm_operation_running() || app.is_execution_running())
+    {
         use std::time::{SystemTime, UNIX_EPOCH};
-    // Prefer braille wheel spinner when Unicode is available, fall back to ASCII otherwise
-    let braille_frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
-    let ascii_frames = ["-","\\","|","/"];
-    let lang = std::env::var("LANG").unwrap_or_default().to_lowercase();
-    let use_unicode = lang.contains("utf-8") || lang.contains("utf8");
-    let frames: &[&str] = if use_unicode { &braille_frames } else { &ascii_frames };
-    // Slower, time-based frame selection (~300ms per frame)
-    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let frame_idx = ((now_ms / 150) as usize) % frames.len();
-    let frame = frames.get(frame_idx).unwrap_or(&frames[0]);
+        // Prefer braille wheel spinner when Unicode is available, fall back to ASCII otherwise
+        let braille_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let ascii_frames = ["-", "\\", "|", "/"];
+        let lang = std::env::var("LANG").unwrap_or_default().to_lowercase();
+        let use_unicode = lang.contains("utf-8") || lang.contains("utf8");
+        let frames: &[&str] = if use_unicode {
+            &braille_frames
+        } else {
+            &ascii_frames
+        };
+        // Slower, time-based frame selection (~300ms per frame)
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let frame_idx = ((now_ms / 150) as usize) % frames.len();
+        let frame = frames.get(frame_idx).unwrap_or(&frames[0]);
 
         // Build label and a small duration badge below the spinner
         let (op_label, op_start) = if app.is_llm_operation_running() {
             // Show the first running LLM operation name and its start time if available
-        if let Some((_name, ts)) = app.llm_operations.iter().next() { (format!("{} LLM", frame), *ts) } else { (format!("{} LLM", frame), 0) }
+            if let Some((_name, ts)) = app.llm_operations.iter().next() {
+                (format!("{} LLM", frame), *ts)
+            } else {
+                (format!("{} LLM", frame), 0)
+            }
         } else if app.is_execution_running() {
-            if let Some((_intent_id, ts)) = app.current_executions.iter().next() { (format!("{} Exec", frame), *ts) } else { (format!("{} Exec", frame), 0) }
-        } else { (format!("{} Busy", frame), 0) };
+            if let Some((_intent_id, ts)) = app.current_executions.iter().next() {
+                (format!("{} Exec", frame), *ts)
+            } else {
+                (format!("{} Exec", frame), 0)
+            }
+        } else {
+            (format!("{} Busy", frame), 0)
+        };
 
         // Compute elapsed seconds for small label
-        let elapsed_s = if op_start > 0 { (now_ms as u64 / 1000).saturating_sub(op_start) } else { 0 };
-        let duration_label = if elapsed_s > 0 { format!("{}s", elapsed_s) } else { "".to_string() };
+        let elapsed_s = if op_start > 0 {
+            (now_ms as u64 / 1000).saturating_sub(op_start)
+        } else {
+            0
+        };
+        let duration_label = if elapsed_s > 0 {
+            format!("{}s", elapsed_s)
+        } else {
+            "".to_string()
+        };
 
         // Place the spinner anchored to the right side of the input area
         let input_area = tabs[1];
@@ -1116,7 +1309,11 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &mut AppState) {
             spinner_w,
             1,
         );
-        let spinner_para = Paragraph::new(op_label).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let spinner_para = Paragraph::new(op_label).style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
         f.render_widget(spinner_para, spinner_rect);
 
         // Render a small duration label under the spinner (if we have space)
@@ -1129,45 +1326,97 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &mut AppState) {
                 dur_w,
                 1,
             );
-            let dur_para = Paragraph::new(duration_label).style(Style::default().fg(Color::LightYellow));
+            let dur_para =
+                Paragraph::new(duration_label).style(Style::default().fg(Color::LightYellow));
             f.render_widget(dur_para, dur_rect);
         }
     }
 
-    match app.current_tab { Tab::Graph => render_graph_tab(f, app, tabs[2]), Tab::Status => render_status_tab(f, app, tabs[2]), Tab::Logs => render_logs_tab(f, app, tabs[2]), Tab::Debug => render_debug_tab(f, app, tabs[2]), Tab::Plans => render_plans_tab(f, app, tabs[2]), Tab::Capabilities => render_capabilities_tab(f, app, tabs[2]), }
+    match app.current_tab {
+        Tab::Graph => render_graph_tab(f, app, tabs[2]),
+        Tab::Status => render_status_tab(f, app, tabs[2]),
+        Tab::Logs => render_logs_tab(f, app, tabs[2]),
+        Tab::Debug => render_debug_tab(f, app, tabs[2]),
+        Tab::Plans => render_plans_tab(f, app, tabs[2]),
+        Tab::Capabilities => render_capabilities_tab(f, app, tabs[2]),
+    }
 
     // Spinner frames for background activity
-    let spinner_frames = ["⠋","⠙","⠹","⠸"]; // simple wheel frames
-    let mut status_text = format!("Intent: {} | Status: {} | Debug: {} | Tab: {}", app.current_intent.as_deref().unwrap_or("None"), if app.running { "Running" } else { "Idle" }, if app.show_debug { "Visible" } else { "Hidden" }, match app.current_tab { Tab::Graph => "Graph", Tab::Status => "Status", Tab::Logs => "Logs", Tab::Debug => "Debug", Tab::Plans => "Plans", Tab::Capabilities => "Capabilities", });
+    let spinner_frames = ["⠋", "⠙", "⠹", "⠸"]; // simple wheel frames
+    let mut status_text = format!(
+        "Intent: {} | Status: {} | Debug: {} | Tab: {}",
+        app.current_intent.as_deref().unwrap_or("None"),
+        if app.running { "Running" } else { "Idle" },
+        if app.show_debug { "Visible" } else { "Hidden" },
+        match app.current_tab {
+            Tab::Graph => "Graph",
+            Tab::Status => "Status",
+            Tab::Logs => "Logs",
+            Tab::Debug => "Debug",
+            Tab::Plans => "Plans",
+            Tab::Capabilities => "Capabilities",
+        }
+    );
     // Show spinner when LLM or execution is active
     if app.is_llm_operation_running() || app.is_execution_running() {
-        let frame = spinner_frames.get(app.spinner_index % spinner_frames.len()).unwrap_or(&"⠋");
+        let frame = spinner_frames
+            .get(app.spinner_index % spinner_frames.len())
+            .unwrap_or(&"⠋");
         status_text.push_str(&format!("  {} Working...", frame));
     }
-    let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Cyan)).block(Block::default().borders(Borders::TOP)); f.render_widget(status_bar, tabs[3]); if app.help_visible { render_help_overlay(f, size); }
+    let status_bar = Paragraph::new(status_text)
+        .style(Style::default().fg(Color::Cyan))
+        .block(Block::default().borders(Borders::TOP));
+    f.render_widget(status_bar, tabs[3]);
+    if app.help_visible {
+        render_help_overlay(f, size);
+    }
 }
 
 fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
     // Vertical split: Graph+Details (80%) and Logs+LLM Status (20%)
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(80), Constraint::Percentage(20)]).split(area);
-    
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+        .split(area);
+
     // Top section: Graph and Details side by side
-    let top_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(60), Constraint::Percentage(40)]).split(chunks[0]);
-    
+    let top_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(chunks[0]);
+
     // Rebuild visible display order each render
     app.display_order.clear();
-    let mut graph_items: Vec<ListItem> = Vec::new(); let mut item_index = 0;
+    let mut graph_items: Vec<ListItem> = Vec::new();
+    let mut item_index = 0;
     if let Some(root_id) = &app.root_intent_id {
         if let Some(_root) = app.intent_graph.get(root_id) {
-            build_graph_display_with_selection(&app.intent_graph, &app.plans_by_intent, &app.execution_history, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes, &mut app.display_order, app.selected_intent_index);
-        } else { graph_items.push(ListItem::new("No graph data available".to_string())); }
-    } else { graph_items.push(ListItem::new("No root intent yet".to_string())); }
-    
+            build_graph_display_with_selection(
+                &app.intent_graph,
+                &app.plans_by_intent,
+                &app.execution_history,
+                root_id,
+                &mut graph_items,
+                &mut item_index,
+                0,
+                &app.selected_intent,
+                &app.expanded_nodes,
+                &mut app.display_order,
+                app.selected_intent_index,
+            );
+        } else {
+            graph_items.push(ListItem::new("No graph data available".to_string()));
+        }
+    } else {
+        graph_items.push(ListItem::new("No root intent yet".to_string()));
+    }
+
     // Clamp cursor index to visible list bounds
     if !app.display_order.is_empty() && app.selected_intent_index >= app.display_order.len() {
         app.selected_intent_index = app.display_order.len() - 1;
     }
-    
+
     // Add LLM operation status, plan count, and execution status to graph title
     let plan_count = app.plans_by_intent.len();
     let intent_count = app.intent_graph.len();
@@ -1179,15 +1428,21 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
     if app.is_execution_running() {
         graph_title.push_str(" • ▶️ Executing...");
     }
-    
-    let graph = List::new(graph_items).block(Block::default().title(graph_title).borders(Borders::ALL)).highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)); 
+
+    let graph = List::new(graph_items)
+        .block(Block::default().title(graph_title).borders(Borders::ALL))
+        .highlight_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
+        );
     f.render_widget(graph, top_chunks[0]);
 
     // spinner moved to the Goal input widget for better visibility
-    
-    let detail_text = if let Some(selected_id) = &app.selected_intent { 
-        if let Some(node) = app.intent_graph.get(selected_id) { 
-            let plan_info = app.plans_by_intent.get(selected_id); 
+
+    let detail_text = if let Some(selected_id) = &app.selected_intent {
+        if let Some(node) = app.intent_graph.get(selected_id) {
+            let plan_info = app.plans_by_intent.get(selected_id);
             let plan_display = if let Some(plan) = plan_info {
                 format!("✅ Plan Available:\nID: {}\nStatus: {}\nBody Preview: {}\nExecution Steps: {}\nCapabilities: {}", 
                     plan.plan_id,
@@ -1199,9 +1454,11 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
             } else {
                 "❌ No plan available\n\nPress 'p' to generate a plan for this intent".to_string()
             };
-            
+
             // Get execution history for this intent
-            let execution_display = app.execution_history.iter()
+            let execution_display = app
+                .execution_history
+                .iter()
                 .rev()
                 .filter(|r| r.intent_id == *selected_id)
                 .take(3) // Show last 3 executions
@@ -1219,89 +1476,280 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) 
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            
+
             let execution_section = if execution_display.is_empty() {
                 "❌ No executions yet\n\nPress 'e' to execute this plan".to_string()
             } else {
                 format!("🚀 Recent Executions:\n{}", execution_display)
             };
-            
+
             format!("🎯 Intent Details:\nID: {}\nName: {}\nGoal: {}\nStatus: {:?}\nCreated: {}\n\n📋 Plan Info:\n{}\n\n{}", 
                 node.intent_id, node.name, node.goal, node.status, node.created_at, plan_display, execution_section)
-        } else { 
-            "Selected intent not found".to_string() 
-        } 
-    } else { 
-        "Select an intent to view details\n\nUse ↑↓ to navigate\nEnter to select\nSpace to expand/collapse".to_string() 
+        } else {
+            "Selected intent not found".to_string()
+        }
+    } else {
+        "Select an intent to view details\n\nUse ↑↓ to navigate\nEnter to select\nSpace to expand/collapse".to_string()
     };
-    let details = Paragraph::new(detail_text).style(Style::default().fg(Color::White)).block(Block::default().title("📋 Intent Details").borders(Borders::ALL)).wrap(Wrap { trim: true }); 
+    let details = Paragraph::new(detail_text)
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .title("📋 Intent Details")
+                .borders(Borders::ALL),
+        )
+        .wrap(Wrap { trim: true });
     f.render_widget(details, top_chunks[1]);
-    
+
     // Bottom section: Logs and LLM Status side by side
-    let bottom_chunks = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(70), Constraint::Percentage(30)]).split(chunks[1]);
-    
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(chunks[1]);
+
     // Left side: Execution results and logs
-    let left_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(6), Constraint::Min(0)]).split(bottom_chunks[0]);
-    
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .split(bottom_chunks[0]);
+
     // Execution results display (prominent)
     let execution_results_text = if let Some(last_result) = app.last_result.as_ref() {
         // last_result is already in RTFS format
         format!("🏁 Last Execution Result:\n{}", last_result)
     } else {
-        "🏁 No executions yet\n\nPress 'e' to execute a plan or orchestrate intent graph".to_string()
+        "🏁 No executions yet\n\nPress 'e' to execute a plan or orchestrate intent graph"
+            .to_string()
     };
-    
+
     let execution_results = Paragraph::new(execution_results_text)
         .style(Style::default().fg(Color::Green))
-        .block(Block::default().title("🏁 Execution Results").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("🏁 Execution Results")
+                .borders(Borders::ALL),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(execution_results, left_chunks[0]);
-    
+
     // Application logs (below execution results)
-    let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(6).map(|s| ListItem::new(s.clone())).collect();
-    let logs = List::new(log_items).block(Block::default().title("📝 Recent Logs").borders(Borders::ALL));
+    let log_items: Vec<ListItem> = app
+        .log_lines
+        .iter()
+        .rev()
+        .take(6)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let logs = List::new(log_items).block(
+        Block::default()
+            .title("📝 Recent Logs")
+            .borders(Borders::ALL),
+    );
     f.render_widget(logs, left_chunks[1]);
-    
+
     // Combined LLM operations and executions status
     let mut combined_status_items = Vec::new();
-    
+
     // Add LLM operations
     if app.is_llm_operation_running() {
         combined_status_items.push(ListItem::new("🤖 LLM Operations:".to_string()));
-        combined_status_items.extend(app.get_llm_operation_status().into_iter().map(|s| ListItem::new(s)));
-        combined_status_items.extend(app.get_recent_llm_history(3).into_iter().map(|s| ListItem::new(s)));
+        combined_status_items.extend(
+            app.get_llm_operation_status()
+                .into_iter()
+                .map(|s| ListItem::new(s)),
+        );
+        combined_status_items.extend(
+            app.get_recent_llm_history(3)
+                .into_iter()
+                .map(|s| ListItem::new(s)),
+        );
     } else {
-        combined_status_items.extend(app.get_recent_llm_history(4).into_iter().map(|s| ListItem::new(s)));
+        combined_status_items.extend(
+            app.get_recent_llm_history(4)
+                .into_iter()
+                .map(|s| ListItem::new(s)),
+        );
     }
-    
+
     // Add execution status
     if app.is_execution_running() {
         if !combined_status_items.is_empty() {
             combined_status_items.push(ListItem::new("---".to_string()));
         }
         combined_status_items.push(ListItem::new("▶️ Executions:".to_string()));
-        combined_status_items.extend(app.get_execution_status().into_iter().map(|s| ListItem::new(s)));
-        combined_status_items.extend(app.get_recent_execution_history(3).into_iter().map(|s| ListItem::new(s)));
+        combined_status_items.extend(
+            app.get_execution_status()
+                .into_iter()
+                .map(|s| ListItem::new(s)),
+        );
+        combined_status_items.extend(
+            app.get_recent_execution_history(3)
+                .into_iter()
+                .map(|s| ListItem::new(s)),
+        );
     } else {
-        combined_status_items.extend(app.get_recent_execution_history(4).into_iter().map(|s| ListItem::new(s)));
+        combined_status_items.extend(
+            app.get_recent_execution_history(4)
+                .into_iter()
+                .map(|s| ListItem::new(s)),
+        );
     }
-    
-    let combined_status = List::new(combined_status_items).block(Block::default().title("🤖 LLM + ▶️ Executions").borders(Borders::ALL));
+
+    let combined_status = List::new(combined_status_items).block(
+        Block::default()
+            .title("🤖 LLM + ▶️ Executions")
+            .borders(Borders::ALL),
+    );
     f.render_widget(combined_status, bottom_chunks[1]);
 }
 
-fn render_status_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let status_items: Vec<ListItem> = app.status_lines.iter().rev().take(100).map(|s| ListItem::new(s.clone())).collect(); let status = List::new(status_items).block(Block::default().title("📊 Status Updates").borders(Borders::ALL)); f.render_widget(status, area); }
-fn render_logs_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(200).map(|s| ListItem::new(s.clone())).collect(); let log = List::new(log_items).block(Block::default().title("📝 Application Logs").borders(Borders::ALL)); f.render_widget(log, area); }
-fn render_debug_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let debug_items: Vec<ListItem> = app.debug_lines.iter().rev().take(200).map(|s| ListItem::new(s.clone())).collect(); let debug = List::new(debug_items).block(Block::default().title("🔧 Debug Logs").borders(Borders::ALL)); f.render_widget(debug, area); }
-fn render_plans_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let plan_items: Vec<ListItem> = if let Some(selected_id) = &app.selected_intent { if let Some(plan_info) = app.plans_by_intent.get(selected_id) { vec![ ListItem::new(format!("📋 Plan ID: {}", plan_info.plan_id)), ListItem::new(format!("📝 Name: {}", plan_info.name.as_deref().unwrap_or("<unnamed>"))), ListItem::new(format!("📊 Status: {}", plan_info.status)), ListItem::new(format!("⚙️ Capabilities: {}", plan_info.capabilities_required.join(", "))), ListItem::new("📄 Plan Body:".to_string()), ].into_iter().chain( plan_info.body.lines().map(|line| ListItem::new(format!("  {}", line))) ).chain( plan_info.execution_steps.iter().map(|step| ListItem::new(format!("▶️ {}", step))) ).collect() } else { vec![ListItem::new("No plan selected or available".to_string())] } } else { vec![ListItem::new("Select an intent to view its plan".to_string())] }; let plans = List::new(plan_items).block(Block::default().title("📋 Plan Details").borders(Borders::ALL)); f.render_widget(plans, area); }
-fn render_capabilities_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) { let cap_items: Vec<ListItem> = if app.capability_calls.is_empty() { vec![ListItem::new("No capability calls recorded yet".to_string())] } else { app.capability_calls.iter().rev().take(50).map(|call| { let status = if call.success { "✅" } else { "❌" }; let result = call.result.as_deref().unwrap_or("pending"); ListItem::new(format!("{} {}({}) → {}", status, call.capability_id, call.args, result)) }).collect() }; let capabilities = List::new(cap_items).block(Block::default().title("⚙️ Capability Calls").borders(Borders::ALL)); f.render_widget(capabilities, area); }
+fn render_status_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let status_items: Vec<ListItem> = app
+        .status_lines
+        .iter()
+        .rev()
+        .take(100)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let status = List::new(status_items).block(
+        Block::default()
+            .title("📊 Status Updates")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(status, area);
+}
+fn render_logs_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let log_items: Vec<ListItem> = app
+        .log_lines
+        .iter()
+        .rev()
+        .take(200)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let log = List::new(log_items).block(
+        Block::default()
+            .title("📝 Application Logs")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(log, area);
+}
+fn render_debug_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let debug_items: Vec<ListItem> = app
+        .debug_lines
+        .iter()
+        .rev()
+        .take(200)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let debug = List::new(debug_items).block(
+        Block::default()
+            .title("🔧 Debug Logs")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(debug, area);
+}
+fn render_plans_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let plan_items: Vec<ListItem> = if let Some(selected_id) = &app.selected_intent {
+        if let Some(plan_info) = app.plans_by_intent.get(selected_id) {
+            vec![
+                ListItem::new(format!("📋 Plan ID: {}", plan_info.plan_id)),
+                ListItem::new(format!(
+                    "📝 Name: {}",
+                    plan_info.name.as_deref().unwrap_or("<unnamed>")
+                )),
+                ListItem::new(format!("📊 Status: {}", plan_info.status)),
+                ListItem::new(format!(
+                    "⚙️ Capabilities: {}",
+                    plan_info.capabilities_required.join(", ")
+                )),
+                ListItem::new("📄 Plan Body:".to_string()),
+            ]
+            .into_iter()
+            .chain(
+                plan_info
+                    .body
+                    .lines()
+                    .map(|line| ListItem::new(format!("  {}", line))),
+            )
+            .chain(
+                plan_info
+                    .execution_steps
+                    .iter()
+                    .map(|step| ListItem::new(format!("▶️ {}", step))),
+            )
+            .collect()
+        } else {
+            vec![ListItem::new("No plan selected or available".to_string())]
+        }
+    } else {
+        vec![ListItem::new(
+            "Select an intent to view its plan".to_string(),
+        )]
+    };
+    let plans = List::new(plan_items).block(
+        Block::default()
+            .title("📋 Plan Details")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(plans, area);
+}
+fn render_capabilities_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let cap_items: Vec<ListItem> = if app.capability_calls.is_empty() {
+        vec![ListItem::new(
+            "No capability calls recorded yet".to_string(),
+        )]
+    } else {
+        app.capability_calls
+            .iter()
+            .rev()
+            .take(50)
+            .map(|call| {
+                let status = if call.success { "✅" } else { "❌" };
+                let result = call.result.as_deref().unwrap_or("pending");
+                ListItem::new(format!(
+                    "{} {}({}) → {}",
+                    status, call.capability_id, call.args, result
+                ))
+            })
+            .collect()
+    };
+    let capabilities = List::new(cap_items).block(
+        Block::default()
+            .title("⚙️ Capability Calls")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(capabilities, area);
+}
 
 fn render_help_overlay(f: &mut ratatui::Frame<'_>, size: Rect) {
     let help_text = "\n🚀 Arbiter TUI Demo - Help\n\nNavigation:\n  1-6     Switch between tabs (Graph/Status/Logs/Debug/Plans/Capabilities)\n  Tab     Cycle through tabs\n  Ctrl+D  Toggle debug log visibility\n  ?/F1    Show/hide this help\n\nActions:\n  s       Start execution with current goal\n  c       Cancel current execution\n  r       Reset everything\n  q       Quit application\n  g       Generate Graph (LLM)\n  p       Generate Plan for selected leaf intent (LLM) - root intents don't need plans\n  a       Auto-generate plans for all leaf intents in graph (LLM)\n  e       Execute selected plan or orchestrate intent graph\n\nIntent Graph Orchestration:\n  • Leaf intents execute individual plans\n  • Root intents orchestrate children (no plans needed)\n  • Use 'set!' to share data between plans\n  • Use 'get' to access shared data\n  • Press 'e' on parent to orchestrate entire graph\n\nInput:\n  Type    Edit goal text\n  Backspace Delete character\n\nTabs:\n  Graph   Intent graph visualization and results\n  Status  Real-time execution status updates\n  Logs    Application logs (non-debug)\n  Debug   Debug logs and detailed traces\n  Plans   Plan details and execution steps\n  Capabilities Capability call history\n\nPress ? or F1 to close this help.\n";
-    let help = Paragraph::new(help_text).style(Style::default().fg(Color::White).bg(Color::Black)).block(Block::default().title("❓ Help").borders(Borders::ALL)).wrap(Wrap { trim: true }); let help_area = centered_rect(60, 80, size); f.render_widget(Clear, help_area); f.render_widget(help, help_area);
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .block(Block::default().title("❓ Help").borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+    let help_area = centered_rect(60, 80, size);
+    f.render_widget(Clear, help_area);
+    f.render_widget(help, help_area);
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect { let popup_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage((100 - percent_y) / 2), Constraint::Percentage(percent_y), Constraint::Percentage((100 - percent_y) / 2), ]).split(r); Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage((100 - percent_x) / 2), Constraint::Percentage(percent_x), Constraint::Percentage((100 - percent_x) / 2), ]).split(popup_layout[1])[1] }
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
 
 impl AppState {
     /// Start tracking an LLM operation
@@ -1310,8 +1758,9 @@ impl AppState {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        self.llm_operations.insert(operation_type.to_string(), timestamp);
-        
+        self.llm_operations
+            .insert(operation_type.to_string(), timestamp);
+
         // Add to history
         let record = LLMOperationRecord {
             operation_type: operation_type.to_string(),
@@ -1322,76 +1771,99 @@ impl AppState {
         };
         self.llm_operation_history.push(record);
     }
-    
+
     /// Stop tracking an LLM operation
     fn stop_llm_operation(&mut self, operation_type: &str, status: &str, details: Option<String>) {
         self.llm_operations.remove(operation_type);
-        
+
         // Update history record
-        if let Some(record) = self.llm_operation_history.iter_mut().rev().find(|r| r.operation_type == operation_type && r.status == "running") {
-            record.end_time = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+        if let Some(record) = self
+            .llm_operation_history
+            .iter_mut()
+            .rev()
+            .find(|r| r.operation_type == operation_type && r.status == "running")
+        {
+            record.end_time = Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            );
             record.status = status.to_string();
             record.details = details;
         }
     }
-    
+
     /// Check if any LLM operation is currently running
     fn is_llm_operation_running(&self) -> bool {
         !self.llm_operations.is_empty()
     }
-    
+
     /// Get the status of current LLM operations
     fn get_llm_operation_status(&self) -> Vec<String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
-        self.llm_operations.iter()
+
+        self.llm_operations
+            .iter()
             .map(|(op_type, start_time)| {
                 let duration = now - start_time;
                 format!("🤖 {} (running for {}s)", op_type, duration)
             })
             .collect()
     }
-    
+
     /// Get recent LLM operation history
     fn get_recent_llm_history(&self, limit: usize) -> Vec<String> {
-        self.llm_operation_history.iter()
+        self.llm_operation_history
+            .iter()
             .rev()
             .take(limit)
             .map(|record| {
                 let duration = if let Some(end_time) = record.end_time {
                     end_time - record.start_time
                 } else {
-                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - record.start_time
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        - record.start_time
                 };
-                
+
                 let status_emoji = match record.status.as_str() {
                     "running" => "🔄",
                     "completed" => "✅",
                     "failed" => "❌",
                     _ => "❓",
                 };
-                
+
                 let details = record.details.as_deref().unwrap_or("");
                 if details.is_empty() {
-                    format!("{} {} ({}s) - {}", status_emoji, record.operation_type, duration, record.status)
+                    format!(
+                        "{} {} ({}s) - {}",
+                        status_emoji, record.operation_type, duration, record.status
+                    )
                 } else {
-                    format!("{} {} ({}s) - {}: {}", status_emoji, record.operation_type, duration, record.status, details)
+                    format!(
+                        "{} {} ({}s) - {}: {}",
+                        status_emoji, record.operation_type, duration, record.status, details
+                    )
                 }
             })
             .collect()
     }
-    
+
     /// Start tracking a plan execution
     fn start_execution(&mut self, intent_id: &str, plan_id: &str) {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        self.current_executions.insert(intent_id.to_string(), timestamp);
-        
+        self.current_executions
+            .insert(intent_id.to_string(), timestamp);
+
         // Add to history
         let record = ExecutionRecord {
             intent_id: intent_id.to_string(),
@@ -1404,14 +1876,30 @@ impl AppState {
         };
         self.execution_history.push(record);
     }
-    
+
     /// Stop tracking a plan execution
-    fn stop_execution(&mut self, intent_id: &str, success: bool, result: Option<String>, error: Option<String>) {
+    fn stop_execution(
+        &mut self,
+        intent_id: &str,
+        success: bool,
+        result: Option<String>,
+        error: Option<String>,
+    ) {
         self.current_executions.remove(intent_id);
-        
+
         // Update history record if one exists (the normal path when start_execution was called)
-        if let Some(record) = self.execution_history.iter_mut().rev().find(|r| r.intent_id == intent_id && r.end_time.is_none()) {
-            record.end_time = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+        if let Some(record) = self
+            .execution_history
+            .iter_mut()
+            .rev()
+            .find(|r| r.intent_id == intent_id && r.end_time.is_none())
+        {
+            record.end_time = Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            );
             record.success = success;
             record.result = result;
             record.error = error;
@@ -1420,7 +1908,10 @@ impl AppState {
 
         // Fallback: no open record found for this intent (e.g., child intents executed without an explicit start)
         // Create a completed record so executions are still visible in history and graph views.
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let record = ExecutionRecord {
             intent_id: intent_id.to_string(),
             plan_id: "<unknown>".to_string(),
@@ -1432,53 +1923,66 @@ impl AppState {
         };
         self.execution_history.push(record);
     }
-    
+
     /// Check if any execution is currently running
     fn is_execution_running(&self) -> bool {
         !self.current_executions.is_empty()
     }
-    
+
     /// Get the status of current executions
     fn get_execution_status(&self) -> Vec<String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
-        self.current_executions.iter()
+
+        self.current_executions
+            .iter()
             .map(|(intent_id, start_time)| {
                 let duration = now - start_time;
                 format!("▶️ {} (running for {}s)", intent_id, duration)
             })
             .collect()
     }
-    
+
     /// Get recent execution history
     fn get_recent_execution_history(&self, limit: usize) -> Vec<String> {
-        self.execution_history.iter()
+        self.execution_history
+            .iter()
             .rev()
             .take(limit)
             .map(|record| {
                 let duration = if let Some(end_time) = record.end_time {
                     end_time - record.start_time
                 } else {
-                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - record.start_time
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        - record.start_time
                 };
-                
+
                 let status_emoji = if record.success { "✅" } else { "❌" };
-                
+
                 // Format result in RTFS syntax - result is already RTFS-formatted
                 let rtfs_result = if record.success {
-                    record.result.as_ref()
+                    record
+                        .result
+                        .as_ref()
                         .map(|r| r.clone())
                         .unwrap_or_else(|| "(result nil)".to_string())
                 } else {
-                    record.error.as_ref()
+                    record
+                        .error
+                        .as_ref()
                         .map(|e| format!("(error \"{}\")", e.replace("\"", "\\\"")))
                         .unwrap_or_else(|| "(error \"Unknown error\")".to_string())
                 };
-                
-                format!("{} {} ({}s) - {}", status_emoji, record.intent_id, duration, rtfs_result)
+
+                format!(
+                    "{} {} ({}s) - {}",
+                    status_emoji, record.intent_id, duration, rtfs_result
+                )
             })
             .collect()
     }
@@ -1486,7 +1990,10 @@ impl AppState {
 
 fn format_rtfs_map(map_str: &str) -> String {
     // Parse Map({key: value}) format and convert to RTFS map syntax
-    if let Some(inner) = map_str.strip_prefix("Map(").and_then(|s| s.strip_suffix(")")) {
+    if let Some(inner) = map_str
+        .strip_prefix("Map(")
+        .and_then(|s| s.strip_suffix(")"))
+    {
         let mut result = "{".to_string();
         let mut first = true;
 
@@ -1543,7 +2050,10 @@ fn format_rtfs_keyword(keyword_str: &str) -> String {
 
 fn format_rtfs_string(string_str: &str) -> String {
     // Parse String("content") format and convert to "content"
-    if let Some(inner) = string_str.strip_prefix("String(").and_then(|s| s.strip_suffix(")")) {
+    if let Some(inner) = string_str
+        .strip_prefix("String(")
+        .and_then(|s| s.strip_suffix(")"))
+    {
         if inner.starts_with('"') && inner.ends_with('"') {
             return inner.to_string();
         }
@@ -1552,35 +2062,62 @@ fn format_rtfs_string(string_str: &str) -> String {
 }
 
 fn build_graph_display_with_selection(
-    graph: &HashMap<IntentId, IntentNode>, 
+    graph: &HashMap<IntentId, IntentNode>,
     plans: &HashMap<IntentId, PlanInfo>,
     execution_history: &[ExecutionRecord],
-    current_id: &IntentId, 
-    items: &mut Vec<ListItem>, 
+    current_id: &IntentId,
+    items: &mut Vec<ListItem>,
     item_index: &mut usize,
     depth: usize,
     selected_id: &Option<IntentId>,
     expanded_nodes: &HashSet<IntentId>,
     display_order: &mut Vec<IntentId>,
-    selected_row_index: usize
+    selected_row_index: usize,
 ) {
     if let Some(node) = graph.get(current_id) {
         let indent = "  ".repeat(depth);
         // Cursor highlight follows the current keyboard row (selected_intent_index)
         let is_cursor_row = *item_index == selected_row_index;
         let is_selected = selected_id.as_ref() == Some(current_id);
-    let is_expanded = expanded_nodes.contains(current_id);
-        let status_emoji = match node.status { IntentStatus::Active => "🟡", IntentStatus::Executing => "🔵", IntentStatus::Completed => "✅", IntentStatus::Failed => "❌", IntentStatus::Archived => "📦", IntentStatus::Suspended => "⏸️", };
-        
+        let is_expanded = expanded_nodes.contains(current_id);
+        let status_emoji = match node.status {
+            IntentStatus::Active => "🟡",
+            IntentStatus::Executing => "🔵",
+            IntentStatus::Completed => "✅",
+            IntentStatus::Failed => "❌",
+            IntentStatus::Archived => "📦",
+            IntentStatus::Suspended => "⏸️",
+        };
+
         // Add plan status indicator
-        let plan_status = if plans.contains_key(current_id) { "📋" } else { "❌" };
-        
+        let plan_status = if plans.contains_key(current_id) {
+            "📋"
+        } else {
+            "❌"
+        };
+
         // Add execution status indicator (we need to pass execution info to this function)
-    let _execution_status = "▶️"; // Placeholder - we'll enhance this later
-        
-        let expand_indicator = if !node.children.is_empty() { if is_expanded { "▼" } else { "▶" } } else { "  " };
-        let display_name = if node.name.is_empty() { "<unnamed>".to_string() } else { node.name.clone() };
-        let goal_preview = if node.goal.len() > 30 { format!("{}...", &node.goal[..27]) } else { node.goal.clone() };
+        let _execution_status = "▶️"; // Placeholder - we'll enhance this later
+
+        let expand_indicator = if !node.children.is_empty() {
+            if is_expanded {
+                "▼"
+            } else {
+                "▶"
+            }
+        } else {
+            "  "
+        };
+        let display_name = if node.name.is_empty() {
+            "<unnamed>".to_string()
+        } else {
+            node.name.clone()
+        };
+        let goal_preview = if node.goal.len() > 30 {
+            format!("{}...", &node.goal[..27])
+        } else {
+            node.goal.clone()
+        };
         let mut style = Style::default();
         if is_cursor_row {
             style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
@@ -1588,38 +2125,78 @@ fn build_graph_display_with_selection(
             // Keep a subtle hint for the last explicitly selected intent
             style = style.fg(Color::LightBlue);
         }
-    items.push(ListItem::new(format!("{}{}{}{}[{:?}] {} — {}", indent, expand_indicator, status_emoji, plan_status, node.status, display_name, goal_preview)).style(style));
-    // Record display order (this index maps to the list shown to the user)
-    display_order.push(current_id.clone());
-    *item_index += 1;
-    
-    // Add execution results as child nodes if this intent has been executed
-    let intent_executions: Vec<&ExecutionRecord> = execution_history.iter()
-        .filter(|record| record.intent_id == *current_id)
-        .collect();
-    
-    if !intent_executions.is_empty() {
-        for execution in intent_executions {
-            let result_indent = "  ".repeat(depth + 1);
-            let result_emoji = if execution.success { "✅" } else { "❌" };
-            
-            // Format result in RTFS syntax - result is already RTFS-formatted
-            let rtfs_result = if execution.success {
-                execution.result.as_ref()
-                    .map(|r| r.clone())
-                    .unwrap_or_else(|| "(result nil)".to_string())
-            } else {
-                execution.error.as_ref()
-                    .map(|e| format!("(error \"{}\")", e.replace("\"", "\\\"")))
-                    .unwrap_or_else(|| "(error \"Unknown error\")".to_string())
-            };
-            
-            let result_style = Style::default().fg(if execution.success { Color::Green } else { Color::Red });
-            items.push(ListItem::new(format!("{}{} {}", result_indent, result_emoji, rtfs_result)).style(result_style));
-            *item_index += 1;
+        items.push(
+            ListItem::new(format!(
+                "{}{}{}{}[{:?}] {} — {}",
+                indent,
+                expand_indicator,
+                status_emoji,
+                plan_status,
+                node.status,
+                display_name,
+                goal_preview
+            ))
+            .style(style),
+        );
+        // Record display order (this index maps to the list shown to the user)
+        display_order.push(current_id.clone());
+        *item_index += 1;
+
+        // Add execution results as child nodes if this intent has been executed
+        let intent_executions: Vec<&ExecutionRecord> = execution_history
+            .iter()
+            .filter(|record| record.intent_id == *current_id)
+            .collect();
+
+        if !intent_executions.is_empty() {
+            for execution in intent_executions {
+                let result_indent = "  ".repeat(depth + 1);
+                let result_emoji = if execution.success { "✅" } else { "❌" };
+
+                // Format result in RTFS syntax - result is already RTFS-formatted
+                let rtfs_result = if execution.success {
+                    execution
+                        .result
+                        .as_ref()
+                        .map(|r| r.clone())
+                        .unwrap_or_else(|| "(result nil)".to_string())
+                } else {
+                    execution
+                        .error
+                        .as_ref()
+                        .map(|e| format!("(error \"{}\")", e.replace("\"", "\\\"")))
+                        .unwrap_or_else(|| "(error \"Unknown error\")".to_string())
+                };
+
+                let result_style = Style::default().fg(if execution.success {
+                    Color::Green
+                } else {
+                    Color::Red
+                });
+                items.push(
+                    ListItem::new(format!("{}{} {}", result_indent, result_emoji, rtfs_result))
+                        .style(result_style),
+                );
+                *item_index += 1;
+            }
         }
-    }
-    
-    if is_expanded { for child_id in &node.children { build_graph_display_with_selection(graph, plans, execution_history, child_id, items, item_index, depth + 1, selected_id, expanded_nodes, display_order, selected_row_index); } }
+
+        if is_expanded {
+            for child_id in &node.children {
+                build_graph_display_with_selection(
+                    graph,
+                    plans,
+                    execution_history,
+                    child_id,
+                    items,
+                    item_index,
+                    depth + 1,
+                    selected_id,
+                    expanded_nodes,
+                    display_order,
+                    selected_row_index,
+                );
+            }
+        }
     }
 }

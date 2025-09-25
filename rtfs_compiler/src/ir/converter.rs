@@ -203,7 +203,10 @@ impl<'a> IrConverter<'a> {
             (
                 "keys",
                 IrType::Function {
-                    param_types: vec![IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }],
+                    param_types: vec![IrType::Map {
+                        entries: vec![],
+                        wildcard: Some(Box::new(IrType::Any)),
+                    }],
                     variadic_param_type: None,
                     return_type: Box::new(IrType::Vector(Box::new(IrType::Any))),
                 },
@@ -212,7 +215,10 @@ impl<'a> IrConverter<'a> {
                 "update",
                 IrType::Function {
                     param_types: vec![
-                        IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+                        IrType::Map {
+                            entries: vec![],
+                            wildcard: Some(Box::new(IrType::Any)),
+                        },
                         IrType::Any,
                         IrType::Function {
                             param_types: vec![IrType::Any],
@@ -221,7 +227,10 @@ impl<'a> IrConverter<'a> {
                         },
                     ],
                     variadic_param_type: None,
-                    return_type: Box::new(IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }),
+                    return_type: Box::new(IrType::Map {
+                        entries: vec![],
+                        wildcard: Some(Box::new(IrType::Any)),
+                    }),
                 },
             ),
             (
@@ -1063,8 +1072,7 @@ impl<'a> IrConverter<'a> {
                     ir_type: IrType::String,
                     source_location: None,
                 })
-            }
-            // Plan is not a core RTFS expression; handled in CCOS layer
+            } // Plan is not a core RTFS expression; handled in CCOS layer
         }
     }
 
@@ -1235,7 +1243,10 @@ impl<'a> IrConverter<'a> {
     }
 
     /// Convert set! special form: (set! symbol expr)
-    fn convert_set_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+    fn convert_set_special_form(
+        &mut self,
+        arguments: Vec<Expression>,
+    ) -> IrConversionResult<IrNode> {
         if arguments.len() != 2 {
             return Err(IrConversionError::InvalidSpecialForm {
                 form: "set!".to_string(),
@@ -1392,7 +1403,8 @@ impl<'a> IrConverter<'a> {
         if arguments.len() < 2 {
             return Err(IrConversionError::InvalidSpecialForm {
                 form: "step-if".to_string(),
-                message: "step-if requires at least 2 arguments: condition and then-branch".to_string(),
+                message: "step-if requires at least 2 arguments: condition and then-branch"
+                    .to_string(),
             });
         }
 
@@ -1442,7 +1454,7 @@ impl<'a> IrConverter<'a> {
 
         let id = self.next_id();
         let condition = Box::new(self.convert_expression(arguments[0].clone())?);
-        
+
         // Convert body expressions
         let body_exprs: Vec<IrNode> = arguments[1..]
             .iter()
@@ -1492,14 +1504,14 @@ impl<'a> IrConverter<'a> {
         for (i, arg) in arguments.iter().enumerate() {
             let init_expr = self.convert_expression(arg.clone())?;
             let binding_name = format!("parallel_{}", i);
-            
+
             let binding_node = IrNode::VariableBinding {
                 id: self.next_id(),
                 name: binding_name.clone(),
                 ir_type: init_expr.ir_type().cloned().unwrap_or(IrType::Any),
                 source_location: None,
             };
-            
+
             bindings.push(IrParallelBinding {
                 binding: binding_node,
                 init_expr,
@@ -1515,9 +1527,15 @@ impl<'a> IrConverter<'a> {
     }
 
     /// Convert step special form: (step "name" [options as keyword/value pairs] body...)
-    fn convert_step_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+    fn convert_step_special_form(
+        &mut self,
+        arguments: Vec<Expression>,
+    ) -> IrConversionResult<IrNode> {
         if arguments.is_empty() {
-            return Err(IrConversionError::InvalidSpecialForm { form: "step".to_string(), message: "step requires at least a name string".to_string() });
+            return Err(IrConversionError::InvalidSpecialForm {
+                form: "step".to_string(),
+                message: "step requires at least a name string".to_string(),
+            });
         }
 
         let id = self.next_id();
@@ -1526,7 +1544,10 @@ impl<'a> IrConverter<'a> {
         let name = match &arguments[0] {
             Expression::Literal(Literal::String(s)) => s.clone(),
             _ => {
-                return Err(IrConversionError::InvalidSpecialForm { form: "step".to_string(), message: "first argument must be a string name".to_string() });
+                return Err(IrConversionError::InvalidSpecialForm {
+                    form: "step".to_string(),
+                    message: "first argument must be a string name".to_string(),
+                });
             }
         };
 
@@ -1538,27 +1559,36 @@ impl<'a> IrConverter<'a> {
         let mut params_node: Option<IrNode> = None;
 
         while i + 1 <= arguments.len() {
-            if i >= arguments.len() { break; }
+            if i >= arguments.len() {
+                break;
+            }
             match &arguments[i] {
                 Expression::Literal(Lit::Keyword(k)) => {
                     let key = k.0.as_str();
-                    if i + 1 >= arguments.len() { break; }
+                    if i + 1 >= arguments.len() {
+                        break;
+                    }
                     let val_expr = arguments[i + 1].clone();
                     match key {
                         "expose-context" => {
                             expose_override = Some(self.convert_expression(val_expr)?);
-                            i += 2; continue;
+                            i += 2;
+                            continue;
                         }
                         "context-keys" => {
                             context_keys_override = Some(self.convert_expression(val_expr)?);
-                            i += 2; continue;
+                            i += 2;
+                            continue;
                         }
                         "params" => {
                             // Expect a map expression; convert it to IR map node
                             params_node = Some(self.convert_expression(val_expr)?);
-                            i += 2; continue;
+                            i += 2;
+                            continue;
                         }
-                        _ => { break; }
+                        _ => {
+                            break;
+                        }
                     }
                 }
                 _ => break,
@@ -1584,11 +1614,15 @@ impl<'a> IrConverter<'a> {
     }
 
     /// Convert dotimes special form: (dotimes [i n] body)
-    fn convert_dotimes_special_form(&mut self, arguments: Vec<Expression>) -> IrConversionResult<IrNode> {
+    fn convert_dotimes_special_form(
+        &mut self,
+        arguments: Vec<Expression>,
+    ) -> IrConversionResult<IrNode> {
         if arguments.len() != 2 {
             return Err(IrConversionError::InvalidSpecialForm {
                 form: "dotimes".to_string(),
-                message: "dotimes requires exactly 2 arguments: [symbol count] and body".to_string(),
+                message: "dotimes requires exactly 2 arguments: [symbol count] and body"
+                    .to_string(),
             });
         }
 
@@ -1597,7 +1631,8 @@ impl<'a> IrConverter<'a> {
             if v.len() != 2 {
                 return Err(IrConversionError::InvalidSpecialForm {
                     form: "dotimes".to_string(),
-                    message: "dotimes binding vector must have exactly 2 elements: [symbol count]".to_string(),
+                    message: "dotimes binding vector must have exactly 2 elements: [symbol count]"
+                        .to_string(),
                 });
             }
             v.clone()
@@ -1738,8 +1773,9 @@ impl<'a> IrConverter<'a> {
                         match p_def.pattern {
                             Pattern::Symbol(s) => {
                                 let param_id = self.next_id();
-                                let param_type =
-                                    self.convert_type_annotation_option(p_def.type_annotation.clone())?;
+                                let param_type = self.convert_type_annotation_option(
+                                    p_def.type_annotation.clone(),
+                                )?;
                                 let binding_info = BindingInfo {
                                     name: s.0.clone(),
                                     binding_id: param_id,
@@ -1760,12 +1796,15 @@ impl<'a> IrConverter<'a> {
                                     source_location: None,
                                 });
                             }
-                            Pattern::Wildcard | Pattern::VectorDestructuring { .. } | Pattern::MapDestructuring { .. } => {
+                            Pattern::Wildcard
+                            | Pattern::VectorDestructuring { .. }
+                            | Pattern::MapDestructuring { .. } => {
                                 let hidden_name = format!("__arg{}", hidden_param_idx);
                                 hidden_param_idx += 1;
                                 let param_id = self.next_id();
-                                let param_type =
-                                    self.convert_type_annotation_option(p_def.type_annotation.clone())?;
+                                let param_type = self.convert_type_annotation_option(
+                                    p_def.type_annotation.clone(),
+                                )?;
                                 let binding_info = BindingInfo {
                                     name: hidden_name.clone(),
                                     binding_id: param_id,
@@ -1801,7 +1840,8 @@ impl<'a> IrConverter<'a> {
                                 });
 
                                 if !matches!(p_def.pattern, Pattern::Wildcard) {
-                                    let ir_pattern = self.convert_pattern_to_irpattern(p_def.pattern)?;
+                                    let ir_pattern =
+                                        self.convert_pattern_to_irpattern(p_def.pattern)?;
                                     let value_ref_id = self.next_id();
                                     param_destructure_prologue.push(IrNode::Destructure {
                                         id: self.next_id(),
@@ -1978,13 +2018,16 @@ impl<'a> IrConverter<'a> {
                     });
                 }
                 // Wildcard or destructuring patterns → compile to hidden param + Destructure prologue
-                Pattern::Wildcard | Pattern::VectorDestructuring { .. } | Pattern::MapDestructuring { .. } => {
+                Pattern::Wildcard
+                | Pattern::VectorDestructuring { .. }
+                | Pattern::MapDestructuring { .. } => {
                     // Fresh hidden param name
                     let hidden_name = format!("__arg{}", hidden_param_idx);
                     hidden_param_idx += 1;
 
                     let param_id = self.next_id();
-                    let param_type = self.convert_type_annotation_option(p_def.type_annotation.clone())?;
+                    let param_type =
+                        self.convert_type_annotation_option(p_def.type_annotation.clone())?;
 
                     // Add the hidden param symbol into current scope as a parameter
                     let binding_info = BindingInfo {
@@ -2500,7 +2543,7 @@ impl<'a> IrConverter<'a> {
     fn convert_defstruct(&mut self, defstruct_expr: DefstructExpr) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let name = defstruct_expr.name.0.clone();
-        
+
         // Create the struct type from the field definitions
         let mut map_entries = Vec::new();
         for field in &defstruct_expr.fields {
@@ -2512,12 +2555,12 @@ impl<'a> IrConverter<'a> {
                 optional: false, // defstruct fields are required by default
             });
         }
-        
+
         let struct_type = IrType::Map {
             entries: map_entries,
             wildcard: None, // defstruct creates closed maps
         };
-        
+
         // Create a constructor function that validates inputs
         // The constructor takes a map and validates it against the struct definition
         let param_id = self.next_id();
@@ -2526,26 +2569,36 @@ impl<'a> IrConverter<'a> {
             binding: Box::new(IrNode::VariableBinding {
                 id: param_id,
                 name: "input_map".to_string(),
-                ir_type: IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+                ir_type: IrType::Map {
+                    entries: vec![],
+                    wildcard: Some(Box::new(IrType::Any)),
+                },
                 source_location: None,
             }),
-            type_annotation: Some(IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }),
-            ir_type: IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
+            type_annotation: Some(IrType::Map {
+                entries: vec![],
+                wildcard: Some(Box::new(IrType::Any)),
+            }),
+            ir_type: IrType::Map {
+                entries: vec![],
+                wildcard: Some(Box::new(IrType::Any)),
+            },
             source_location: None,
         };
-        
+
         // Constructor body: for now, just return the input map
         // In a full implementation, this would contain validation logic
-        let constructor_body = vec![
-            IrNode::VariableRef {
-                id: self.next_id(),
-                name: "input_map".to_string(),
-                binding_id: param_id,
-                ir_type: IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) },
-                source_location: None,
-            }
-        ];
-        
+        let constructor_body = vec![IrNode::VariableRef {
+            id: self.next_id(),
+            name: "input_map".to_string(),
+            binding_id: param_id,
+            ir_type: IrType::Map {
+                entries: vec![],
+                wildcard: Some(Box::new(IrType::Any)),
+            },
+            source_location: None,
+        }];
+
         // TODO: Full defstruct IR implementation should include:
         // 1. Field validation logic in constructor body (instead of just returning input_map)
         // 2. Proper typed field access methods/getters for each struct field
@@ -2555,14 +2608,17 @@ impl<'a> IrConverter<'a> {
         // 6. Error handling and reporting for invalid field values
         // 7. Support for default values and optional fields
         // 8. Immutable update operations (assoc, dissoc, update-in style)
-        
+
         // Create the constructor function type
         let constructor_type = IrType::Function {
-            param_types: vec![IrType::Map { entries: vec![], wildcard: Some(Box::new(IrType::Any)) }],
+            param_types: vec![IrType::Map {
+                entries: vec![],
+                wildcard: Some(Box::new(IrType::Any)),
+            }],
             variadic_param_type: None,
             return_type: Box::new(struct_type.clone()),
         };
-        
+
         // Create the constructor lambda
         let constructor_lambda = IrNode::Lambda {
             id: self.next_id(),
@@ -2573,7 +2629,7 @@ impl<'a> IrConverter<'a> {
             ir_type: constructor_type.clone(),
             source_location: None,
         };
-        
+
         // Define the constructor function in the environment
         let binding_info = BindingInfo {
             name: name.clone(),
@@ -2582,7 +2638,7 @@ impl<'a> IrConverter<'a> {
             kind: BindingKind::Function,
         };
         self.define_binding(name.clone(), binding_info);
-        
+
         // Return a function definition that binds the constructor to the struct name
         Ok(IrNode::FunctionDef {
             id,
@@ -2772,7 +2828,7 @@ impl<'a> IrConverter<'a> {
                     }
                 }
             }
-            IrNode::Lambda {  .. } => {
+            IrNode::Lambda { .. } => {
                 // Don't traverse into nested lambdas for capture analysis
                 // Each lambda should do its own capture analysis
                 return;
@@ -2904,7 +2960,6 @@ impl<'a> IrConverter<'a> {
             | IrNode::Parallel { .. }
             | IrNode::Module { .. }
             | IrNode::Import { .. }
-
             | IrNode::Program { .. } => {
                 // No variable references in these node types
             }
@@ -2938,14 +2993,14 @@ impl<'a> IrConverter<'a> {
             TypeExpr::Vector(element_type) => {
                 let element_ir_type = self.convert_type_annotation(*element_type)?;
                 Ok(IrType::Vector(Box::new(element_ir_type)))
-            },
+            }
             TypeExpr::Tuple(element_types) => {
                 let ir_types: Result<Vec<_>, _> = element_types
                     .into_iter()
                     .map(|t| self.convert_type_annotation(t))
                     .collect();
                 Ok(IrType::Tuple(ir_types?))
-            },
+            }
             TypeExpr::Map { entries, wildcard } => {
                 let mut ir_entries = Vec::new();
                 for entry in entries {
@@ -2964,8 +3019,12 @@ impl<'a> IrConverter<'a> {
                     entries: ir_entries,
                     wildcard: wildcard_type,
                 })
-            },
-            TypeExpr::Function { param_types, variadic_param_type, return_type } => {
+            }
+            TypeExpr::Function {
+                param_types,
+                variadic_param_type,
+                return_type,
+            } => {
                 let ir_param_types: Result<Vec<_>, _> = param_types
                     .into_iter()
                     .map(|pt| match pt {
@@ -2982,45 +3041,49 @@ impl<'a> IrConverter<'a> {
                     variadic_param_type: ir_variadic_type,
                     return_type: ir_return_type,
                 })
-            },
+            }
             TypeExpr::Union(types) => {
                 let ir_types: Result<Vec<_>, _> = types
                     .into_iter()
                     .map(|t| self.convert_type_annotation(t))
                     .collect();
                 Ok(IrType::Union(ir_types?))
-            },
+            }
             TypeExpr::Intersection(types) => {
                 let ir_types: Result<Vec<_>, _> = types
                     .into_iter()
                     .map(|t| self.convert_type_annotation(t))
                     .collect();
                 Ok(IrType::Intersection(ir_types?))
-            },
+            }
             TypeExpr::Resource(symbol) => Ok(IrType::Resource(symbol.0)),
             TypeExpr::Literal(lit) => Ok(IrType::LiteralValue(lit)),
             TypeExpr::Optional(inner_type) => {
                 let inner_ir_type = self.convert_type_annotation(*inner_type)?;
                 Ok(IrType::Union(vec![inner_ir_type, IrType::Nil]))
-            },
+            }
             // For complex types that don't have direct IR equivalents, fall back to Any for now
-            TypeExpr::Array { element_type: _, shape: _ } => {
+            TypeExpr::Array {
+                element_type: _,
+                shape: _,
+            } => {
                 // TODO: Implement proper array type support in IR
                 Ok(IrType::Any)
-            },
-            TypeExpr::Refined { base_type, predicates: _ } => {
+            }
+            TypeExpr::Refined {
+                base_type,
+                predicates: _,
+            } => {
                 // For now, just convert the base type and ignore predicates
                 // TODO: Implement refined type support in IR
                 self.convert_type_annotation(*base_type)
-            },
+            }
             TypeExpr::Enum(literals) => {
                 // Convert enum to union of literal types
-                let literal_types: Vec<IrType> = literals
-                    .into_iter()
-                    .map(IrType::LiteralValue)
-                    .collect();
+                let literal_types: Vec<IrType> =
+                    literals.into_iter().map(IrType::LiteralValue).collect();
                 Ok(IrType::Union(literal_types))
-            },
+            }
         }
     }
 

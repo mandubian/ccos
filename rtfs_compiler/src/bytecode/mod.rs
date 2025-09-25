@@ -1,7 +1,7 @@
 use crate::ir::core::IrNode;
-use wasmtime::{Engine, Module, Store, Instance, Val};
 use crate::runtime::{RuntimeError, RuntimeResult, Value};
 use std::sync::Arc;
+use wasmtime::{Engine, Instance, Module, Store, Val};
 
 /// Trait for pluggable back-ends that turn RTFS IR modules into machine-executable bytecode.
 /// Returns a raw byte vector suitable for publishing to the L4 cache.
@@ -70,10 +70,18 @@ impl WasmExecutor {
 }
 
 // Utility to simplify float conversions
-fn f64_to_bits(f: f64) -> u64 { f.to_bits() }
-fn bits_to_f64(b: u64) -> f64 { f64::from_bits(b) }
-fn f32_to_bits(f: f64) -> u32 { (f as f32).to_bits() }
-fn bits_to_f32(b: u32) -> f64 { f32::from_bits(b) as f64 }
+fn f64_to_bits(f: f64) -> u64 {
+    f.to_bits()
+}
+fn bits_to_f64(b: u64) -> f64 {
+    f64::from_bits(b)
+}
+fn f32_to_bits(f: f64) -> u32 {
+    (f as f32).to_bits()
+}
+fn bits_to_f32(b: u32) -> f64 {
+    f32::from_bits(b) as f64
+}
 
 impl BytecodeExecutor for WasmExecutor {
     fn execute_module(
@@ -83,11 +91,15 @@ impl BytecodeExecutor for WasmExecutor {
         args: &[Value],
     ) -> RuntimeResult<Value> {
         // Compile module
-        let module = Module::from_binary(&self.engine, bytecode).map_err(|e| RuntimeError::Generic(format!("Wasm load error: {e}")))?;
+        let module = Module::from_binary(&self.engine, bytecode)
+            .map_err(|e| RuntimeError::Generic(format!("Wasm load error: {e}")))?;
         // Create a store (empty context)
         let mut store = Store::new(&self.engine, ());
-        let instance = Instance::new(&mut store, &module, &[]).map_err(|e| RuntimeError::Generic(format!("Wasm instantiate error: {e}")))?;
-        let func = instance.get_func(&mut store, fn_name).ok_or_else(|| RuntimeError::Generic(format!("Function '{}' not found in module", fn_name)))?;
+        let instance = Instance::new(&mut store, &module, &[])
+            .map_err(|e| RuntimeError::Generic(format!("Wasm instantiate error: {e}")))?;
+        let func = instance.get_func(&mut store, fn_name).ok_or_else(|| {
+            RuntimeError::Generic(format!("Function '{}' not found in module", fn_name))
+        })?;
         // Map arguments
         let wasm_args: Vec<Val> = args
             .iter()
@@ -113,7 +125,9 @@ impl BytecodeExecutor for WasmExecutor {
                 Val::I64(i) => Ok(Value::Integer(*i)),
                 Val::F32(bits) => Ok(Value::Float(bits_to_f32(*bits))),
                 Val::F64(bits) => Ok(Value::Float(bits_to_f64(*bits))),
-                _ => Err(RuntimeError::Generic("Unsupported return type from Wasm".to_string())),
+                _ => Err(RuntimeError::Generic(
+                    "Unsupported return type from Wasm".to_string(),
+                )),
             }
         } else {
             Ok(Value::Nil)
@@ -123,4 +137,4 @@ impl BytecodeExecutor for WasmExecutor {
     fn target_id(&self) -> &'static str {
         "wasm32"
     }
-} 
+}

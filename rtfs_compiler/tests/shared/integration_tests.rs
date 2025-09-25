@@ -130,7 +130,10 @@ fn preprocess_test_content(content: &str) -> String {
 /// Run a single test file with the given runtime
 fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let test_file_path = format!("{}/tests/shared/rtfs_files/{}.rtfs", manifest_dir, config.name);
+    let test_file_path = format!(
+        "{}/tests/shared/rtfs_files/{}.rtfs",
+        manifest_dir, config.name
+    );
 
     // Check if file exists
     if !Path::new(&test_file_path).exists() {
@@ -147,10 +150,13 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     // Create module registry and load stdlib
     let mut module_registry = ModuleRegistry::new();
     let _ = rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry);
-    
+
     // Debug: Check if stdlib module exists
     if let Some(stdlib_module) = module_registry.get_module("stdlib") {
-        println!("DEBUG: stdlib module found with {} exports", stdlib_module.exports.read().unwrap().len());
+        println!(
+            "DEBUG: stdlib module found with {} exports",
+            stdlib_module.exports.read().unwrap().len()
+        );
         for (name, export) in stdlib_module.exports.read().unwrap().iter() {
             if name == "*" {
                 println!("DEBUG: * function found: {:?}", export.value);
@@ -159,31 +165,31 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
     } else {
         println!("DEBUG: stdlib module not found!");
     }
-    
+
     let module_registry = std::sync::Arc::new(module_registry);
 
     // Create runtime based on strategy
     let mut runtime = match strategy {
-    "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
+        "ast" => runtime::Runtime::new_with_tree_walking_strategy(module_registry.clone()),
         "ir" => {
             let ir_strategy = runtime::ir_runtime::IrStrategy::new((*module_registry).clone());
-            
+
             // Debug: Check if the environment has the * function
-            let debug_env = rtfs_compiler::runtime::environment::IrEnvironment::with_stdlib(&module_registry).unwrap();
+            let debug_env =
+                rtfs_compiler::runtime::environment::IrEnvironment::with_stdlib(&module_registry)
+                    .unwrap();
             if let Some(value) = debug_env.get("*") {
                 println!("DEBUG: * function found in environment: {:?}", value);
                 match &value {
-                    rtfs_compiler::runtime::values::Value::Function(func) => {
-                        match func {
-                            rtfs_compiler::runtime::values::Function::Builtin(builtin) => {
-                                println!("DEBUG: * function is a Builtin function: {}", builtin.name);
-                            },
-                            rtfs_compiler::runtime::values::Function::Ir(_) => {
-                                println!("DEBUG: * function is an IR function (this is the problem!)");
-                            },
-                            _ => {
-                                println!("DEBUG: * function is some other type: {:?}", func);
-                            }
+                    rtfs_compiler::runtime::values::Value::Function(func) => match func {
+                        rtfs_compiler::runtime::values::Function::Builtin(builtin) => {
+                            println!("DEBUG: * function is a Builtin function: {}", builtin.name);
+                        }
+                        rtfs_compiler::runtime::values::Function::Ir(_) => {
+                            println!("DEBUG: * function is an IR function (this is the problem!)");
+                        }
+                        _ => {
+                            println!("DEBUG: * function is some other type: {:?}", func);
                         }
                     },
                     _ => {
@@ -193,10 +199,13 @@ fn run_test_file(config: &TestConfig, strategy: &str) -> Result<String, String> 
             } else {
                 println!("DEBUG: * function NOT found in environment!");
             }
-            
+
             // Debug: Check what functions are available in the environment
-            println!("DEBUG: Available functions in environment: {:?}", debug_env.binding_names());
-            
+            println!(
+                "DEBUG: Available functions in environment: {:?}",
+                debug_env.binding_names()
+            );
+
             runtime::Runtime::new(Box::new(ir_strategy))
         }
         _ => unreachable!(),
@@ -487,8 +496,8 @@ fn test_unknown_escape() {
         name: "test_unknown_escape".to_string(),
         should_compile: false,
         should_execute: false,
-    // Expect a parser/unescape error; we now surface InvalidEscapeSequence from the parser
-    expected_error: Some("InvalidEscapeSequence"),
+        // Expect a parser/unescape error; we now surface InvalidEscapeSequence from the parser
+        expected_error: Some("InvalidEscapeSequence"),
         ..TestConfig::new("test_unknown_escape")
     });
 }
@@ -550,7 +559,6 @@ fn test_computational_heavy() {
     });
 }
 
-
 #[test]
 fn test_string_ops() {
     run_all_tests_for_file(&TestConfig {
@@ -560,25 +568,25 @@ fn test_string_ops() {
     });
 }
 
-
 #[test]
 fn test_map_creation() {
     use rtfs_compiler::ast::{Keyword, MapKey};
     use rtfs_compiler::runtime::Value;
     use std::collections::HashMap;
-    
+
     let mut expected_map = HashMap::new();
-    expected_map.insert(MapKey::Keyword(Keyword::new("category")), Value::Keyword(Keyword::new("medium")));
+    expected_map.insert(
+        MapKey::Keyword(Keyword::new("category")),
+        Value::Keyword(Keyword::new("medium")),
+    );
     expected_map.insert(MapKey::Keyword(Keyword::new("sum")), Value::Integer(60));
-    
+
     run_all_tests_for_file(&TestConfig {
         name: "test_map_creation".to_string(),
         expected_value: Some(Value::Map(expected_map)),
         ..TestConfig::new("test_map_creation")
     });
 }
-
-
 
 #[test]
 fn test_if_map_return() {
@@ -588,7 +596,6 @@ fn test_if_map_return() {
         ..TestConfig::new("test_if_map_return")
     });
 }
-
 
 #[test]
 fn test_simple_if_keyword() {
@@ -701,63 +708,63 @@ fn test_map_multiple_vectors() {
 #[test]
 fn test_http_enhanced() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_http_enhanced"));
 }
 
 #[test]
 fn test_http_functions() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_http_functions"));
 }
 
 #[test]
 fn test_accept_language() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_accept_language"));
 }
 
 #[test]
 fn test_hyphen_keyword() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_hyphen_keyword"));
 }
 
 #[test]
 fn test_map_parts() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_map_parts"));
 }
 
 #[test]
 fn test_comma_string() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_comma_string"));
 }
 
 #[test]
 fn test_specific_map() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_specific_map"));
 }
 
 #[test]
 fn test_boolean_map() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_boolean_map"));
 }
 
 #[test]
 fn test_let_map_issue() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_let_map_issue"));
 }
 
@@ -769,7 +776,7 @@ fn test_map_simple() {
 #[test]
 fn test_http_simple() {
     ensure_global_init();
-    
+
     run_all_tests_for_file(&TestConfig::new("test_http_simple"));
 }
 
@@ -841,18 +848,22 @@ fn test_orchestration_primitives() {
     // Orchestration primitives require CCOS integration
     // Use CCOS environment instead of basic runtime
     use rtfs_compiler::ccos::environment::{CCOSBuilder, SecurityLevel};
-    
+
     let env = CCOSBuilder::new()
         .security_level(SecurityLevel::Standard)
         .build()
         .expect("Failed to create CCOS environment");
-    
+
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let test_file_path = format!("{}/tests/shared/rtfs_files/orchestration_primitives_test.rtfs", manifest_dir);
-    
-    let result = env.execute_file(&test_file_path)
+    let test_file_path = format!(
+        "{}/tests/shared/rtfs_files/orchestration_primitives_test.rtfs",
+        manifest_dir
+    );
+
+    let result = env
+        .execute_file(&test_file_path)
         .expect("Failed to execute orchestration primitives test");
-    
+
     // Handle ExecutionOutcome return type
     let actual_value = match result {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
@@ -860,20 +871,25 @@ fn test_orchestration_primitives() {
             panic!("Unexpected host call in orchestration primitives test");
         }
     };
-    
+
     let expected = r#"String("All orchestration primitive tests completed!")"#;
     let actual = format!("{:?}", actual_value);
-    
-    assert_eq!(actual, expected, "Orchestration primitives test result mismatch");
+
+    assert_eq!(
+        actual, expected,
+        "Orchestration primitives test result mismatch"
+    );
 }
 
 #[test]
 fn test_defstruct_evaluation_basic() {
-    use rtfs_compiler::ast::{DefstructExpr, DefstructField, Symbol, Keyword, TypeExpr, PrimitiveType, MapKey};
-    use rtfs_compiler::runtime::{Environment};
-    use rtfs_compiler::runtime::values::{Value};
-    use std::collections::HashMap;
     use crate::test_helpers;
+    use rtfs_compiler::ast::{
+        DefstructExpr, DefstructField, Keyword, MapKey, PrimitiveType, Symbol, TypeExpr,
+    };
+    use rtfs_compiler::runtime::values::Value;
+    use rtfs_compiler::runtime::Environment;
+    use std::collections::HashMap;
 
     // Create a defstruct for testing
     let defstruct_expr = DefstructExpr {
@@ -900,36 +916,64 @@ fn test_defstruct_evaluation_basic() {
 
     // Check that a constructor function was created
     let constructor = env.lookup(&Symbol::new("TestStruct"));
-    assert!(constructor.is_some(), "Constructor function not found in environment");
+    assert!(
+        constructor.is_some(),
+        "Constructor function not found in environment"
+    );
 
     if let Some(constructor_value) = constructor {
         if let Value::Function(_) = &constructor_value {
             // Test valid input
             let mut valid_map = HashMap::new();
-            valid_map.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Alice".to_string()));
+            valid_map.insert(
+                MapKey::Keyword(Keyword::new("name")),
+                Value::String("Alice".to_string()),
+            );
             valid_map.insert(MapKey::Keyword(Keyword::new("age")), Value::Integer(30));
-            
+
             let valid_input = vec![Value::Map(valid_map)];
-            let construct_result = evaluator.call_function(constructor_value.clone(), &valid_input, &mut env);
-            assert!(construct_result.is_ok(), "Failed to construct valid struct: {:?}", construct_result);
+            let construct_result =
+                evaluator.call_function(constructor_value.clone(), &valid_input, &mut env);
+            assert!(
+                construct_result.is_ok(),
+                "Failed to construct valid struct: {:?}",
+                construct_result
+            );
 
             // Test invalid input - missing field
             let mut invalid_map = HashMap::new();
-            invalid_map.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Bob".to_string()));
+            invalid_map.insert(
+                MapKey::Keyword(Keyword::new("name")),
+                Value::String("Bob".to_string()),
+            );
             // Missing age field
-            
+
             let invalid_input = vec![Value::Map(invalid_map)];
-            let invalid_result = evaluator.call_function(constructor_value.clone(), &invalid_input, &mut env);
-            assert!(invalid_result.is_err(), "Should have failed for missing field");
+            let invalid_result =
+                evaluator.call_function(constructor_value.clone(), &invalid_input, &mut env);
+            assert!(
+                invalid_result.is_err(),
+                "Should have failed for missing field"
+            );
 
             // Test invalid type
             let mut wrong_type_map = HashMap::new();
-            wrong_type_map.insert(MapKey::Keyword(Keyword::new("name")), Value::String("Charlie".to_string()));
-            wrong_type_map.insert(MapKey::Keyword(Keyword::new("age")), Value::String("thirty".to_string())); // Wrong type
-            
+            wrong_type_map.insert(
+                MapKey::Keyword(Keyword::new("name")),
+                Value::String("Charlie".to_string()),
+            );
+            wrong_type_map.insert(
+                MapKey::Keyword(Keyword::new("age")),
+                Value::String("thirty".to_string()),
+            ); // Wrong type
+
             let wrong_type_input = vec![Value::Map(wrong_type_map)];
-            let wrong_type_result = evaluator.call_function(constructor_value.clone(), &wrong_type_input, &mut env);
-            assert!(wrong_type_result.is_err(), "Should have failed for wrong type");
+            let wrong_type_result =
+                evaluator.call_function(constructor_value.clone(), &wrong_type_input, &mut env);
+            assert!(
+                wrong_type_result.is_err(),
+                "Should have failed for wrong type"
+            );
         } else {
             panic!("Expected a function value for the constructor");
         }
@@ -940,11 +984,11 @@ fn test_defstruct_evaluation_basic() {
 
 #[test]
 fn test_defstruct_evaluation_empty() {
-    use rtfs_compiler::ast::{DefstructExpr, Symbol};
-    use rtfs_compiler::runtime::{Environment};
-    use rtfs_compiler::runtime::values::{Value};
-    use std::collections::HashMap;
     use crate::test_helpers;
+    use rtfs_compiler::ast::{DefstructExpr, Symbol};
+    use rtfs_compiler::runtime::values::Value;
+    use rtfs_compiler::runtime::Environment;
+    use std::collections::HashMap;
 
     // Create an empty defstruct for testing
     let defstruct_expr = DefstructExpr {
@@ -958,19 +1002,31 @@ fn test_defstruct_evaluation_empty() {
 
     // Evaluate the defstruct
     let result = evaluator.eval_defstruct(&defstruct_expr, &mut env);
-    assert!(result.is_ok(), "Failed to evaluate empty defstruct: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate empty defstruct: {:?}",
+        result
+    );
 
     // Check that a constructor function was created
     let constructor = env.lookup(&Symbol::new("EmptyStruct"));
-    assert!(constructor.is_some(), "Constructor function not found in environment");
+    assert!(
+        constructor.is_some(),
+        "Constructor function not found in environment"
+    );
 
     if let Some(constructor_value) = constructor {
         if let Value::Function(_) = &constructor_value {
             // Test empty map - should work
             let empty_map = HashMap::new();
             let valid_input = vec![Value::Map(empty_map)];
-            let construct_result = evaluator.call_function(constructor_value, &valid_input, &mut env);
-            assert!(construct_result.is_ok(), "Failed to construct empty struct: {:?}", construct_result);
+            let construct_result =
+                evaluator.call_function(constructor_value, &valid_input, &mut env);
+            assert!(
+                construct_result.is_ok(),
+                "Failed to construct empty struct: {:?}",
+                construct_result
+            );
         } else {
             panic!("Expected a function value for the constructor");
         }

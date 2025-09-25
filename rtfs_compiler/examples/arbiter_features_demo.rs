@@ -1,9 +1,11 @@
-use rtfs_compiler::ccos::arbiter::{
-    ArbiterConfig, ArbiterEngineType, TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior,
-    LlmConfig, DelegationConfig, ArbiterFactory, LlmProviderType,
+use rtfs_compiler::ccos::arbiter::arbiter_config::{
+    AgentDefinition, AgentRegistryConfig, RegistryType,
 };
-use rtfs_compiler::ccos::arbiter::arbiter_config::{AgentRegistryConfig, AgentDefinition, RegistryType};
-use rtfs_compiler::ccos::delegation_keys::{generation, agent};
+use rtfs_compiler::ccos::arbiter::{
+    ArbiterConfig, ArbiterEngineType, ArbiterFactory, DelegationConfig, FallbackBehavior,
+    IntentPattern, LlmConfig, LlmProviderType, PlanTemplate, TemplateConfig,
+};
+use rtfs_compiler::ccos::delegation_keys::{agent, generation};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,13 +14,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demo 1: Template Arbiter
     demo_template_arbiter().await?;
-    
+
     // Demo 2: Hybrid Arbiter
     demo_hybrid_arbiter().await?;
-    
+
     // Demo 3: Delegating Arbiter
     demo_delegating_arbiter().await?;
-    
+
     // Demo 4: LLM Arbiter
     demo_llm_arbiter().await?;
 
@@ -81,7 +83,9 @@ async fn demo_template_arbiter() -> Result<(), Box<dyn std::error::Error>> {
     (step "Generate Report" (call :ccos.echo "generating sentiment report"))
     (step "Store Results" (call :ccos.echo "storing analysis results"))
 )
-                "#.trim().to_string(),
+                "#
+                .trim()
+                .to_string(),
                 variables: vec!["analyze_sentiment".to_string(), "source".to_string()],
             },
             PlanTemplate {
@@ -93,7 +97,9 @@ async fn demo_template_arbiter() -> Result<(), Box<dyn std::error::Error>> {
     (step "Verify Backup" (call :ccos.echo "verifying backup integrity"))
     (step "Store Backup" (call :ccos.echo "storing backup in secure location"))
 )
-                "#.trim().to_string(),
+                "#
+                .trim()
+                .to_string(),
                 variables: vec!["backup_data".to_string(), "data_type".to_string()],
             },
             PlanTemplate {
@@ -105,7 +111,9 @@ async fn demo_template_arbiter() -> Result<(), Box<dyn std::error::Error>> {
     (step "Apply Optimizations" (call :ccos.echo "applying performance optimizations"))
     (step "Test Improvements" (call :ccos.echo "testing performance improvements"))
 )
-                "#.trim().to_string(),
+                "#
+                .trim()
+                .to_string(),
                 variables: vec!["optimize_performance".to_string(), "component".to_string()],
             },
         ],
@@ -124,7 +132,7 @@ async fn demo_template_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create intent graph
     let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?
+        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?,
     ));
 
     // Create arbiter
@@ -140,16 +148,25 @@ async fn demo_template_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, (request, context_value)) in demo_requests.iter().enumerate() {
         println!("📝 Request {}: {}", i + 1, request);
-        
+
         // Create context if provided
         let context = context_value.map(|value| {
             let mut ctx = std::collections::HashMap::new();
             if request.contains("sentiment") {
-                ctx.insert("source".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "source".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             } else if request.contains("backup") {
-                ctx.insert("data_type".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "data_type".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             } else if request.contains("optimize") {
-                ctx.insert("component".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "component".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             }
             ctx
         });
@@ -183,29 +200,27 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create template configuration
     let template_config = TemplateConfig {
-        intent_patterns: vec![
-            IntentPattern {
-                name: "sentiment_analysis".to_string(),
-                pattern: r"(?i)analyze.*sentiment|sentiment.*analysis".to_string(),
-                intent_name: "analyze_sentiment".to_string(),
-                goal_template: "Analyze user sentiment from {source}".to_string(),
-                constraints: vec!["privacy".to_string(), "accuracy".to_string()],
-                preferences: vec!["speed".to_string()],
-            },
-        ],
-        plan_templates: vec![
-            PlanTemplate {
-                name: "sentiment_analysis_plan".to_string(),
-                rtfs_template: r#"
+        intent_patterns: vec![IntentPattern {
+            name: "sentiment_analysis".to_string(),
+            pattern: r"(?i)analyze.*sentiment|sentiment.*analysis".to_string(),
+            intent_name: "analyze_sentiment".to_string(),
+            goal_template: "Analyze user sentiment from {source}".to_string(),
+            constraints: vec!["privacy".to_string(), "accuracy".to_string()],
+            preferences: vec!["speed".to_string()],
+        }],
+        plan_templates: vec![PlanTemplate {
+            name: "sentiment_analysis_plan".to_string(),
+            rtfs_template: r#"
 (do
     (step "Fetch Data" (call :ccos.echo "fetching {source} data"))
     (step "Analyze Sentiment" (call :ccos.echo "analyzing sentiment"))
     (step "Generate Report" (call :ccos.echo "generating sentiment report"))
 )
-                "#.trim().to_string(),
-                variables: vec!["analyze_sentiment".to_string(), "source".to_string()],
-            },
-        ],
+                "#
+            .trim()
+            .to_string(),
+            variables: vec!["analyze_sentiment".to_string(), "source".to_string()],
+        }],
         fallback: FallbackBehavior::Llm,
     };
 
@@ -217,8 +232,8 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         max_tokens: Some(1000),
         temperature: Some(0.7),
-    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
-    timeout_seconds: Some(30),
+        prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+        timeout_seconds: Some(30),
     };
 
     // Create arbiter configuration
@@ -233,7 +248,7 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create intent graph
     let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?
+        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?,
     ));
 
     // Create arbiter
@@ -243,18 +258,21 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
     // Demo requests - mix of template matches and LLM fallback
     let demo_requests = vec![
         ("analyze sentiment from chat logs", Some("chat_logs")), // Template match
-        ("create a complex data analysis pipeline", None), // LLM fallback
+        ("create a complex data analysis pipeline", None),       // LLM fallback
         ("optimize database queries for better performance", None), // LLM fallback
     ];
 
     for (i, (request, context_value)) in demo_requests.iter().enumerate() {
         println!("📝 Request {}: {}", i + 1, request);
-        
+
         // Create context if provided
         let context = context_value.map(|value| {
             let mut ctx = std::collections::HashMap::new();
             if request.contains("sentiment") {
-                ctx.insert("source".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "source".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             }
             ctx
         });
@@ -297,8 +315,8 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         max_tokens: Some(1000),
         temperature: Some(0.7),
-    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
-    timeout_seconds: Some(30),
+        prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+        timeout_seconds: Some(30),
     };
 
     // Create delegation configuration with agents
@@ -315,7 +333,10 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
                 AgentDefinition {
                     agent_id: "sentiment_agent".to_string(),
                     name: "Sentiment Analysis Agent".to_string(),
-                    capabilities: vec!["sentiment_analysis".to_string(), "text_processing".to_string()],
+                    capabilities: vec![
+                        "sentiment_analysis".to_string(),
+                        "text_processing".to_string(),
+                    ],
                     cost: 0.1,
                     trust_score: 0.9,
                     metadata: std::collections::HashMap::<String, String>::new(),
@@ -331,7 +352,10 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
                 AgentDefinition {
                     agent_id: "optimization_agent".to_string(),
                     name: "Performance Optimization Agent".to_string(),
-                    capabilities: vec!["performance_optimization".to_string(), "monitoring".to_string()],
+                    capabilities: vec![
+                        "performance_optimization".to_string(),
+                        "monitoring".to_string(),
+                    ],
                     cost: 0.15,
                     trust_score: 0.85,
                     metadata: std::collections::HashMap::<String, String>::new(),
@@ -352,7 +376,7 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create intent graph
     let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?
+        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?,
     ));
 
     // Create arbiter
@@ -361,19 +385,31 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demo requests that might trigger delegation
     let demo_requests = vec![
-        ("analyze sentiment from user feedback and provide detailed insights", None),
-        ("create a comprehensive backup strategy for our production database", None),
-        ("optimize our web application performance and provide recommendations", None),
+        (
+            "analyze sentiment from user feedback and provide detailed insights",
+            None,
+        ),
+        (
+            "create a comprehensive backup strategy for our production database",
+            None,
+        ),
+        (
+            "optimize our web application performance and provide recommendations",
+            None,
+        ),
         ("simple echo test", None), // Should not trigger delegation
     ];
 
     for (i, (request, context_value)) in demo_requests.iter().enumerate() {
         println!("📝 Request {}: {}", i + 1, request);
-        
+
         // Create context if provided
         let context = context_value.map(|value: &str| {
             let mut ctx = std::collections::HashMap::new();
-            ctx.insert("context".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+            ctx.insert(
+                "context".to_string(),
+                rtfs_compiler::runtime::values::Value::String(value.to_string()),
+            );
             ctx
         });
 
@@ -418,8 +454,8 @@ async fn demo_llm_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         max_tokens: Some(1000),
         temperature: Some(0.7),
-    prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
-    timeout_seconds: Some(30),
+        prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+        timeout_seconds: Some(30),
     };
 
     // Create arbiter configuration
@@ -434,7 +470,7 @@ async fn demo_llm_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create intent graph
     let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?
+        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?,
     ));
 
     // Create arbiter
@@ -443,18 +479,30 @@ async fn demo_llm_arbiter() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demo requests for pure LLM reasoning
     let demo_requests = vec![
-        ("create a machine learning pipeline for customer segmentation", None),
-        ("design a microservices architecture for an e-commerce platform", None),
-        ("implement a real-time data processing system with streaming analytics", None),
+        (
+            "create a machine learning pipeline for customer segmentation",
+            None,
+        ),
+        (
+            "design a microservices architecture for an e-commerce platform",
+            None,
+        ),
+        (
+            "implement a real-time data processing system with streaming analytics",
+            None,
+        ),
     ];
 
     for (i, (request, context_value)) in demo_requests.iter().enumerate() {
         println!("📝 Request {}: {}", i + 1, request);
-        
+
         // Create context if provided
         let context = context_value.map(|value: &str| {
             let mut ctx = std::collections::HashMap::new();
-            ctx.insert("context".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+            ctx.insert(
+                "context".to_string(),
+                rtfs_compiler::runtime::values::Value::String(value.to_string()),
+            );
             ctx
         });
 

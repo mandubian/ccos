@@ -13,27 +13,25 @@ use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
-use rtfs_compiler::ccos::types::{Plan, ActionType, Intent};
-use rtfs_compiler::ccos::intent_graph::IntentGraph;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::plan_archive::PlanArchive;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::types::{ActionType, Intent, Plan};
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 
-use rtfs_compiler::ccos::arbiter::plan_generation::{
-    PlanGenerationProvider,
-    StubPlanGenerationProvider,
-    LlmRtfsPlanGenerationProvider,
-};
+use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ccos::arbiter::llm_provider::{LlmProviderConfig, LlmProviderType};
+use rtfs_compiler::ccos::arbiter::plan_generation::{
+    LlmRtfsPlanGenerationProvider, PlanGenerationProvider, StubPlanGenerationProvider,
+};
 use rtfs_compiler::ccos::arbiter::{
-    arbiter_factory::ArbiterFactory,
     arbiter_config::{ArbiterConfig, ArbiterEngineType, LlmConfig},
+    arbiter_factory::ArbiterFactory,
 };
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ast::MapKey;
 
 // Compact pretty-printer to render Value maps with friendly keys (e.g., {:message "hi"})
 fn render_value_compact(v: &Value) -> String {
@@ -83,8 +81,8 @@ fn render_value_compact(v: &Value) -> String {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "multi_intent_demo")] 
-#[command(about = "Run a multi-intent, multi-step RTFS demo with Arbiter + Orchestrator")] 
+#[command(name = "multi_intent_demo")]
+#[command(about = "Run a multi-intent, multi-step RTFS demo with Arbiter + Orchestrator")]
 struct Args {
     /// Scenario preset
     #[arg(long, default_value = "greet-and-sum")]
@@ -156,7 +154,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // --- Arbiter config for intent generation ---
-    let use_stub_intent = args.stub || (std::env::var("OPENROUTER_API_KEY").is_err() && std::env::var("OPENAI_API_KEY").is_err());
+    let use_stub_intent = args.stub
+        || (std::env::var("OPENROUTER_API_KEY").is_err()
+            && std::env::var("OPENAI_API_KEY").is_err());
     let arbiter_config = if use_stub_intent {
         ArbiterConfig {
             engine_type: ArbiterEngineType::Llm,
@@ -171,14 +171,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prompts: None,
             }),
             delegation_config: None,
-            capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
-            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(),
+            capability_config:
+                rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
+            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(
+            ),
             template_config: None,
         }
     } else {
         let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
-            (Some(key), Some("https://openrouter.ai/api/v1".to_string()), model)
+            let model = std::env::var("LLM_MODEL")
+                .unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
+            (
+                Some(key),
+                Some("https://openrouter.ai/api/v1".to_string()),
+                model,
+            )
         } else {
             let key = std::env::var("OPENAI_API_KEY").ok();
             let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
@@ -188,7 +195,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ArbiterConfig {
             engine_type: ArbiterEngineType::Llm,
             llm_config: Some(LlmConfig {
-                provider_type: rtfs_compiler::ccos::arbiter::arbiter_config::LlmProviderType::OpenAI,
+                provider_type:
+                    rtfs_compiler::ccos::arbiter::arbiter_config::LlmProviderType::OpenAI,
                 model,
                 api_key,
                 base_url,
@@ -198,8 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prompts: None,
             }),
             delegation_config: None,
-            capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
-            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(),
+            capability_config:
+                rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
+            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(
+            ),
             template_config: None,
         }
     };
@@ -208,8 +218,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to create arbiter: {}", e))?;
 
     // Verbose: show prompts
-    if args.verbose { std::env::set_var("RTFS_SHOW_PROMPTS", "1"); }
-    if args.full_plan { std::env::set_var("RTFS_FULL_PLAN", "1"); }
+    if args.verbose {
+        std::env::set_var("RTFS_SHOW_PROMPTS", "1");
+    }
+    if args.full_plan {
+        std::env::set_var("RTFS_FULL_PLAN", "1");
+    }
 
     // Build the scenario
     let mut goals: Vec<String> = vec![];
@@ -243,7 +257,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 2) Generate plan (deterministic/stub vs LLM)
         let plan_result = if deterministic || !llm_plans {
-            if verbose { println!("⚙️  Using deterministic StubPlanGenerationProvider\n"); }
+            if verbose {
+                println!("⚙️  Using deterministic StubPlanGenerationProvider\n");
+            }
             let provider = StubPlanGenerationProvider;
             provider
                 .generate_plan(&intent, Arc::clone(&marketplace))
@@ -251,11 +267,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Plan generation failed: {}", e))?
         } else {
             let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
-                (Some(key), Some("https://openrouter.ai/api/v1".to_string()), model)
+                let model = std::env::var("LLM_MODEL")
+                    .unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
+                (
+                    Some(key),
+                    Some("https://openrouter.ai/api/v1".to_string()),
+                    model,
+                )
             } else {
                 let key = std::env::var("OPENAI_API_KEY").ok();
-                let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+                let model =
+                    std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
                 (key, None, model)
             };
             let config = LlmProviderConfig {
@@ -272,8 +294,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .generate_plan(&intent, Arc::clone(&marketplace))
                 .await
                 .map_err(|e| format!("Plan generation failed: {}", e))?;
-            if verbose { println!("ℹ️ Advisory capability whitelist (demo): :ccos.echo, :ccos.math.add"); }
-            if let Some(diag) = &result.diagnostics { if verbose { println!("🩺 Diagnostics: {}", diag); } }
+            if verbose {
+                println!("ℹ️ Advisory capability whitelist (demo): :ccos.echo, :ccos.math.add");
+            }
+            if let Some(diag) = &result.diagnostics {
+                if verbose {
+                    println!("🩺 Diagnostics: {}", diag);
+                }
+            }
             result
         };
 
@@ -287,11 +315,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 3) Lifecycle logs
         if let Ok(mut chain) = causal_chain.lock() {
             let _ = chain.log_intent_created(&plan_id, &intent.intent_id, &intent.goal, None);
-            let _ = chain.log_intent_status_change(&plan_id, &intent.intent_id, "Active", "Executing", "demo:start", None);
+            let _ = chain.log_intent_status_change(
+                &plan_id,
+                &intent.intent_id,
+                "Active",
+                "Executing",
+                "demo:start",
+                None,
+            );
         }
         if verbose {
             println!("🧠 Intent lifecycle:");
-            println!("  • Created intent {} (goal: \"{}\")", intent.intent_id, intent.goal);
+            println!(
+                "  • Created intent {} (goal: \"{}\")",
+                intent.intent_id, intent.goal
+            );
             println!("  • Status: Active → Executing");
         }
 
@@ -308,15 +346,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut seen_ids = std::collections::HashSet::new();
             for a in actions {
                 if a.action_type == ActionType::CapabilityResult {
-                    if let Some(exec) = &a.result { if !seen_ids.insert(a.action_id.clone()) { continue; }
-                        if !printed_header { println!("\n🔎 Step outputs:"); printed_header = true; }
+                    if let Some(exec) = &a.result {
+                        if !seen_ids.insert(a.action_id.clone()) {
+                            continue;
+                        }
+                        if !printed_header {
+                            println!("\n🔎 Step outputs:");
+                            printed_header = true;
+                        }
                         let cap = a.function_name.as_deref().unwrap_or("<unknown>");
                         let inputs_str = chain
                             .get_parent(&a.action_id)
                             .and_then(|parent| parent.arguments.as_ref())
                             .map(|args| {
-                                if args.is_empty() { "".to_string() } else {
-                                    let rendered: Vec<String> = args.iter().map(|v| render_value_compact(v)).collect();
+                                if args.is_empty() {
+                                    "".to_string()
+                                } else {
+                                    let rendered: Vec<String> =
+                                        args.iter().map(|v| render_value_compact(v)).collect();
                                     format!("({})", rendered.join(", "))
                                 }
                             })
@@ -331,7 +378,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            if !printed_header { println!("\n🔎 No capability results recorded for this plan."); }
+            if !printed_header {
+                println!("\n🔎 No capability results recorded for this plan.");
+            }
             if verbose {
                 println!("\n🧭 Debug: all actions for this plan (type, name, has_result)");
                 let mut i = 1;
@@ -351,20 +400,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 6) Wrap up and return
         match exec_res {
             Ok(exec) => {
-                println!("✅ Execution success: {}", render_value_compact(&exec.value));
+                println!(
+                    "✅ Execution success: {}",
+                    render_value_compact(&exec.value)
+                );
                 if let Ok(mut chain) = causal_chain.lock() {
-                    let _ = chain.log_intent_status_change(&plan_id, &intent.intent_id, "Executing", "Completed", "demo:completed", None);
+                    let _ = chain.log_intent_status_change(
+                        &plan_id,
+                        &intent.intent_id,
+                        "Executing",
+                        "Completed",
+                        "demo:completed",
+                        None,
+                    );
                 }
-                if verbose { println!("  • Status: Executing → Completed"); }
-                Ok(IntentRunResult { intent, plan_id, success: true, value: Some(exec.value), error: None })
+                if verbose {
+                    println!("  • Status: Executing → Completed");
+                }
+                Ok(IntentRunResult {
+                    intent,
+                    plan_id,
+                    success: true,
+                    value: Some(exec.value),
+                    error: None,
+                })
             }
             Err(e) => {
                 println!("❌ Execution failed: {}", e);
                 if let Ok(mut chain) = causal_chain.lock() {
-                    let _ = chain.log_intent_status_change(&plan_id, &intent.intent_id, "Executing", "Failed", &format!("demo:error: {}", e), None);
+                    let _ = chain.log_intent_status_change(
+                        &plan_id,
+                        &intent.intent_id,
+                        "Executing",
+                        "Failed",
+                        &format!("demo:error: {}", e),
+                        None,
+                    );
                 }
-                if verbose { println!("  • Status: Executing → Failed"); }
-                Ok(IntentRunResult { intent, plan_id, success: false, value: None, error: Some(e.to_string()) })
+                if verbose {
+                    println!("  • Status: Executing → Failed");
+                }
+                Ok(IntentRunResult {
+                    intent,
+                    plan_id,
+                    success: false,
+                    value: None,
+                    error: Some(e.to_string()),
+                })
             }
         }
     }
@@ -382,7 +464,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&causal_chain),
             arbiter.as_ref(),
             args.verbose,
-        ).await?;
+        )
+        .await?;
         results.push(res);
     }
 
@@ -398,15 +481,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&causal_chain),
             arbiter.as_ref(),
             args.verbose,
-        ).await?;
+        )
+        .await?;
         // Try to interpret result as integer
-        if let Some(Value::Integer(n)) = res.value.clone() { sum_value = Some(n); }
+        if let Some(Value::Integer(n)) = res.value.clone() {
+            sum_value = Some(n);
+        }
         results.push(res);
     }
 
     // Optional Intent 3 (summarize)
     if args.scenario == "greet-and-sum" {
-        let summary_goal = if let Some(n) = sum_value { format!("Announce the computed sum {} using echo", n) } else { "Announce that the sum could not be computed".to_string() };
+        let summary_goal = if let Some(n) = sum_value {
+            format!("Announce the computed sum {} using echo", n)
+        } else {
+            "Announce that the sum could not be computed".to_string()
+        };
         let res = run_intent(
             &summary_goal,
             args.llm_plans,
@@ -416,7 +506,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&causal_chain),
             arbiter.as_ref(),
             args.verbose,
-        ).await?;
+        )
+        .await?;
         results.push(res);
     }
 
@@ -425,8 +516,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, r) in results.iter().enumerate() {
         let status = if r.success { "✅" } else { "❌" };
         let goal = &r.intent.goal;
-        let val = r.value.as_ref().map(render_value_compact).unwrap_or_else(|| "nil".to_string());
-        println!("  {} Intent {}: {}\n     • goal: {}\n     • plan: {}\n     • output: {}", status, i + 1, r.intent.intent_id, goal, r.plan_id, val);
+        let val = r
+            .value
+            .as_ref()
+            .map(render_value_compact)
+            .unwrap_or_else(|| "nil".to_string());
+        println!(
+            "  {} Intent {}: {}\n     • goal: {}\n     • plan: {}\n     • output: {}",
+            status,
+            i + 1,
+            r.intent.intent_id,
+            goal,
+            r.plan_id,
+            val
+        );
     }
 
     println!("\n✨ Done.");

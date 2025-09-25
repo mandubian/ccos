@@ -1,12 +1,12 @@
 // Minimal test helpers for RTFS-only tests
 // This provides only the essential functions needed for pure RTFS testing
 
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
-use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
@@ -17,7 +17,7 @@ fn create_minimal_host() -> Arc<dyn rtfs_compiler::runtime::host_interface::Host
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
     let security_context = RuntimeContext::pure();
-    
+
     Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,

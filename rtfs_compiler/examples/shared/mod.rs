@@ -1,7 +1,7 @@
 //! Shared utilities for example demos
-use rtfs_compiler::ccos::remote_models::RemoteModelConfig;
-use rtfs_compiler::ccos::delegation::ModelProvider;
 use reqwest::blocking::Client;
+use rtfs_compiler::ccos::delegation::ModelProvider;
+use rtfs_compiler::ccos::remote_models::RemoteModelConfig;
 
 /// Real OpenRouter provider that makes actual API calls
 #[derive(Debug)]
@@ -16,13 +16,15 @@ impl CustomOpenRouterModel {
             std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
             model_name.to_string(),
         );
-        
+
         Self { id, config }
     }
 }
 
 impl ModelProvider for CustomOpenRouterModel {
-    fn id(&self) -> &'static str { self.id }
+    fn id(&self) -> &'static str {
+        self.id
+    }
 
     fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Check if API key is available

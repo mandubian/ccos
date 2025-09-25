@@ -5,15 +5,17 @@
 //! The goal is to test whether a general-purpose model can "speak RTFS" with a
 //! few-shot prompt plus a snippet of the grammar – no fine-tuning.
 
-use rtfs_compiler::ccos::delegation::{ExecTarget, ModelRegistry, StaticDelegationEngine, ModelProvider};
-use rtfs_compiler::parser;
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
+use regex::Regex; // Add dependency in Cargo.toml if not present
 use rtfs_compiler::ast::TopLevel;
+use rtfs_compiler::ccos::delegation::{
+    ExecTarget, ModelProvider, ModelRegistry, StaticDelegationEngine,
+};
+use rtfs_compiler::ccos::types::Intent;
+use rtfs_compiler::parser;
 use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
-use regex::Regex; // Add dependency in Cargo.toml if not present
-use rtfs_compiler::ccos::types::Intent;
 
 mod shared;
 use shared::CustomOpenRouterModel;
@@ -50,9 +52,8 @@ fn extract_intent(text: &str) -> Option<String> {
 fn sanitize_regex_literals(text: &str) -> String {
     // Matches #rx"..." with minimal escaping (no nested quotes inside pattern)
     let re = Regex::new(r#"#rx\"([^\"]*)\""#).unwrap();
-    re.replace_all(text, |caps: &regex::Captures| {
-        format!("\"{}\"", &caps[1])
-    }).into_owned()
+    re.replace_all(text, |caps: &regex::Captures| format!("\"{}\"", &caps[1]))
+        .into_owned()
 }
 
 // Helper: convert parser Literal to runtime Value (basic subset)
@@ -68,7 +69,7 @@ fn lit_to_val(lit: &rtfs_compiler::ast::Literal) -> Value {
 }
 
 fn expr_to_value(expr: &rtfs_compiler::ast::Expression) -> Value {
-    use rtfs_compiler::ast::{Expression as E};
+    use rtfs_compiler::ast::Expression as E;
     match expr {
         E::Literal(lit) => lit_to_val(lit),
         E::Map(m) => {
@@ -80,7 +81,11 @@ fn expr_to_value(expr: &rtfs_compiler::ast::Expression) -> Value {
         }
         E::Vector(vec) | E::List(vec) => {
             let vals = vec.iter().map(expr_to_value).collect();
-            if matches!(expr, E::Vector(_)) { Value::Vector(vals) } else { Value::List(vals) }
+            if matches!(expr, E::Vector(_)) {
+                Value::Vector(vals)
+            } else {
+                Value::List(vals)
+            }
         }
         E::Symbol(s) => Value::Symbol(rtfs_compiler::ast::Symbol(s.0.clone())),
         E::FunctionCall { callee, arguments } => {
@@ -92,26 +97,31 @@ fn expr_to_value(expr: &rtfs_compiler::ast::Expression) -> Value {
         E::Fn(fn_expr) => {
             // Convert fn expressions to a list representation: (fn params body...)
             let mut fn_list = vec![Value::Symbol(rtfs_compiler::ast::Symbol("fn".to_string()))];
-            
+
             // Add parameters as a vector
             let mut params = Vec::new();
             for param in &fn_expr.params {
-                params.push(Value::Symbol(rtfs_compiler::ast::Symbol(format!("{:?}", param.pattern))));
+                params.push(Value::Symbol(rtfs_compiler::ast::Symbol(format!(
+                    "{:?}",
+                    param.pattern
+                ))));
             }
             fn_list.push(Value::Vector(params));
-            
+
             // Add body expressions
             for body_expr in &fn_expr.body {
                 fn_list.push(expr_to_value(body_expr));
             }
-            
+
             Value::List(fn_list)
         }
         _ => Value::Nil,
     }
 }
 
-fn map_expr_to_string_value(expr: &rtfs_compiler::ast::Expression) -> Option<std::collections::HashMap<String, Value>> {
+fn map_expr_to_string_value(
+    expr: &rtfs_compiler::ast::Expression,
+) -> Option<std::collections::HashMap<String, Value>> {
     use rtfs_compiler::ast::{Expression as E, MapKey};
     if let E::Map(m) = expr {
         let mut out = std::collections::HashMap::new();
@@ -132,10 +142,18 @@ fn map_expr_to_string_value(expr: &rtfs_compiler::ast::Expression) -> Option<std
 fn intent_from_function_call(expr: &rtfs_compiler::ast::Expression) -> Option<Intent> {
     use rtfs_compiler::ast::{Expression as E, Literal, Symbol};
 
-    let E::FunctionCall { callee, arguments } = expr else { return None; };
-    let E::Symbol(Symbol(sym)) = &**callee else { return None; };
-    if sym != "intent" { return None; }
-    if arguments.is_empty() { return None; }
+    let E::FunctionCall { callee, arguments } = expr else {
+        return None;
+    };
+    let E::Symbol(Symbol(sym)) = &**callee else {
+        return None;
+    };
+    if sym != "intent" {
+        return None;
+    }
+    if arguments.is_empty() {
+        return None;
+    }
 
     // The first argument is the intent name/type, as per the demo's grammar snippet.
     let name = if let E::Symbol(Symbol(name_sym)) = &arguments[0] {
@@ -152,16 +170,30 @@ fn intent_from_function_call(expr: &rtfs_compiler::ast::Expression) -> Option<In
         }
     }
 
-    let original_request = properties.get("original-request")
-        .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
+    let original_request = properties
+        .get("original-request")
+        .and_then(|expr| {
+            if let E::Literal(Literal::String(s)) = expr {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_default();
-    
-    let goal = properties.get("goal")
-        .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
+
+    let goal = properties
+        .get("goal")
+        .and_then(|expr| {
+            if let E::Literal(Literal::String(s)) = expr {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| original_request.clone());
 
     let mut intent = Intent::new(goal).with_name(name);
-    
+
     if let Some(expr) = properties.get("constraints") {
         if let Some(m) = map_expr_to_string_value(expr) {
             intent.constraints = m;
@@ -180,9 +212,12 @@ fn intent_from_function_call(expr: &rtfs_compiler::ast::Expression) -> Option<In
         println!("🔍 Debug - Converted to value: {:?}", value);
         intent.success_criteria = Some(value);
     } else {
-        println!("🔍 Debug - No success-criteria property found in properties: {:?}", properties.keys().collect::<Vec<_>>());
+        println!(
+            "🔍 Debug - No success-criteria property found in properties: {:?}",
+            properties.keys().collect::<Vec<_>>()
+        );
     }
-    
+
     Some(intent)
 }
 
@@ -435,12 +470,18 @@ COMMON PATTERNS:
         ExecTarget::RemoteModel("openrouter-hunyuan-a13b-instruct".to_string()),
     );
     let delegation = Arc::new(StaticDelegationEngine::new(static_map));
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()),
+    );
 
     // Evaluator (we won't actually evaluate the generated intent here, but set up for future)
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
-        Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        Arc::new(std::sync::Mutex::new(
+            rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+        )),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
@@ -508,35 +549,56 @@ COMMON PATTERNS:
                                         ccos_intent.success_criteria = Some(Value::Nil);
                                     }
                                     // Print the enriched struct
-                                    println!("\n🪄 Enriched CCOS Intent struct:\n{:#?}", ccos_intent);
-                                    
+                                    println!(
+                                        "\n🪄 Enriched CCOS Intent struct:\n{:#?}",
+                                        ccos_intent
+                                    );
+
                                     // -------- AI Validation and Repair Loop --------
-                                    validate_and_repair_intent(&ccos_intent, &intent_block, &user_request, provider.as_ref())?;
+                                    validate_and_repair_intent(
+                                        &ccos_intent,
+                                        &intent_block,
+                                        &user_request,
+                                        provider.as_ref(),
+                                    )?;
                                 } else {
-                                     eprintln!("Parsed AST expression was not a valid intent definition.");
-                                     // Try to repair the intent
-                                     attempt_intent_repair(&intent_block, &user_request, provider.as_ref())?;
+                                    eprintln!(
+                                        "Parsed AST expression was not a valid intent definition."
+                                    );
+                                    // Try to repair the intent
+                                    attempt_intent_repair(
+                                        &intent_block,
+                                        &user_request,
+                                        provider.as_ref(),
+                                    )?;
                                 }
                             } else {
-                                                                 eprintln!("Parsed AST did not contain a top-level expression for the intent.");
-                                 // Try to repair the intent
-                                 attempt_intent_repair(&intent_block, &user_request, provider.as_ref())?;
+                                eprintln!("Parsed AST did not contain a top-level expression for the intent.");
+                                // Try to repair the intent
+                                attempt_intent_repair(
+                                    &intent_block,
+                                    &user_request,
+                                    provider.as_ref(),
+                                )?;
                             }
                         }
                         Err(e) => {
-                                                         eprintln!("Failed to parse extracted intent: {:?}", e);
-                             // Try to repair the intent
-                             attempt_intent_repair(&intent_block, &user_request, provider.as_ref())?;
+                            eprintln!("Failed to parse extracted intent: {:?}", e);
+                            // Try to repair the intent
+                            attempt_intent_repair(&intent_block, &user_request, provider.as_ref())?;
                         }
                     }
                 }
                 None => {
-                                         println!("\n⚠️  Could not locate a complete (intent …) block. Raw response:\n{}", r.trim());
-                     // Try to generate a new intent from scratch
-                     generate_intent_from_scratch(&user_request, provider.as_ref())?;
+                    println!(
+                        "\n⚠️  Could not locate a complete (intent …) block. Raw response:\n{}",
+                        r.trim()
+                    );
+                    // Try to generate a new intent from scratch
+                    generate_intent_from_scratch(&user_request, provider.as_ref())?;
                 }
             }
-        },
+        }
         Err(e) => eprintln!("Error contacting model: {}", e),
     }
 
@@ -545,19 +607,19 @@ COMMON PATTERNS:
 
 /// AI-powered validation and repair of generated intents
 fn validate_and_repair_intent(
-    intent: &Intent, 
-    original_rtfs: &str, 
-    user_request: &str, 
-    provider: &dyn ModelProvider
+    intent: &Intent,
+    original_rtfs: &str,
+    user_request: &str,
+    provider: &dyn ModelProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔍 AI Validation and Repair Loop");
     println!("=================================");
-    
+
     // Debug: Print the actual success_criteria value
     println!("🔍 Debug - success_criteria: {:?}", intent.success_criteria);
-    
+
     let mut issues = Vec::new();
-    
+
     // Check for common issues
     if intent.goal.is_empty() {
         issues.push("Missing or empty :goal property");
@@ -571,18 +633,18 @@ fn validate_and_repair_intent(
     if intent.success_criteria.is_none() || matches!(intent.success_criteria, Some(Value::Nil)) {
         issues.push("Missing or empty :success-criteria function");
     }
-    
+
     if issues.is_empty() {
         println!("✅ Intent validation passed - no issues found!");
         write_intent_to_file(original_rtfs, user_request)?;
         return Ok(());
     }
-    
+
     println!("⚠️  Found {} issues:", issues.len());
     for issue in &issues {
         println!("   - {}", issue);
     }
-    
+
     // Generate repair prompt
     let repair_prompt = format!(
         "The following RTFS intent has validation issues. Please fix them:\n\n{}\n\nIssues to fix:\n{}\n\nUser's original request: \"{}\"\n\nPlease provide a corrected RTFS intent that addresses all issues:\n",
@@ -590,12 +652,12 @@ fn validate_and_repair_intent(
         issues.join("\n"),
         user_request
     );
-    
+
     match provider.infer(&repair_prompt) {
         Ok(repaired) => {
             if let Some(repaired_intent) = extract_intent(&repaired) {
                 println!("\n🔧 Repaired RTFS intent:\n{}", repaired_intent.trim());
-                
+
                 // Validate the repaired intent
                 let sanitized = sanitize_regex_literals(&repaired_intent);
                 if let Ok(ast_items) = parser::parse(&sanitized) {
@@ -609,42 +671,51 @@ fn validate_and_repair_intent(
         }
         Err(e) => eprintln!("Failed to repair intent: {}", e),
     }
-    
+
     Ok(())
 }
 
 /// Attempt to repair a malformed intent
 fn attempt_intent_repair(
-    malformed_rtfs: &str, 
-    user_request: &str, 
-    provider: &dyn ModelProvider
+    malformed_rtfs: &str,
+    user_request: &str,
+    provider: &dyn ModelProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔧 Attempting Intent Repair");
     println!("==========================");
-    
+
     let repair_prompt = format!(
         "The following RTFS intent is malformed and cannot be parsed. Please fix the syntax and structure:\n\n{}\n\nUser's original request: \"{}\"\n\nPlease provide a corrected, well-formed RTFS intent:\n",
         malformed_rtfs,
         user_request
     );
-    
+
     println!("📤 Sending repair prompt to model...");
-    println!("📝 Repair prompt length: {} characters", repair_prompt.len());
-    
+    println!(
+        "📝 Repair prompt length: {} characters",
+        repair_prompt.len()
+    );
+
     // Simple API call with debugging
     match provider.infer(&repair_prompt) {
         Ok(repaired) => {
-            println!("📥 Received repair response ({} characters)", repaired.len());
+            println!(
+                "📥 Received repair response ({} characters)",
+                repaired.len()
+            );
             if let Some(repaired_intent) = extract_intent(&repaired) {
                 println!("\n🔧 Repaired RTFS intent:\n{}", repaired_intent.trim());
-                
+
                 // Try to parse the repaired intent
                 let sanitized = sanitize_regex_literals(&repaired_intent);
                 match parser::parse(&sanitized) {
                     Ok(ast_items) => {
                         if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
                             if let Some(repaired_ccos) = intent_from_function_call(expr) {
-                                println!("\n✅ Successfully repaired and parsed:\n{:#?}", repaired_ccos);
+                                println!(
+                                    "\n✅ Successfully repaired and parsed:\n{:#?}",
+                                    repaired_ccos
+                                );
                             }
                         }
                     }
@@ -659,35 +730,38 @@ fn attempt_intent_repair(
             eprintln!("❌ Failed to repair intent: {}", e);
         }
     }
-    
+
     Ok(())
 }
 
 /// Generate a new intent from scratch when extraction fails
 fn generate_intent_from_scratch(
-    user_request: &str, 
-    provider: &dyn ModelProvider
+    user_request: &str,
+    provider: &dyn ModelProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔄 Generating Intent from Scratch");
     println!("=================================");
-    
+
     let scratch_prompt = format!(
         "The LLM failed to generate a proper RTFS intent. Please generate a complete, well-formed RTFS intent for this user request:\n\nUser request: \"{}\"\n\nPlease provide a complete RTFS intent definition:\n",
         user_request
     );
-    
+
     match provider.infer(&scratch_prompt) {
         Ok(new_intent) => {
             if let Some(intent_block) = extract_intent(&new_intent) {
                 println!("\n🆕 Generated RTFS intent:\n{}", intent_block.trim());
-                
+
                 // Try to parse the new intent
                 let sanitized = sanitize_regex_literals(&intent_block);
                 match parser::parse(&sanitized) {
                     Ok(ast_items) => {
                         if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
                             if let Some(ccos_intent) = intent_from_function_call(expr) {
-                                println!("\n✅ Successfully generated and parsed:\n{:#?}", ccos_intent);
+                                println!(
+                                    "\n✅ Successfully generated and parsed:\n{:#?}",
+                                    ccos_intent
+                                );
                             }
                         }
                     }
@@ -697,12 +771,15 @@ fn generate_intent_from_scratch(
         }
         Err(e) => eprintln!("Failed to generate new intent: {}", e),
     }
-    
+
     Ok(())
 }
 
 /// Write the validated RTFS intent to an output file
-fn write_intent_to_file(intent_rtfs: &str, user_request: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn write_intent_to_file(
+    intent_rtfs: &str,
+    user_request: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Create output directory if it doesn't exist
     let output_dir = std::path::Path::new("output");
     if !output_dir.exists() {

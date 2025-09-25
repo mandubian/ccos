@@ -15,7 +15,10 @@ fn extract_test_cases(content: &str) -> Vec<(String, String)> {
 
         if trimmed.starts_with(";; Expected:") {
             if !current_code.trim().is_empty() {
-                current_expected = trimmed.trim_start_matches(";; Expected:").trim().to_string();
+                current_expected = trimmed
+                    .trim_start_matches(";; Expected:")
+                    .trim()
+                    .to_string();
                 in_expected = true;
             }
         } else if trimmed.starts_with(";;") || trimmed.is_empty() {
@@ -47,7 +50,10 @@ fn extract_test_cases(content: &str) -> Vec<(String, String)> {
 
 fn read_feature(feature_name: &str) -> Result<String, String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = format!("{}/tests/rtfs_files/features/{}.rtfs", manifest_dir, feature_name);
+    let path = format!(
+        "{}/tests/rtfs_files/features/{}.rtfs",
+        manifest_dir, feature_name
+    );
     if !Path::new(&path).exists() {
         return Err(format!("feature file not found: {}", path));
     }
@@ -59,12 +65,15 @@ fn debug_parse_selected_cases() {
     // targets to inspect
     let targets = vec![
         ("literal_values", "Special: !@#$%^&*()_+-=[]{}|;':\""),
-        ("parallel_expressions", "#(* % %)") ,
+        ("parallel_expressions", "#(* % %)"),
         ("try_catch_expressions", ".getMessage e"),
     ];
 
     for (feature, snippet) in targets {
-        println!("\n=== Inspecting feature '{}' for snippet '{}' ===", feature, snippet);
+        println!(
+            "\n=== Inspecting feature '{}' for snippet '{}' ===",
+            feature, snippet
+        );
         let content = match read_feature(feature) {
             Ok(c) => c,
             Err(e) => {

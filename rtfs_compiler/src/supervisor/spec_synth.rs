@@ -3,8 +3,8 @@
 //! This module transforms RTFS agent.config.microvm into a Firecracker-style
 //! machine configuration JSON for actual VM deployment.
 
-use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::config::types::*;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 
 /// Firecracker machine configuration specification
@@ -165,24 +165,25 @@ pub struct TokenBucket {
 }
 
 /// Synthesizes a Firecracker machine specification from an agent configuration
-/// 
+///
 /// This function transforms the RTFS agent.config.microvm into a complete
 /// Firecracker JSON specification that can be used to spawn a MicroVM.
-/// 
+///
 /// # Arguments
 /// * `agent_config` - The agent configuration containing MicroVM settings
-/// 
+///
 /// # Returns
 /// * `FirecrackerSpec` - Complete Firecracker machine specification
-/// 
+///
 /// # Errors
 /// * Returns `RuntimeError` if the configuration is invalid or missing required fields
 pub fn synthesize_vm_spec(agent_config: &AgentConfig) -> RuntimeResult<FirecrackerSpec> {
     // Extract MicroVM configuration
-    let microvm_config = agent_config.microvm.as_ref()
-        .ok_or_else(|| RuntimeError::InvalidArgument(
-            "Agent configuration does not contain MicroVM settings".to_string()
-        ))?;
+    let microvm_config = agent_config.microvm.as_ref().ok_or_else(|| {
+        RuntimeError::InvalidArgument(
+            "Agent configuration does not contain MicroVM settings".to_string(),
+        )
+    })?;
 
     // Build boot source configuration
     let boot_source = BootSource {
@@ -229,7 +230,10 @@ pub fn synthesize_vm_spec(agent_config: &AgentConfig) -> RuntimeResult<Firecrack
         Some(VSockConfig {
             vsock_id: "vsock0".to_string(),
             guest_cid: microvm_config.devices.vsock.cid,
-            uds_path: format!("/tmp/firecracker-vsock-{}.sock", agent_config.agent_id.replace(".", "-")),
+            uds_path: format!(
+                "/tmp/firecracker-vsock-{}.sock",
+                agent_config.agent_id.replace(".", "-")
+            ),
         })
     } else {
         None
@@ -237,8 +241,14 @@ pub fn synthesize_vm_spec(agent_config: &AgentConfig) -> RuntimeResult<Firecrack
 
     // Build logger configuration
     let logger = Some(LoggerConfig {
-        log_fifo: Some(format!("/tmp/firecracker-{}-log.fifo", agent_config.agent_id.replace(".", "-"))),
-        metrics_fifo: Some(format!("/tmp/firecracker-{}-metrics.fifo", agent_config.agent_id.replace(".", "-"))),
+        log_fifo: Some(format!(
+            "/tmp/firecracker-{}-log.fifo",
+            agent_config.agent_id.replace(".", "-")
+        )),
+        metrics_fifo: Some(format!(
+            "/tmp/firecracker-{}-metrics.fifo",
+            agent_config.agent_id.replace(".", "-")
+        )),
         level: Some("Info".to_string()),
         show_level: Some(true),
         show_log_origin: Some(false),
@@ -246,7 +256,10 @@ pub fn synthesize_vm_spec(agent_config: &AgentConfig) -> RuntimeResult<Firecrack
 
     // Build metrics configuration
     let metrics = Some(MetricsConfig {
-        metrics_fifo: format!("/tmp/firecracker-{}-metrics.fifo", agent_config.agent_id.replace(".", "-")),
+        metrics_fifo: format!(
+            "/tmp/firecracker-{}-metrics.fifo",
+            agent_config.agent_id.replace(".", "-")
+        ),
     });
 
     // Build entropy device for better randomness
@@ -276,30 +289,31 @@ pub fn synthesize_vm_spec(agent_config: &AgentConfig) -> RuntimeResult<Firecrack
 }
 
 /// Serializes a Firecracker specification to JSON string
-/// 
+///
 /// # Arguments
 /// * `spec` - The Firecracker specification to serialize
-/// 
+///
 /// # Returns
 /// * `String` - JSON representation of the specification
-/// 
+///
 /// # Errors
 /// * Returns `RuntimeError` if serialization fails
 pub fn serialize_firecracker_spec(spec: &FirecrackerSpec) -> RuntimeResult<String> {
-    serde_json::to_string_pretty(spec)
-        .map_err(|e| RuntimeError::JsonError(format!("Failed to serialize Firecracker spec: {}", e)))
+    serde_json::to_string_pretty(spec).map_err(|e| {
+        RuntimeError::JsonError(format!("Failed to serialize Firecracker spec: {}", e))
+    })
 }
 
 /// Creates a minimal Firecracker specification for testing
-/// 
+///
 /// This function creates a basic Firecracker spec that can be used for
 /// testing and development purposes.
-/// 
+///
 /// # Arguments
 /// * `agent_id` - The agent identifier
 /// * `kernel_path` - Path to the kernel image
 /// * `rootfs_path` - Path to the rootfs image
-/// 
+///
 /// # Returns
 /// * `FirecrackerSpec` - Minimal Firecracker specification
 pub fn create_minimal_firecracker_spec(
@@ -341,14 +355,23 @@ pub fn create_minimal_firecracker_spec(
             stats_polling_interval_s: Some(1),
         }),
         logger: Some(LoggerConfig {
-            log_fifo: Some(format!("/tmp/firecracker-{}-log.fifo", agent_id.replace(".", "-"))),
-            metrics_fifo: Some(format!("/tmp/firecracker-{}-metrics.fifo", agent_id.replace(".", "-"))),
+            log_fifo: Some(format!(
+                "/tmp/firecracker-{}-log.fifo",
+                agent_id.replace(".", "-")
+            )),
+            metrics_fifo: Some(format!(
+                "/tmp/firecracker-{}-metrics.fifo",
+                agent_id.replace(".", "-")
+            )),
             level: Some("Info".to_string()),
             show_level: Some(true),
             show_log_origin: Some(false),
         }),
         metrics: Some(MetricsConfig {
-            metrics_fifo: format!("/tmp/firecracker-{}-metrics.fifo", agent_id.replace(".", "-")),
+            metrics_fifo: format!(
+                "/tmp/firecracker-{}-metrics.fifo",
+                agent_id.replace(".", "-")
+            ),
         }),
         entropy: Some(EntropyConfig {
             entropy_id: "entropy0".to_string(),
@@ -357,27 +380,27 @@ pub fn create_minimal_firecracker_spec(
 }
 
 /// Validates a Firecracker specification
-/// 
+///
 /// This function performs basic validation on a Firecracker specification
 /// to ensure it meets the requirements for deployment.
-/// 
+///
 /// # Arguments
 /// * `spec` - The Firecracker specification to validate
-/// 
+///
 /// # Returns
 /// * `RuntimeResult<()>` - Success if valid, error if invalid
 pub fn validate_firecracker_spec(spec: &FirecrackerSpec) -> RuntimeResult<()> {
     // Validate boot source
     if spec.boot_source.kernel_image_path.is_empty() {
         return Err(RuntimeError::InvalidArgument(
-            "Kernel image path cannot be empty".to_string()
+            "Kernel image path cannot be empty".to_string(),
         ));
     }
 
     // Validate drives
     if spec.drives.is_empty() {
         return Err(RuntimeError::InvalidArgument(
-            "At least one drive must be configured".to_string()
+            "At least one drive must be configured".to_string(),
         ));
     }
 
@@ -385,20 +408,20 @@ pub fn validate_firecracker_spec(spec: &FirecrackerSpec) -> RuntimeResult<()> {
     let has_root_device = spec.drives.iter().any(|drive| drive.is_root_device);
     if !has_root_device {
         return Err(RuntimeError::InvalidArgument(
-            "Exactly one drive must be configured as root device".to_string()
+            "Exactly one drive must be configured as root device".to_string(),
         ));
     }
 
     // Validate machine configuration
     if spec.machine_config.vcpu_count == 0 {
         return Err(RuntimeError::InvalidArgument(
-            "vCPU count must be greater than 0".to_string()
+            "vCPU count must be greater than 0".to_string(),
         ));
     }
 
     if spec.machine_config.mem_size_mib == 0 {
         return Err(RuntimeError::InvalidArgument(
-            "Memory size must be greater than 0".to_string()
+            "Memory size must be greater than 0".to_string(),
         ));
     }
 
@@ -406,7 +429,7 @@ pub fn validate_firecracker_spec(spec: &FirecrackerSpec) -> RuntimeResult<()> {
     if let Some(vsock) = &spec.vsock {
         if vsock.guest_cid == 0 {
             return Err(RuntimeError::InvalidArgument(
-                "VSock guest CID must be greater than 0".to_string()
+                "VSock guest CID must be greater than 0".to_string(),
             ));
         }
     }
@@ -425,7 +448,9 @@ mod tests {
         config.orchestrator.isolation.fs.ephemeral = true;
         config.orchestrator.isolation.fs.mounts.insert(
             "capabilities".to_string(),
-            crate::config::types::MountConfig { mode: "ro".to_string() },
+            crate::config::types::MountConfig {
+                mode: "ro".to_string(),
+            },
         );
         config.network.enabled = true;
         config.network.egress.via = "proxy".to_string();
@@ -468,7 +493,10 @@ mod tests {
 
         // Verify boot source
         assert_eq!(spec.boot_source.kernel_image_path, "/path/to/kernel");
-        assert_eq!(spec.boot_source.boot_args, Some("console=ttyS0".to_string()));
+        assert_eq!(
+            spec.boot_source.boot_args,
+            Some("console=ttyS0".to_string())
+        );
 
         // Verify root drive
         assert_eq!(spec.drives.len(), 1);
@@ -500,16 +528,16 @@ mod tests {
 
         let result = synthesize_vm_spec(&config);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RuntimeError::InvalidArgument(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RuntimeError::InvalidArgument(_)
+        ));
     }
 
     #[test]
     fn test_serialize_firecracker_spec() {
-        let spec = create_minimal_firecracker_spec(
-            "agent.test",
-            "/path/to/kernel",
-            "/path/to/rootfs",
-        );
+        let spec =
+            create_minimal_firecracker_spec("agent.test", "/path/to/kernel", "/path/to/rootfs");
 
         let json = serialize_firecracker_spec(&spec).unwrap();
         assert!(json.contains("boot_source"));
@@ -519,11 +547,8 @@ mod tests {
 
     #[test]
     fn test_validate_firecracker_spec_valid() {
-        let spec = create_minimal_firecracker_spec(
-            "agent.test",
-            "/path/to/kernel",
-            "/path/to/rootfs",
-        );
+        let spec =
+            create_minimal_firecracker_spec("agent.test", "/path/to/kernel", "/path/to/rootfs");
 
         let result = validate_firecracker_spec(&spec);
         assert!(result.is_ok());
@@ -531,11 +556,8 @@ mod tests {
 
     #[test]
     fn test_validate_firecracker_spec_invalid_vcpu() {
-        let mut spec = create_minimal_firecracker_spec(
-            "agent.test",
-            "/path/to/kernel",
-            "/path/to/rootfs",
-        );
+        let mut spec =
+            create_minimal_firecracker_spec("agent.test", "/path/to/kernel", "/path/to/rootfs");
         spec.machine_config.vcpu_count = 0;
 
         let result = validate_firecracker_spec(&spec);
@@ -544,11 +566,8 @@ mod tests {
 
     #[test]
     fn test_validate_firecracker_spec_invalid_memory() {
-        let mut spec = create_minimal_firecracker_spec(
-            "agent.test",
-            "/path/to/kernel",
-            "/path/to/rootfs",
-        );
+        let mut spec =
+            create_minimal_firecracker_spec("agent.test", "/path/to/kernel", "/path/to/rootfs");
         spec.machine_config.mem_size_mib = 0;
 
         let result = validate_firecracker_spec(&spec);
@@ -557,11 +576,8 @@ mod tests {
 
     #[test]
     fn test_validate_firecracker_spec_no_root_device() {
-        let mut spec = create_minimal_firecracker_spec(
-            "agent.test",
-            "/path/to/kernel",
-            "/path/to/rootfs",
-        );
+        let mut spec =
+            create_minimal_firecracker_spec("agent.test", "/path/to/kernel", "/path/to/rootfs");
         spec.drives[0].is_root_device = false;
 
         let result = validate_firecracker_spec(&spec);
@@ -570,11 +586,8 @@ mod tests {
 
     #[test]
     fn test_create_minimal_firecracker_spec() {
-        let spec = create_minimal_firecracker_spec(
-            "agent.test",
-            "/path/to/kernel",
-            "/path/to/rootfs",
-        );
+        let spec =
+            create_minimal_firecracker_spec("agent.test", "/path/to/kernel", "/path/to/rootfs");
 
         assert_eq!(spec.boot_source.kernel_image_path, "/path/to/kernel");
         assert_eq!(spec.drives.len(), 1);
@@ -586,4 +599,4 @@ mod tests {
         assert!(spec.metrics.is_some());
         assert!(spec.entropy.is_some());
     }
-} 
+}

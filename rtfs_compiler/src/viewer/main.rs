@@ -1,5 +1,7 @@
-
-use axum::extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State};
+use axum::extract::{
+    ws::{Message, WebSocket, WebSocketUpgrade},
+    State,
+};
 use axum::response::IntoResponse;
 use futures::{sink::SinkExt, stream::StreamExt};
 use std::{net::SocketAddr, sync::Arc};
@@ -40,20 +42,22 @@ async fn main() {
     // remain in place and can be wired to a server in a follow-up change.
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("CCOS Viewer (server wiring omitted) listening on http://{}", addr);
+    println!(
+        "CCOS Viewer (server wiring omitted) listening on http://{}",
+        addr
+    );
     // NOTE: starting a full HTTP server here caused hyper/axum feature conflicts in the
     // monorepo build. To keep the example compiling cleanly, we currently do not start
     // the server automatically. Instead, block until Ctrl-C so the binary stays alive
     // and can be manually wired to run the server in a follow-up change.
 
-    tokio::signal::ctrl_c().await.expect("failed to wait for ctrl-c");
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to wait for ctrl-c");
 }
 
 #[allow(dead_code)]
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(|socket| websocket(socket, state))
 }
 
@@ -110,28 +114,37 @@ async fn simulate_ccos_execution(state: Arc<AppState>) {
     ];
 
     // 1. Send initial graph
-    state.tx.send(ViewerEvent::FullUpdate {
-        nodes,
-        edges,
-        rtfs_code: rtfs_code.to_string(),
-    }).unwrap();
+    state
+        .tx
+        .send(ViewerEvent::FullUpdate {
+            nodes,
+            edges,
+            rtfs_code: rtfs_code.to_string(),
+        })
+        .unwrap();
     sleep(Duration::from_secs(2)).await;
 
     // 2. Simulate execution flow
     let action_ids = ["load_data", "process_data", "generate_report"];
     for id in action_ids {
         // Set to InProgress
-        state.tx.send(ViewerEvent::NodeStatusChange {
-            id: id.to_string(),
-            status: "InProgress".to_string(),
-        }).unwrap();
+        state
+            .tx
+            .send(ViewerEvent::NodeStatusChange {
+                id: id.to_string(),
+                status: "InProgress".to_string(),
+            })
+            .unwrap();
         sleep(Duration::from_secs(1)).await;
 
         // Set to Success
-        state.tx.send(ViewerEvent::NodeStatusChange {
-            id: id.to_string(),
-            status: "Success".to_string(),
-        }).unwrap();
+        state
+            .tx
+            .send(ViewerEvent::NodeStatusChange {
+                id: id.to_string(),
+                status: "Success".to_string(),
+            })
+            .unwrap();
         sleep(Duration::from_secs(1)).await;
     }
 }

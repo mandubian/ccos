@@ -11,7 +11,9 @@
 //!
 //! Unit tests are colocated at the bottom of this file.
 
-use crate::ccos::working_memory::backend::{QueryParams, QueryResult, WorkingMemoryBackend, WorkingMemoryError};
+use crate::ccos::working_memory::backend::{
+    QueryParams, QueryResult, WorkingMemoryBackend, WorkingMemoryError,
+};
 use crate::ccos::working_memory::types::{WorkingMemoryEntry, WorkingMemoryId};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -216,7 +218,10 @@ impl WorkingMemoryBackend for InMemoryJsonlBackend {
         }
 
         // 2) Apply time window filter
-        let (from, to) = (params.from_ts_s.unwrap_or(0), params.to_ts_s.unwrap_or(u64::MAX));
+        let (from, to) = (
+            params.from_ts_s.unwrap_or(0),
+            params.to_ts_s.unwrap_or(u64::MAX),
+        );
         let mut filtered: Vec<WorkingMemoryEntry> = candidate_ids
             .unwrap()
             .into_iter()
@@ -235,7 +240,11 @@ impl WorkingMemoryBackend for InMemoryJsonlBackend {
         Ok(QueryResult { entries: filtered })
     }
 
-    fn prune(&mut self, max_entries: Option<usize>, max_tokens: Option<usize>) -> Result<(), WorkingMemoryError> {
+    fn prune(
+        &mut self,
+        max_entries: Option<usize>,
+        max_tokens: Option<usize>,
+    ) -> Result<(), WorkingMemoryError> {
         if max_entries.is_some() {
             self.max_entries_in_memory = max_entries;
         }
@@ -251,7 +260,10 @@ impl WorkingMemoryBackend for InMemoryJsonlBackend {
         if let Some(path_buf) = path_opt {
             // Ensure file exists if persistence is requested
             if !path_buf.exists() {
-                let _ = OpenOptions::new().create(true).append(true).open(&path_buf)?;
+                let _ = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path_buf)?;
             }
 
             // Build fresh structures off to the side to avoid partial state on failure
@@ -280,10 +292,16 @@ impl WorkingMemoryBackend for InMemoryJsonlBackend {
                         // by_id
                         new_by_id.insert(id.clone(), entry.clone());
                         // by_time
-                        new_by_time.entry(entry.timestamp_s).or_insert_with(HashSet::new).insert(id.clone());
+                        new_by_time
+                            .entry(entry.timestamp_s)
+                            .or_insert_with(HashSet::new)
+                            .insert(id.clone());
                         // by_tag
                         for tag in &entry.tags {
-                            new_by_tag.entry(tag.clone()).or_insert_with(HashSet::new).insert(id.clone());
+                            new_by_tag
+                                .entry(tag.clone())
+                                .or_insert_with(HashSet::new)
+                                .insert(id.clone());
                         }
                     }
                 }
@@ -317,7 +335,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn now_s() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
     }
 
     fn temp_path(name: &str) -> PathBuf {
@@ -345,7 +366,9 @@ mod tests {
 
         let t0 = now_s();
         backend.append(mk_entry("a", t0 - 30, &["wisdom"])).unwrap();
-        backend.append(mk_entry("b", t0 - 20, &["wisdom", "x"])).unwrap();
+        backend
+            .append(mk_entry("b", t0 - 20, &["wisdom", "x"]))
+            .unwrap();
         backend.append(mk_entry("c", t0 - 10, &["y"])).unwrap();
 
         // Query by tag OR
@@ -358,7 +381,9 @@ mod tests {
         // Budget prune by entries: add one more triggers eviction of oldest ("a")
         backend.append(mk_entry("d", t0 - 5, &["wisdom"])).unwrap();
 
-        let res2 = backend.query(&QueryParams::with_tags(["wisdom"]).with_limit(Some(10))).unwrap();
+        let res2 = backend
+            .query(&QueryParams::with_tags(["wisdom"]).with_limit(Some(10)))
+            .unwrap();
         let ids: Vec<_> = res2.entries.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"b"));
         assert!(ids.contains(&"d"));
@@ -390,7 +415,10 @@ mod tests {
         assert_eq!(ids, vec!["c", "b"]); // recency desc
 
         // Limit to 1
-        let qp2 = QueryParams { limit: Some(1), ..qp };
+        let qp2 = QueryParams {
+            limit: Some(1),
+            ..qp
+        };
         let res2 = backend.query(&qp2).unwrap();
         assert_eq!(res2.entries.len(), 1);
         assert_eq!(res2.entries[0].id, "c");

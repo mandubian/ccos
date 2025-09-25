@@ -1,15 +1,15 @@
 //! Example demonstrating optional CUDA support
-//! 
+//!
 //! This example shows how to conditionally use CUDA features in your Rust project.
-//! 
+//!
 //! To run with CUDA support:
 //!   cargo run --example cuda_optional_demo --features cuda
-//! 
+//!
 //! To run without CUDA support:
 //!   cargo run --example cuda_optional_demo
 
-use rtfs_compiler::ccos::local_models::LocalLlamaModel;
 use rtfs_compiler::ccos::delegation::ModelProvider;
+use rtfs_compiler::ccos::local_models::LocalLlamaModel;
 
 fn main() {
     println!("=== RTFS CUDA Optional Demo ===\n");
@@ -43,7 +43,7 @@ fn main() {
         }
         Err(e) => {
             println!("❌ Error: {}", e);
-            
+
             #[cfg(not(feature = "cuda"))]
             {
                 println!("\n💡 To enable CUDA support, run:");

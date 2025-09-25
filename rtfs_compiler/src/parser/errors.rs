@@ -1,5 +1,7 @@
+use crate::error_reporting::{
+    DiagnosticInfo, ErrorHint, ErrorSeverity, SourceSpan, ValidationError,
+};
 use pest::iterators::Pair;
-use crate::error_reporting::{SourceSpan, DiagnosticInfo, ErrorSeverity, ErrorHint, ValidationError};
 
 // Helper function to convert pest span to our SourceSpan
 pub fn pest_span_to_source_span(span: pest::Span) -> SourceSpan {
@@ -88,90 +90,89 @@ impl PestParseError {
     /// Convert the parse error to a diagnostic info for enhanced error reporting
     pub fn to_diagnostic(&self) -> DiagnosticInfo {
         match self {
-            PestParseError::UnexpectedRule { expected, found, rule_text, span } => {
-                DiagnosticInfo {
-                    error_code: "P001".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: format!("Expected {}, found {}", expected, found),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![ErrorHint::new(&format!("Expected a {} expression here", expected))],
-                    notes: vec![format!("Rule text: {}", rule_text)],
-                    caused_by: None,
-                }
-            }
-            PestParseError::MissingToken { token, span } => {
-                DiagnosticInfo {
-                    error_code: "P002".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: format!("Missing required token: {}", token),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![ErrorHint::new(&format!("Add the missing {} token", token))],
-                    notes: vec![],
-                    caused_by: None,
-                }
-            }
-            PestParseError::InvalidInput { message, span } => {
-                DiagnosticInfo {
-                    error_code: "P003".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: message.clone(),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![ErrorHint::new("Check the syntax of your input")],
-                    notes: vec![],
-                    caused_by: None,
-                }
-            }
-            PestParseError::UnsupportedRule { rule, span } => {
-                DiagnosticInfo {
-                    error_code: "P004".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: format!("Unsupported rule: {}", rule),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![ErrorHint::new(&format!("The {} construct is not yet supported", rule))],
-                    notes: vec![],
-                    caused_by: None,
-                }
-            }
-            PestParseError::InvalidLiteral { message, span } => {
-                DiagnosticInfo {
-                    error_code: "P005".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: message.clone(),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![ErrorHint::new("Check the literal syntax")],
-                    notes: vec![],
-                    caused_by: None,
-                }
-            }
-            PestParseError::InvalidEscapeSequence { sequence, span } => {
-                DiagnosticInfo {
-                    error_code: "P006".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: format!("Invalid escape sequence: {}", sequence),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![ErrorHint::new("Use valid escape sequences like \\n, \\t, \\r, \\\\, or \\\"")],
-                    notes: vec![],
-                    caused_by: None,
-                }
-            }
-            PestParseError::CustomError { message, span } => {
-                DiagnosticInfo {
-                    error_code: "P007".to_string(),
-                    severity: ErrorSeverity::Error,
-                    primary_message: message.clone(),
-                    primary_span: span.clone(),
-                    secondary_spans: vec![],
-                    hints: vec![],
-                    notes: vec![],
-                    caused_by: None,
-                }
-            }
+            PestParseError::UnexpectedRule {
+                expected,
+                found,
+                rule_text,
+                span,
+            } => DiagnosticInfo {
+                error_code: "P001".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: format!("Expected {}, found {}", expected, found),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![ErrorHint::new(&format!(
+                    "Expected a {} expression here",
+                    expected
+                ))],
+                notes: vec![format!("Rule text: {}", rule_text)],
+                caused_by: None,
+            },
+            PestParseError::MissingToken { token, span } => DiagnosticInfo {
+                error_code: "P002".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: format!("Missing required token: {}", token),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![ErrorHint::new(&format!("Add the missing {} token", token))],
+                notes: vec![],
+                caused_by: None,
+            },
+            PestParseError::InvalidInput { message, span } => DiagnosticInfo {
+                error_code: "P003".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: message.clone(),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![ErrorHint::new("Check the syntax of your input")],
+                notes: vec![],
+                caused_by: None,
+            },
+            PestParseError::UnsupportedRule { rule, span } => DiagnosticInfo {
+                error_code: "P004".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: format!("Unsupported rule: {}", rule),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![ErrorHint::new(&format!(
+                    "The {} construct is not yet supported",
+                    rule
+                ))],
+                notes: vec![],
+                caused_by: None,
+            },
+            PestParseError::InvalidLiteral { message, span } => DiagnosticInfo {
+                error_code: "P005".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: message.clone(),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![ErrorHint::new("Check the literal syntax")],
+                notes: vec![],
+                caused_by: None,
+            },
+            PestParseError::InvalidEscapeSequence { sequence, span } => DiagnosticInfo {
+                error_code: "P006".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: format!("Invalid escape sequence: {}", sequence),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![ErrorHint::new(
+                    "Use valid escape sequences like \\n, \\t, \\r, \\\\, or \\\"",
+                )],
+                notes: vec![],
+                caused_by: None,
+            },
+            PestParseError::CustomError { message, span } => DiagnosticInfo {
+                error_code: "P007".to_string(),
+                severity: ErrorSeverity::Error,
+                primary_message: message.clone(),
+                primary_span: span.clone(),
+                secondary_spans: vec![],
+                hints: vec![],
+                notes: vec![],
+                caused_by: None,
+            },
             PestParseError::ValidationError(validation_err) => match validation_err {
                 ValidationError::SchemaError { type_name, errors } => DiagnosticInfo {
                     error_code: "V001".to_string(),
@@ -213,7 +214,9 @@ impl PestParseError {
 }
 
 // Helper function to convert pest::error::Error location to SourceSpan
-pub fn pest_error_location_to_source_span(error: &pest::error::Error<super::Rule>) -> Option<SourceSpan> {
+pub fn pest_error_location_to_source_span(
+    error: &pest::error::Error<super::Rule>,
+) -> Option<SourceSpan> {
     match error.line_col {
         pest::error::LineColLocation::Pos((line, col)) => {
             let text = error.variant.message().to_string();

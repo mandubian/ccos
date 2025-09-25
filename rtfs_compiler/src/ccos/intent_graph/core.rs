@@ -3,18 +3,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ccos::types::{
-    EdgeType, IntentId, IntentStatus, StorableIntent, ExecutionResult,
-};
-use crate::ccos::intent_storage::IntentFilter;
-use crate::ccos::event_sink::IntentEventSink;
-use crate::runtime::RuntimeError;
 use super::{
     config::IntentGraphConfig,
-    storage::{IntentGraphStorage, Edge},
-    virtualization::{IntentGraphVirtualization, VirtualizationConfig, VirtualizedIntentGraph, VirtualizedSearchResult, VirtualizationStats},
-    processing::{IntentLifecycleManager},
+    processing::IntentLifecycleManager,
+    storage::{Edge, IntentGraphStorage},
+    virtualization::{
+        IntentGraphVirtualization, VirtualizationConfig, VirtualizationStats,
+        VirtualizedIntentGraph, VirtualizedSearchResult,
+    },
 };
+use crate::ccos::event_sink::IntentEventSink;
+use crate::ccos::intent_storage::IntentFilter;
+use crate::ccos::types::{EdgeType, ExecutionResult, IntentId, IntentStatus, StorableIntent};
+use crate::runtime::RuntimeError;
 use std::sync::Arc;
 
 /// Main Intent Graph implementation with persistent storage
@@ -55,7 +56,10 @@ impl IntentGraph {
 
     pub fn new() -> Result<Self, RuntimeError> {
         // Default to Noop sink (legacy callers). Production should use with_event_sink.
-    Self::with_config_and_event_sink(IntentGraphConfig::default(), Arc::new(crate::ccos::event_sink::NoopIntentEventSink::default()))
+        Self::with_config_and_event_sink(
+            IntentGraphConfig::default(),
+            Arc::new(crate::ccos::event_sink::NoopIntentEventSink::default()),
+        )
     }
 
     pub fn with_config(config: IntentGraphConfig) -> Result<Self, RuntimeError> {
@@ -76,8 +80,9 @@ impl IntentGraph {
             handle
         } else {
             // If no runtime exists, create a simple one for this instance
-            let runtime = tokio::runtime::Runtime::new()
-                .map_err(|e| RuntimeError::StorageError(format!("Failed to create runtime: {}", e)))?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+                RuntimeError::StorageError(format!("Failed to create runtime: {}", e))
+            })?;
             let handle = runtime.handle().clone();
             // Keep the runtime alive
             std::mem::forget(runtime);
@@ -110,7 +115,7 @@ impl IntentGraph {
 
     pub async fn new_async_with_event_sink(
         config: IntentGraphConfig,
-        intent_event_sink: Arc<dyn IntentEventSink>
+        intent_event_sink: Arc<dyn IntentEventSink>,
     ) -> Result<Self, RuntimeError> {
         let storage = IntentGraphStorage::new(config).await;
         // Get the current runtime handle for future operations
@@ -147,9 +152,12 @@ impl IntentGraph {
     /// Get an intent by ID
     pub fn get_intent(&self, intent_id: &IntentId) -> Option<StorableIntent> {
         if tokio::runtime::Handle::try_current().is_ok() {
-            futures::executor::block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+            futures::executor::block_on(async {
+                self.storage.get_intent(intent_id).await.unwrap_or(None)
+            })
         } else {
-            self.rt.block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+            self.rt
+                .block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
         }
     }
 
@@ -159,26 +167,20 @@ impl IntentGraph {
         intent: StorableIntent,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
-    let intent_id = intent.intent_id.clone();
-    let event_sink = self.intent_event_sink.clone();
-        
+        let intent_id = intent.intent_id.clone();
+        let event_sink = self.intent_event_sink.clone();
+
         if tokio::runtime::Handle::try_current().is_ok() {
-            futures::executor::block_on(async { 
-                self.lifecycle.complete_intent(
-                    &mut self.storage,
-                    event_sink.as_ref(),
-                    &intent_id,
-                    result,
-                ).await
+            futures::executor::block_on(async {
+                self.lifecycle
+                    .complete_intent(&mut self.storage, event_sink.as_ref(), &intent_id, result)
+                    .await
             })
         } else {
-            self.rt.block_on(async { 
-                self.lifecycle.complete_intent(
-                    &mut self.storage,
-                    event_sink.as_ref(),
-                    &intent_id,
-                    result,
-                ).await
+            self.rt.block_on(async {
+                self.lifecycle
+                    .complete_intent(&mut self.storage, event_sink.as_ref(), &intent_id, result)
+                    .await
             })
         }
     }
@@ -209,7 +211,8 @@ impl IntentGraph {
         if tokio::runtime::Handle::try_current().is_ok() {
             futures::executor::block_on(async { self.storage.update_intent(&intent).await })?;
         } else {
-            self.rt.block_on(async { self.storage.update_intent(&intent).await })?;
+            self.rt
+                .block_on(async { self.storage.update_intent(&intent).await })?;
         }
 
         let plan_id_owned = plan_id_opt.unwrap_or("");
@@ -227,23 +230,37 @@ impl IntentGraph {
 
     /// Set an intent's status explicitly (e.g. Active -> Executing) without marking terminal completion.
     /// This is used by the Orchestrator when a plan begins executing an intent.
-    pub fn set_intent_status(&mut self, intent_id: &IntentId, new_status: IntentStatus) -> Result<(), RuntimeError> {
+    pub fn set_intent_status(
+        &mut self,
+        intent_id: &IntentId,
+        new_status: IntentStatus,
+    ) -> Result<(), RuntimeError> {
         // Fetch current intent
         let maybe_intent = if tokio::runtime::Handle::try_current().is_ok() {
-            futures::executor::block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+            futures::executor::block_on(async {
+                self.storage.get_intent(intent_id).await.unwrap_or(None)
+            })
         } else {
-            self.rt.block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+            self.rt
+                .block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
         };
         if let Some(mut intent) = maybe_intent {
             intent.status = new_status;
-            intent.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            intent.updated_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             if tokio::runtime::Handle::try_current().is_ok() {
                 futures::executor::block_on(async { self.storage.update_intent(&intent).await })
             } else {
-                self.rt.block_on(async { self.storage.update_intent(&intent).await })
+                self.rt
+                    .block_on(async { self.storage.update_intent(&intent).await })
             }
         } else {
-            Err(RuntimeError::StorageError(format!("Intent not found: {}", intent_id)))
+            Err(RuntimeError::StorageError(format!(
+                "Intent not found: {}",
+                intent_id
+            )))
         }
     }
 
@@ -257,21 +274,28 @@ impl IntentGraph {
     ) -> Result<(), RuntimeError> {
         // Fetch current intent
         let maybe_intent = if tokio::runtime::Handle::try_current().is_ok() {
-            futures::executor::block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+            futures::executor::block_on(async {
+                self.storage.get_intent(intent_id).await.unwrap_or(None)
+            })
         } else {
-            self.rt.block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
+            self.rt
+                .block_on(async { self.storage.get_intent(intent_id).await.unwrap_or(None) })
         };
 
         if let Some(mut intent) = maybe_intent {
             let old_status = format!("{:?}", intent.status.clone());
             intent.status = new_status.clone();
-            intent.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            intent.updated_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
 
             // Persist
             if tokio::runtime::Handle::try_current().is_ok() {
                 futures::executor::block_on(async { self.storage.update_intent(&intent).await })?;
             } else {
-                self.rt.block_on(async { self.storage.update_intent(&intent).await })?;
+                self.rt
+                    .block_on(async { self.storage.update_intent(&intent).await })?;
             }
 
             let plan_id_owned = plan_id_opt.unwrap_or("");
@@ -286,7 +310,10 @@ impl IntentGraph {
 
             Ok(())
         } else {
-            Err(RuntimeError::StorageError(format!("Intent not found: {}", intent_id)))
+            Err(RuntimeError::StorageError(format!(
+                "Intent not found: {}",
+                intent_id
+            )))
         }
     }
 
@@ -376,7 +403,9 @@ impl IntentGraph {
         focal_intents: &[IntentId],
         config: &VirtualizationConfig,
     ) -> Result<VirtualizedIntentGraph, RuntimeError> {
-        self.virtualization.create_virtualized_view(focal_intents, &self.storage, config).await
+        self.virtualization
+            .create_virtualized_view(focal_intents, &self.storage, config)
+            .await
     }
 
     /// Load context window with virtualization optimizations
@@ -385,7 +414,9 @@ impl IntentGraph {
         intent_ids: &[IntentId],
         config: &VirtualizationConfig,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        self.virtualization.load_context_window(intent_ids, &self.storage, config).await
+        self.virtualization
+            .load_context_window(intent_ids, &self.storage, config)
+            .await
     }
 
     /// Perform semantic search with virtualization
@@ -394,7 +425,9 @@ impl IntentGraph {
         query: &str,
         config: &VirtualizationConfig,
     ) -> Result<VirtualizedSearchResult, RuntimeError> {
-        self.virtualization.search_with_virtualization(query, &self.storage, config).await
+        self.virtualization
+            .search_with_virtualization(query, &self.storage, config)
+            .await
     }
 
     /// Enhanced semantic search using the virtualization layer
@@ -403,15 +436,17 @@ impl IntentGraph {
         query: &str,
         limit: Option<usize>,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        let intent_ids = self.virtualization.search_intents(query, &self.storage, limit.unwrap_or(50))?;
+        let intent_ids =
+            self.virtualization
+                .search_intents(query, &self.storage, limit.unwrap_or(50))?;
         let mut results = Vec::new();
-        
+
         for intent_id in intent_ids {
             if let Some(intent) = self.storage.get_intent_sync(&intent_id) {
                 results.push(intent);
             }
         }
-        
+
         Ok(results)
     }
 
@@ -421,19 +456,17 @@ impl IntentGraph {
         target_intent: &StorableIntent,
         limit: usize,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        let similar_ids = self.virtualization.find_similar_intents(
-            target_intent, 
-            &self.storage, 
-            limit
-        )?;
-        
+        let similar_ids =
+            self.virtualization
+                .find_similar_intents(target_intent, &self.storage, limit)?;
+
         let mut results = Vec::new();
         for intent_id in similar_ids {
             if let Some(intent) = self.storage.get_intent_sync(&intent_id) {
                 results.push(intent);
             }
         }
-        
+
         Ok(results)
     }
 
@@ -441,26 +474,31 @@ impl IntentGraph {
     pub fn get_virtualization_stats(&self) -> Result<VirtualizationStats, RuntimeError> {
         let all_intents = self.storage.get_all_intents_sync();
         let total_intents = all_intents.len();
-        
+
         let mut status_distribution = HashMap::new();
         let mut connectivity_scores = Vec::new();
-        
+
         for intent in &all_intents {
-            *status_distribution.entry(intent.status.clone()).or_insert(0) += 1;
-            
-            let connections = self.storage.get_connected_intents_sync(&intent.intent_id).len();
+            *status_distribution
+                .entry(intent.status.clone())
+                .or_insert(0) += 1;
+
+            let connections = self
+                .storage
+                .get_connected_intents_sync(&intent.intent_id)
+                .len();
             connectivity_scores.push(connections);
         }
-        
+
         let avg_connectivity = if !connectivity_scores.is_empty() {
             connectivity_scores.iter().sum::<usize>() as f64 / connectivity_scores.len() as f64
         } else {
             0.0
         };
-        
+
         let isolated_intents = connectivity_scores.iter().filter(|&&x| x == 0).count();
         let highly_connected = connectivity_scores.iter().filter(|&&x| x > 5).count();
-        
+
         Ok(VirtualizationStats {
             total_intents,
             status_distribution,
@@ -474,34 +512,46 @@ impl IntentGraph {
     /// Get related intents for a given intent
     pub fn get_related_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         self.block_on_runtime(async {
-            self.storage.get_related_intents(intent_id).await.unwrap_or_default()
+            self.storage
+                .get_related_intents(intent_id)
+                .await
+                .unwrap_or_default()
         })
     }
 
     /// Get dependent intents for a given intent
     pub fn get_dependent_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         self.block_on_runtime(async {
-            self.storage.get_dependent_intents(intent_id).await.unwrap_or_default()
+            self.storage
+                .get_dependent_intents(intent_id)
+                .await
+                .unwrap_or_default()
         })
     }
 
     /// Get subgoals for a given intent
     pub fn get_subgoals(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         self.block_on_runtime(async {
-            self.storage.get_subgoals(intent_id).await.unwrap_or_default()
+            self.storage
+                .get_subgoals(intent_id)
+                .await
+                .unwrap_or_default()
         })
     }
 
     /// Get conflicting intents for a given intent
     pub fn get_conflicting_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         self.block_on_runtime(async {
-            self.storage.get_conflicting_intents(intent_id).await.unwrap_or_default()
+            self.storage
+                .get_conflicting_intents(intent_id)
+                .await
+                .unwrap_or_default()
         })
     }
 
     /// Get all active intents
     pub fn get_active_intents(&self) -> Vec<StorableIntent> {
-    self.block_on_runtime(async {
+        self.block_on_runtime(async {
             let filter = IntentFilter {
                 status: Some(IntentStatus::Active),
                 ..Default::default()
@@ -512,8 +562,12 @@ impl IntentGraph {
 
     /// Get intent count by status
     pub fn get_intent_count_by_status(&self) -> HashMap<IntentStatus, usize> {
-    self.block_on_runtime(async {
-            let all_intents = self.storage.list_intents(IntentFilter::default()).await.unwrap_or_default();
+        self.block_on_runtime(async {
+            let all_intents = self
+                .storage
+                .list_intents(IntentFilter::default())
+                .await
+                .unwrap_or_default();
             let mut counts = HashMap::new();
 
             for intent in all_intents {
@@ -576,16 +630,19 @@ impl IntentGraph {
     pub fn get_parent_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         let edges = self.get_edges_for_intent(intent_id);
         let mut parents = Vec::new();
-        
+
         for edge in edges {
             // For parent relationship: intent_id is the 'from' field, parent is the 'to' field
-            if edge.from == *intent_id && (edge.edge_type == EdgeType::DependsOn || edge.edge_type == EdgeType::IsSubgoalOf) {
+            if edge.from == *intent_id
+                && (edge.edge_type == EdgeType::DependsOn
+                    || edge.edge_type == EdgeType::IsSubgoalOf)
+            {
                 if let Some(parent) = self.get_intent(&edge.to) {
                     parents.push(parent);
                 }
             }
         }
-        
+
         parents
     }
 
@@ -593,16 +650,19 @@ impl IntentGraph {
     pub fn get_child_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         let edges = self.get_edges_for_intent(intent_id);
         let mut children = Vec::new();
-        
+
         for edge in edges {
             // For child relationship: intent_id is the 'to' field, child is the 'from' field
-            if edge.to == *intent_id && (edge.edge_type == EdgeType::DependsOn || edge.edge_type == EdgeType::IsSubgoalOf) {
+            if edge.to == *intent_id
+                && (edge.edge_type == EdgeType::DependsOn
+                    || edge.edge_type == EdgeType::IsSubgoalOf)
+            {
                 if let Some(child) = self.get_intent(&edge.from) {
                     children.push(child);
                 }
             }
         }
-        
+
         children
     }
 
@@ -610,12 +670,12 @@ impl IntentGraph {
     pub fn get_intent_hierarchy(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         let mut hierarchy = Vec::new();
         let mut visited = HashSet::new();
-        
+
         self.collect_hierarchy_recursive(intent_id, &mut hierarchy, &mut visited);
-        
+
         hierarchy
     }
-    
+
     /// Helper method to collect hierarchy recursively with cycle detection
     fn collect_hierarchy_recursive(
         &self,
@@ -628,18 +688,18 @@ impl IntentGraph {
             return;
         }
         visited.insert(intent_id.clone());
-        
+
         // Add the current intent
         if let Some(intent) = self.get_intent(intent_id) {
             hierarchy.push(intent);
         }
-        
+
         // Add all parents recursively
         let parents = self.get_parent_intents(intent_id);
         for parent in &parents {
             self.collect_hierarchy_recursive(&parent.intent_id, hierarchy, visited);
         }
-        
+
         // Add all children recursively
         let children = self.get_child_intents(intent_id);
         for child in &children {
@@ -648,19 +708,27 @@ impl IntentGraph {
     }
 
     /// Find intents by edge type relationship
-    pub fn find_intents_by_relationship(&self, intent_id: &IntentId, edge_type: EdgeType) -> Vec<StorableIntent> {
+    pub fn find_intents_by_relationship(
+        &self,
+        intent_id: &IntentId,
+        edge_type: EdgeType,
+    ) -> Vec<StorableIntent> {
         let edges = self.get_edges_for_intent(intent_id);
         let mut related = Vec::new();
-        
+
         for edge in edges {
             if edge.edge_type == edge_type {
-                let related_id = if edge.from == *intent_id { &edge.to } else { &edge.from };
+                let related_id = if edge.from == *intent_id {
+                    &edge.to
+                } else {
+                    &edge.from
+                };
                 if let Some(intent) = self.get_intent(related_id) {
                     related.push(intent);
                 }
             }
         }
-        
+
         related
     }
 
@@ -668,10 +736,14 @@ impl IntentGraph {
     pub fn get_strongly_connected_intents(&self, intent_id: &IntentId) -> Vec<StorableIntent> {
         let edges = self.get_edges_for_intent(intent_id);
         let mut connected = HashSet::new();
-        
+
         for edge in edges {
-            let other_id = if edge.from == *intent_id { &edge.to } else { &edge.from };
-            
+            let other_id = if edge.from == *intent_id {
+                &edge.to
+            } else {
+                &edge.from
+            };
+
             // Check if there's a reverse edge of the same type
             let reverse_edges = self.get_edges_for_intent(other_id);
             let has_reverse = reverse_edges.iter().any(|e| {
@@ -679,21 +751,22 @@ impl IntentGraph {
                 // 1. The reverse edge goes from the other intent to this intent
                 // 2. It's the same edge type
                 // 3. It's not the same edge (different direction)
-                e.from == *other_id && 
-                e.to == *intent_id && 
-                e.edge_type == edge.edge_type &&
-                !(e.from == edge.from && e.to == edge.to) // Not the same edge
+                e.from == *other_id
+                    && e.to == *intent_id
+                    && e.edge_type == edge.edge_type
+                    && !(e.from == edge.from && e.to == edge.to) // Not the same edge
             });
-            
+
             if has_reverse {
                 if let Some(intent) = self.get_intent(other_id) {
                     connected.insert(intent.intent_id.clone());
                 }
             }
         }
-        
+
         // Convert back to Vec<StorableIntent>
-        connected.into_iter()
+        connected
+            .into_iter()
             .filter_map(|id| self.get_intent(&id))
             .collect()
     }
@@ -701,32 +774,40 @@ impl IntentGraph {
     /// Calculate relationship strength between two intents
     pub fn get_relationship_strength(&self, intent_a: &IntentId, intent_b: &IntentId) -> f64 {
         let edges = self.get_edges_for_intent(intent_a);
-        
+
         for edge in edges {
             if edge.to == *intent_b || edge.from == *intent_b {
                 return edge.weight.unwrap_or(1.0);
             }
         }
-        
+
         0.0 // No relationship found
     }
 
     /// Find intents with high relationship weights
-    pub fn get_high_weight_relationships(&self, intent_id: &IntentId, threshold: f64) -> Vec<(StorableIntent, f64)> {
+    pub fn get_high_weight_relationships(
+        &self,
+        intent_id: &IntentId,
+        threshold: f64,
+    ) -> Vec<(StorableIntent, f64)> {
         let edges = self.get_edges_for_intent(intent_id);
         let mut high_weight = Vec::new();
-        
+
         for edge in edges {
             if let Some(weight) = edge.weight {
                 if weight >= threshold {
-                    let other_id = if edge.from == *intent_id { &edge.to } else { &edge.from };
+                    let other_id = if edge.from == *intent_id {
+                        &edge.to
+                    } else {
+                        &edge.from
+                    };
                     if let Some(intent) = self.get_intent(other_id) {
                         high_weight.push((intent, weight));
                     }
                 }
             }
         }
-        
+
         // Sort by weight descending
         high_weight.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         high_weight
@@ -734,12 +815,12 @@ impl IntentGraph {
 
     /// Health check for the storage backend
     pub fn health_check(&self) -> Result<(), RuntimeError> {
-    self.block_on_runtime(async { self.storage.health_check().await })
+        self.block_on_runtime(async { self.storage.health_check().await })
     }
 
     /// Backup the intent graph to a file
     pub fn backup(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
-    self.block_on_runtime(async { self.storage.backup(path).await })
+        self.block_on_runtime(async { self.storage.backup(path).await })
     }
 
     /// Restore the intent graph from a backup file
@@ -755,7 +836,11 @@ impl IntentGraph {
 
     /// Store an entire subgraph starting from a root intent
     /// This stores the root intent and all its descendants (children, grandchildren, etc.)
-    pub fn store_subgraph_from_root(&mut self, root_intent_id: &IntentId, path: &std::path::Path) -> Result<(), RuntimeError> {
+    pub fn store_subgraph_from_root(
+        &mut self,
+        root_intent_id: &IntentId,
+        path: &std::path::Path,
+    ) -> Result<(), RuntimeError> {
         {
             let in_rt = tokio::runtime::Handle::try_current().is_ok();
             let handle = self.rt.clone();
@@ -764,19 +849,31 @@ impl IntentGraph {
                     // Get the root intent
                     let root_intent = self.storage.get_intent(root_intent_id).await?;
                     if root_intent.is_none() {
-                        return Err(RuntimeError::StorageError(format!("Root intent {} not found", root_intent_id)));
+                        return Err(RuntimeError::StorageError(format!(
+                            "Root intent {} not found",
+                            root_intent_id
+                        )));
                     }
-                    
+
                     // Collect all descendants recursively
                     let mut subgraph_intents = vec![root_intent.unwrap()];
                     let mut subgraph_edges = Vec::new();
                     let mut visited = HashSet::new();
-                    
-                    self.collect_subgraph_recursive(root_intent_id, &mut subgraph_intents, &mut subgraph_edges, &mut visited).await?;
-                    
+
+                    self.collect_subgraph_recursive(
+                        root_intent_id,
+                        &mut subgraph_intents,
+                        &mut subgraph_edges,
+                        &mut visited,
+                    )
+                    .await?;
+
                     // Create backup data for the subgraph
                     let backup_data = SubgraphBackupData {
-                        intents: subgraph_intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
+                        intents: subgraph_intents
+                            .into_iter()
+                            .map(|i| (i.intent_id.clone(), i))
+                            .collect(),
                         edges: subgraph_edges,
                         root_intent_id: root_intent_id.clone(),
                         version: "1.0".to_string(),
@@ -785,51 +882,67 @@ impl IntentGraph {
                             .unwrap()
                             .as_secs(),
                     };
-                    
+
                     // Serialize and save
-                    let json = serde_json::to_string_pretty(&backup_data)
-                        .map_err(|e| RuntimeError::StorageError(format!("Serialization error: {}", e)))?;
-                    
-                    tokio::fs::write(path, json).await
+                    let json = serde_json::to_string_pretty(&backup_data).map_err(|e| {
+                        RuntimeError::StorageError(format!("Serialization error: {}", e))
+                    })?;
+
+                    tokio::fs::write(path, json)
+                        .await
                         .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
-                    
+
                     Ok(())
                 })
             } else {
                 handle.block_on(async {
-            // Get the root intent
-            let root_intent = self.storage.get_intent(root_intent_id).await?;
-            if root_intent.is_none() {
-                return Err(RuntimeError::StorageError(format!("Root intent {} not found", root_intent_id)));
-            }
-            
-            // Collect all descendants recursively
-            let mut subgraph_intents = vec![root_intent.unwrap()];
-            let mut subgraph_edges = Vec::new();
-            let mut visited = HashSet::new();
-            
-            self.collect_subgraph_recursive(root_intent_id, &mut subgraph_intents, &mut subgraph_edges, &mut visited).await?;
-            
-            // Create backup data for the subgraph
-            let backup_data = SubgraphBackupData {
-                intents: subgraph_intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
-                edges: subgraph_edges,
-                root_intent_id: root_intent_id.clone(),
-                version: "1.0".to_string(),
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            };
-            
-            // Serialize and save
-            let json = serde_json::to_string_pretty(&backup_data)
-                .map_err(|e| RuntimeError::StorageError(format!("Serialization error: {}", e)))?;
-            
-            tokio::fs::write(path, json).await
-                .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
-            
-            Ok(())
+                    // Get the root intent
+                    let root_intent = self.storage.get_intent(root_intent_id).await?;
+                    if root_intent.is_none() {
+                        return Err(RuntimeError::StorageError(format!(
+                            "Root intent {} not found",
+                            root_intent_id
+                        )));
+                    }
+
+                    // Collect all descendants recursively
+                    let mut subgraph_intents = vec![root_intent.unwrap()];
+                    let mut subgraph_edges = Vec::new();
+                    let mut visited = HashSet::new();
+
+                    self.collect_subgraph_recursive(
+                        root_intent_id,
+                        &mut subgraph_intents,
+                        &mut subgraph_edges,
+                        &mut visited,
+                    )
+                    .await?;
+
+                    // Create backup data for the subgraph
+                    let backup_data = SubgraphBackupData {
+                        intents: subgraph_intents
+                            .into_iter()
+                            .map(|i| (i.intent_id.clone(), i))
+                            .collect(),
+                        edges: subgraph_edges,
+                        root_intent_id: root_intent_id.clone(),
+                        version: "1.0".to_string(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    };
+
+                    // Serialize and save
+                    let json = serde_json::to_string_pretty(&backup_data).map_err(|e| {
+                        RuntimeError::StorageError(format!("Serialization error: {}", e))
+                    })?;
+
+                    tokio::fs::write(path, json)
+                        .await
+                        .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
+
+                    Ok(())
                 })
             }
         }
@@ -837,7 +950,11 @@ impl IntentGraph {
 
     /// Store an entire subgraph containing a child intent and all its ancestors
     /// This stores the child intent and all its parents (up to root intents)
-    pub fn store_subgraph_from_child(&mut self, child_intent_id: &IntentId, path: &std::path::Path) -> Result<(), RuntimeError> {
+    pub fn store_subgraph_from_child(
+        &mut self,
+        child_intent_id: &IntentId,
+        path: &std::path::Path,
+    ) -> Result<(), RuntimeError> {
         {
             let in_rt = tokio::runtime::Handle::try_current().is_ok();
             let handle = self.rt.clone();
@@ -846,19 +963,31 @@ impl IntentGraph {
                     // Get the child intent
                     let child_intent = self.storage.get_intent(child_intent_id).await?;
                     if child_intent.is_none() {
-                        return Err(RuntimeError::StorageError(format!("Child intent {} not found", child_intent_id)));
+                        return Err(RuntimeError::StorageError(format!(
+                            "Child intent {} not found",
+                            child_intent_id
+                        )));
                     }
-                    
+
                     // Collect all ancestors recursively
                     let mut subgraph_intents = vec![child_intent.unwrap()];
                     let mut subgraph_edges = Vec::new();
                     let mut visited = HashSet::new();
-                    
-                    self.collect_ancestor_subgraph_recursive(child_intent_id, &mut subgraph_intents, &mut subgraph_edges, &mut visited).await?;
-                    
+
+                    self.collect_ancestor_subgraph_recursive(
+                        child_intent_id,
+                        &mut subgraph_intents,
+                        &mut subgraph_edges,
+                        &mut visited,
+                    )
+                    .await?;
+
                     // Create backup data for the subgraph
                     let backup_data = SubgraphBackupData {
-                        intents: subgraph_intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
+                        intents: subgraph_intents
+                            .into_iter()
+                            .map(|i| (i.intent_id.clone(), i))
+                            .collect(),
                         edges: subgraph_edges,
                         root_intent_id: child_intent_id.clone(), // For child-based subgraphs, use child as reference
                         version: "1.0".to_string(),
@@ -867,51 +996,67 @@ impl IntentGraph {
                             .unwrap()
                             .as_secs(),
                     };
-                    
+
                     // Serialize and save
-                    let json = serde_json::to_string_pretty(&backup_data)
-                        .map_err(|e| RuntimeError::StorageError(format!("Serialization error: {}", e)))?;
-                    
-                    tokio::fs::write(path, json).await
+                    let json = serde_json::to_string_pretty(&backup_data).map_err(|e| {
+                        RuntimeError::StorageError(format!("Serialization error: {}", e))
+                    })?;
+
+                    tokio::fs::write(path, json)
+                        .await
                         .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
-                    
+
                     Ok(())
                 })
             } else {
                 handle.block_on(async {
-            // Get the child intent
-            let child_intent = self.storage.get_intent(child_intent_id).await?;
-            if child_intent.is_none() {
-                return Err(RuntimeError::StorageError(format!("Child intent {} not found", child_intent_id)));
-            }
-            
-            // Collect all ancestors recursively
-            let mut subgraph_intents = vec![child_intent.unwrap()];
-            let mut subgraph_edges = Vec::new();
-            let mut visited = HashSet::new();
-            
-            self.collect_ancestor_subgraph_recursive(child_intent_id, &mut subgraph_intents, &mut subgraph_edges, &mut visited).await?;
-            
-            // Create backup data for the subgraph
-            let backup_data = SubgraphBackupData {
-                intents: subgraph_intents.into_iter().map(|i| (i.intent_id.clone(), i)).collect(),
-                edges: subgraph_edges,
-                root_intent_id: child_intent_id.clone(), // For child-based subgraphs, use child as reference
-                version: "1.0".to_string(),
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            };
-            
-            // Serialize and save
-            let json = serde_json::to_string_pretty(&backup_data)
-                .map_err(|e| RuntimeError::StorageError(format!("Serialization error: {}", e)))?;
-            
-            tokio::fs::write(path, json).await
-                .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
-            
-            Ok(())
+                    // Get the child intent
+                    let child_intent = self.storage.get_intent(child_intent_id).await?;
+                    if child_intent.is_none() {
+                        return Err(RuntimeError::StorageError(format!(
+                            "Child intent {} not found",
+                            child_intent_id
+                        )));
+                    }
+
+                    // Collect all ancestors recursively
+                    let mut subgraph_intents = vec![child_intent.unwrap()];
+                    let mut subgraph_edges = Vec::new();
+                    let mut visited = HashSet::new();
+
+                    self.collect_ancestor_subgraph_recursive(
+                        child_intent_id,
+                        &mut subgraph_intents,
+                        &mut subgraph_edges,
+                        &mut visited,
+                    )
+                    .await?;
+
+                    // Create backup data for the subgraph
+                    let backup_data = SubgraphBackupData {
+                        intents: subgraph_intents
+                            .into_iter()
+                            .map(|i| (i.intent_id.clone(), i))
+                            .collect(),
+                        edges: subgraph_edges,
+                        root_intent_id: child_intent_id.clone(), // For child-based subgraphs, use child as reference
+                        version: "1.0".to_string(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    };
+
+                    // Serialize and save
+                    let json = serde_json::to_string_pretty(&backup_data).map_err(|e| {
+                        RuntimeError::StorageError(format!("Serialization error: {}", e))
+                    })?;
+
+                    tokio::fs::write(path, json)
+                        .await
+                        .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
+
+                    Ok(())
                 })
             }
         }
@@ -925,44 +1070,50 @@ impl IntentGraph {
             let handle = self.rt.clone();
             if in_rt {
                 futures::executor::block_on(async {
-            // Read and deserialize the backup data
-            let content = tokio::fs::read_to_string(path).await
-                .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
-            
-            let backup_data: SubgraphBackupData = serde_json::from_str(&content)
-                .map_err(|e| RuntimeError::StorageError(format!("Deserialization error: {}", e)))?;
-            
-            // Restore intents
-            for (_, intent) in backup_data.intents {
-                self.storage.store_intent(intent).await?;
-            }
-            
-            // Restore edges
-            for edge in backup_data.edges {
-                self.storage.store_edge(edge).await?;
-            }
-            
-            Ok(())
-                })
-            } else {
-                handle.block_on(async {
                     // Read and deserialize the backup data
-                    let content = tokio::fs::read_to_string(path).await
+                    let content = tokio::fs::read_to_string(path)
+                        .await
                         .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
-                    
-                    let backup_data: SubgraphBackupData = serde_json::from_str(&content)
-                        .map_err(|e| RuntimeError::StorageError(format!("Deserialization error: {}", e)))?;
-                    
+
+                    let backup_data: SubgraphBackupData =
+                        serde_json::from_str(&content).map_err(|e| {
+                            RuntimeError::StorageError(format!("Deserialization error: {}", e))
+                        })?;
+
                     // Restore intents
                     for (_, intent) in backup_data.intents {
                         self.storage.store_intent(intent).await?;
                     }
-                    
+
                     // Restore edges
                     for edge in backup_data.edges {
                         self.storage.store_edge(edge).await?;
                     }
-                    
+
+                    Ok(())
+                })
+            } else {
+                handle.block_on(async {
+                    // Read and deserialize the backup data
+                    let content = tokio::fs::read_to_string(path)
+                        .await
+                        .map_err(|e| RuntimeError::StorageError(format!("IO error: {}", e)))?;
+
+                    let backup_data: SubgraphBackupData =
+                        serde_json::from_str(&content).map_err(|e| {
+                            RuntimeError::StorageError(format!("Deserialization error: {}", e))
+                        })?;
+
+                    // Restore intents
+                    for (_, intent) in backup_data.intents {
+                        self.storage.store_intent(intent).await?;
+                    }
+
+                    // Restore edges
+                    for edge in backup_data.edges {
+                        self.storage.store_edge(edge).await?;
+                    }
+
                     Ok(())
                 })
             }
@@ -981,53 +1132,62 @@ impl IntentGraph {
             return Ok(());
         }
         visited.insert(intent_id.clone());
-        
+
         // Get all edges for this intent
         let all_edges = self.storage.get_edges_for_intent(intent_id).await?;
-        
+
         for edge in all_edges {
-            // For child relationships in IsSubgoalOf: 
+            // For child relationships in IsSubgoalOf:
             // If edge is "A -> B" with type IsSubgoalOf, it means "A is a subgoal of B"
             // So B (the 'to' field) is the parent, and A (the 'from' field) is the child
             // If we're looking for children of intent_id, we need edges where intent_id is the 'to' field
             if edge.to == *intent_id && edge.edge_type == EdgeType::IsSubgoalOf {
                 // This is a child relationship
                 edges.push(edge.clone());
-                
+
                 // Get the child intent (the 'from' field)
                 if let Some(child_intent) = self.storage.get_intent(&edge.from).await? {
                     intents.push(child_intent);
-                    
+
                     // Recursively collect descendants using Box::pin
-                    Box::pin(self.collect_subgraph_recursive(&edge.from, intents, edges, visited)).await?;
+                    Box::pin(self.collect_subgraph_recursive(&edge.from, intents, edges, visited))
+                        .await?;
                 }
             }
-            
+
             // Also include all other edges that connect intents in the subgraph
             // This ensures that RelatedTo, DependsOn, etc. edges are preserved
             if edge.from == *intent_id || edge.to == *intent_id {
                 // Check if the other intent is already in our subgraph or will be added
-                let other_id = if edge.from == *intent_id { &edge.to } else { &edge.from };
-                
+                let other_id = if edge.from == *intent_id {
+                    &edge.to
+                } else {
+                    &edge.from
+                };
+
                 // If this is not an IsSubgoalOf edge, we need to check if the other intent
                 // is part of our hierarchical subgraph
                 if edge.edge_type != EdgeType::IsSubgoalOf {
                     // For non-hierarchical edges, we need to ensure the other intent is in our subgraph
                     // We'll add it if it's not already visited and not already in our intents list
-                    if !visited.contains(other_id) && !intents.iter().any(|i| i.intent_id == *other_id) {
+                    if !visited.contains(other_id)
+                        && !intents.iter().any(|i| i.intent_id == *other_id)
+                    {
                         if let Some(other_intent) = self.storage.get_intent(other_id).await? {
                             intents.push(other_intent);
                         }
                     }
                 }
-                
+
                 // Add the edge if it's not already in our list
-                if !edges.iter().any(|e| e.from == edge.from && e.to == edge.to && e.edge_type == edge.edge_type) {
+                if !edges.iter().any(|e| {
+                    e.from == edge.from && e.to == edge.to && e.edge_type == edge.edge_type
+                }) {
                     edges.push(edge.clone());
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -1043,10 +1203,10 @@ impl IntentGraph {
             return Ok(());
         }
         visited.insert(intent_id.clone());
-        
+
         // Get all edges for this intent
         let all_edges = self.storage.get_edges_for_intent(intent_id).await?;
-        
+
         for edge in all_edges {
             // For parent relationships in IsSubgoalOf:
             // If edge is "A -> B" with type IsSubgoalOf, it means "A is a subgoal of B"
@@ -1055,17 +1215,20 @@ impl IntentGraph {
             if edge.from == *intent_id && edge.edge_type == EdgeType::IsSubgoalOf {
                 // This is a parent relationship
                 edges.push(edge.clone());
-                
+
                 // Get the parent intent (the 'to' field)
                 if let Some(parent_intent) = self.storage.get_intent(&edge.to).await? {
                     intents.push(parent_intent);
-                    
+
                     // Recursively collect ancestors using Box::pin
-                    Box::pin(self.collect_ancestor_subgraph_recursive(&edge.to, intents, edges, visited)).await?;
+                    Box::pin(
+                        self.collect_ancestor_subgraph_recursive(&edge.to, intents, edges, visited),
+                    )
+                    .await?;
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -1090,7 +1253,11 @@ impl IntentGraph {
     }
 
     /// Complete an intent with execution result
-    pub fn complete_intent(&mut self, intent_id: &IntentId, result: &ExecutionResult) -> Result<(), RuntimeError> {
+    pub fn complete_intent(
+        &mut self,
+        intent_id: &IntentId,
+        result: &ExecutionResult,
+    ) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
         let in_rt = tokio::runtime::Handle::try_current().is_ok();
         let handle = self.rt.clone();
@@ -1110,27 +1277,45 @@ impl IntentGraph {
     }
 
     /// Fail an intent with error message
-    pub fn fail_intent(&mut self, intent_id: &IntentId, error_message: String) -> Result<(), RuntimeError> {
+    pub fn fail_intent(
+        &mut self,
+        intent_id: &IntentId,
+        error_message: String,
+    ) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
         let in_rt = tokio::runtime::Handle::try_current().is_ok();
         let handle = self.rt.clone();
         if in_rt {
             futures::executor::block_on(async {
                 self.lifecycle
-                    .fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message)
+                    .fail_intent(
+                        &mut self.storage,
+                        event_sink.as_ref(),
+                        intent_id,
+                        error_message,
+                    )
                     .await
             })
         } else {
             handle.block_on(async {
                 self.lifecycle
-                    .fail_intent(&mut self.storage, event_sink.as_ref(), intent_id, error_message)
+                    .fail_intent(
+                        &mut self.storage,
+                        event_sink.as_ref(),
+                        intent_id,
+                        error_message,
+                    )
                     .await
             })
         }
     }
 
     /// Suspend an intent with reason
-    pub fn suspend_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+    pub fn suspend_intent(
+        &mut self,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
         let in_rt = tokio::runtime::Handle::try_current().is_ok();
         let handle = self.rt.clone();
@@ -1150,7 +1335,11 @@ impl IntentGraph {
     }
 
     /// Resume a suspended intent
-    pub fn resume_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+    pub fn resume_intent(
+        &mut self,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
         let in_rt = tokio::runtime::Handle::try_current().is_ok();
         let handle = self.rt.clone();
@@ -1170,7 +1359,11 @@ impl IntentGraph {
     }
 
     /// Archive an intent with reason
-    pub fn archive_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+    pub fn archive_intent(
+        &mut self,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
         let in_rt = tokio::runtime::Handle::try_current().is_ok();
         let handle = self.rt.clone();
@@ -1190,7 +1383,11 @@ impl IntentGraph {
     }
 
     /// Reactivate an archived intent
-    pub fn reactivate_intent(&mut self, intent_id: &IntentId, reason: String) -> Result<(), RuntimeError> {
+    pub fn reactivate_intent(
+        &mut self,
+        intent_id: &IntentId,
+        reason: String,
+    ) -> Result<(), RuntimeError> {
         let event_sink = self.intent_event_sink.clone();
         let in_rt = tokio::runtime::Handle::try_current().is_ok();
         let handle = self.rt.clone();
@@ -1211,28 +1408,53 @@ impl IntentGraph {
 
     /// Get intents by status
     pub fn get_intents_by_status(&self, status: IntentStatus) -> Vec<StorableIntent> {
-    // Only immutable borrows; safe to use helper
-    self.block_on_runtime(async { self.lifecycle.get_intents_by_status(&self.storage, status).await.unwrap_or_default() })
+        // Only immutable borrows; safe to use helper
+        self.block_on_runtime(async {
+            self.lifecycle
+                .get_intents_by_status(&self.storage, status)
+                .await
+                .unwrap_or_default()
+        })
     }
 
     /// Get intent status transition history
     pub fn get_status_history(&self, intent_id: &IntentId) -> Vec<String> {
-    self.block_on_runtime(async { self.lifecycle.get_status_history(&self.storage, intent_id).await.unwrap_or_default() })
+        self.block_on_runtime(async {
+            self.lifecycle
+                .get_status_history(&self.storage, intent_id)
+                .await
+                .unwrap_or_default()
+        })
     }
 
     /// Get intents that are ready for processing (Active status)
     pub fn get_ready_intents(&self) -> Vec<StorableIntent> {
-    self.block_on_runtime(async { self.lifecycle.get_ready_intents(&self.storage).await.unwrap_or_default() })
+        self.block_on_runtime(async {
+            self.lifecycle
+                .get_ready_intents(&self.storage)
+                .await
+                .unwrap_or_default()
+        })
     }
 
     /// Get intents that need attention (Failed or Suspended status)
     pub fn get_intents_needing_attention(&self) -> Vec<StorableIntent> {
-    self.block_on_runtime(async { self.lifecycle.get_intents_needing_attention(&self.storage).await.unwrap_or_default() })
+        self.block_on_runtime(async {
+            self.lifecycle
+                .get_intents_needing_attention(&self.storage)
+                .await
+                .unwrap_or_default()
+        })
     }
 
     /// Get intents that can be archived (Completed for more than specified days)
     pub fn get_intents_ready_for_archival(&self, days_threshold: u64) -> Vec<StorableIntent> {
-    self.block_on_runtime(async { self.lifecycle.get_intents_ready_for_archival(&self.storage, days_threshold).await.unwrap_or_default() })
+        self.block_on_runtime(async {
+            self.lifecycle
+                .get_intents_ready_for_archival(&self.storage, days_threshold)
+                .await
+                .unwrap_or_default()
+        })
     }
 
     /// Clear all intents and edges from the graph
@@ -1241,13 +1463,15 @@ impl IntentGraph {
         let handle = self.rt.clone();
         if in_rt {
             futures::executor::block_on(async {
-                self.storage.clear_all().await
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to clear intent graph: {}", e)))
+                self.storage.clear_all().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to clear intent graph: {}", e))
+                })
             })
         } else {
             handle.block_on(async {
-                self.storage.clear_all().await
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to clear intent graph: {}", e)))
+                self.storage.clear_all().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to clear intent graph: {}", e))
+                })
             })
         }
     }

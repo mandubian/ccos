@@ -44,7 +44,8 @@ impl Planner {
                     _ => return Err("Missing or invalid 'file_path' parameter.".to_string()),
                 };
 
-                Ok(format!(r#"
+                Ok(format!(
+                    r#"
 (do
     (println "--- Phase 1: Analyzing Dependencies ---")
     (let cargo_content (read-file "{}"))
@@ -55,7 +56,9 @@ impl Planner {
                 cargo_content)))
     analysis_result
 )
-"#, file_path))
+"#,
+                    file_path
+                ))
             }
             "apply_dependency_updates" => {
                 let updates_json = match intent.parameters.get("updates_json") {
@@ -63,7 +66,8 @@ impl Planner {
                     _ => return Err("Missing or invalid 'updates_json' parameter.".to_string()),
                 };
 
-                Ok(format!(r#"
+                Ok(format!(
+                    r#"
 (do
     (println "--- Phase 2: Planning & Executing Updates ---")
     (let updates (json-parse {}))
@@ -86,13 +90,14 @@ impl Planner {
         )
     )
 )
-"#, updates_json))
+"#,
+                    updates_json
+                ))
             }
             _ => Err(format!("Unknown intent: {}", intent.name)),
         }
     }
 }
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 CCOS Smart Dependency Updater Demo (Intent-Driven)");
@@ -102,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 1. Boilerplate: Model and Delegation Engine Setup ---
     let model_path = std::env::var("RTFS_LOCAL_MODEL_PATH")
         .unwrap_or_else(|_| "models/phi-2.Q4_K_M.gguf".to_string());
-    
+
     if !std::path::Path::new(&model_path).exists() {
         println!("❌ Model not found. Please run ./scripts/download_model.sh or set RTFS_LOCAL_MODEL_PATH.");
         return Ok(());
@@ -112,16 +117,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = ModelRegistry::new();
     let realistic_model = LocalLlamaModel::new("local-analyzer", &model_path, None);
     registry.register(realistic_model);
-    
+
     let mut static_map = HashMap::new();
-    static_map.insert("analyze-dependencies".to_string(), ExecTarget::LocalModel("local-analyzer".to_string()));
+    static_map.insert(
+        "analyze-dependencies".to_string(),
+        ExecTarget::LocalModel("local-analyzer".to_string()),
+    );
     let de = Arc::new(StaticDelegationEngine::new(static_map));
-    
+
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()),
+    );
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
-        Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        Arc::new(std::sync::Mutex::new(
+            rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+        )),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
@@ -159,33 +173,44 @@ rand = "0.8.0"
         name: "analyze_dependencies",
         parameters: initial_params,
     };
-    println!("🧠 Generated Intent: {:?}
-", initial_intent);
+    println!(
+        "🧠 Generated Intent: {:?}
+",
+        initial_intent
+    );
 
     // --- 4. Generate and Execute the First Plan ---
     let initial_plan_rtfs = planner.generate_plan(&initial_intent)?;
-    println!("📝 Generated Plan (Phase 1):
+    println!(
+        "📝 Generated Plan (Phase 1):
 {}
-", initial_plan_rtfs.trim());
+",
+        initial_plan_rtfs.trim()
+    );
 
     let parsed_plan1 = parser::parse(&initial_plan_rtfs)?;
     let analysis_result = evaluator.eval_toplevel(&parsed_plan1)?;
 
     let llm_output = match analysis_result {
-        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::String(s)) => s,
+        rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(Value::String(s)) => {
+            s
+        }
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
             return Err("Host call required but not supported in this example.".into());
         }
         _ => return Err("LLM did not return a string.".into()),
     };
 
-    println!("✅ LLM Analysis Complete. Raw Output:
+    println!(
+        "✅ LLM Analysis Complete. Raw Output:
 {}
-", llm_output);
+",
+        llm_output
+    );
 
     // --- 5. The Recursive Intent & Plan ---
     println!("🔄 CCOS is now forming a new Intent from the LLM's output...");
-    
+
     // (Simulated Intent creation from structured data)
     let mut update_params = HashMap::new();
     update_params.insert("updates_json", Value::String(llm_output.clone()));
@@ -193,22 +218,30 @@ rand = "0.8.0"
         name: "apply_dependency_updates",
         parameters: update_params,
     };
-    println!("🧠 Generated Intent: {:?}
-", update_intent);
+    println!(
+        "🧠 Generated Intent: {:?}
+",
+        update_intent
+    );
 
     // --- 6. Generate and Execute the Second Plan ---
     let update_plan_rtfs = planner.generate_plan(&update_intent)?;
-    println!("📝 Generated Plan (Phase 2):
+    println!(
+        "📝 Generated Plan (Phase 2):
 {}
-", update_plan_rtfs.trim());
+",
+        update_plan_rtfs.trim()
+    );
 
     let parsed_plan2 = parser::parse(&update_plan_rtfs)?;
     evaluator.eval_toplevel(&parsed_plan2)?;
 
     // --- 7. Cleanup ---
     std::fs::remove_file("dummy_Cargo.toml")?;
-    println!("
-✅ Demo complete. Cleaned up dummy file.");
+    println!(
+        "
+✅ Demo complete. Cleaned up dummy file."
+    );
 
     Ok(())
 }

@@ -95,20 +95,26 @@ impl ParserError {
         };
 
         // Check for delimiter mismatch errors first
-        if let Some((mismatch_msg, mismatch_hints)) = Self::detect_delimiter_mismatch(source_code, line, column) {
+        if let Some((mismatch_msg, mismatch_hints)) =
+            Self::detect_delimiter_mismatch(source_code, line, column)
+        {
             message = mismatch_msg;
             hints.extend(mismatch_hints);
             return (message, hints);
         }
 
         // Check for special form specific errors
-        if let Some((special_msg, special_hints)) = Self::detect_special_form_errors(current_line, positives) {
+        if let Some((special_msg, special_hints)) =
+            Self::detect_special_form_errors(current_line, positives)
+        {
             message = special_msg;
             hints.extend(special_hints);
         }
 
         // Check for function call syntax errors
-        if let Some((func_msg, func_hints)) = Self::detect_function_call_errors(current_line, positives) {
+        if let Some((func_msg, func_hints)) =
+            Self::detect_function_call_errors(current_line, positives)
+        {
             if message.is_empty() {
                 message = func_msg;
             }
@@ -124,76 +130,77 @@ impl ParserError {
         // Provide specific hints based on what was expected
         for positive in positives {
             match positive {
-                    Rule::map_key => {
-                        hints.push(
-                            ErrorHint::new("Map keys must be keywords, strings, or integers")
-                                .with_suggestion(
-                                    "Try using :keyword, \"string\", or 123 as map keys",
-                                ),
-                        );
-                    }
-                    Rule::expression => {
-                        hints.push(
-                            ErrorHint::new("Expected an expression here")
-                                .with_suggestion("Try adding a value, variable, or function call"),
-                        );
-                    }
-                    Rule::symbol => {
-                        hints.push(ErrorHint::new("Expected a symbol (identifier) here")
-                            .with_suggestion("Try using a valid identifier like 'my-function' or 'variable-name'"));
-                    }
-                    Rule::keyword => {
-                        hints.push(ErrorHint::new("Expected a keyword here").with_suggestion(
+                Rule::map_key => {
+                    hints.push(
+                        ErrorHint::new("Map keys must be keywords, strings, or integers")
+                            .with_suggestion("Try using :keyword, \"string\", or 123 as map keys"),
+                    );
+                }
+                Rule::expression => {
+                    hints.push(
+                        ErrorHint::new("Expected an expression here")
+                            .with_suggestion("Try adding a value, variable, or function call"),
+                    );
+                }
+                Rule::symbol => {
+                    hints.push(
+                        ErrorHint::new("Expected a symbol (identifier) here").with_suggestion(
+                            "Try using a valid identifier like 'my-function' or 'variable-name'",
+                        ),
+                    );
+                }
+                Rule::keyword => {
+                    hints.push(
+                        ErrorHint::new("Expected a keyword here").with_suggestion(
                             "Keywords start with ':' like :keyword or :my.keyword",
-                        ));
-                    }
-                    Rule::string => {
-                        hints.push(
-                            ErrorHint::new("Expected a string literal here").with_suggestion(
-                                "Try wrapping text in quotes like \"hello world\"",
-                            ),
-                        );
-                    }
-                    Rule::integer => {
-                        hints.push(
-                            ErrorHint::new("Expected an integer here")
-                                .with_suggestion("Try using a number like 42 or -17"),
-                        );
-                    }
-                    Rule::list => {
-                        hints.push(ErrorHint::new("Expected a list here").with_suggestion(
-                            "Lists are enclosed in parentheses like (function arg1 arg2)",
-                        ));
-                    }
-                    Rule::vector => {
-                        hints.push(ErrorHint::new("Expected a vector here").with_suggestion(
+                        ),
+                    );
+                }
+                Rule::string => {
+                    hints.push(
+                        ErrorHint::new("Expected a string literal here")
+                            .with_suggestion("Try wrapping text in quotes like \"hello world\""),
+                    );
+                }
+                Rule::integer => {
+                    hints.push(
+                        ErrorHint::new("Expected an integer here")
+                            .with_suggestion("Try using a number like 42 or -17"),
+                    );
+                }
+                Rule::list => {
+                    hints.push(ErrorHint::new("Expected a list here").with_suggestion(
+                        "Lists are enclosed in parentheses like (function arg1 arg2)",
+                    ));
+                }
+                Rule::vector => {
+                    hints.push(
+                        ErrorHint::new("Expected a vector here").with_suggestion(
                             "Vectors are enclosed in square brackets like [1 2 3]",
-                        ));
-                    }
-                    Rule::map => {
-                        hints.push(
-                            ErrorHint::new("Expected a map here").with_suggestion(
-                                "Maps are enclosed in braces like {:key \"value\"}",
-                            ),
-                        );
-                    }
-                    Rule::module_definition => {
-                        hints.push(
-                            ErrorHint::new("Expected a module definition")
-                                .with_suggestion("Try: (module my-module ...)"),
-                        );
-                    }
-                    _ => {
-                        hints.push(
-                            ErrorHint::new(&format!("Expected '{:?}' here", positive))
-                                .with_suggestion(&format!(
-                                    "Try adding '{:?}' at this position",
-                                    positive
-                                )),
-                        );
-                    }
+                        ),
+                    );
+                }
+                Rule::map => {
+                    hints.push(
+                        ErrorHint::new("Expected a map here")
+                            .with_suggestion("Maps are enclosed in braces like {:key \"value\"}"),
+                    );
+                }
+                Rule::module_definition => {
+                    hints.push(
+                        ErrorHint::new("Expected a module definition")
+                            .with_suggestion("Try: (module my-module ...)"),
+                    );
+                }
+                _ => {
+                    hints.push(
+                        ErrorHint::new(&format!("Expected '{:?}' here", positive)).with_suggestion(
+                            &format!("Try adding '{:?}' at this position", positive),
+                        ),
+                    );
                 }
             }
+        }
 
         // Add context-specific hints using the new helper method
         Self::add_context_specific_hints(&mut hints, current_line);
@@ -202,7 +209,11 @@ impl ParserError {
     }
 
     /// Detect delimiter mismatch errors and provide location of opening delimiters
-    fn detect_delimiter_mismatch(source_code: &str, error_line: usize, error_column: usize) -> Option<(String, Vec<ErrorHint>)> {
+    fn detect_delimiter_mismatch(
+        source_code: &str,
+        error_line: usize,
+        error_column: usize,
+    ) -> Option<(String, Vec<ErrorHint>)> {
         let lines: Vec<&str> = source_code.lines().collect();
         if error_line == 0 || error_line > lines.len() {
             return None;
@@ -210,13 +221,13 @@ impl ParserError {
 
         // Track delimiter stack with positions
         let mut delimiter_stack: Vec<(char, usize, usize)> = Vec::new(); // (delimiter, line, column)
-        
+
         for (line_idx, line) in lines.iter().enumerate() {
             let line_num = line_idx + 1;
-            
+
             for (col_idx, ch) in line.chars().enumerate() {
                 let col_num = col_idx + 1;
-                
+
                 match ch {
                     '(' | '[' | '{' => {
                         delimiter_stack.push((ch, line_num, col_num));
@@ -229,7 +240,7 @@ impl ParserError {
                                 '{' => '}',
                                 _ => ch,
                             };
-                            
+
                             if ch != expected_closing {
                                 let message = format!(
                                     "Mismatched delimiter: found '{}' but expected '{}' to close '{}' from line {}:{}",
@@ -246,16 +257,21 @@ impl ParserError {
                             }
                         } else {
                             let message = format!("Unexpected closing delimiter '{}'", ch);
-                            let hint = ErrorHint::new("Found closing delimiter without matching opening delimiter")
-                                .with_suggestion("Remove the extra delimiter or add a matching opening delimiter");
+                            let hint = ErrorHint::new(
+                                "Found closing delimiter without matching opening delimiter",
+                            )
+                            .with_suggestion(
+                                "Remove the extra delimiter or add a matching opening delimiter",
+                            );
                             return Some((message, vec![hint]));
                         }
                     }
                     _ => {} // Ignore other characters
                 }
-                
+
                 // If we've reached the error position and there are unclosed delimiters
-                if line_num == error_line && col_num >= error_column && !delimiter_stack.is_empty() {
+                if line_num == error_line && col_num >= error_column && !delimiter_stack.is_empty()
+                {
                     let (opening, open_line, open_col) = delimiter_stack.last().unwrap();
                     let expected_closing = match opening {
                         '(' => ')',
@@ -270,7 +286,8 @@ impl ParserError {
                     let hint = ErrorHint::new(&format!(
                         "The '{}' delimiter needs to be closed with '{}'",
                         opening, expected_closing
-                    )).with_suggestion(&format!(
+                    ))
+                    .with_suggestion(&format!(
                         "Add '{}' to close the expression started at line {}:{}",
                         expected_closing, open_line, open_col
                     ));
@@ -283,69 +300,88 @@ impl ParserError {
     }
 
     /// Detect special form specific errors (let, if, fn, etc.)
-    fn detect_special_form_errors(current_line: &str, positives: &[Rule]) -> Option<(String, Vec<ErrorHint>)> {
+    fn detect_special_form_errors(
+        current_line: &str,
+        positives: &[Rule],
+    ) -> Option<(String, Vec<ErrorHint>)> {
         let trimmed = current_line.trim();
-        
+
         // Check for let syntax errors
         if trimmed.starts_with("(let ") && !trimmed.contains("[") {
             let message = "Invalid let syntax: missing binding vector".to_string();
-            let hint = ErrorHint::new("let expressions require a binding vector")
-                .with_suggestion("Use syntax: (let [binding1 value1 binding2 value2 ...] body-expressions...)");
+            let hint = ErrorHint::new("let expressions require a binding vector").with_suggestion(
+                "Use syntax: (let [binding1 value1 binding2 value2 ...] body-expressions...)",
+            );
             return Some((message, vec![hint]));
         }
-        
+
         // Check for if syntax errors
         if trimmed == "(if)" || (trimmed.starts_with("(if ") && trimmed.matches(" ").count() < 2) {
             let message = "Invalid if syntax: missing condition or branches".to_string();
-            let mut hints = vec![
-                ErrorHint::new("if expressions require at least a condition and then-branch")
-                    .with_suggestion("Use syntax: (if condition then-branch) or (if condition then-branch else-branch)")
-            ];
+            let mut hints = vec![ErrorHint::new(
+                "if expressions require at least a condition and then-branch",
+            )
+            .with_suggestion(
+                "Use syntax: (if condition then-branch) or (if condition then-branch else-branch)",
+            )];
             if trimmed == "(if)" {
-                hints.push(ErrorHint::new("Empty if expression")
-                    .with_suggestion("Add a condition: (if true 'yes' 'no')"));
+                hints.push(
+                    ErrorHint::new("Empty if expression")
+                        .with_suggestion("Add a condition: (if true 'yes' 'no')"),
+                );
             }
             return Some((message, hints));
         }
-        
+
         // Check for fn syntax errors
         if trimmed == "(fn)" || (trimmed.starts_with("(fn ") && !trimmed.contains("[")) {
             let message = "Invalid fn syntax: missing parameter list or body".to_string();
-            let mut hints = vec![
-                ErrorHint::new("fn expressions require a parameter list and body")
-                    .with_suggestion("Use syntax: (fn [param1 param2 ...] body-expressions...)")
-            ];
+            let mut hints =
+                vec![
+                    ErrorHint::new("fn expressions require a parameter list and body")
+                        .with_suggestion(
+                            "Use syntax: (fn [param1 param2 ...] body-expressions...)",
+                        ),
+                ];
             if trimmed == "(fn)" {
-                hints.push(ErrorHint::new("Empty fn expression")
-                    .with_suggestion("Add parameters and body: (fn [x y] (+ x y))"));
+                hints.push(
+                    ErrorHint::new("Empty fn expression")
+                        .with_suggestion("Add parameters and body: (fn [x y] (+ x y))"),
+                );
             }
             return Some((message, hints));
         }
-        
-        // Check for def syntax errors  
-        if trimmed == "(def)" || (trimmed.starts_with("(def ") && trimmed.matches(" ").count() < 2) {
+
+        // Check for def syntax errors
+        if trimmed == "(def)" || (trimmed.starts_with("(def ") && trimmed.matches(" ").count() < 2)
+        {
             let message = "Invalid def syntax: missing symbol or value".to_string();
-            let mut hints = vec![
-                ErrorHint::new("def expressions require a symbol and value")
-                    .with_suggestion("Use syntax: (def symbol-name value-expression)")
-            ];
+            let mut hints = vec![ErrorHint::new("def expressions require a symbol and value")
+                .with_suggestion("Use syntax: (def symbol-name value-expression)")];
             if trimmed == "(def)" {
-                hints.push(ErrorHint::new("Empty def expression")
-                    .with_suggestion("Add symbol and value: (def my-var 42)"));
+                hints.push(
+                    ErrorHint::new("Empty def expression")
+                        .with_suggestion("Add symbol and value: (def my-var 42)"),
+                );
             }
             return Some((message, hints));
         }
-        
+
         // Check for defn syntax errors
         if trimmed == "(defn)" || (trimmed.starts_with("(defn ") && !trimmed.contains("[")) {
             let message = "Invalid defn syntax: missing name, parameters, or body".to_string();
-            let mut hints = vec![
-                ErrorHint::new("defn expressions require a name, parameter list, and body")
-                    .with_suggestion("Use syntax: (defn function-name [param1 param2 ...] body-expressions...)")
-            ];
+            let mut hints =
+                vec![
+                    ErrorHint::new("defn expressions require a name, parameter list, and body")
+                        .with_suggestion(
+                        "Use syntax: (defn function-name [param1 param2 ...] body-expressions...)",
+                    ),
+                ];
             if trimmed == "(defn)" {
-                hints.push(ErrorHint::new("Empty defn expression")
-                    .with_suggestion("Add name, parameters and body: (defn add [x y] (+ x y))"));
+                hints
+                    .push(ErrorHint::new("Empty defn expression").with_suggestion(
+                        "Add name, parameters and body: (defn add [x y] (+ x y))",
+                    ));
             }
             return Some((message, hints));
         }
@@ -354,25 +390,32 @@ impl ParserError {
     }
 
     /// Detect function call syntax errors and provide suggestions
-    fn detect_function_call_errors(current_line: &str, positives: &[Rule]) -> Option<(String, Vec<ErrorHint>)> {
+    fn detect_function_call_errors(
+        current_line: &str,
+        positives: &[Rule],
+    ) -> Option<(String, Vec<ErrorHint>)> {
         let trimmed = current_line.trim();
-        
+
         // Check for empty function call
         if trimmed == "()" {
             let message = "Empty list: not a valid function call".to_string();
-            let hint = ErrorHint::new("Function calls require a function name")
-                .with_suggestion("Try: (function-name arg1 arg2 ...) or use [] for empty vector, {} for empty map");
+            let hint = ErrorHint::new("Function calls require a function name").with_suggestion(
+                "Try: (function-name arg1 arg2 ...) or use [] for empty vector, {} for empty map",
+            );
             return Some((message, vec![hint]));
         }
-        
+
         // Check for incomplete function calls (unclosed parentheses)
-        if trimmed.starts_with("(") && !trimmed.ends_with(")") && trimmed.matches('(').count() > trimmed.matches(')').count() {
+        if trimmed.starts_with("(")
+            && !trimmed.ends_with(")")
+            && trimmed.matches('(').count() > trimmed.matches(')').count()
+        {
             let message = "Incomplete function call: missing closing parenthesis".to_string();
             let hint = ErrorHint::new("Function calls must be properly closed")
                 .with_suggestion("Add ')' to complete the function call");
             return Some((message, vec![hint]));
         }
-        
+
         // Check for potential function call issues based on expected rules
         if positives.contains(&Rule::expression) || positives.contains(&Rule::list) {
             // If we expect an expression or list, provide function call guidance
@@ -453,7 +496,7 @@ impl ParserError {
                         } else {
                             "   "
                         };
-                        
+
                         // Add line number with consistent formatting
                         output.push_str(&format!("{:4} {}{}\n", line_num, prefix, line_content));
 
@@ -463,7 +506,7 @@ impl ParserError {
                             if column > 0 && column <= line_content.len() + 1 {
                                 let mut pointer_line = String::new();
                                 pointer_line.push_str("     "); // Align with line content
-                                
+
                                 // Add spaces to align with error column
                                 for i in 1..column {
                                     if i <= line_content.len() {
@@ -477,28 +520,35 @@ impl ParserError {
                                         pointer_line.push(' ');
                                     }
                                 }
-                                
+
                                 pointer_line.push_str("^");
-                                
+
                                 // Add range indicator if error spans multiple columns
-                                if span.end_column > span.start_column && span.start_line == span.end_line {
+                                if span.end_column > span.start_column
+                                    && span.start_line == span.end_line
+                                {
                                     let range_len = span.end_column - span.start_column;
                                     for _ in 1..range_len {
                                         pointer_line.push('~');
                                     }
                                 }
-                                
+
                                 output.push_str(&format!("{}\n", pointer_line));
                                 output.push_str(&format!("     Here at column {}\n", column));
                             }
                         }
                     }
                 }
-                
+
                 // Add delimiter stack information if available
-                if self.message.contains("delimiter") || self.message.contains("Unclosed") || self.message.contains("Mismatched") {
+                if self.message.contains("delimiter")
+                    || self.message.contains("Unclosed")
+                    || self.message.contains("Mismatched")
+                {
                     output.push_str("\n🔍 Delimiter Analysis:\n");
-                    output.push_str("   Check that all opening delimiters have matching closing delimiters:\n");
+                    output.push_str(
+                        "   Check that all opening delimiters have matching closing delimiters:\n",
+                    );
                     output.push_str("   • Parentheses: ( ... )\n");
                     output.push_str("   • Brackets: [ ... ]\n");
                     output.push_str("   • Braces: { ... }\n");
@@ -561,7 +611,11 @@ impl ParserErrorReporter {
     }
 
     /// Create a customized parser error reporter
-    pub fn with_config(use_colors: bool, show_source_context: bool, max_context_lines: usize) -> Self {
+    pub fn with_config(
+        use_colors: bool,
+        show_source_context: bool,
+        max_context_lines: usize,
+    ) -> Self {
         Self {
             use_colors,
             show_source_context,

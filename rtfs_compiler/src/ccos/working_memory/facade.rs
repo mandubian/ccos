@@ -8,7 +8,9 @@
 //! - Keep this file small; heavy logic remains in backends.
 //! - Unit tests cover basic flows and error propagation.
 
-use crate::ccos::working_memory::backend::{QueryParams, QueryResult, WorkingMemoryBackend, WorkingMemoryError};
+use crate::ccos::working_memory::backend::{
+    QueryParams, QueryResult, WorkingMemoryBackend, WorkingMemoryError,
+};
 use crate::ccos::working_memory::types::{WorkingMemoryEntry, WorkingMemoryId};
 
 /// Thin facade over a boxed WorkingMemoryBackend implementation.
@@ -28,7 +30,10 @@ impl WorkingMemory {
     }
 
     /// Get an entry by id.
-    pub fn get(&self, id: &WorkingMemoryId) -> Result<Option<WorkingMemoryEntry>, WorkingMemoryError> {
+    pub fn get(
+        &self,
+        id: &WorkingMemoryId,
+    ) -> Result<Option<WorkingMemoryEntry>, WorkingMemoryError> {
         self.backend.get(id)
     }
 
@@ -38,7 +43,11 @@ impl WorkingMemory {
     }
 
     /// Enforce budgets by pruning oldest entries until constraints are met.
-    pub fn prune(&mut self, max_entries: Option<usize>, max_tokens: Option<usize>) -> Result<(), WorkingMemoryError> {
+    pub fn prune(
+        &mut self,
+        max_entries: Option<usize>,
+        max_tokens: Option<usize>,
+    ) -> Result<(), WorkingMemoryError> {
         self.backend.prune(max_entries, max_tokens)
     }
 
@@ -61,7 +70,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn now_s() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
     }
 
     fn mk_entry(id: &str, ts: u64, tags: &[&str]) -> WorkingMemoryEntry {
@@ -85,7 +97,9 @@ mod tests {
         wm.append(mk_entry("a", t0 - 2, &["w", "x"])).unwrap();
         wm.append(mk_entry("b", t0 - 1, &["w"])).unwrap();
 
-        let res = wm.query(&QueryParams::with_tags(["w"]).with_limit(Some(10))).unwrap();
+        let res = wm
+            .query(&QueryParams::with_tags(["w"]).with_limit(Some(10)))
+            .unwrap();
         let ids: Vec<_> = res.entries.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["b", "a"]);
 
@@ -104,7 +118,9 @@ mod tests {
         wm.append(mk_entry("c", t0 - 1, &["w"])).unwrap();
 
         // after appends with budget=1, only most recent should remain
-        let res = wm.query(&QueryParams::with_tags(["w"]).with_limit(Some(10))).unwrap();
+        let res = wm
+            .query(&QueryParams::with_tags(["w"]).with_limit(Some(10)))
+            .unwrap();
         let ids: Vec<_> = res.entries.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["c"]);
     }

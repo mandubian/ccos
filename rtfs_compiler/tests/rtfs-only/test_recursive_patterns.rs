@@ -10,9 +10,15 @@ fn test_mutual_recursion_pattern() {
 
     let parsed = parser::parse(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
@@ -31,7 +37,7 @@ fn test_mutual_recursion_pattern() {
     } else {
         panic!("Expected a top-level expression");
     };
-    
+
     let result = match outcome {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
@@ -57,9 +63,15 @@ fn test_nested_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
@@ -74,7 +86,7 @@ fn test_nested_recursion_pattern() {
     let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
-    
+
     let result = match outcome {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
@@ -92,9 +104,15 @@ fn test_higher_order_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
@@ -109,7 +127,7 @@ fn test_higher_order_recursion_pattern() {
     let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
-    
+
     let result = match outcome {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
@@ -127,9 +145,15 @@ fn test_three_way_recursion_pattern() {
 
     let parsed = parser::parse_expression(code).expect("Should parse successfully");
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
@@ -144,7 +168,7 @@ fn test_three_way_recursion_pattern() {
     let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
-    
+
     let result = match outcome {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {

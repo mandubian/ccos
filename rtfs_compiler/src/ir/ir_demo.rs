@@ -1,9 +1,9 @@
 // Example demonstrating AST to IR conversion and optimization
 // This shows the complete pipeline from source code to optimized IR
 
-use crate::ir::enhanced_optimizer::EnhancedOptimizationPipeline;
-use crate::ir::core::{IrNode, IrType, IrLetBinding, NodeId};
 use crate::ast::*;
+use crate::ir::core::{IrLetBinding, IrNode, IrType, NodeId};
+use crate::ir::enhanced_optimizer::EnhancedOptimizationPipeline;
 // use crate::ir_converter::*; // Temporarily disabled
 
 /// Stub implementation for demo purposes
@@ -15,12 +15,13 @@ impl IrConverter {
     pub fn new() -> Self {
         IrConverter { next_id: 1 }
     }
-    
+
     fn next_id(&mut self) -> NodeId {
         let id = self.next_id;
         self.next_id += 1;
         id as NodeId
-    }    /// Create a demo IR node for demonstration
+    }
+    /// Create a demo IR node for demonstration
     pub fn create_demo_ir(&mut self) -> IrNode {
         IrNode::Let {
             id: self.next_id(),
@@ -165,7 +166,7 @@ impl IrConverter {
 /// Demonstrates the complete AST to IR conversion pipeline
 pub fn demonstrate_ir_pipeline() {
     println!("=== Complete IR Pipeline Demonstration ===");
-    
+
     // Example RTFS code to process
     let example_code = r#"
     (let [x 10
@@ -174,26 +175,26 @@ pub fn demonstrate_ir_pipeline() {
         (+ x y)
         (- x y)))
     "#;
-    
+
     println!("Source Code:");
     println!("{}", example_code);
-    
+
     // Step 1: Create demo IR directly (simplified for demonstration)
     let mut converter = IrConverter::new();
     let ir = converter.create_demo_ir();
-    
+
     println!("\n1. IR (simplified representation):");
     print_ir_simplified(&ir);
-      // Step 2: Apply optimizations
+    // Step 2: Apply optimizations
     let mut optimizer = EnhancedOptimizationPipeline::new();
     let optimized_ir = optimizer.optimize(ir);
-    
+
     println!("\n2. Optimized IR:");
     print_ir_simplified(&optimized_ir);
-    
+
     println!("\n3. Optimization Statistics:");
     println!("   {:?}", optimizer.stats());
-    
+
     // Step 3: Show runtime execution differences
     demonstrate_runtime_differences();
 }
@@ -213,31 +214,29 @@ fn create_example_ast() -> Expression {
                 value: Box::new(Expression::Literal(Literal::Integer(20))),
             },
         ],
-        body: vec![
-            Expression::If(IfExpr {
-                condition: Box::new(Expression::FunctionCall {
-                    callee: Box::new(Expression::Symbol(Symbol(">".to_string()))),
-                    arguments: vec![
-                        Expression::Symbol(Symbol("x".to_string())),
-                        Expression::Literal(Literal::Integer(5)),
-                    ],
-                }),
-                then_branch: Box::new(Expression::FunctionCall {
-                    callee: Box::new(Expression::Symbol(Symbol("+".to_string()))),
-                    arguments: vec![
-                        Expression::Symbol(Symbol("x".to_string())),
-                        Expression::Symbol(Symbol("y".to_string())),
-                    ],
-                }),
-                else_branch: Some(Box::new(Expression::FunctionCall {
-                    callee: Box::new(Expression::Symbol(Symbol("-".to_string()))),
-                    arguments: vec![
-                        Expression::Symbol(Symbol("x".to_string())),
-                        Expression::Symbol(Symbol("y".to_string())),
-                    ],
-                })),
+        body: vec![Expression::If(IfExpr {
+            condition: Box::new(Expression::FunctionCall {
+                callee: Box::new(Expression::Symbol(Symbol(">".to_string()))),
+                arguments: vec![
+                    Expression::Symbol(Symbol("x".to_string())),
+                    Expression::Literal(Literal::Integer(5)),
+                ],
             }),
-        ],
+            then_branch: Box::new(Expression::FunctionCall {
+                callee: Box::new(Expression::Symbol(Symbol("+".to_string()))),
+                arguments: vec![
+                    Expression::Symbol(Symbol("x".to_string())),
+                    Expression::Symbol(Symbol("y".to_string())),
+                ],
+            }),
+            else_branch: Some(Box::new(Expression::FunctionCall {
+                callee: Box::new(Expression::Symbol(Symbol("-".to_string()))),
+                arguments: vec![
+                    Expression::Symbol(Symbol("x".to_string())),
+                    Expression::Symbol(Symbol("y".to_string())),
+                ],
+            })),
+        })],
     })
 }
 
@@ -267,7 +266,13 @@ fn print_ast_simplified(expr: &Expression) {
 /// Print a simplified representation of the IR
 fn print_ir_simplified(node: &IrNode) {
     match node {
-        IrNode::Let { id, bindings, body, ir_type, .. } => {
+        IrNode::Let {
+            id,
+            bindings,
+            body,
+            ir_type,
+            ..
+        } => {
             println!("   Let {{");
             println!("     id: {},", id);
             println!("     type: {:?},", ir_type);
@@ -283,10 +288,21 @@ fn print_ir_simplified(node: &IrNode) {
             println!("     ]");
             println!("   }}");
         }
-        IrNode::Literal { id, value, ir_type, .. } => {
-            println!("   Literal {{ id: {}, value: {:?}, type: {:?} }}", id, value, ir_type);
+        IrNode::Literal {
+            id, value, ir_type, ..
+        } => {
+            println!(
+                "   Literal {{ id: {}, value: {:?}, type: {:?} }}",
+                id, value, ir_type
+            );
         }
-        IrNode::Apply { id, function, arguments, ir_type, .. } => {
+        IrNode::Apply {
+            id,
+            function,
+            arguments,
+            ir_type,
+            ..
+        } => {
             println!("   Apply {{");
             println!("     id: {},", id);
             println!("     type: {:?},", ir_type);
@@ -301,39 +317,39 @@ fn print_ir_simplified(node: &IrNode) {
 /// Demonstrate the performance differences between AST and IR runtime
 fn demonstrate_runtime_differences() {
     println!("\n5. Runtime Performance Comparison:");
-    
+
     println!("\nAST Runtime Characteristics:");
     println!("   - Symbol lookup: O(log n) per variable access");
     println!("   - Type checking: Runtime type checks");
     println!("   - Function calls: Dynamic dispatch");
     println!("   - Memory: AST nodes + symbol tables");
-    
+
     println!("\nIR Runtime Characteristics:");
     println!("   - Variable access: O(1) direct binding reference");
     println!("   - Type checking: Compile-time verification");
     println!("   - Function calls: Type-specialized dispatch");
     println!("   - Memory: Optimized IR nodes + pre-computed values");
-    
+
     println!("\nOptimization Benefits:");
     println!("   - Constant folding: (> 10 5) → true, (+ 10 20) → 30");
     println!("   - Dead code elimination: Remove unused branches");
     println!("   - Inlining: Small functions inlined at call sites");
     println!("   - Type specialization: Integer-specific arithmetic");
-    
+
     // Simulated performance metrics
     println!("\nSimulated Performance Metrics:");
     println!("   AST Runtime:");
     println!("     - Variable lookup: 100ns");
-    println!("     - Function call: 200ns"); 
+    println!("     - Function call: 200ns");
     println!("     - Type check: 50ns");
     println!("     - Total for example: ~800ns");
-    
+
     println!("   IR Runtime (optimized):");
     println!("     - Variable access: 10ns");
     println!("     - Inlined operations: 20ns");
     println!("     - Pre-computed constants: 5ns");
     println!("     - Total for example: ~30ns");
-    
+
     println!("   Performance improvement: ~26x faster");
 }
 
@@ -354,23 +370,23 @@ impl PerformanceBenchmark {
             optimization_ratio: 0.0,
         }
     }
-    
+
     pub fn run_ast_benchmark(&mut self, _iterations: usize) {
         // Placeholder for actual benchmarking
         self.ast_time_ns = 1000; // Simulated
     }
-    
+
     pub fn run_ir_benchmark(&mut self, _iterations: usize) {
-        // Placeholder for actual benchmarking  
+        // Placeholder for actual benchmarking
         self.ir_time_ns = 50; // Simulated
     }
-    
+
     pub fn calculate_improvement(&mut self) {
         if self.ir_time_ns > 0 {
             self.optimization_ratio = self.ast_time_ns as f64 / self.ir_time_ns as f64;
         }
     }
-    
+
     pub fn report(&self) {
         println!("Benchmark: {}", self.name);
         println!("  AST Runtime: {}ns", self.ast_time_ns);
@@ -382,7 +398,7 @@ impl PerformanceBenchmark {
 /// Run a suite of performance benchmarks
 pub fn run_benchmark_suite() {
     println!("\n=== Performance Benchmark Suite ===");
-    
+
     let mut benchmarks = vec![
         PerformanceBenchmark::new("Simple Arithmetic".to_string()),
         PerformanceBenchmark::new("Variable Binding".to_string()),
@@ -390,7 +406,7 @@ pub fn run_benchmark_suite() {
         PerformanceBenchmark::new("Control Flow".to_string()),
         PerformanceBenchmark::new("Complex Expression".to_string()),
     ];
-    
+
     for benchmark in &mut benchmarks {
         benchmark.run_ast_benchmark(10000);
         benchmark.run_ir_benchmark(10000);
@@ -398,10 +414,9 @@ pub fn run_benchmark_suite() {
         benchmark.report();
         println!();
     }
-    
-    let avg_improvement: f64 = benchmarks.iter()
-        .map(|b| b.optimization_ratio)
-        .sum::<f64>() / benchmarks.len() as f64;
-    
+
+    let avg_improvement: f64 =
+        benchmarks.iter().map(|b| b.optimization_ratio).sum::<f64>() / benchmarks.len() as f64;
+
     println!("Average Performance Improvement: {:.2}x", avg_improvement);
 }

@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rtfs_compiler::ast::{Keyword, MapKey};
-use rtfs_compiler::runtime::{IrRuntime, ModuleRegistry, RuntimeContext, Value, ExecutionOutcome};
 use rtfs_compiler::ir::converter::IrConverter;
+use rtfs_compiler::runtime::{ExecutionOutcome, IrRuntime, ModuleRegistry, RuntimeContext, Value};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,16 +15,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_else(|| "/tmp/weather.txt".to_string());
 
-    println!("Running examples.mcp-and-fs/run with city='{}', outfile='{}'", city, outfile);
+    println!(
+        "Running examples.mcp-and-fs/run with city='{}', outfile='{}'",
+        city, outfile
+    );
 
     // --- CCOS plumbing: registry, marketplace, causal chain, host, security ---
     // Set up the capability registry and marketplace for external tools (MCP, filesystem).
     let capability_registry = Arc::new(tokio::sync::RwLock::new(
         rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
     ));
-    let marketplace = Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
-        capability_registry.clone(),
-    ));
+    let marketplace = Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+            capability_registry.clone(),
+        ),
+    );
 
     // Register stub MCP tool: mcp.default_mcp_server.get-weather
     // This simulates an MCP server capability that fetches weather data.
@@ -39,7 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut summary = String::from("Unknown");
                 if let Value::List(list) = input {
                     if let Some(Value::Map(map)) = list.get(0) {
-                        if let Some(Value::String(city)) = map.get(&MapKey::Keyword(Keyword("city".to_string()))) {
+                        if let Some(Value::String(city)) =
+                            map.get(&MapKey::Keyword(Keyword("city".to_string())))
+                        {
                             summary = format!("Sunny in {} with 22°C (stub)", city);
                         }
                     }
@@ -68,24 +75,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut content_opt: Option<String> = None;
                 if let Value::List(list) = input {
                     if let Some(Value::Map(map)) = list.get(0) {
-                        if let Some(Value::String(p)) = map.get(&MapKey::Keyword(Keyword("path".to_string()))) {
+                        if let Some(Value::String(p)) =
+                            map.get(&MapKey::Keyword(Keyword("path".to_string())))
+                        {
                             path_opt = Some(p.clone());
                         }
-                        if let Some(Value::String(c)) = map.get(&MapKey::Keyword(Keyword("content".to_string()))) {
+                        if let Some(Value::String(c)) =
+                            map.get(&MapKey::Keyword(Keyword("content".to_string())))
+                        {
                             content_opt = Some(c.clone());
                         }
                     }
                 }
-                let path = path_opt.ok_or_else(|| rtfs_compiler::runtime::error::RuntimeError::Generic(
-                    "fs.write: missing :path".to_string(),
-                ))?;
-                let content = content_opt.ok_or_else(|| rtfs_compiler::runtime::error::RuntimeError::Generic(
-                    "fs.write: missing :content".to_string(),
-                ))?;
-                std::fs::write(&path, &content).map_err(|e| rtfs_compiler::runtime::error::RuntimeError::Generic(format!(
-                    "fs.write error: {}",
-                    e
-                )))?;
+                let path = path_opt.ok_or_else(|| {
+                    rtfs_compiler::runtime::error::RuntimeError::Generic(
+                        "fs.write: missing :path".to_string(),
+                    )
+                })?;
+                let content = content_opt.ok_or_else(|| {
+                    rtfs_compiler::runtime::error::RuntimeError::Generic(
+                        "fs.write: missing :content".to_string(),
+                    )
+                })?;
+                std::fs::write(&path, &content).map_err(|e| {
+                    rtfs_compiler::runtime::error::RuntimeError::Generic(format!(
+                        "fs.write error: {}",
+                        e
+                    ))
+                })?;
                 let mut out = std::collections::HashMap::new();
                 out.insert(
                     MapKey::Keyword(Keyword("bytes-written".to_string())),
@@ -140,7 +157,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Instead of resolving and binding the function manually, parse RTFS source directly that calls the function.
     // This demonstrates direct RTFS execution without manual IR construction.
-    let rtfs_source = format!("(examples.mcp-and-fs/run {{:city \"{}\" :outfile \"{}\"}})", city, outfile);
+    let rtfs_source = format!(
+        "(examples.mcp-and-fs/run {{:city \"{}\" :outfile \"{}\"}})",
+        city, outfile
+    );
     println!("Parsing and executing RTFS source: {}", rtfs_source);
 
     // Parse the RTFS source into AST expression.
@@ -149,7 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Compile AST to IR using IrConverter.
     let mut converter = IrConverter::with_module_registry(&registry);
-    let ir = converter.convert(&ast)
+    let ir = converter
+        .convert(&ast)
         .map_err(|e| format!("Failed to compile to IR: {:?}", e))?;
 
     // Prepare IR environment from stdlib (module functions are resolved via qualified symbols in IR).

@@ -19,8 +19,12 @@ pub struct CheckpointRecord {
 }
 
 impl Archivable for CheckpointRecord {
-    fn entity_id(&self) -> String { self.checkpoint_id.clone() }
-    fn entity_type(&self) -> &'static str { "CheckpointRecord" }
+    fn entity_id(&self) -> String {
+        self.checkpoint_id.clone()
+    }
+    fn entity_type(&self) -> &'static str {
+        "CheckpointRecord"
+    }
 }
 
 /// In-memory checkpoint archive
@@ -34,7 +38,13 @@ pub struct CheckpointArchive {
 }
 
 impl CheckpointArchive {
-    pub fn new() -> Self { Self { storage: InMemoryArchive::new(), id_index: Default::default(), durable_dir: None } }
+    pub fn new() -> Self {
+        Self {
+            storage: InMemoryArchive::new(),
+            id_index: Default::default(),
+            durable_dir: None,
+        }
+    }
 
     /// Enable durable persistence to a directory. Files are named by checkpoint_id with .json extension.
     pub fn with_durable_dir(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -57,8 +67,12 @@ impl CheckpointArchive {
         if let Some(dir) = &self.durable_dir {
             let mut path = dir.clone();
             path.push(format!("{}.json", id));
-            let json = serde_json::to_string_pretty(&self.get_by_id(&id).ok_or_else(|| "not found after insert".to_string())?)
-                .map_err(|e| format!("serde: {}", e))?;
+            let json = serde_json::to_string_pretty(
+                &self
+                    .get_by_id(&id)
+                    .ok_or_else(|| "not found after insert".to_string())?,
+            )
+            .map_err(|e| format!("serde: {}", e))?;
             fs::write(&path, json).map_err(|e| format!("write: {}", e))?;
         }
         Ok(id)
@@ -77,5 +91,3 @@ impl CheckpointArchive {
         serde_json::from_slice::<CheckpointRecord>(&bytes).ok()
     }
 }
-
-

@@ -1,25 +1,25 @@
 // IR Runtime - Efficient execution engine for typed RTFS IR
 // This runtime leverages type information and pre-resolved bindings for performance
 
-use super::execution_outcome::ExecutionOutcome;
 use super::environment::IrEnvironment;
 use super::error::RuntimeError;
+use super::execution_outcome::ExecutionOutcome;
 use super::module_runtime::ModuleRegistry;
-use super::values::{Function, Value, BuiltinFunctionWithContext};
+use super::values::{BuiltinFunctionWithContext, Function, Value};
 use crate::ast::{Expression, Keyword, MapKey};
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::causal_chain::CausalChain;
+use crate::ccos::execution_context::{ContextManager, IsolationLevel};
+use crate::ccos::host::RuntimeHost;
+use crate::ccos::types::ExecutionResult;
 use crate::ir::converter::IrConverter;
 use crate::ir::core::{IrNode, IrPattern};
+use crate::runtime::host_interface::HostInterface;
+use crate::runtime::security::RuntimeContext;
 use crate::runtime::RuntimeStrategy;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::ccos::host::RuntimeHost;
-use crate::runtime::host_interface::HostInterface;
-use crate::ccos::types::ExecutionResult;
-use crate::ccos::execution_context::{ContextManager, IsolationLevel};
-use crate::runtime::security::RuntimeContext;
-use crate::ccos::capability_marketplace::CapabilityMarketplace;
-use crate::ccos::causal_chain::CausalChain;
 // L4AwareDelegationEngine is CCOS-specific, not used in pure RTFS
 
 /// A `RuntimeStrategy` that uses the `IrRuntime`.
@@ -35,18 +35,26 @@ impl IrStrategy {
         // Load stdlib into the module registry if not already loaded
         let _ = crate::runtime::stdlib::load_stdlib(&mut module_registry);
         // Build a minimal host for IR runtime so it can notify the CCOS host about steps
-    let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
-        let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
-        let causal_chain = Arc::new(std::sync::Mutex::new(CausalChain::new().expect("Failed to create causal chain")));
+        let capability_registry = Arc::new(tokio::sync::RwLock::new(
+            crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+        ));
+        let capability_marketplace =
+            Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
+        let causal_chain = Arc::new(std::sync::Mutex::new(
+            CausalChain::new().expect("Failed to create causal chain"),
+        ));
         let security_context = RuntimeContext::pure();
-        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+        let host: Arc<dyn HostInterface> = Arc::new(RuntimeHost::new(
+            causal_chain.clone(),
+            capability_marketplace.clone(),
+            security_context.clone(),
+        ));
 
         Self {
             runtime: IrRuntime::new(host, security_context.clone()),
             module_registry,
         }
     }
-
 }
 
 impl RuntimeStrategy for IrStrategy {
@@ -90,7 +98,7 @@ pub struct IrRuntime {
 impl IrRuntime {
     /// Creates a new IR runtime.
     pub fn new(host: Arc<dyn HostInterface>, security_context: RuntimeContext) -> Self {
-        IrRuntime { 
+        IrRuntime {
             host: host,
             security_context,
             context_manager: RefCell::new(ContextManager::new()),
@@ -99,20 +107,18 @@ impl IrRuntime {
         }
     }
 
-
-
     /// Executes a program by running its top-level forms.
     pub fn execute_program(
         &mut self,
         program_node: &IrNode,
-    _module_registry: &mut ModuleRegistry,
+        _module_registry: &mut ModuleRegistry,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         let forms = match program_node {
             IrNode::Program { forms, .. } => forms,
             _ => return Err(RuntimeError::Generic("Expected Program node".to_string())),
         };
 
-    let mut env = IrEnvironment::with_stdlib(_module_registry)?;
+        let mut env = IrEnvironment::with_stdlib(_module_registry)?;
 
         // First pass: predefine placeholders for any function definitions to support
         // forward references and mutual recursion at the top level.
@@ -161,24 +167,26 @@ impl IrRuntime {
         match node {
             IrNode::Literal { value, .. } => Ok(ExecutionOutcome::Complete(value.clone().into())),
             IrNode::VariableRef { name, .. } => {
-                let val = env
-                    .get(name)
-                    .ok_or_else(|| RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone())))?;
+                let val = env.get(name).ok_or_else(|| {
+                    RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone()))
+                })?;
                 Ok(ExecutionOutcome::Complete(val))
             }
             IrNode::VariableDef {
                 name, init_expr, ..
-            } => {
-                match self.execute_node(init_expr, env, false, module_registry)? {
-                    ExecutionOutcome::Complete(value_to_assign) => {
-                        env.define(name.clone(), value_to_assign);
-                        Ok(ExecutionOutcome::Complete(Value::Nil))
-                    }
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+            } => match self.execute_node(init_expr, env, false, module_registry)? {
+                ExecutionOutcome::Complete(value_to_assign) => {
+                    env.define(name.clone(), value_to_assign);
+                    Ok(ExecutionOutcome::Complete(Value::Nil))
                 }
-            }
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+            },
             IrNode::Lambda {
                 params,
                 variadic_param,
@@ -200,9 +208,9 @@ impl IrRuntime {
                         // mutual recursion), fill it instead of overwriting the binding.
                         if let Some(existing) = env.get(name) {
                             if let Value::FunctionPlaceholder(cell) = existing {
-                                let mut guard = cell
-                                    .write()
-                                    .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                                let mut guard = cell.write().map_err(|e| {
+                                    RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                                })?;
                                 *guard = function_val.clone();
                             } else {
                                 env.define(name.clone(), function_val.clone());
@@ -212,9 +220,13 @@ impl IrRuntime {
                         }
                         Ok(ExecutionOutcome::Complete(function_val))
                     }
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                 }
             }
             IrNode::Apply {
@@ -224,32 +236,42 @@ impl IrRuntime {
             } => self.execute_call(function, arguments, env, is_tail_call, module_registry),
             IrNode::QualifiedSymbolRef { module, symbol, .. } => {
                 let qualified_name = format!("{}/{}", module, symbol);
-                Ok(ExecutionOutcome::Complete(module_registry.resolve_qualified_symbol(&qualified_name)?))
+                Ok(ExecutionOutcome::Complete(
+                    module_registry.resolve_qualified_symbol(&qualified_name)?,
+                ))
             }
             IrNode::If {
                 condition,
                 then_branch,
                 else_branch,
                 ..
-            } => {
-                match self.execute_node(condition, env, false, module_registry)? {
-                    ExecutionOutcome::Complete(cond_value) => {
-                        if self.recursion_depth < 64 { eprintln!("[IR] If cond => {}", cond_value); }
-                        if cond_value.is_truthy() {
-                            if self.recursion_depth < 64 { eprintln!("[IR] If then-branch"); }
-                            self.execute_node(then_branch, env, is_tail_call, module_registry)
-                        } else if let Some(alternative) = else_branch {
-                            if self.recursion_depth < 64 { eprintln!("[IR] If else-branch"); }
-                            self.execute_node(alternative, env, is_tail_call, module_registry)
-                        } else {
-                            Ok(ExecutionOutcome::Complete(Value::Nil))
-                        }
+            } => match self.execute_node(condition, env, false, module_registry)? {
+                ExecutionOutcome::Complete(cond_value) => {
+                    if self.recursion_depth < 64 {
+                        eprintln!("[IR] If cond => {}", cond_value);
                     }
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    if cond_value.is_truthy() {
+                        if self.recursion_depth < 64 {
+                            eprintln!("[IR] If then-branch");
+                        }
+                        self.execute_node(then_branch, env, is_tail_call, module_registry)
+                    } else if let Some(alternative) = else_branch {
+                        if self.recursion_depth < 64 {
+                            eprintln!("[IR] If else-branch");
+                        }
+                        self.execute_node(alternative, env, is_tail_call, module_registry)
+                    } else {
+                        Ok(ExecutionOutcome::Complete(Value::Nil))
+                    }
                 }
-            }
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+            },
             IrNode::Import { module_name, .. } => {
                 match self.execute_import(module_name, env, module_registry) {
                     Ok(value) => Ok(ExecutionOutcome::Complete(value)),
@@ -262,11 +284,17 @@ impl IrRuntime {
                 for def in definitions {
                     match self.execute_node(def, env, false, module_registry)? {
                         ExecutionOutcome::Complete(_) => {}
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Nil))
@@ -278,11 +306,17 @@ impl IrRuntime {
                 for expr in expressions {
                     match self.execute_node(expr, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Ok(ExecutionOutcome::Complete(result))
@@ -294,7 +328,8 @@ impl IrRuntime {
                 for binding in bindings {
                     if let IrNode::VariableBinding { name, .. } = &binding.pattern {
                         if let IrNode::Lambda { .. } = &binding.init_expr {
-                            let placeholder_cell = std::sync::Arc::new(std::sync::RwLock::new(Value::Nil));
+                            let placeholder_cell =
+                                std::sync::Arc::new(std::sync::RwLock::new(Value::Nil));
                             env.define(
                                 name.clone(),
                                 Value::FunctionPlaceholder(placeholder_cell.clone()),
@@ -305,20 +340,20 @@ impl IrRuntime {
                 }
                 // Second pass: evaluate all function bindings and update placeholders
                 for (name, lambda_node, placeholder_cell) in &placeholders {
-                        match self.execute_node(lambda_node, env, false, module_registry)? {
-                            ExecutionOutcome::Complete(value) => {
-                                if matches!(value, Value::Function(_)) {
-                                let mut guard = placeholder_cell
-                                    .write()
-                                    .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                                    *guard = value;
-                                } else {
-                                    return Err(RuntimeError::Generic(format!(
-                                        "letrec: expected function for {}",
-                                        name
-                                    )));
-                                }
+                    match self.execute_node(lambda_node, env, false, module_registry)? {
+                        ExecutionOutcome::Complete(value) => {
+                            if matches!(value, Value::Function(_)) {
+                                let mut guard = placeholder_cell.write().map_err(|e| {
+                                    RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                                })?;
+                                *guard = value;
+                            } else {
+                                return Err(RuntimeError::Generic(format!(
+                                    "letrec: expected function for {}",
+                                    name
+                                )));
                             }
+                        }
                         ExecutionOutcome::RequiresHost(host_call) => {
                             return Ok(ExecutionOutcome::RequiresHost(host_call))
                         }
@@ -330,47 +365,87 @@ impl IrRuntime {
                         ExecutionOutcome::RequiresHost(host_call) => {
                             return Ok(ExecutionOutcome::RequiresHost(host_call))
                         }
-                        }
+                    }
                 }
                 // Now handle non-function bindings as usual
                 for binding in bindings {
                     match &binding.pattern {
                         IrNode::VariableBinding { name, .. } => {
                             if !placeholders.iter().any(|(n, _, _)| n == name) {
-                                match self.execute_node(&binding.init_expr, env, false, module_registry)? {
-                                    ExecutionOutcome::Complete(value) => env.define(name.clone(), value),
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                match self.execute_node(
+                                    &binding.init_expr,
+                                    env,
+                                    false,
+                                    module_registry,
+                                )? {
+                                    ExecutionOutcome::Complete(value) => {
+                                        env.define(name.clone(), value)
+                                    }
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
                                     #[cfg(feature = "effect-boundary")]
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
                                     #[cfg(feature = "effect-boundary")]
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
                                 }
                             }
                         }
                         IrNode::Destructure { pattern, .. } => {
-                            match self.execute_node(&binding.init_expr, env, false, module_registry)? {
+                            match self.execute_node(
+                                &binding.init_expr,
+                                env,
+                                false,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(value) => {
-                                    self.execute_destructure(pattern, &value, env, module_registry)?;
+                                    self.execute_destructure(
+                                        pattern,
+                                        &value,
+                                        env,
+                                        module_registry,
+                                    )?;
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                                 #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                                 #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         _ => {
                             // For other pattern types, just evaluate the init_expr
-                            match self.execute_node(&binding.init_expr, env, false, module_registry)? {
+                            match self.execute_node(
+                                &binding.init_expr,
+                                env,
+                                false,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(value) => {
                                     // Could add more specific handling here if needed
                                     let _ = value;
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                                 #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                                 #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                     }
@@ -380,11 +455,17 @@ impl IrRuntime {
                 for expr in body {
                     match self.execute_node(expr, env, is_tail_call, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Ok(ExecutionOutcome::Complete(result))
@@ -394,11 +475,17 @@ impl IrRuntime {
                 for elem in elements {
                     match self.execute_node(elem, env, false, module_registry)? {
                         ExecutionOutcome::Complete(val) => values.push(val),
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Vector(values)))
@@ -408,20 +495,33 @@ impl IrRuntime {
                 for entry in entries {
                     let key = match self.execute_node(&entry.key, env, false, module_registry)? {
                         ExecutionOutcome::Complete(val) => val,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     };
-                    let value = match self.execute_node(&entry.value, env, false, module_registry)? {
-                        ExecutionOutcome::Complete(val) => val,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    };
+                    let value =
+                        match self.execute_node(&entry.value, env, false, module_registry)? {
+                            ExecutionOutcome::Complete(val) => val,
+                            ExecutionOutcome::RequiresHost(host_call) => {
+                                return Ok(ExecutionOutcome::RequiresHost(host_call))
+                            }
+                            #[cfg(feature = "effect-boundary")]
+                            ExecutionOutcome::RequiresHost(host_call) => {
+                                return Ok(ExecutionOutcome::RequiresHost(host_call))
+                            }
+                            #[cfg(feature = "effect-boundary")]
+                            ExecutionOutcome::RequiresHost(host_call) => {
+                                return Ok(ExecutionOutcome::RequiresHost(host_call))
+                            }
+                        };
                     // Convert key to MapKey format
                     let map_key = match key {
                         Value::Keyword(k) => MapKey::Keyword(k),
@@ -440,25 +540,38 @@ impl IrRuntime {
             } => {
                 let value = match self.execute_node(expression, env, false, module_registry)? {
                     ExecutionOutcome::Complete(val) => val,
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                 };
                 // For now, implement basic pattern matching
                 for clause in clauses {
                     // Simple implementation - just check if pattern matches
                     if self.pattern_matches(&clause.pattern, &value)? {
                         if let Some(guard) = &clause.guard {
-                            let guard_result = match self.execute_node(guard, env, false, module_registry)? {
-                                ExecutionOutcome::Complete(val) => val,
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                            };
+                            let guard_result =
+                                match self.execute_node(guard, env, false, module_registry)? {
+                                    ExecutionOutcome::Complete(val) => val,
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                    #[cfg(feature = "effect-boundary")]
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                    #[cfg(feature = "effect-boundary")]
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                };
                             if !guard_result.is_truthy() {
                                 continue;
                             }
@@ -500,9 +613,9 @@ impl IrRuntime {
                 match try_result {
                     Ok(value) => {
                         // Success path: run finally if present, propagate finally error if it fails
-                if let Some(finally) = finally_body {
-                    for expr in finally {
-                        match self.execute_node(expr, env, false, module_registry)? {
+                        if let Some(finally) = finally_body {
+                            for expr in finally {
+                                match self.execute_node(expr, env, false, module_registry)? {
                                     ExecutionOutcome::Complete(_) => {}
                                     ExecutionOutcome::RequiresHost(host_call) => {
                                         return Ok(ExecutionOutcome::RequiresHost(host_call));
@@ -541,7 +654,12 @@ impl IrRuntime {
                                 // Execute catch body; on error, run finally then return that error
                                 let mut catch_value = Value::Nil;
                                 for expr in &clause.body {
-                                    match self.execute_node(expr, &mut catch_env, false, module_registry) {
+                                    match self.execute_node(
+                                        expr,
+                                        &mut catch_env,
+                                        false,
+                                        module_registry,
+                                    ) {
                                         Ok(ExecutionOutcome::Complete(v)) => {
                                             catch_value = v;
                                         }
@@ -556,14 +674,31 @@ impl IrRuntime {
                                             // Run finally then return catch error
                                             if let Some(finally) = finally_body {
                                                 for fexpr in finally {
-                                                    match self.execute_node(fexpr, env, false, module_registry)? {
+                                                    match self.execute_node(
+                                                        fexpr,
+                                                        env,
+                                                        false,
+                                                        module_registry,
+                                                    )? {
                                                         ExecutionOutcome::Complete(_) => {}
-                                                        ExecutionOutcome::RequiresHost(host_call) => {
-                                                            return Ok(ExecutionOutcome::RequiresHost(host_call));
+                                                        ExecutionOutcome::RequiresHost(
+                                                            host_call,
+                                                        ) => {
+                                                            return Ok(
+                                                                ExecutionOutcome::RequiresHost(
+                                                                    host_call,
+                                                                ),
+                                                            );
                                                         }
                                                         #[cfg(feature = "effect-boundary")]
-                                                        ExecutionOutcome::RequiresHost(host_call) => {
-                                                            return Ok(ExecutionOutcome::RequiresHost(host_call));
+                                                        ExecutionOutcome::RequiresHost(
+                                                            host_call,
+                                                        ) => {
+                                                            return Ok(
+                                                                ExecutionOutcome::RequiresHost(
+                                                                    host_call,
+                                                                ),
+                                                            );
                                                         }
                                                     }
                                                 }
@@ -576,14 +711,23 @@ impl IrRuntime {
                                 // Success in catch: run finally (in original env) then return value
                                 if let Some(finally) = finally_body {
                                     for fexpr in finally {
-                                        match self.execute_node(fexpr, env, false, module_registry)? {
+                                        match self.execute_node(
+                                            fexpr,
+                                            env,
+                                            false,
+                                            module_registry,
+                                        )? {
                                             ExecutionOutcome::Complete(_) => {}
                                             ExecutionOutcome::RequiresHost(host_call) => {
-                                                return Ok(ExecutionOutcome::RequiresHost(host_call));
+                                                return Ok(ExecutionOutcome::RequiresHost(
+                                                    host_call,
+                                                ));
                                             }
                                             #[cfg(feature = "effect-boundary")]
                                             ExecutionOutcome::RequiresHost(host_call) => {
-                                                return Ok(ExecutionOutcome::RequiresHost(host_call));
+                                                return Ok(ExecutionOutcome::RequiresHost(
+                                                    host_call,
+                                                ));
                                             }
                                         }
                                     }
@@ -626,21 +770,24 @@ impl IrRuntime {
                             if let IrNode::VariableBinding { name, .. } = &binding.binding {
                                 results.insert(MapKey::Keyword(Keyword(name.clone())), value);
                             }
-                        },
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        }
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Ok(ExecutionOutcome::Complete(Value::Map(results)))
             }
             IrNode::WithResource {
-                
-                init_expr,
-                body,
-                ..
+                init_expr, body, ..
             } => {
                 match self.execute_node(init_expr, env, false, module_registry)? {
                     ExecutionOutcome::Complete(_resource) => {
@@ -649,41 +796,72 @@ impl IrRuntime {
                         for expr in body {
                             match self.execute_node(expr, env, false, module_registry)? {
                                 ExecutionOutcome::Complete(value) => result = value,
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         Ok(ExecutionOutcome::Complete(result))
-                    },
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                 }
             }
-            IrNode::LogStep {  values, .. } => {
+            IrNode::LogStep { values, .. } => {
                 // Execute values and log them
                 let mut log_values = Vec::new();
                 for value_expr in values {
                     match self.execute_node(value_expr, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => log_values.push(value),
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 // For now, just return the last value
-                Ok(ExecutionOutcome::Complete(log_values.last().cloned().unwrap_or(Value::Nil)))
+                Ok(ExecutionOutcome::Complete(
+                    log_values.last().cloned().unwrap_or(Value::Nil),
+                ))
             }
 
-            IrNode::Step { name, expose_override, context_keys_override, params, body, .. } => {
+            IrNode::Step {
+                name,
+                expose_override,
+                context_keys_override,
+                params,
+                body,
+                ..
+            } => {
                 // 1. Enforce isolation policy and enter step context (mirror AST evaluator)
-                if !self.security_context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::Inherit) {
-                    return Err(RuntimeError::Generic(format!("Isolation level not permitted: Inherit under {:?}", self.security_context.security_level)));
+                if !self
+                    .security_context
+                    .is_isolation_allowed(&crate::runtime::security::IsolationLevel::Inherit)
+                {
+                    return Err(RuntimeError::Generic(format!(
+                        "Isolation level not permitted: Inherit under {:?}",
+                        self.security_context.security_level
+                    )));
                 }
                 let mut cm = self.context_manager.borrow_mut();
                 let _ = cm.enter_step(name, IsolationLevel::Inherit)?;
@@ -701,7 +879,9 @@ impl IrRuntime {
                                 // Clear context and return error
                                 let mut cm = self.context_manager.borrow_mut();
                                 let _ = cm.exit_step();
-                                return Err(RuntimeError::Generic(":expose override must be a boolean literal".to_string()));
+                                return Err(RuntimeError::Generic(
+                                    ":expose override must be a boolean literal".to_string(),
+                                ));
                             }
                         },
                         other => {
@@ -712,7 +892,10 @@ impl IrRuntime {
                                     _ => {
                                         let mut cm = self.context_manager.borrow_mut();
                                         let _ = cm.exit_step();
-                                        return Err(RuntimeError::Generic(":expose override must evaluate to a boolean".to_string()));
+                                        return Err(RuntimeError::Generic(
+                                            ":expose override must evaluate to a boolean"
+                                                .to_string(),
+                                        ));
                                     }
                                 },
                                 ExecutionOutcome::RequiresHost(host_call) => {
@@ -733,14 +916,14 @@ impl IrRuntime {
                                 for e in elements {
                                     match self.execute_node(e, env, false, module_registry)? {
                                         ExecutionOutcome::Complete(v) => {
-                                            if let Value::String(s) = v { 
-                                                keys.push(s); 
+                                            if let Value::String(s) = v {
+                                                keys.push(s);
                                             } else {
                                                 let mut cm = self.context_manager.borrow_mut();
                                                 let _ = cm.exit_step();
                                                 return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string()));
                                             }
-                                        },
+                                        }
                                         ExecutionOutcome::RequiresHost(host_call) => {
                                             let mut cm = self.context_manager.borrow_mut();
                                             let _ = cm.exit_step();
@@ -757,7 +940,10 @@ impl IrRuntime {
                                 } else {
                                     let mut cm = self.context_manager.borrow_mut();
                                     let _ = cm.exit_step();
-                                    return Err(RuntimeError::Generic(":context-keys override must be a vector or string literal".to_string()));
+                                    return Err(RuntimeError::Generic(
+                                        ":context-keys override must be a vector or string literal"
+                                            .to_string(),
+                                    ));
                                 }
                             }
                             other => {
@@ -766,21 +952,21 @@ impl IrRuntime {
                                     ExecutionOutcome::Complete(v) => match v {
                                         Value::Vector(vec) => {
                                             let mut keys = Vec::new();
-                                            for item in vec { 
-                                                if let Value::String(s) = item { 
-                                                    keys.push(s); 
-                                                } else { 
-                                                    let mut cm = self.context_manager.borrow_mut(); 
-                                                    let _ = cm.exit_step(); 
-                                                    return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string())); 
-                                                } 
+                                            for item in vec {
+                                                if let Value::String(s) = item {
+                                                    keys.push(s);
+                                                } else {
+                                                    let mut cm = self.context_manager.borrow_mut();
+                                                    let _ = cm.exit_step();
+                                                    return Err(RuntimeError::Generic(":context-keys override must be a vector of strings".to_string()));
+                                                }
                                             }
                                             context_keys = Some(keys);
                                         }
-                                        _ => { 
-                                            let mut cm = self.context_manager.borrow_mut(); 
-                                            let _ = cm.exit_step(); 
-                                            return Err(RuntimeError::Generic(":context-keys override must evaluate to a vector of strings".to_string())); 
+                                        _ => {
+                                            let mut cm = self.context_manager.borrow_mut();
+                                            let _ = cm.exit_step();
+                                            return Err(RuntimeError::Generic(":context-keys override must evaluate to a vector of strings".to_string()));
                                         }
                                     },
                                     ExecutionOutcome::RequiresHost(host_call) => {
@@ -793,7 +979,8 @@ impl IrRuntime {
                         }
                     }
 
-                    self.host.set_step_exposure_override(expose_val, context_keys);
+                    self.host
+                        .set_step_exposure_override(expose_val, context_keys);
                 }
 
                 // 2. Notify host that step has started
@@ -802,7 +989,10 @@ impl IrRuntime {
                     Err(e) => {
                         let mut cm = self.context_manager.borrow_mut();
                         let _ = cm.exit_step();
-                        return Err(RuntimeError::Generic(format!("Host notify_step_started failed: {:?}", e)));
+                        return Err(RuntimeError::Generic(format!(
+                            "Host notify_step_started failed: {:?}",
+                            e
+                        )));
                     }
                 };
 
@@ -817,11 +1007,16 @@ impl IrRuntime {
                             let mut map = HashMap::new();
                             for entry in entries {
                                 // keys and values are IR nodes; evaluate both
-                                let key_result = self.execute_node(&entry.key, env, false, module_registry);
-                                let value_result = self.execute_node(&entry.value, env, false, module_registry);
-                                
+                                let key_result =
+                                    self.execute_node(&entry.key, env, false, module_registry);
+                                let value_result =
+                                    self.execute_node(&entry.value, env, false, module_registry);
+
                                 match (key_result, value_result) {
-                                    (Ok(ExecutionOutcome::Complete(key_val)), Ok(ExecutionOutcome::Complete(value_val))) => {
+                                    (
+                                        Ok(ExecutionOutcome::Complete(key_val)),
+                                        Ok(ExecutionOutcome::Complete(value_val)),
+                                    ) => {
                                         // Allow string or keyword keys for :params to be flexible
                                         let map_key = match key_val {
                                             Value::String(s) => crate::ast::MapKey::String(s),
@@ -836,15 +1031,21 @@ impl IrRuntime {
                                         };
                                         map.insert(map_key, value_val);
                                     }
-                                    (Ok(ExecutionOutcome::RequiresHost(host_call)), _) | (_, Ok(ExecutionOutcome::RequiresHost(host_call))) => {
-                                        let _ = self.host.notify_step_failed(&step_action_id, "Host call required during params evaluation");
+                                    (Ok(ExecutionOutcome::RequiresHost(host_call)), _)
+                                    | (_, Ok(ExecutionOutcome::RequiresHost(host_call))) => {
+                                        let _ = self.host.notify_step_failed(
+                                            &step_action_id,
+                                            "Host call required during params evaluation",
+                                        );
                                         let mut cm = self.context_manager.borrow_mut();
                                         let _ = cm.exit_step();
                                         self.host.clear_step_exposure_override();
                                         return Ok(ExecutionOutcome::RequiresHost(host_call));
                                     }
                                     (Err(e), _) | (_, Err(e)) => {
-                                        let _ = self.host.notify_step_failed(&step_action_id, &e.to_string());
+                                        let _ = self
+                                            .host
+                                            .notify_step_failed(&step_action_id, &e.to_string());
                                         let mut cm = self.context_manager.borrow_mut();
                                         let _ = cm.exit_step();
                                         self.host.clear_step_exposure_override();
@@ -855,7 +1056,8 @@ impl IrRuntime {
                             param_map = Some(map);
                         }
                         other => {
-                            let msg = format!("Expected map node for :params, found {:?}", other.id());
+                            let msg =
+                                format!("Expected map node for :params, found {:?}", other.id());
                             let _ = self.host.notify_step_failed(&step_action_id, &msg);
                             let mut cm = self.context_manager.borrow_mut();
                             let _ = cm.exit_step();
@@ -872,7 +1074,9 @@ impl IrRuntime {
                     // Insert %params binding
                     let mut ast_map = HashMap::new();
                     if let Some(ref m) = param_map {
-                        for (k, v) in m.iter() { ast_map.insert(k.clone(), v.clone()); }
+                        for (k, v) in m.iter() {
+                            ast_map.insert(k.clone(), v.clone());
+                        }
                     }
                     c.define("%params".to_string(), Value::Map(ast_map));
                     child_env_opt = Some(c);
@@ -894,7 +1098,10 @@ impl IrRuntime {
                         Ok(ExecutionOutcome::Complete(v)) => last_result = v,
                         Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                             // Notify host of interruption, exit step context and clear override
-                            let _ = self.host.notify_step_failed(&step_action_id, "Host call required during step execution");
+                            let _ = self.host.notify_step_failed(
+                                &step_action_id,
+                                "Host call required during step execution",
+                            );
                             let mut cm = self.context_manager.borrow_mut();
                             let _ = cm.exit_step();
                             self.host.clear_step_exposure_override();
@@ -902,7 +1109,9 @@ impl IrRuntime {
                         }
                         Err(e) => {
                             // Notify host of failure, exit step context and clear override
-                            let _ = self.host.notify_step_failed(&step_action_id, &e.to_string());
+                            let _ = self
+                                .host
+                                .notify_step_failed(&step_action_id, &e.to_string());
                             let mut cm = self.context_manager.borrow_mut();
                             let _ = cm.exit_step();
                             self.host.clear_step_exposure_override();
@@ -912,8 +1121,14 @@ impl IrRuntime {
                 }
 
                 // 3. Notify host of successful completion
-                let exec_result = ExecutionResult { success: true, value: last_result.clone(), metadata: Default::default() };
-                let _ = self.host.notify_step_completed(&step_action_id, &exec_result);
+                let exec_result = ExecutionResult {
+                    success: true,
+                    value: last_result.clone(),
+                    metadata: Default::default(),
+                };
+                let _ = self
+                    .host
+                    .notify_step_completed(&step_action_id, &exec_result);
 
                 // 4. Exit step context and clear override
                 let mut cm = self.context_manager.borrow_mut();
@@ -926,10 +1141,16 @@ impl IrRuntime {
             IrNode::DiscoverAgents { criteria, .. } => {
                 // Execute criteria and return empty vector for now
                 match self.execute_node(criteria, env, false, module_registry)? {
-                    ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(vec![]))),
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::Complete(_) => {
+                        Ok(ExecutionOutcome::Complete(Value::Vector(vec![])))
+                    }
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                 }
             }
             IrNode::ResourceRef { name, .. } => {
@@ -938,7 +1159,10 @@ impl IrRuntime {
                     Some(value) => Ok(ExecutionOutcome::Complete(value)),
                     None => {
                         // If not found in context, return the resource name as a string for backward compatibility
-                        Ok(ExecutionOutcome::Complete(Value::String(format!("@{}", name))))
+                        Ok(ExecutionOutcome::Complete(Value::String(format!(
+                            "@{}",
+                            name
+                        ))))
                     }
                 }
             }
@@ -951,10 +1175,14 @@ impl IrRuntime {
                     ExecutionOutcome::Complete(val) => {
                         self.execute_destructure(pattern, &val, env, module_registry)?;
                         Ok(ExecutionOutcome::Complete(Value::Nil))
-                    },
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    }
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+                    ExecutionOutcome::RequiresHost(host_call) => {
+                        Ok(ExecutionOutcome::RequiresHost(host_call))
+                    }
                 }
             }
             IrNode::Program { forms, .. } => {
@@ -965,11 +1193,17 @@ impl IrRuntime {
                 for form in forms {
                     match self.execute_node(form, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => result = value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Ok(ExecutionOutcome::Complete(result))
@@ -1026,7 +1260,12 @@ impl IrRuntime {
     ) -> Result<Value, RuntimeError> {
         let module = module_registry.load_module(module_name, self)?;
 
-    for (name, value) in module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
+        for (name, value) in module
+            .exports
+            .read()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+            .iter()
+        {
             env.define(name.clone(), value.value.clone());
         }
 
@@ -1043,22 +1282,34 @@ impl IrRuntime {
     ) -> Result<ExecutionOutcome, RuntimeError> {
         let callee_val = match self.execute_node(callee_node, env, false, module_registry)? {
             ExecutionOutcome::Complete(val) => val,
-            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+            ExecutionOutcome::RequiresHost(host_call) => {
+                return Ok(ExecutionOutcome::RequiresHost(host_call))
+            }
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(host_call) => {
+                return Ok(ExecutionOutcome::RequiresHost(host_call))
+            }
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(host_call) => {
+                return Ok(ExecutionOutcome::RequiresHost(host_call))
+            }
         };
 
         let mut args = Vec::new();
         for arg_node in arg_nodes {
             match self.execute_node(arg_node, env, false, module_registry)? {
                 ExecutionOutcome::Complete(val) => args.push(val),
-                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
             }
         }
 
@@ -1075,23 +1326,49 @@ impl IrRuntime {
     ) -> Result<ExecutionOutcome, RuntimeError> {
         match function {
             Value::FunctionPlaceholder(cell) => {
-                let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                let guard = cell
+                    .read()
+                    .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
                 let actual = guard.clone();
                 self.apply_function(actual, args, env, _is_tail_call, module_registry)
             }
             Value::Function(ref f) => {
                 if self.recursion_depth < 64 {
                     match f {
-                        Function::Builtin(b) => eprintln!("[IR] depth={} apply builtin {} with {} args", self.recursion_depth, b.name, args.len()),
-                        Function::BuiltinWithContext(b) => eprintln!("[IR] depth={} apply builtin-ctx {} with {} args", self.recursion_depth, b.name, args.len()),
-                        Function::Closure(_) => eprintln!("[IR] depth={} apply closure with {} args", self.recursion_depth, args.len()),
-                        Function::Ir(_) => eprintln!("[IR] depth={} apply ir-lambda with {} args", self.recursion_depth, args.len()),
-                        Function::Native(_) => eprintln!("[IR] depth={} apply native with {} args", self.recursion_depth, args.len()),
+                        Function::Builtin(b) => eprintln!(
+                            "[IR] depth={} apply builtin {} with {} args",
+                            self.recursion_depth,
+                            b.name,
+                            args.len()
+                        ),
+                        Function::BuiltinWithContext(b) => eprintln!(
+                            "[IR] depth={} apply builtin-ctx {} with {} args",
+                            self.recursion_depth,
+                            b.name,
+                            args.len()
+                        ),
+                        Function::Closure(_) => eprintln!(
+                            "[IR] depth={} apply closure with {} args",
+                            self.recursion_depth,
+                            args.len()
+                        ),
+                        Function::Ir(_) => eprintln!(
+                            "[IR] depth={} apply ir-lambda with {} args",
+                            self.recursion_depth,
+                            args.len()
+                        ),
+                        Function::Native(_) => eprintln!(
+                            "[IR] depth={} apply native with {} args",
+                            self.recursion_depth,
+                            args.len()
+                        ),
                     }
                 }
                 // Execute based on function variant
                 match f {
-                    Function::Native(native_fn) => Ok(ExecutionOutcome::Complete((native_fn.func)(args.to_vec())?)),
+                    Function::Native(native_fn) => {
+                        Ok(ExecutionOutcome::Complete((native_fn.func)(args.to_vec())?))
+                    }
                     Function::Builtin(builtin_fn) => {
                         // Special handling for map function to support user-defined functions
                         if builtin_fn.name == "map" && args.len() == 2 {
@@ -1102,13 +1379,20 @@ impl IrRuntime {
                                 module_registry,
                             )
                         } else {
-                            Ok(ExecutionOutcome::Complete((builtin_fn.func)(args.to_vec())?))
+                            Ok(ExecutionOutcome::Complete((builtin_fn.func)(
+                                args.to_vec(),
+                            )?))
                         }
                     }
                     Function::BuiltinWithContext(builtin_fn) => {
                         // Implement BuiltinWithContext functions in IR runtime
                         // These functions need access to the execution context to handle user-defined functions
-                        self.execute_builtin_with_context(builtin_fn, args.to_vec(), env, module_registry)
+                        self.execute_builtin_with_context(
+                            builtin_fn,
+                            args.to_vec(),
+                            env,
+                            module_registry,
+                        )
                     }
                     Function::Ir(ir_func) => {
                         // Execute IR lambda locally (no delegation for simple functional constructs)
@@ -1119,7 +1403,7 @@ impl IrRuntime {
                         self.apply_closure(closure, args, env, module_registry)
                     }
                 }
-            },
+            }
             Value::Keyword(keyword) => {
                 // Keywords act as functions: (:key map) is equivalent to (get map :key)
                 if args.len() == 1 {
@@ -1131,7 +1415,9 @@ impl IrRuntime {
                                 Ok(ExecutionOutcome::Complete(v.clone()))
                             } else {
                                 let map_key_str = crate::ast::MapKey::String(keyword.0.clone());
-                                Ok(ExecutionOutcome::Complete(map.get(&map_key_str).cloned().unwrap_or(Value::Nil)))
+                                Ok(ExecutionOutcome::Complete(
+                                    map.get(&map_key_str).cloned().unwrap_or(Value::Nil),
+                                ))
                             }
                         }
                         _ => Err(RuntimeError::TypeError {
@@ -1149,7 +1435,9 @@ impl IrRuntime {
                                 Ok(ExecutionOutcome::Complete(v.clone()))
                             } else {
                                 let map_key_str = crate::ast::MapKey::String(keyword.0.clone());
-                                Ok(ExecutionOutcome::Complete(map.get(&map_key_str).cloned().unwrap_or(args[1].clone())))
+                                Ok(ExecutionOutcome::Complete(
+                                    map.get(&map_key_str).cloned().unwrap_or(args[1].clone()),
+                                ))
                             }
                         }
                         _ => Err(RuntimeError::TypeError {
@@ -1181,11 +1469,11 @@ impl IrRuntime {
         _env: &mut IrEnvironment,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         // Convert arguments to a prompt string
-    let _prompt = self.args_to_prompt(args)?;
-        
+        let _prompt = self.args_to_prompt(args)?;
+
         // Model execution is now handled by CCOS through yield-based control flow
         // This method should not be called in the new architecture
-        
+
         // Call the model (placeholder implementation)
         let response = format!("[Model inference placeholder for {}]", model_id);
         // TODO: Replace with actual model inference
@@ -1195,7 +1483,7 @@ impl IrRuntime {
                 format!("Model inference failed: {}", e)
             ))?;
         */
-        
+
         // Convert response back to RTFS value
         Ok(ExecutionOutcome::Complete(Value::String(response)))
     }
@@ -1203,7 +1491,7 @@ impl IrRuntime {
     #[allow(dead_code)]
     fn args_to_prompt(&self, args: &[Value]) -> Result<String, RuntimeError> {
         let mut prompt_parts = Vec::new();
-        
+
         for (i, arg) in args.iter().enumerate() {
             let arg_str = match arg {
                 Value::String(s) => s.clone(),
@@ -1212,7 +1500,8 @@ impl IrRuntime {
                 Value::Boolean(b) => b.to_string(),
                 Value::Nil => "nil".to_string(),
                 Value::Vector(v) => {
-                    let elements: Vec<String> = v.iter()
+                    let elements: Vec<String> = v
+                        .iter()
                         .map(|v| match v {
                             Value::String(s) => s.clone(),
                             Value::Integer(n) => n.to_string(),
@@ -1228,7 +1517,7 @@ impl IrRuntime {
             };
             prompt_parts.push(format!("arg{}: {}", i, arg_str));
         }
-        
+
         Ok(prompt_parts.join("; "))
     }
 
@@ -1270,11 +1559,17 @@ impl IrRuntime {
                         module_registry,
                     )? {
                         ExecutionOutcome::Complete(value) => result.push(value),
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Value::Function(Function::Native(native_func)) => {
@@ -1294,11 +1589,17 @@ impl IrRuntime {
                         module_registry,
                     )? {
                         ExecutionOutcome::Complete(value) => result.push(value),
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 _ => {
@@ -1334,14 +1635,23 @@ impl IrRuntime {
         self.recursion_depth += 1;
         if self.recursion_depth < 64 {
             if args.len() == 1 {
-                eprintln!("[IR] depth={} enter ir-lambda arg0={}", self.recursion_depth, args[0]);
+                eprintln!(
+                    "[IR] depth={} enter ir-lambda arg0={}",
+                    self.recursion_depth, args[0]
+                );
             } else {
-                eprintln!("[IR] depth={} enter ir-lambda with {} args", self.recursion_depth, args.len());
+                eprintln!(
+                    "[IR] depth={} enter ir-lambda with {} args",
+                    self.recursion_depth,
+                    args.len()
+                );
             }
         }
 
         // Build initial call environment from the closure's captured env (if any)
-        let parent_env = if !ir_func.closure_env.binding_names().is_empty() || ir_func.closure_env.has_parent() {
+        let parent_env = if !ir_func.closure_env.binding_names().is_empty()
+            || ir_func.closure_env.has_parent()
+        {
             Arc::new((*ir_func.closure_env).clone())
         } else {
             Arc::new(env.clone())
@@ -1353,10 +1663,18 @@ impl IrRuntime {
         for param in &ir_func.params {
             match param {
                 IrNode::Param { binding, .. } => match &**binding {
-                        IrNode::VariableBinding { name, .. } => param_names.push(name.clone()),
-                    _ => return Err(RuntimeError::Generic("Unsupported IR param pattern in IR lambda".to_string())),
+                    IrNode::VariableBinding { name, .. } => param_names.push(name.clone()),
+                    _ => {
+                        return Err(RuntimeError::Generic(
+                            "Unsupported IR param pattern in IR lambda".to_string(),
+                        ))
+                    }
                 },
-                _ => return Err(RuntimeError::Generic("Invalid IR lambda param node".to_string())),
+                _ => {
+                    return Err(RuntimeError::Generic(
+                        "Invalid IR lambda param node".to_string(),
+                    ))
+                }
             }
         }
         let variadic_name: Option<String> = match &ir_func.variadic_param {
@@ -1374,12 +1692,12 @@ impl IrRuntime {
         if variadic_name.is_some() {
             if args.len() < fixed_arity {
                 self.recursion_depth -= 1;
-            return Err(RuntimeError::ArityMismatch {
-                function: "ir-lambda".to_string(),
+                return Err(RuntimeError::ArityMismatch {
+                    function: "ir-lambda".to_string(),
                     expected: format!("at least {}", fixed_arity),
-                actual: args.len(),
-            });
-        }
+                    actual: args.len(),
+                });
+            }
         } else if fixed_arity != args.len() {
             self.recursion_depth -= 1;
             return Err(RuntimeError::ArityMismatch {
@@ -1407,13 +1725,33 @@ impl IrRuntime {
         #[derive(Clone)]
         enum EvalState {
             // Evaluate a node and leave its value on the value stack; is_tail marks tail position
-            Node { node: IrNode, is_tail: bool },
+            Node {
+                node: IrNode,
+                is_tail: bool,
+            },
             // Sequential evaluation of a vector of expressions; last expr uses is_tail
-            Seq { nodes: Vec<IrNode>, idx: usize, is_tail: bool },
+            Seq {
+                nodes: Vec<IrNode>,
+                idx: usize,
+                is_tail: bool,
+            },
             // If evaluation state with tail propagation
-            If { cond: IrNode, then_b: Box<IrNode>, else_b: Option<Box<IrNode>>, stage: u8, is_tail: bool },
+            If {
+                cond: IrNode,
+                then_b: Box<IrNode>,
+                else_b: Option<Box<IrNode>>,
+                stage: u8,
+                is_tail: bool,
+            },
             // Apply evaluation: evaluate callee then args, then apply; TCO when is_tail
-            Apply { callee_node: Box<IrNode>, arg_nodes: Vec<IrNode>, stage: u8, callee_val: Option<Value>, arg_vals: Vec<Value>, is_tail: bool },
+            Apply {
+                callee_node: Box<IrNode>,
+                arg_nodes: Vec<IrNode>,
+                stage: u8,
+                callee_val: Option<Value>,
+                arg_vals: Vec<Value>,
+                is_tail: bool,
+            },
             // Special marker to place a computed value back to parent (no-op container)
             ValueMarker,
         }
@@ -1435,8 +1773,15 @@ impl IrRuntime {
             return Ok(ExecutionOutcome::Complete(Value::Nil));
         }
         let mut initial_states = Vec::new();
-        initial_states.push(EvalState::Seq { nodes: body_seq, idx: 0, is_tail: true });
-        call_stack.push(CallFrame { env: initial_env, states: initial_states });
+        initial_states.push(EvalState::Seq {
+            nodes: body_seq,
+            idx: 0,
+            is_tail: true,
+        });
+        call_stack.push(CallFrame {
+            env: initial_env,
+            states: initial_states,
+        });
 
         // Main trampoline loop
         while let Some(frame) = call_stack.last_mut() {
@@ -1471,22 +1816,54 @@ impl IrRuntime {
                             value_stack.push(value.into());
                         }
                         IrNode::VariableRef { name, .. } => {
-                            let v = frame.env.get(&name)
-                                .ok_or_else(|| RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone())))?;
+                            let v = frame.env.get(&name).ok_or_else(|| {
+                                RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone()))
+                            })?;
                             value_stack.push(v);
                         }
-                        IrNode::If { condition, then_branch, else_branch, .. } => {
-                            frame.states.push(EvalState::If { cond: *condition, then_b: then_branch, else_b: else_branch, stage: 0, is_tail });
+                        IrNode::If {
+                            condition,
+                            then_branch,
+                            else_branch,
+                            ..
+                        } => {
+                            frame.states.push(EvalState::If {
+                                cond: *condition,
+                                then_b: then_branch,
+                                else_b: else_branch,
+                                stage: 0,
+                                is_tail,
+                            });
                         }
                         IrNode::Do { expressions, .. } => {
-                            frame.states.push(EvalState::Seq { nodes: expressions, idx: 0, is_tail });
+                            frame.states.push(EvalState::Seq {
+                                nodes: expressions,
+                                idx: 0,
+                                is_tail,
+                            });
                         }
-                        IrNode::Apply { function, arguments, .. } => {
-                            frame.states.push(EvalState::Apply { callee_node: function, arg_nodes: arguments, stage: 0, callee_val: None, arg_vals: Vec::new(), is_tail });
+                        IrNode::Apply {
+                            function,
+                            arguments,
+                            ..
+                        } => {
+                            frame.states.push(EvalState::Apply {
+                                callee_node: function,
+                                arg_nodes: arguments,
+                                stage: 0,
+                                callee_val: None,
+                                arg_vals: Vec::new(),
+                                is_tail,
+                            });
                         }
                         // Fallback to recursive executor for other forms
                         other => {
-                            match self.execute_node(&other, &mut frame.env, false, module_registry)? {
+                            match self.execute_node(
+                                &other,
+                                &mut frame.env,
+                                false,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => value_stack.push(v),
                                 ExecutionOutcome::RequiresHost(hc) => {
                                     self.recursion_depth -= 1;
@@ -1496,10 +1873,16 @@ impl IrRuntime {
                         }
                     }
                 }
-                EvalState::Seq { nodes, mut idx, is_tail } => {
+                EvalState::Seq {
+                    nodes,
+                    mut idx,
+                    is_tail,
+                } => {
                     if idx >= nodes.len() {
                         // Empty sequence yields Nil if nothing else
-                        if value_stack.is_empty() { value_stack.push(Value::Nil); }
+                        if value_stack.is_empty() {
+                            value_stack.push(Value::Nil);
+                        }
                         continue;
                     } else {
                         // Evaluate nodes sequentially; last value remains
@@ -1507,9 +1890,16 @@ impl IrRuntime {
                         let node = nodes[idx].clone();
                         idx += 1;
                         // Re-push this Seq to continue after child
-                        frame.states.push(EvalState::Seq { nodes, idx, is_tail });
+                        frame.states.push(EvalState::Seq {
+                            nodes,
+                            idx,
+                            is_tail,
+                        });
                         // Push child node
-                        frame.states.push(EvalState::Node { node, is_tail: is_tail && is_last });
+                        frame.states.push(EvalState::Node {
+                            node,
+                            is_tail: is_tail && is_last,
+                        });
                         if !is_last {
                             // After child, discard its value to keep only last
                             // We do this by popping and dropping when we come back
@@ -1518,33 +1908,71 @@ impl IrRuntime {
                         }
                     }
                 }
-                EvalState::If { cond, then_b, else_b, ref mut stage, is_tail } => {
+                EvalState::If {
+                    cond,
+                    then_b,
+                    else_b,
+                    ref mut stage,
+                    is_tail,
+                } => {
                     if *stage == 0 {
                         // Evaluate condition: push continuation then cond
                         *stage = 1;
-                        frame.states.push(EvalState::If { cond: cond.clone(), then_b: then_b.clone(), else_b: else_b.clone(), stage: 1, is_tail });
-                        frame.states.push(EvalState::Node { node: cond.clone(), is_tail: false });
+                        frame.states.push(EvalState::If {
+                            cond: cond.clone(),
+                            then_b: then_b.clone(),
+                            else_b: else_b.clone(),
+                            stage: 1,
+                            is_tail,
+                        });
+                        frame.states.push(EvalState::Node {
+                            node: cond.clone(),
+                            is_tail: false,
+                        });
                     } else {
                         // We expect a condition value on stack
                         let v = value_stack.pop().unwrap_or(Value::Nil);
                         let truthy = v.is_truthy();
                         // Evaluate appropriate branch
                         if truthy {
-                            frame.states.push(EvalState::Node { node: (*then_b.clone()).clone(), is_tail });
+                            frame.states.push(EvalState::Node {
+                                node: (*then_b.clone()).clone(),
+                                is_tail,
+                            });
                         } else if let Some(else_box) = else_b.clone() {
-                            frame.states.push(EvalState::Node { node: (*else_box).clone(), is_tail });
+                            frame.states.push(EvalState::Node {
+                                node: (*else_box).clone(),
+                                is_tail,
+                            });
                         } else {
                             value_stack.push(Value::Nil);
                         }
                     }
                 }
-                EvalState::Apply { callee_node, arg_nodes, ref mut stage, ref mut callee_val, ref mut arg_vals, is_tail } => {
+                EvalState::Apply {
+                    callee_node,
+                    arg_nodes,
+                    ref mut stage,
+                    ref mut callee_val,
+                    ref mut arg_vals,
+                    is_tail,
+                } => {
                     match *stage {
                         0 => {
                             *stage = 1;
                             // Evaluate callee
-                            frame.states.push(EvalState::Apply { callee_node: callee_node.clone(), arg_nodes: arg_nodes.clone(), stage: 2, callee_val: None, arg_vals: Vec::new(), is_tail });
-                            frame.states.push(EvalState::Node { node: (*callee_node).clone(), is_tail: false });
+                            frame.states.push(EvalState::Apply {
+                                callee_node: callee_node.clone(),
+                                arg_nodes: arg_nodes.clone(),
+                                stage: 2,
+                                callee_val: None,
+                                arg_vals: Vec::new(),
+                                is_tail,
+                            });
+                            frame.states.push(EvalState::Node {
+                                node: (*callee_node).clone(),
+                                is_tail: false,
+                            });
                         }
                         2 => {
                             // Callee value is on stack
@@ -1553,12 +1981,38 @@ impl IrRuntime {
                             *stage = 3;
                             // If no args, apply immediately
                             if arg_nodes.is_empty() {
-                                frame.states.push(EvalState::Apply { callee_node, arg_nodes, stage: 4, callee_val: callee_val.clone(), arg_vals: arg_vals.clone(), is_tail });
+                                frame.states.push(EvalState::Apply {
+                                    callee_node,
+                                    arg_nodes,
+                                    stage: 4,
+                                    callee_val: callee_val.clone(),
+                                    arg_vals: arg_vals.clone(),
+                                    is_tail,
+                                });
                             } else {
                                 // Evaluate first arg
-                                frame.states.push(EvalState::Apply { callee_node: callee_node.clone(), arg_nodes: arg_nodes.clone(), stage: 3, callee_val: callee_val.clone(), arg_vals: arg_vals.clone(), is_tail });
-                                let first = arg_nodes.first().cloned().unwrap_or_else(|| IrNode::Literal { id: 0, value: crate::ast::Literal::Nil, source_location: None, ir_type: crate::ir::core::IrType::Nil });
-                                frame.states.push(EvalState::Node { node: first, is_tail: false });
+                                frame.states.push(EvalState::Apply {
+                                    callee_node: callee_node.clone(),
+                                    arg_nodes: arg_nodes.clone(),
+                                    stage: 3,
+                                    callee_val: callee_val.clone(),
+                                    arg_vals: arg_vals.clone(),
+                                    is_tail,
+                                });
+                                let first =
+                                    arg_nodes
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_else(|| IrNode::Literal {
+                                            id: 0,
+                                            value: crate::ast::Literal::Nil,
+                                            source_location: None,
+                                            ir_type: crate::ir::core::IrType::Nil,
+                                        });
+                                frame.states.push(EvalState::Node {
+                                    node: first,
+                                    is_tail: false,
+                                });
                             }
                         }
                         3 => {
@@ -1569,12 +2023,36 @@ impl IrRuntime {
                             let total = arg_nodes.len();
                             if next_idx < total {
                                 // Evaluate next
-                                frame.states.push(EvalState::Apply { callee_node, arg_nodes: arg_nodes.clone(), stage: 3, callee_val: callee_val.clone(), arg_vals: arg_vals.clone(), is_tail });
-                                let node = arg_nodes.get(next_idx).cloned().unwrap_or_else(|| IrNode::Literal { id: 0, value: crate::ast::Literal::Nil, source_location: None, ir_type: crate::ir::core::IrType::Nil });
-                                frame.states.push(EvalState::Node { node, is_tail: false });
+                                frame.states.push(EvalState::Apply {
+                                    callee_node,
+                                    arg_nodes: arg_nodes.clone(),
+                                    stage: 3,
+                                    callee_val: callee_val.clone(),
+                                    arg_vals: arg_vals.clone(),
+                                    is_tail,
+                                });
+                                let node = arg_nodes.get(next_idx).cloned().unwrap_or_else(|| {
+                                    IrNode::Literal {
+                                        id: 0,
+                                        value: crate::ast::Literal::Nil,
+                                        source_location: None,
+                                        ir_type: crate::ir::core::IrType::Nil,
+                                    }
+                                });
+                                frame.states.push(EvalState::Node {
+                                    node,
+                                    is_tail: false,
+                                });
                             } else {
                                 // All args done → apply
-                                frame.states.push(EvalState::Apply { callee_node, arg_nodes: arg_nodes.clone(), stage: 4, callee_val: callee_val.clone(), arg_vals: arg_vals.clone(), is_tail });
+                                frame.states.push(EvalState::Apply {
+                                    callee_node,
+                                    arg_nodes: arg_nodes.clone(),
+                                    stage: 4,
+                                    callee_val: callee_val.clone(),
+                                    arg_vals: arg_vals.clone(),
+                                    is_tail,
+                                });
                             }
                         }
                         4 => {
@@ -1583,10 +2061,22 @@ impl IrRuntime {
                             // Dispatch
                             match fval.clone() {
                                 Value::FunctionPlaceholder(cell) => {
-                                    let guard = cell.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                                    let guard = cell.read().map_err(|e| {
+                                        RuntimeError::InternalError(format!(
+                                            "RwLock poisoned: {}",
+                                            e
+                                        ))
+                                    })?;
                                     let actual = guard.clone();
                                     // Re-run apply with resolved function
-                                    frame.states.push(EvalState::Apply { callee_node, arg_nodes, stage: 4, callee_val: Some(actual), arg_vals: arg_vals.clone(), is_tail });
+                                    frame.states.push(EvalState::Apply {
+                                        callee_node,
+                                        arg_nodes,
+                                        stage: 4,
+                                        callee_val: Some(actual),
+                                        arg_vals: arg_vals.clone(),
+                                        is_tail,
+                                    });
                                     continue;
                                 }
                                 Value::Function(Function::Builtin(b)) => {
@@ -1594,7 +2084,12 @@ impl IrRuntime {
                                     value_stack.push(res);
                                 }
                                 Value::Function(Function::BuiltinWithContext(b)) => {
-                                    match self.execute_builtin_with_context(&b, arg_vals.clone(), &mut frame.env, module_registry)? {
+                                    match self.execute_builtin_with_context(
+                                        &b,
+                                        arg_vals.clone(),
+                                        &mut frame.env,
+                                        module_registry,
+                                    )? {
                                         ExecutionOutcome::Complete(v) => value_stack.push(v),
                                         ExecutionOutcome::RequiresHost(hc) => {
                                             self.recursion_depth -= 1;
@@ -1612,16 +2107,26 @@ impl IrRuntime {
                                     let mut next_param_names: Vec<String> = Vec::new();
                                     for p in &next_ir.params {
                                         if let IrNode::Param { binding, .. } = p {
-                                            if let IrNode::VariableBinding { name, .. } = &**binding { next_param_names.push(name.clone()); } else {
+                                            if let IrNode::VariableBinding { name, .. } = &**binding
+                                            {
+                                                next_param_names.push(name.clone());
+                                            } else {
                                                 self.recursion_depth -= 1;
-                                                return Err(RuntimeError::Generic("Unsupported IR param pattern".to_string()));
+                                                return Err(RuntimeError::Generic(
+                                                    "Unsupported IR param pattern".to_string(),
+                                                ));
                                             }
                                         }
                                     }
-                                    let next_variadic: Option<String> = match &next_ir.variadic_param {
+                                    let next_variadic: Option<String> = match &next_ir
+                                        .variadic_param
+                                    {
                                         Some(b) => match b.as_ref() {
-                                            IrNode::Param { binding, .. } => match binding.as_ref() {
-                                                IrNode::VariableBinding { name, .. } => Some(name.clone()),
+                                            IrNode::Param { binding, .. } => match binding.as_ref()
+                                            {
+                                                IrNode::VariableBinding { name, .. } => {
+                                                    Some(name.clone())
+                                                }
                                                 _ => None,
                                             },
                                             _ => None,
@@ -1632,16 +2137,33 @@ impl IrRuntime {
                                     if next_variadic.is_some() {
                                         if arg_vals.len() < next_fixed {
                                             self.recursion_depth -= 1;
-                                            return Err(RuntimeError::ArityMismatch { function: "ir-lambda".to_string(), expected: format!("at least {}", next_fixed), actual: arg_vals.len() });
+                                            return Err(RuntimeError::ArityMismatch {
+                                                function: "ir-lambda".to_string(),
+                                                expected: format!("at least {}", next_fixed),
+                                                actual: arg_vals.len(),
+                                            });
                                         }
                                     } else if next_fixed != arg_vals.len() {
                                         self.recursion_depth -= 1;
-                                        return Err(RuntimeError::ArityMismatch { function: "ir-lambda".to_string(), expected: next_fixed.to_string(), actual: arg_vals.len() });
+                                        return Err(RuntimeError::ArityMismatch {
+                                            function: "ir-lambda".to_string(),
+                                            expected: next_fixed.to_string(),
+                                            actual: arg_vals.len(),
+                                        });
                                     }
-                                    let parent_env = if !next_ir.closure_env.binding_names().is_empty() || next_ir.closure_env.has_parent() { Arc::new((*next_ir.closure_env).clone()) } else { Arc::new(frame.env.clone()) };
+                                    let parent_env =
+                                        if !next_ir.closure_env.binding_names().is_empty()
+                                            || next_ir.closure_env.has_parent()
+                                        {
+                                            Arc::new((*next_ir.closure_env).clone())
+                                        } else {
+                                            Arc::new(frame.env.clone())
+                                        };
                                     let mut new_env = IrEnvironment::with_parent(parent_env);
                                     // Bind fixed args
-                                    for (n, v) in next_param_names.iter().zip(arg_vals.iter()) { new_env.define(n.clone(), v.clone()); }
+                                    for (n, v) in next_param_names.iter().zip(arg_vals.iter()) {
+                                        new_env.define(n.clone(), v.clone());
+                                    }
                                     // Bind variadic rest if present
                                     if let Some(var_name) = next_variadic {
                                         if arg_vals.len() > next_fixed {
@@ -1653,20 +2175,38 @@ impl IrRuntime {
                                     }
                                     // Execute callee body: TCO if tail position
                                     let seq = next_ir.body.clone();
-                                    if seq.is_empty() { value_stack.push(Value::Nil); continue; }
+                                    if seq.is_empty() {
+                                        value_stack.push(Value::Nil);
+                                        continue;
+                                    }
                                     let mut states = Vec::new();
-                                    states.push(EvalState::Seq { nodes: seq, idx: 0, is_tail: true });
+                                    states.push(EvalState::Seq {
+                                        nodes: seq,
+                                        idx: 0,
+                                        is_tail: true,
+                                    });
                                     if is_tail {
                                         // Proper tail call optimization: replace current frame
-                                        *frame = CallFrame { env: new_env, states };
+                                        *frame = CallFrame {
+                                            env: new_env,
+                                            states,
+                                        };
                                     } else {
                                         // Regular call: push new frame
-                                        call_stack.push(CallFrame { env: new_env, states });
+                                        call_stack.push(CallFrame {
+                                            env: new_env,
+                                            states,
+                                        });
                                     }
                                 }
                                 Value::Function(Function::Closure(c)) => {
                                     // Fallback to existing closure application (may recurse)
-                                    match self.apply_closure(&c, &arg_vals, &mut frame.env, module_registry)? {
+                                    match self.apply_closure(
+                                        &c,
+                                        &arg_vals,
+                                        &mut frame.env,
+                                        module_registry,
+                                    )? {
                                         ExecutionOutcome::Complete(v) => value_stack.push(v),
                                         ExecutionOutcome::RequiresHost(hc) => {
                                             self.recursion_depth -= 1;
@@ -1676,7 +2216,10 @@ impl IrRuntime {
                                 }
                                 other => {
                                     self.recursion_depth -= 1;
-                                    return Err(RuntimeError::Generic(format!("Not a function: {}", other.to_string())));
+                                    return Err(RuntimeError::Generic(format!(
+                                        "Not a function: {}",
+                                        other.to_string()
+                                    )));
                                 }
                             }
                         }
@@ -1722,11 +2265,13 @@ impl IrRuntime {
                 let capability_id = match &args[0] {
                     Value::Keyword(kw) => kw.0.clone(),
                     Value::String(s) => s.clone(),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "keyword or string".to_string(),
-                        actual: args[0].type_name().to_string(),
-                        operation: "capability call".to_string(),
-                    }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "keyword or string".to_string(),
+                            actual: args[0].type_name().to_string(),
+                            operation: "capability call".to_string(),
+                        })
+                    }
                 };
 
                 // Remaining args are forwarded as-is
@@ -1750,7 +2295,7 @@ impl IrRuntime {
 
                 let collection = &args[0];
                 let key = &args[1];
-                
+
                 // Handle 3-arg vs 4-arg cases
                 let (updater, default_val) = if args.len() == 3 {
                     (&args[2], None)
@@ -1765,44 +2310,75 @@ impl IrRuntime {
                             Value::Keyword(k) => crate::ast::MapKey::Keyword(k.clone()),
                             Value::String(s) => crate::ast::MapKey::String(s.clone()),
                             Value::Integer(i) => crate::ast::MapKey::Integer(*i),
-                            _ => return Err(RuntimeError::TypeError {
-                                expected: "map-key".to_string(),
-                                actual: key.type_name().to_string(),
-                                operation: "update".to_string(),
-                            }),
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "map-key".to_string(),
+                                    actual: key.type_name().to_string(),
+                                    operation: "update".to_string(),
+                                })
+                            }
                         };
 
                         let current = if let Some(default) = default_val {
-                            map.get(&map_key).cloned().unwrap_or_else(|| default.clone())
+                            map.get(&map_key)
+                                .cloned()
+                                .unwrap_or_else(|| default.clone())
                         } else {
                             map.get(&map_key).cloned().unwrap_or(Value::Nil)
                         };
                         // Apply updater if it's a builtin or callable value
                         let new_val = match updater {
-                            Value::Function(Function::Builtin(b)) => (b.func)(vec![current.clone()])?,
+                            Value::Function(Function::Builtin(b)) => {
+                                (b.func)(vec![current.clone()])?
+                            }
                             Value::Function(Function::BuiltinWithContext(b)) => {
-                                match self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)? {
+                                match self.execute_builtin_with_context(
+                                    b,
+                                    vec![current.clone()],
+                                    env,
+                                    module_registry,
+                                )? {
                                     ExecutionOutcome::Complete(v) => v,
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                    #[cfg(feature = "effect-boundary")]
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                    #[cfg(feature = "effect-boundary")]
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
                                 }
                             }
-                            Value::Function(_) => match self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)? {
+                            Value::Function(_) => match self.apply_function(
+                                updater.clone(),
+                                &[current.clone()],
+                                env,
+                                false,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => v,
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             },
-                            _ => return Err(RuntimeError::TypeError {
-                                expected: "function".to_string(),
-                                actual: updater.type_name().to_string(),
-                                operation: "update".to_string(),
-                            }),
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "function".to_string(),
+                                    actual: updater.type_name().to_string(),
+                                    operation: "update".to_string(),
+                                })
+                            }
                         };
 
                         // Build new map
@@ -1824,35 +2400,65 @@ impl IrRuntime {
                         };
 
                         if idx >= vec.len() {
-                            return Err(RuntimeError::IndexOutOfBounds { index: idx as i64, length: vec.len() });
+                            return Err(RuntimeError::IndexOutOfBounds {
+                                index: idx as i64,
+                                length: vec.len(),
+                            });
                         }
 
                         let current = vec[idx].clone();
                         let new_val = match updater {
-                            Value::Function(Function::Builtin(b)) => (b.func)(vec![current.clone()])?,
+                            Value::Function(Function::Builtin(b)) => {
+                                (b.func)(vec![current.clone()])?
+                            }
                             Value::Function(Function::BuiltinWithContext(b)) => {
-                                match self.execute_builtin_with_context(b, vec![current.clone()], env, module_registry)? {
+                                match self.execute_builtin_with_context(
+                                    b,
+                                    vec![current.clone()],
+                                    env,
+                                    module_registry,
+                                )? {
                                     ExecutionOutcome::Complete(v) => v,
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                    #[cfg(feature = "effect-boundary")]
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
+                                    #[cfg(feature = "effect-boundary")]
+                                    ExecutionOutcome::RequiresHost(host_call) => {
+                                        return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                    }
                                 }
                             }
-                            Value::Function(_) => match self.apply_function(updater.clone(), &[current.clone()], env, false, module_registry)? {
+                            Value::Function(_) => match self.apply_function(
+                                updater.clone(),
+                                &[current.clone()],
+                                env,
+                                false,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => v,
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             },
-                            _ => return Err(RuntimeError::TypeError {
-                                expected: "function".to_string(),
-                                actual: updater.type_name().to_string(),
-                                operation: "update".to_string(),
-                            }),
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "function".to_string(),
+                                    actual: updater.type_name().to_string(),
+                                    operation: "update".to_string(),
+                                })
+                            }
                         };
 
                         let mut new_vec = vec.clone();
@@ -1987,7 +2593,7 @@ impl IrRuntime {
         }
         let function = &args[0];
         let collection = &args[1];
-        
+
         let collection_vec = match collection {
             Value::Vector(v) => v.clone(),
             _ => {
@@ -2008,13 +2614,24 @@ impl IrRuntime {
                 }
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     let func_args = vec![item];
-                    match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                    match self.execute_builtin_with_context(
+                        builtin_func,
+                        func_args,
+                        env,
+                        module_registry,
+                    )? {
                         ExecutionOutcome::Complete(value) => value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Value::Function(func) => {
@@ -2027,11 +2644,17 @@ impl IrRuntime {
                         module_registry,
                     )? {
                         ExecutionOutcome::Complete(value) => value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 _ => {
@@ -2063,7 +2686,7 @@ impl IrRuntime {
         }
         let function = &args[0];
         let collection = &args[1];
-        
+
         let collection_vec = match collection {
             Value::Vector(v) => v.clone(),
             _ => {
@@ -2085,13 +2708,24 @@ impl IrRuntime {
                 }
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     let func_args = vec![item.clone()];
-                    match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                    match self.execute_builtin_with_context(
+                        builtin_func,
+                        func_args,
+                        env,
+                        module_registry,
+                    )? {
                         ExecutionOutcome::Complete(v) => v.is_truthy(),
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Value::Function(func) => {
@@ -2104,11 +2738,17 @@ impl IrRuntime {
                         module_registry,
                     )? {
                         ExecutionOutcome::Complete(v) => v.is_truthy(),
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 _ => {
@@ -2143,8 +2783,12 @@ impl IrRuntime {
         let function = &args[0];
         let collection_arg_index = args.len() - 1;
         let collection = &args[collection_arg_index];
-        let init_value = if args.len() == 3 { Some(&args[1]) } else { None };
-        
+        let init_value = if args.len() == 3 {
+            Some(&args[1])
+        } else {
+            None
+        };
+
         // Accept vector, string (as chars), and list to mirror stdlib behavior
         let collection_vec: Vec<Value> = match collection {
             Value::Vector(v) => v.clone(),
@@ -2164,7 +2808,7 @@ impl IrRuntime {
                 Ok(ExecutionOutcome::Complete(init.clone()))
             } else {
                 Err(RuntimeError::Generic(
-                    "reduce on empty collection with no initial value".to_string()
+                    "reduce on empty collection with no initial value".to_string(),
                 ))
             };
         }
@@ -2174,7 +2818,7 @@ impl IrRuntime {
         } else {
             (collection_vec[0].clone(), &collection_vec[1..])
         };
-        
+
         for item in rest {
             accumulator = match function {
                 Value::Function(Function::Builtin(builtin_func)) => {
@@ -2183,13 +2827,24 @@ impl IrRuntime {
                 }
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     let func_args = vec![accumulator, item.clone()];
-                    match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                    match self.execute_builtin_with_context(
+                        builtin_func,
+                        func_args,
+                        env,
+                        module_registry,
+                    )? {
                         ExecutionOutcome::Complete(value) => value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 Value::Function(func) => {
@@ -2202,11 +2857,17 @@ impl IrRuntime {
                         module_registry,
                     )? {
                         ExecutionOutcome::Complete(value) => value,
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(host_call) => {
+                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+                        }
                     }
                 }
                 _ => {
@@ -2252,17 +2913,30 @@ impl IrRuntime {
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![item.clone()];
-                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                            match self.execute_builtin_with_context(
+                                builtin_func,
+                                func_args,
+                                env,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(false) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            false,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         Value::Function(func) => {
@@ -2276,14 +2950,22 @@ impl IrRuntime {
                             )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(false) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            false,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         _ => {
@@ -2310,17 +2992,30 @@ impl IrRuntime {
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![char_value];
-                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                            match self.execute_builtin_with_context(
+                                builtin_func,
+                                func_args,
+                                env,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(false) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            false,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         Value::Function(func) => {
@@ -2334,14 +3029,22 @@ impl IrRuntime {
                             )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(false) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(false)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            false,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         _ => {
@@ -2355,13 +3058,11 @@ impl IrRuntime {
                 }
                 Ok(ExecutionOutcome::Complete(Value::Boolean(true)))
             }
-            _ => {
-                Err(RuntimeError::TypeError {
-                    expected: "vector or string".to_string(),
-                    actual: collection.type_name().to_string(),
-                    operation: "every?".to_string(),
-                })
-            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "every?".to_string(),
+            }),
         }
     }
 
@@ -2395,17 +3096,30 @@ impl IrRuntime {
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![item.clone()];
-                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                            match self.execute_builtin_with_context(
+                                builtin_func,
+                                func_args,
+                                env,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(true) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            true,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         Value::Function(func) => {
@@ -2419,14 +3133,22 @@ impl IrRuntime {
                             )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(true) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            true,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         _ => {
@@ -2453,17 +3175,30 @@ impl IrRuntime {
                         }
                         Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                             let func_args = vec![char_value];
-                            match self.execute_builtin_with_context(builtin_func, func_args, env, module_registry)? {
+                            match self.execute_builtin_with_context(
+                                builtin_func,
+                                func_args,
+                                env,
+                                module_registry,
+                            )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(true) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            true,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         Value::Function(func) => {
@@ -2477,14 +3212,22 @@ impl IrRuntime {
                             )? {
                                 ExecutionOutcome::Complete(v) => {
                                     if let Value::Boolean(true) = v {
-                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(true)));
+                                        return Ok(ExecutionOutcome::Complete(Value::Boolean(
+                                            true,
+                                        )));
                                     }
                                 }
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
+                                #[cfg(feature = "effect-boundary")]
+                                ExecutionOutcome::RequiresHost(host_call) => {
+                                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                                }
                             }
                         }
                         _ => {
@@ -2498,13 +3241,11 @@ impl IrRuntime {
                 }
                 Ok(ExecutionOutcome::Complete(Value::Boolean(false)))
             }
-            _ => {
-                Err(RuntimeError::TypeError {
-                    expected: "vector or string".to_string(),
-                    actual: collection.type_name().to_string(),
-                    operation: "some?".to_string(),
-                })
-            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "vector or string".to_string(),
+                actual: collection.type_name().to_string(),
+                operation: "some?".to_string(),
+            }),
         }
     }
 
@@ -2690,9 +3431,7 @@ impl IrRuntime {
 
         let elements = match collection {
             Value::Vector(vec) => vec.clone(),
-            Value::String(s) => {
-                s.chars().map(|c| Value::String(c.to_string())).collect()
-            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             other => {
                 return Err(RuntimeError::TypeError {
@@ -2706,13 +3445,25 @@ impl IrRuntime {
         // Create pairs of (element, key) for sorting
         let mut pairs = Vec::new();
         for element in elements {
-            let key = match self.apply_function(key_fn.clone(), &[element.clone()], env, false, module_registry)? {
+            let key = match self.apply_function(
+                key_fn.clone(),
+                &[element.clone()],
+                env,
+                false,
+                module_registry,
+            )? {
                 ExecutionOutcome::Complete(value) => value,
-                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
-                    #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHost(host_call) => return Ok(ExecutionOutcome::RequiresHost(host_call)),
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
             };
             pairs.push((element, key));
         }
@@ -2737,43 +3488,123 @@ impl IrRuntime {
     fn is_standard_library_function(fn_symbol: &str) -> bool {
         // List of standard library functions that should be executed locally
         const STDLIB_FUNCTIONS: &[&str] = &[
-            "*", "+", "-", "/", "%", "mod",
-            "=", "!=", "<", ">", "<=", ">=",
-            "and", "or", "not",
-            "inc", "dec", "abs", "min", "max",
-            "count", "length", "empty?", "first", "rest", "last", "nth",
-            "get", "assoc", "dissoc", "keys", "vals",
-            "conj", "cons", "concat", "reverse",
-            "map", "filter", "reduce", "sort",
-            "str", "string?", "keyword?", "symbol?", "number?", "int?", "float?", "bool?", "nil?", "fn?", "vector?", "map?",
-            "vector", "hash-map", // Removed: atom, deref, reset!, swap!
-            "range", "take", "drop", "distinct", "partition",
-            "some?", "every?", "contains?", "find",
-            "merge", "update", "get-in", // Removed: assoc!
-            "read-file", "file-exists?", "get-env",
-            "log", "tool.log", "tool.time-ms",
-            "println", "current-time-millis",
-            "string-length", "string-upper", "string-lower", "string-trim", "string-contains", "substring",
-            "parse-json", "serialize-json",
-            "type-name", "getMessage", "Exception.",
-            "even?", "odd?", "sqrt", "pow",
-            "map-indexed", "frequencies", "sort-by",
-            "subvec", "remove", "deftype", "Point",
-            "step", "plan-id", "call", "for"
+            "*",
+            "+",
+            "-",
+            "/",
+            "%",
+            "mod",
+            "=",
+            "!=",
+            "<",
+            ">",
+            "<=",
+            ">=",
+            "and",
+            "or",
+            "not",
+            "inc",
+            "dec",
+            "abs",
+            "min",
+            "max",
+            "count",
+            "length",
+            "empty?",
+            "first",
+            "rest",
+            "last",
+            "nth",
+            "get",
+            "assoc",
+            "dissoc",
+            "keys",
+            "vals",
+            "conj",
+            "cons",
+            "concat",
+            "reverse",
+            "map",
+            "filter",
+            "reduce",
+            "sort",
+            "str",
+            "string?",
+            "keyword?",
+            "symbol?",
+            "number?",
+            "int?",
+            "float?",
+            "bool?",
+            "nil?",
+            "fn?",
+            "vector?",
+            "map?",
+            "vector",
+            "hash-map", // Removed: atom, deref, reset!, swap!
+            "range",
+            "take",
+            "drop",
+            "distinct",
+            "partition",
+            "some?",
+            "every?",
+            "contains?",
+            "find",
+            "merge",
+            "update",
+            "get-in", // Removed: assoc!
+            "read-file",
+            "file-exists?",
+            "get-env",
+            "log",
+            "tool.log",
+            "tool.time-ms",
+            "println",
+            "current-time-millis",
+            "string-length",
+            "string-upper",
+            "string-lower",
+            "string-trim",
+            "string-contains",
+            "substring",
+            "parse-json",
+            "serialize-json",
+            "type-name",
+            "getMessage",
+            "Exception.",
+            "even?",
+            "odd?",
+            "sqrt",
+            "pow",
+            "map-indexed",
+            "frequencies",
+            "sort-by",
+            "subvec",
+            "remove",
+            "deftype",
+            "Point",
+            "step",
+            "plan-id",
+            "call",
+            "for",
         ];
-        
+
         STDLIB_FUNCTIONS.contains(&fn_symbol)
     }
 
     /// Get and execute a builtin function from a fresh standard library environment
     #[allow(dead_code)]
-    fn get_and_execute_builtin_function(fn_symbol: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        use crate::runtime::stdlib::StandardLibrary;
+    fn get_and_execute_builtin_function(
+        fn_symbol: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
         use crate::ast::Symbol;
-        
+        use crate::runtime::stdlib::StandardLibrary;
+
         // Create a fresh standard library environment
         let env = StandardLibrary::create_global_environment();
-        
+
         // Look up the function in the fresh environment
         if let Some(function_value) = env.lookup(&Symbol(fn_symbol.to_string())) {
             // Check if it's a builtin function
@@ -2781,13 +3612,19 @@ impl IrRuntime {
                 // Execute the builtin function
                 return (builtin_fn.func)(args);
             }
-            // If it's not a builtin function in the fresh environment, 
+            // If it's not a builtin function in the fresh environment,
             // it might be a different type, so return an error
-            return Err(RuntimeError::Generic(format!("Function '{}' is not a builtin in fresh environment", fn_symbol)));
+            return Err(RuntimeError::Generic(format!(
+                "Function '{}' is not a builtin in fresh environment",
+                fn_symbol
+            )));
         }
-        
+
         // Function not found in standard library
-        Err(RuntimeError::Generic(format!("Standard library function '{}' not found", fn_symbol)))
+        Err(RuntimeError::Generic(format!(
+            "Standard library function '{}' not found",
+            fn_symbol
+        )))
     }
 
     /// Apply a closure by setting up environment and executing body
@@ -2811,12 +3648,12 @@ impl IrRuntime {
         // Parent is current IR env (so it can see stdlib and current scope),
         // then bind parameters in a fresh child frame.
         let mut func_env = IrEnvironment::with_parent(Arc::new(env.clone()));
-        
+
         // Bind arguments to parameter patterns
         if let Some(variadic_symbol) = &closure.variadic_param {
             // This closure has a variadic parameter
             let required_param_count = closure.param_patterns.len();
-            
+
             // Check minimum argument count for required parameters
             if args.len() < required_param_count {
                 return Err(RuntimeError::ArityMismatch {
@@ -2825,12 +3662,12 @@ impl IrRuntime {
                     actual: args.len(),
                 });
             }
-            
-            // Bind required parameters normally 
+
+            // Bind required parameters normally
             for (i, pat) in closure.param_patterns.iter().enumerate() {
                 self.bind_pattern_ir(pat, &args[i], &mut func_env)?;
             }
-            
+
             // Bind variadic parameter - collect remaining args into a list
             let rest_args = if args.len() > required_param_count {
                 args[required_param_count..].to_vec()
@@ -2847,7 +3684,7 @@ impl IrRuntime {
                     actual: args.len(),
                 });
             }
-            
+
             for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
                 self.bind_pattern_ir(pat, arg, &mut func_env)?;
             }
@@ -2869,7 +3706,7 @@ impl IrRuntime {
     ) -> Result<ExecutionOutcome, RuntimeError> {
         self.execute_closure_body_inner(body, env, module_registry)
     }
-    
+
     fn execute_closure_body_inner(
         &mut self,
         body: &crate::ast::Expression,
@@ -2891,27 +3728,35 @@ impl IrRuntime {
                                         arg_preview = format!("{}", Value::from(lit.clone()));
                                     }
                                     crate::ast::Expression::Symbol(s2) => {
-                                        if let Some(v) = env.get(&s2.0) { arg_preview = format!("{}", v); }
+                                        if let Some(v) = env.get(&s2.0) {
+                                            arg_preview = format!("{}", v);
+                                        }
                                     }
                                     _ => {}
                                 }
                             }
-                            eprintln!("[IR] depth={} call fib({})", self.recursion_depth, arg_preview);
+                            eprintln!(
+                                "[IR] depth={} call fib({})",
+                                self.recursion_depth, arg_preview
+                            );
                         } else {
                             eprintln!("[IR] depth={} call {}(..)", self.recursion_depth, sym.0);
                         }
                     } else {
-                        eprintln!("[IR] depth={} call <non-symbol callee>", self.recursion_depth);
+                        eprintln!(
+                            "[IR] depth={} call <non-symbol callee>",
+                            self.recursion_depth
+                        );
                     }
                 }
                 let callee_value = self.evaluate_expression(callee, env, module_registry)?;
                 let mut arg_values = Vec::new();
-                
+
                 for arg in arguments {
                     let arg_value = self.evaluate_expression(arg, env, module_registry)?;
                     arg_values.push(arg_value);
                 }
-                
+
                 // Apply the function
                 self.apply_function(callee_value, &arg_values, env, false, module_registry)
             }
@@ -2971,13 +3816,11 @@ impl IrRuntime {
             crate::ast::Expression::Defn(defn_expr) => {
                 self.execute_defn_expression(defn_expr, env, module_registry)
             }
-            _ => {
-                Err(RuntimeError::Generic(format!(
-                    "Complex expression not yet implemented in IR runtime: {:?}. \
+            _ => Err(RuntimeError::Generic(format!(
+                "Complex expression not yet implemented in IR runtime: {:?}. \
                      This expression type needs to be implemented in the IR runtime.",
-                    expr
-                )))
-            }
+                expr
+            ))),
         }
     }
 
@@ -2990,7 +3833,7 @@ impl IrRuntime {
     ) -> Result<ExecutionOutcome, RuntimeError> {
         // Create a new child environment for the let bindings
         let mut child_env = env.new_child();
-        
+
         // Pre-bind symbols to support recursion (letrec semantics)
         for binding in &let_expr.bindings {
             if let crate::ast::Pattern::Symbol(sym) = &binding.pattern {
@@ -3000,23 +3843,26 @@ impl IrRuntime {
 
         // Evaluate all bindings and update
         for binding in &let_expr.bindings {
-            let value = self.evaluate_expression(&binding.value, &mut child_env, module_registry)?;
+            let value =
+                self.evaluate_expression(&binding.value, &mut child_env, module_registry)?;
             match &binding.pattern {
                 crate::ast::Pattern::Symbol(sym) => {
                     child_env.define(sym.0.clone(), value);
                 }
                 _ => {
-                    return Err(RuntimeError::Generic("Complex destructuring not implemented in IR runtime".to_string()));
+                    return Err(RuntimeError::Generic(
+                        "Complex destructuring not implemented in IR runtime".to_string(),
+                    ));
                 }
             }
         }
-        
+
         // Evaluate the body in the new environment
         let mut body_result = Value::Nil;
         for expr in &let_expr.body {
             body_result = self.evaluate_expression(expr, &mut child_env, module_registry)?;
         }
-        
+
         Ok(ExecutionOutcome::Complete(body_result))
     }
 
@@ -3031,19 +3877,23 @@ impl IrRuntime {
         if self.recursion_depth < 64 {
             eprintln!("[IR] if condition => {}", condition);
         }
-        
+
         // Check if condition is truthy
         let is_truthy = match condition {
             Value::Boolean(false) | Value::Nil => false,
             _ => true,
         };
-        
+
         if is_truthy {
-            if self.recursion_depth < 64 { eprintln!("[IR] if then-branch"); }
+            if self.recursion_depth < 64 {
+                eprintln!("[IR] if then-branch");
+            }
             let result = self.evaluate_expression(&if_expr.then_branch, env, module_registry)?;
             Ok(ExecutionOutcome::Complete(result))
         } else if let Some(else_branch) = &if_expr.else_branch {
-            if self.recursion_depth < 64 { eprintln!("[IR] if else-branch"); }
+            if self.recursion_depth < 64 {
+                eprintln!("[IR] if else-branch");
+            }
             let result = self.evaluate_expression(else_branch, env, module_registry)?;
             Ok(ExecutionOutcome::Complete(result))
         } else {
@@ -3082,13 +3932,20 @@ impl IrRuntime {
 
         // Ensure we got a Lambda IR node
         match ir_node {
-            IrNode::Lambda { params, variadic_param, body, .. } => {
+            IrNode::Lambda {
+                params,
+                variadic_param,
+                body,
+                ..
+            } => {
                 // Capture current IR environment for closure semantics
-                let ir_func = Function::new_ir_lambda(params, variadic_param, body, Box::new(env.clone()));
+                let ir_func =
+                    Function::new_ir_lambda(params, variadic_param, body, Box::new(env.clone()));
                 Ok(ExecutionOutcome::Complete(Value::Function(ir_func)))
             }
             other => Err(RuntimeError::Generic(format!(
-                "Expected IR Lambda for fn expression, got: {:?}", other
+                "Expected IR Lambda for fn expression, got: {:?}",
+                other
             ))),
         }
     }
@@ -3111,14 +3968,16 @@ impl IrRuntime {
 
         // Execute the fn expression to create the function value
         let function_result = self.execute_fn_expression(&fn_expr, env, module_registry)?;
-        
+
         match function_result {
             ExecutionOutcome::Complete(function_value) => {
                 // Define the function in the environment
                 env.define(defn_expr.name.0.clone(), function_value);
                 Ok(ExecutionOutcome::Complete(Value::Nil))
             }
-            ExecutionOutcome::RequiresHost(host_call) => Ok(ExecutionOutcome::RequiresHost(host_call)),
+            ExecutionOutcome::RequiresHost(host_call) => {
+                Ok(ExecutionOutcome::RequiresHost(host_call))
+            }
         }
     }
 
@@ -3131,7 +3990,9 @@ impl IrRuntime {
     ) -> Result<Value, RuntimeError> {
         match self.execute_closure_body_inner(expr, env, module_registry)? {
             ExecutionOutcome::Complete(value) => Ok(value),
-            ExecutionOutcome::RequiresHost(_) => Err(RuntimeError::Generic("Host call required in expression evaluation".to_string())),
+            ExecutionOutcome::RequiresHost(_) => Err(RuntimeError::Generic(
+                "Host call required in expression evaluation".to_string(),
+            )),
         }
     }
 
@@ -3151,7 +4012,11 @@ impl IrRuntime {
                 // Wildcard patterns don't bind anything
                 Ok(())
             }
-            crate::ast::Pattern::VectorDestructuring { elements, rest, as_symbol } => {
+            crate::ast::Pattern::VectorDestructuring {
+                elements,
+                rest,
+                as_symbol,
+            } => {
                 if let Value::Vector(vec) = value {
                     // Check if we have enough elements for the required patterns
                     if elements.len() > vec.len() {
@@ -3161,12 +4026,12 @@ impl IrRuntime {
                             actual: vec.len(),
                         });
                     }
-                    
+
                     // Bind each element pattern
                     for (pat, val) in elements.iter().zip(vec.iter()) {
                         self.bind_pattern_ir(pat, val, env)?;
                     }
-                    
+
                     // Handle rest parameter
                     if let Some(rest_symbol) = rest {
                         let rest_values = if vec.len() > elements.len() {
@@ -3176,12 +4041,12 @@ impl IrRuntime {
                         };
                         env.define(rest_symbol.0.clone(), Value::Vector(rest_values));
                     }
-                    
+
                     // Handle as binding
                     if let Some(as_sym) = as_symbol {
                         env.define(as_sym.0.clone(), value.clone());
                     }
-                    
+
                     Ok(())
                 } else {
                     Err(RuntimeError::TypeError {
@@ -3191,7 +4056,11 @@ impl IrRuntime {
                     })
                 }
             }
-            crate::ast::Pattern::MapDestructuring { entries, rest, as_symbol } => {
+            crate::ast::Pattern::MapDestructuring {
+                entries,
+                rest,
+                as_symbol,
+            } => {
                 if let Value::Map(map) = value {
                     // For now, we'll handle simple map destructuring
                     // This is a simplified implementation
@@ -3199,7 +4068,7 @@ impl IrRuntime {
                         // We'll need to implement proper map destructuring later
                         // For now, just skip it
                     }
-                    
+
                     // Handle rest parameter
                     if let Some(rest_symbol) = rest {
                         // Create a map with remaining keys
@@ -3209,12 +4078,12 @@ impl IrRuntime {
                         }
                         env.define(rest_symbol.0.clone(), Value::Map(rest_map));
                     }
-                    
+
                     // Handle as binding
                     if let Some(as_sym) = as_symbol {
                         env.define(as_sym.0.clone(), value.clone());
                     }
-                    
+
                     Ok(())
                 } else {
                     Err(RuntimeError::TypeError {
@@ -3226,5 +4095,4 @@ impl IrRuntime {
             }
         }
     }
-
 }

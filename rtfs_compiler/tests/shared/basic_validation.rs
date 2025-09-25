@@ -1,6 +1,6 @@
 // Test file to validate basic functionality without tokio timeout dependency
-use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::parser;
+use rtfs_compiler::runtime::module_runtime::ModuleRegistry;
 use rtfs_compiler::runtime::Evaluator;
 use rtfs_compiler::runtime::RuntimeResult;
 use rtfs_compiler::runtime::Value;
@@ -11,10 +11,17 @@ fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
     let parsed = parser::parse(input).expect("Failed to parse");
     let mut module_registry = ModuleRegistry::new();
     // Load stdlib to get basic functions
-    rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    rtfs_compiler::runtime::stdlib::load_stdlib(&mut module_registry)
+        .expect("Failed to load stdlib");
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
@@ -23,8 +30,14 @@ fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
     ));
     let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
     match evaluator.eval_toplevel(&parsed) {
-        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value)) => Ok(value),
-        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(rtfs_compiler::runtime::error::RuntimeError::Generic("Unexpected host call".to_string())),
+        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value)) => {
+            Ok(value)
+        }
+        Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => {
+            Err(rtfs_compiler::runtime::error::RuntimeError::Generic(
+                "Unexpected host call".to_string(),
+            ))
+        }
         Err(e) => Err(e),
     }
 }
@@ -40,7 +53,11 @@ mod basic_tests {
             Ok(result) => {
                 println!("Test result: {}", result);
                 // Basic validation that something was computed
-                assert!(matches!(result, Value::Integer(3)), "Expected 3, got {:?}", result);
+                assert!(
+                    matches!(result, Value::Integer(3)),
+                    "Expected 3, got {:?}",
+                    result
+                );
             }
             Err(e) => {
                 println!("Error: {:?}", e);
@@ -55,7 +72,11 @@ mod basic_tests {
         match parse_and_evaluate(code) {
             Ok(result) => {
                 println!("Literal result: {}", result);
-                assert!(matches!(result, Value::Integer(42)), "Expected 42, got {:?}", result);
+                assert!(
+                    matches!(result, Value::Integer(42)),
+                    "Expected 42, got {:?}",
+                    result
+                );
             }
             Err(e) => {
                 println!("Error: {:?}", e);

@@ -1,14 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
-use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
-use tokio::sync::RwLock;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
+use tokio::sync::RwLock;
 
 #[test]
 fn test_checkpoint_store_and_resume_from_disk() {
@@ -17,7 +17,11 @@ fn test_checkpoint_store_and_resume_from_disk() {
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().expect("cc")));
 
-    let host = Arc::new(RuntimeHost::new(causal_chain, capability_marketplace, RuntimeContext::pure()));
+    let host = Arc::new(RuntimeHost::new(
+        causal_chain,
+        capability_marketplace,
+        RuntimeContext::pure(),
+    ));
     let module_registry = Arc::new(ModuleRegistry::new());
     let de = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let evaluator = Evaluator::new(module_registry, RuntimeContext::pure(), host.clone());
@@ -50,7 +54,11 @@ fn test_checkpoint_store_and_resume_from_disk() {
     let registry2 = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace2 = Arc::new(CapabilityMarketplace::new(registry2));
     let causal_chain2 = Arc::new(Mutex::new(CausalChain::new().expect("cc2")));
-    let host2 = Arc::new(RuntimeHost::new(causal_chain2, capability_marketplace2, RuntimeContext::pure()));
+    let host2 = Arc::new(RuntimeHost::new(
+        causal_chain2,
+        capability_marketplace2,
+        RuntimeContext::pure(),
+    ));
     let module_registry2 = Arc::new(ModuleRegistry::new());
     let de2 = Arc::new(StaticDelegationEngine::new(std::collections::HashMap::new()));
     let evaluator2 = Evaluator::new(module_registry2, RuntimeContext::pure(), host2);
@@ -63,5 +71,3 @@ fn test_checkpoint_store_and_resume_from_disk() {
     let val = evaluator2.context_manager.borrow().get("k");
     assert_eq!(val, Some(Value::Integer(7)));
 }
-
-

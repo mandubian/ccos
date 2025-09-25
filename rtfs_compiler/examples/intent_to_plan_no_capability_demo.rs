@@ -1,13 +1,15 @@
 // Demonstrate intent->plan failure when no template produces a capability for the goal
 // Run: cargo run --example intent_to_plan_no_capability_demo --manifest-path rtfs_compiler/Cargo.toml
 
-use rtfs_compiler::ccos::arbiter::{TemplateArbiter};
-use rtfs_compiler::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior};
-use rtfs_compiler::ccos::intent_graph::IntentGraph;
+use rtfs_compiler::ccos::arbiter::arbiter_config::{
+    FallbackBehavior, IntentPattern, PlanTemplate, TemplateConfig,
+};
 use rtfs_compiler::ccos::arbiter::arbiter_engine::ArbiterEngine;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use rtfs_compiler::ccos::arbiter::TemplateArbiter;
+use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::runtime::values::Value;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -36,7 +38,10 @@ async fn main() {
     // Create an intent via the template pattern
     let mut ctx: HashMap<String, Value> = HashMap::new();
     ctx.insert("format".into(), Value::String("pdf".into()));
-    let intent = match arbiter.natural_language_to_intent("Please export the report", Some(ctx)).await {
+    let intent = match arbiter
+        .natural_language_to_intent("Please export the report", Some(ctx))
+        .await
+    {
         Ok(i) => i,
         Err(e) => {
             eprintln!("Unexpected: failed to create intent: {e}");

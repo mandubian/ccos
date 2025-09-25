@@ -1,15 +1,15 @@
 //! Local Model Providers using llama-cpp
-//! 
+//!
 //! This module provides realistic local model implementations using efficient
 //! quantized LLMs that can run on GPU with llama-cpp.
 
 use crate::ccos::delegation::ModelProvider;
+use futures::executor::block_on;
 #[cfg(feature = "cuda")]
-use llama_cpp::{LlamaModel, LlamaParams, SessionParams, standard_sampler::StandardSampler};
+use llama_cpp::{standard_sampler::StandardSampler, LlamaModel, LlamaParams, SessionParams};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use futures::executor::block_on;
 use tokio::task;
 
 /// Realistic local model provider using llama-cpp
@@ -45,7 +45,7 @@ impl LocalLlamaModel {
         #[cfg(feature = "cuda")]
         {
             let mut model_guard = self.model.lock().await;
-            
+
             if model_guard.is_none() {
                 // Check if model file exists
                 if !Path::new(&self.model_path).exists() {
@@ -53,7 +53,10 @@ impl LocalLlamaModel {
                 }
 
                 // Load the model (once per process)
-                println!("[LocalLlamaModel] 🔄 Loading model from '{}'. This should appear only once.", self.model_path);
+                println!(
+                    "[LocalLlamaModel] 🔄 Loading model from '{}'. This should appear only once.",
+                    self.model_path
+                );
                 let model = LlamaModel::load_from_file(&self.model_path, LlamaParams::default())?;
                 *model_guard = Some(model);
             }
@@ -71,7 +74,7 @@ impl LocalLlamaModel {
         // Use a path that can be overridden via environment variable
         let model_path = std::env::var("RTFS_LOCAL_MODEL_PATH")
             .unwrap_or_else(|_| "models/phi-2.gguf".to_string());
-        
+
         Self::new("local-llama", &model_path, None)
     }
 
@@ -89,7 +92,10 @@ impl LocalLlamaModel {
     }
 
     /// Core async inference logic shared by both sync entrypoints.
-    async fn infer_async(&self, _prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn infer_async(
+        &self,
+        _prompt: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         #[cfg(feature = "cuda")]
         {
             // Ensure model is loaded
@@ -151,7 +157,14 @@ impl std::fmt::Debug for LocalLlamaModel {
         f.debug_struct("LocalLlamaModel")
             .field("id", &self.id)
             .field("model_path", &self.model_path)
-            .field("model", &if self.model.try_lock().is_ok() { "Loaded" } else { "Not loaded" })
+            .field(
+                "model",
+                &if self.model.try_lock().is_ok() {
+                    "Loaded"
+                } else {
+                    "Not loaded"
+                },
+            )
             .finish()
     }
 }
@@ -161,7 +174,9 @@ pub struct ModelDownloader;
 
 impl ModelDownloader {
     /// Download a common efficient model if not present
-    pub async fn ensure_model_available(model_path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn ensure_model_available(
+        model_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if Path::new(model_path).exists() {
             return Ok(());
         }
@@ -174,7 +189,10 @@ impl ModelDownloader {
 
         // For now, just provide instructions
         println!("Model file not found: {}", model_path);
-        println!("Please download a GGUF model file and place it at: {}", model_path);
+        println!(
+            "Please download a GGUF model file and place it at: {}",
+            model_path
+        );
         println!("Recommended models:");
         println!("  - Microsoft Phi-2 (efficient, good performance)");
         println!("  - Llama-2-7B-Chat (good balance)");
@@ -209,4 +227,4 @@ mod tests {
         let model = LocalLlamaModel::rtfs_optimized();
         assert_eq!(model.id(), "rtfs-llama");
     }
-} 
+}

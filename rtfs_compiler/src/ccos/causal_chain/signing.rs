@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use sha2::{Digest, Sha256};
-use uuid::Uuid;
 use super::super::types::Action;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Cryptographic signing for actions
 #[derive(Debug)]

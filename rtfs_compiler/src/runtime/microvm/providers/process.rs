@@ -1,12 +1,12 @@
 //! Process-based MicroVM Provider
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata};
+use crate::runtime::microvm::config::{FileSystemPolicy, NetworkPolicy};
+use crate::runtime::microvm::core::{ExecutionContext, ExecutionMetadata, ExecutionResult};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
-use crate::runtime::microvm::config::{NetworkPolicy, FileSystemPolicy};
-use std::time::Instant;
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 /// Process-based MicroVM provider for basic isolation
 pub struct ProcessMicroVMProvider {
@@ -22,17 +22,27 @@ impl ProcessMicroVMProvider {
 
     fn extract_host_from_url(url: &str) -> Option<String> {
         // naive parse: scheme://host[:port]/...
-        let without_scheme = if let Some(pos) = url.find("://") { &url[pos+3..] } else { url };
+        let without_scheme = if let Some(pos) = url.find("://") {
+            &url[pos + 3..]
+        } else {
+            url
+        };
         let host_port = without_scheme.split('/').next().unwrap_or("");
         let host = host_port.split(':').next().unwrap_or("");
-        if host.is_empty() { None } else { Some(host.to_string()) }
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_string())
+        }
     }
 
     fn is_path_allowed_by_policy(path: &str, policy: &FileSystemPolicy, write: bool) -> bool {
         match policy {
             FileSystemPolicy::None => false,
             FileSystemPolicy::ReadOnly(paths) => {
-                if write { return false; }
+                if write {
+                    return false;
+                }
                 paths.iter().any(|p| path.starts_with(p))
             }
             FileSystemPolicy::ReadWrite(paths) => paths.iter().any(|p| path.starts_with(p)),
@@ -47,15 +57,22 @@ impl ProcessMicroVMProvider {
             is_network = program.is_network_operation();
         }
         if let Some(cap_id) = &context.capability_id {
-            if cap_id == "ccos.network.http-fetch" { is_network = true; }
+            if cap_id == "ccos.network.http-fetch" {
+                is_network = true;
+            }
         }
 
-        if !is_network { return Ok(()); }
+        if !is_network {
+            return Ok(());
+        }
 
         match &context.config.network_policy {
             NetworkPolicy::Denied => Err(RuntimeError::SecurityViolation {
                 operation: "network".to_string(),
-                capability: context.capability_id.clone().unwrap_or_else(|| "network".to_string()),
+                capability: context
+                    .capability_id
+                    .clone()
+                    .unwrap_or_else(|| "network".to_string()),
                 context: "Network access denied by policy".to_string(),
             }),
             NetworkPolicy::AllowList(domains) => {
@@ -66,11 +83,21 @@ impl ProcessMicroVMProvider {
                         host_ok = domains.iter().any(|d| d == &host);
                     }
                 }
-                if host_ok { Ok(()) } else { Err(RuntimeError::SecurityViolation {
-                    operation: "network".to_string(),
-                    capability: context.capability_id.clone().unwrap_or_else(|| "network".to_string()),
-                    context: format!("Host not in allowlist: args={:?}, allow={:?}", context.args, domains),
-                })}
+                if host_ok {
+                    Ok(())
+                } else {
+                    Err(RuntimeError::SecurityViolation {
+                        operation: "network".to_string(),
+                        capability: context
+                            .capability_id
+                            .clone()
+                            .unwrap_or_else(|| "network".to_string()),
+                        context: format!(
+                            "Host not in allowlist: args={:?}, allow={:?}",
+                            context.args, domains
+                        ),
+                    })
+                }
             }
             NetworkPolicy::DenyList(denied) => {
                 let mut denied_hit = false;
@@ -79,11 +106,18 @@ impl ProcessMicroVMProvider {
                         denied_hit = denied.iter().any(|d| d == &host);
                     }
                 }
-                if denied_hit { Err(RuntimeError::SecurityViolation {
-                    operation: "network".to_string(),
-                    capability: context.capability_id.clone().unwrap_or_else(|| "network".to_string()),
-                    context: "Host in denylist".to_string(),
-                }) } else { Ok(()) }
+                if denied_hit {
+                    Err(RuntimeError::SecurityViolation {
+                        operation: "network".to_string(),
+                        capability: context
+                            .capability_id
+                            .clone()
+                            .unwrap_or_else(|| "network".to_string()),
+                        context: "Host in denylist".to_string(),
+                    })
+                } else {
+                    Ok(())
+                }
             }
             NetworkPolicy::Full => Ok(()),
         }
@@ -97,30 +131,42 @@ impl ProcessMicroVMProvider {
         }
         if let Some(cap_id) = &context.capability_id {
             match cap_id.as_str() {
-                "ccos.io.open-file" | "ccos.io.read-line" | "ccos.io.write-line" | "ccos.io.close-file" => is_file = true,
+                "ccos.io.open-file" | "ccos.io.read-line" | "ccos.io.write-line"
+                | "ccos.io.close-file" => is_file = true,
                 _ => {}
             }
         }
 
-        if !is_file { return Ok(()); }
+        if !is_file {
+            return Ok(());
+        }
 
         // Determine path and whether it's a write
         let mut path_opt: Option<String> = None;
         let mut is_write = false;
-        if let Some(Value::String(p)) = context.args.get(0) { path_opt = Some(p.clone()); }
+        if let Some(Value::String(p)) = context.args.get(0) {
+            path_opt = Some(p.clone());
+        }
         if let Some(cap_id) = &context.capability_id {
-            if cap_id == "ccos.io.write-line" { is_write = true; }
+            if cap_id == "ccos.io.write-line" {
+                is_write = true;
+            }
         }
 
         // If no path provided, conservatively deny unless policy is Full
-        let path = if let Some(p) = path_opt { p } else {
+        let path = if let Some(p) = path_opt {
+            p
+        } else {
             return match context.config.fs_policy {
                 FileSystemPolicy::Full => Ok(()),
                 _ => Err(RuntimeError::SecurityViolation {
                     operation: "filesystem".to_string(),
-                    capability: context.capability_id.clone().unwrap_or_else(|| "filesystem".to_string()),
+                    capability: context
+                        .capability_id
+                        .clone()
+                        .unwrap_or_else(|| "filesystem".to_string()),
                     context: "No path provided for filesystem operation".to_string(),
-                })
+                }),
             };
         };
 
@@ -129,7 +175,10 @@ impl ProcessMicroVMProvider {
         } else {
             Err(RuntimeError::SecurityViolation {
                 operation: "filesystem".to_string(),
-                capability: context.capability_id.clone().unwrap_or_else(|| "filesystem".to_string()),
+                capability: context
+                    .capability_id
+                    .clone()
+                    .unwrap_or_else(|| "filesystem".to_string()),
                 context: format!("Path not allowed by policy (write={}): {}", is_write, path),
             })
         }
@@ -143,19 +192,20 @@ impl ProcessMicroVMProvider {
     ) -> RuntimeResult<Value> {
         let mut command = Command::new(path);
         command.args(args);
-        
+
         // Set environment variables from config
         for (key, value) in &context.config.env_vars {
             command.env(key, value);
         }
-        
+
         // Capture output
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
-        
-        let output = command.output()
+
+        let output = command
+            .output()
             .map_err(|e| RuntimeError::Generic(format!("Process execution failed: {}", e)))?;
-        
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             Ok(Value::String(stdout.to_string()))
@@ -172,10 +222,12 @@ impl ProcessMicroVMProvider {
     ) -> RuntimeResult<Value> {
         // Delegate to RTFS runtime for proper evaluation
         let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();
-        let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
-        
+        let rtfs_runtime =
+            crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
+
         // Use the RTFS runtime to evaluate the source directly
-        rtfs_runtime.evaluate(source)
+        rtfs_runtime
+            .evaluate(source)
             .map_err(|e| RuntimeError::Generic(format!("Evaluation error: {}", e)))
     }
 
@@ -194,7 +246,7 @@ impl ProcessMicroVMProvider {
                 });
             }
         }
-        
+
         func(context.args.clone())
     }
 }
@@ -216,7 +268,9 @@ impl MicroVMProvider for ProcessMicroVMProvider {
 
     fn execute_program(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         if !self.initialized {
-            return Err(RuntimeError::Generic("Process provider not initialized".to_string()));
+            return Err(RuntimeError::Generic(
+                "Process provider not initialized".to_string(),
+            ));
         }
 
         // 🔒 SECURITY: Minimal boundary validation (central authorization already done)
@@ -226,7 +280,10 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "execute_program".to_string(),
                     capability: capability_id.clone(),
-                    context: format!("Boundary validation failed - capability not in permissions: {:?}", context.capability_permissions),
+                    context: format!(
+                        "Boundary validation failed - capability not in permissions: {:?}",
+                        context.capability_permissions
+                    ),
                 });
             }
         }
@@ -251,7 +308,7 @@ impl MicroVMProvider for ProcessMicroVMProvider {
         }
 
         let start_time = Instant::now();
-        
+
         let result_value = match context.program {
             Some(ref program) => match program {
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
@@ -259,7 +316,7 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                         Ok(v) => v,
                         Err(e) => Value::String(format!("Process RTFS evaluation error: {}", e)),
                     }
-                },
+                }
                 crate::runtime::microvm::core::Program::RtfsAst(ast) => {
                     // Convert AST back to source for execution
                     let source = format!("{:?}", ast);
@@ -267,22 +324,22 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                         Ok(v) => v,
                         Err(e) => Value::String(format!("Process RTFS evaluation error: {}", e)),
                     }
-                },
-                crate::runtime::microvm::core::Program::RtfsBytecode(_) => {
-                    Value::String("Bytecode execution not supported in process provider".to_string())
-                },
+                }
+                crate::runtime::microvm::core::Program::RtfsBytecode(_) => Value::String(
+                    "Bytecode execution not supported in process provider".to_string(),
+                ),
                 crate::runtime::microvm::core::Program::NativeFunction(func) => {
                     match self.execute_native_in_process(&func, &context) {
                         Ok(v) => v,
                         Err(e) => Value::String(format!("Process native execution error: {}", e)),
                     }
-                },
+                }
                 crate::runtime::microvm::core::Program::ExternalProgram { path, args } => {
                     match self.execute_external_process(&path, &args, &context) {
                         Ok(v) => v,
                         Err(e) => Value::String(format!("Process external execution error: {}", e)),
                     }
-                },
+                }
             },
             None => Value::String("No program provided".to_string()),
         };
@@ -296,7 +353,7 @@ impl MicroVMProvider for ProcessMicroVMProvider {
         if duration > context.config.timeout {
             duration = context.config.timeout;
         }
-        
+
         // Respect requested memory limit in the returned metadata when available
         let memory_used = context.config.memory_limit_mb;
 

@@ -325,7 +325,8 @@ impl Default for TemplateConfig {
     (step "Fetch Data" (call :ccos.echo "fetched user interactions"))
     (step "Analyze Sentiment" (call :ccos.echo "sentiment: positive"))
     (step "Generate Report" (call :ccos.echo "report generated"))
-)"#.to_string(),
+)"#
+                    .to_string(),
                     variables: vec![],
                 },
                 PlanTemplate {
@@ -335,7 +336,8 @@ impl Default for TemplateConfig {
     (step "Get Metrics" (call :ccos.echo "metrics collected"))
     (step "Identify Bottlenecks" (call :ccos.echo "bottlenecks identified"))
     (step "Apply Optimizations" (call :ccos.echo "optimizations applied"))
-)"#.to_string(),
+)"#
+                    .to_string(),
                     variables: vec![],
                 },
             ],
@@ -355,7 +357,7 @@ impl ArbiterConfig {
     /// Create a configuration from environment variables
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let mut config = ArbiterConfig::default();
-        
+
         // Engine type
         if let Ok(engine_type) = std::env::var("CCOS_ARBITER_ENGINE_TYPE") {
             config.engine_type = match engine_type.as_str() {
@@ -552,7 +554,7 @@ mod tests {
             timeout_seconds: Some(60),
             prompts: None,
         };
-        
+
         assert_eq!(config.provider_type, LlmProviderType::Stub);
         assert_eq!(config.model, "test-model");
         assert_eq!(config.max_tokens, Some(1000));

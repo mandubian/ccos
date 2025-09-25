@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use crate::ccos::caching::l4_content_addressable::L4CacheClient;
 use crate::ir::converter::{BindingInfo, BindingKind, IrConverter};
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::{IrEnvironment, IrRuntime, RuntimeError, Value};
-use sha2::{Sha256, Digest};
-use crate::ccos::caching::l4_content_addressable::L4CacheClient;
+use sha2::{Digest, Sha256};
 
 /// Module registry that manages all loaded modules
 #[derive(Debug)]
@@ -168,7 +168,10 @@ impl ModuleRegistry {
     }
 
     /// Attach a bytecode backend; returns self for chaining
-    pub fn with_bytecode_backend(mut self, backend: Arc<dyn crate::bytecode::BytecodeBackend>) -> Self {
+    pub fn with_bytecode_backend(
+        mut self,
+        backend: Arc<dyn crate::bytecode::BytecodeBackend>,
+    ) -> Self {
         self.bytecode_backend = Some(backend);
         self
     }
@@ -209,7 +212,12 @@ impl ModuleRegistry {
         ir_runtime: &mut IrRuntime,
     ) -> RuntimeResult<Arc<Module>> {
         // If already loaded, return it.
-        if let Some(module) = self.modules.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(module_name) {
+        if let Some(module) = self
+            .modules
+            .read()
+            .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+            .get(module_name)
+        {
             return Ok(module.clone());
         }
 
@@ -252,36 +260,63 @@ impl ModuleRegistry {
 
         // Push module onto loading stack
         {
-            let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let mut guard = self
+                .loading_stack
+                .write()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
             guard.push(module_name.to_string());
         }
 
         // Compile the module from source, getting back the module structure and the bindings map.
-        let (compiled_module, bindings) = match self.load_module_from_file(module_name, ir_runtime) {
+        let (compiled_module, bindings) = match self.load_module_from_file(module_name, ir_runtime)
+        {
             Ok(result) => result,
             Err(e) => {
                 // Pop loading stack on error
-                let _ = { let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?; guard.pop(); };
+                let _ = {
+                    let mut guard = self.loading_stack.write().map_err(|e| {
+                        RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                    })?;
+                    guard.pop();
+                };
                 return Err(e);
             }
         };
 
         // Execute the module's IR to populate its namespace.
         {
-            let mut ns_guard = compiled_module.namespace.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let mut ns_guard = compiled_module
+                .namespace
+                .write()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
             match ir_runtime.execute_node(&compiled_module.ir_node, &mut *ns_guard, false, self) {
                 Ok(_) => {}
                 Err(e) => {
-                    let _ = { let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?; guard.pop(); };
+                    let _ = {
+                        let mut guard = self.loading_stack.write().map_err(|e| {
+                            RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                        })?;
+                        guard.pop();
+                    };
                     return Err(e);
                 }
             }
         }
 
         // After execution, populate the exports using the bindings map and the populated environment.
-        if let IrNode::Module { exports: export_names, .. } = &compiled_module.ir_node {
-            let mut exports_map = compiled_module.exports.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-            let module_env_borrow = compiled_module.namespace.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+        if let IrNode::Module {
+            exports: export_names,
+            ..
+        } = &compiled_module.ir_node
+        {
+            let mut exports_map = compiled_module
+                .exports
+                .write()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let module_env_borrow = compiled_module
+                .namespace
+                .read()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
 
             // DEBUG: Print bindings and environment keys before export population
             #[cfg(debug_assertions)]
@@ -304,11 +339,19 @@ impl ModuleRegistry {
                             export_name: export_name.to_string(),
                             value: value.clone(),
                             ir_type: binding_info.ir_type.clone(),
-                            export_type: match value { Value::Function(_) => ExportType::Function, _ => ExportType::Variable },
+                            export_type: match value {
+                                Value::Function(_) => ExportType::Function,
+                                _ => ExportType::Variable,
+                            },
                         };
                         exports_map.insert(export_name.to_string(), export);
                     } else {
-                        let _ = { let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?; guard.pop(); };
+                        let _ = {
+                            let mut guard = self.loading_stack.write().map_err(|e| {
+                                RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                            })?;
+                            guard.pop();
+                        };
                         return Err(RuntimeError::ModuleError(format!(
                             "Exported symbol '{}' not found in module '{}' environment after execution.",
                             export_name, module_name
@@ -320,7 +363,10 @@ impl ModuleRegistry {
 
         // Pop the loading stack after successful compilation
         {
-            let mut guard = self.loading_stack.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let mut guard = self
+                .loading_stack
+                .write()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
             let _ = guard.pop();
         }
 
@@ -341,14 +387,21 @@ impl ModuleRegistry {
             let bytecode = backend.compile_module(&compiled_module.ir_node);
 
             // Interface hash = SHA256(sorted export names)::hex
-            let mut export_names: Vec<String> = compiled_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.keys().cloned().collect();
+            let mut export_names: Vec<String> = compiled_module
+                .exports
+                .read()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+                .keys()
+                .cloned()
+                .collect();
             export_names.sort();
             let joined = export_names.join("::");
             let mut hasher = Sha256::new();
             hasher.update(joined.as_bytes());
             let interface_hash = format!("{:x}", hasher.finalize());
             // Semantic embedding unavailable here; leave empty.
-            let metadata = RtfsModuleMetadata::new(Vec::<f32>::new(), interface_hash, String::new());
+            let metadata =
+                RtfsModuleMetadata::new(Vec::<f32>::new(), interface_hash, String::new());
             // Ignore errors in the prototype.
             let _ = cache.publish_module(bytecode, metadata);
         }
@@ -396,8 +449,8 @@ impl ModuleRegistry {
             compiled_at: std::time::SystemTime::now(),
         };
         // Create module namespace environment with stdlib as parent, wrapped for interior mutability
-    let stdlib_env = Arc::new(IrEnvironment::with_stdlib(self)?);
-    let module_env = Arc::new(RwLock::new(IrEnvironment::with_parent(stdlib_env)));
+        let stdlib_env = Arc::new(IrEnvironment::with_stdlib(self)?);
+        let module_env = Arc::new(RwLock::new(IrEnvironment::with_parent(stdlib_env)));
 
         // Process module dependencies first
         let mut dependencies = Vec::new();
@@ -428,7 +481,14 @@ impl ModuleRegistry {
                 match (&import_def.alias, &import_def.only) {
                     (Some(alias), None) => {
                         // Import with alias: (import [module :as alias])
-                        for (export_name, export) in loaded_dep_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
+                        for (export_name, export) in loaded_dep_module
+                            .exports
+                            .read()
+                            .map_err(|e| {
+                                RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                            })?
+                            .iter()
+                        {
                             let qualified_name = format!("{}/{}", alias.0, export_name);
                             let binding_id = ir_converter.next_id();
                             let binding_kind = match export.export_type {
@@ -450,8 +510,13 @@ impl ModuleRegistry {
                         // Import specific symbols: (import [module :only [sym1 sym2]])
                         for symbol_ast in only_symbols {
                             let export_name = &symbol_ast.0;
-                            if let Some(export) =
-                                loaded_dep_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(export_name)
+                            if let Some(export) = loaded_dep_module
+                                .exports
+                                .read()
+                                .map_err(|e| {
+                                    RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                                })?
+                                .get(export_name)
                             {
                                 let binding_id = ir_converter.next_id();
                                 let binding_kind = match export.export_type {
@@ -477,7 +542,14 @@ impl ModuleRegistry {
                     }
                     (None, None) => {
                         // Import all symbols, qualified by the full module name
-                        for (export_name, export) in loaded_dep_module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.iter() {
+                        for (export_name, export) in loaded_dep_module
+                            .exports
+                            .read()
+                            .map_err(|e| {
+                                RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                            })?
+                            .iter()
+                        {
                             let qualified_name = format!("{}/{}", dep_module_name, export_name);
                             let binding_id = ir_converter.next_id();
                             let binding_kind = match export.export_type {
@@ -594,7 +666,11 @@ impl ModuleRegistry {
     }
 
     pub fn get_module(&self, module_name: &str) -> Option<Arc<Module>> {
-        self.modules.read().map_err(|_e| ()).ok().and_then(|m| m.get(module_name).cloned())
+        self.modules
+            .read()
+            .map_err(|_e| ())
+            .ok()
+            .and_then(|m| m.get(module_name).cloned())
     }
 
     pub fn loaded_modules(&self) -> std::collections::HashMap<String, Arc<Module>> {
@@ -624,7 +700,12 @@ impl ModuleRegistry {
         let symbol_name = parts[1];
 
         if let Some(module) = self.get_module(module_name) {
-            if let Some(export) = module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(symbol_name) {
+            if let Some(export) = module
+                .exports
+                .read()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+                .get(symbol_name)
+            {
                 Ok(export.value.clone())
             } else {
                 Err(RuntimeError::SymbolNotFound(format!(
@@ -635,15 +716,36 @@ impl ModuleRegistry {
         } else {
             // Before failing, try to load the module
             // Create a temporary runtime with default host and security context
-            let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
-            let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(capability_registry.clone()));
-            let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().expect("Failed to create causal chain")));
+            let capability_registry = Arc::new(tokio::sync::RwLock::new(
+                crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+            ));
+            let capability_marketplace = Arc::new(
+                crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+                    capability_registry.clone(),
+                ),
+            );
+            let causal_chain = Arc::new(std::sync::Mutex::new(
+                crate::ccos::causal_chain::CausalChain::new()
+                    .expect("Failed to create causal chain"),
+            ));
             let security_context = crate::runtime::security::RuntimeContext::pure();
-            let host: Arc<dyn crate::runtime::host_interface::HostInterface> = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+            let host: Arc<dyn crate::runtime::host_interface::HostInterface> =
+                Arc::new(crate::ccos::host::RuntimeHost::new(
+                    causal_chain.clone(),
+                    capability_marketplace.clone(),
+                    security_context.clone(),
+                ));
             let mut ir_runtime = IrRuntime::new(host, security_context); // Temporary runtime
             match self.load_module(module_name, &mut ir_runtime) {
                 Ok(module) => {
-                    if let Some(export) = module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.get(symbol_name) {
+                    if let Some(export) = module
+                        .exports
+                        .read()
+                        .map_err(|e| {
+                            RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                        })?
+                        .get(symbol_name)
+                    {
                         Ok(export.value.clone())
                     } else {
                         Err(RuntimeError::SymbolNotFound(format!(
@@ -767,11 +869,25 @@ impl ModuleAwareRuntime {
         ModuleAwareRuntime {
             ir_runtime: {
                 // Create a default runtime with minimal host
-                let capability_registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
-                let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(capability_registry.clone()));
-                let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().expect("Failed to create causal chain")));
+                let capability_registry = Arc::new(tokio::sync::RwLock::new(
+                    crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+                ));
+                let capability_marketplace = Arc::new(
+                    crate::ccos::capability_marketplace::CapabilityMarketplace::new(
+                        capability_registry.clone(),
+                    ),
+                );
+                let causal_chain = Arc::new(std::sync::Mutex::new(
+                    crate::ccos::causal_chain::CausalChain::new()
+                        .expect("Failed to create causal chain"),
+                ));
                 let security_context = crate::runtime::security::RuntimeContext::pure();
-                let host: Arc<dyn crate::runtime::host_interface::HostInterface> = Arc::new(crate::ccos::host::RuntimeHost::new(causal_chain.clone(), capability_marketplace.clone(), security_context.clone()));
+                let host: Arc<dyn crate::runtime::host_interface::HostInterface> =
+                    Arc::new(crate::ccos::host::RuntimeHost::new(
+                        causal_chain.clone(),
+                        capability_marketplace.clone(),
+                        security_context.clone(),
+                    ));
                 IrRuntime::new(host, security_context)
             },
             module_registry,
@@ -793,11 +909,23 @@ impl ModuleAwareRuntime {
             }
             _ => {
                 // IrRuntime now returns ExecutionOutcome; unwrap Complete or map RequiresHost to error
-                match self.ir_runtime.execute_program(program, &mut self.module_registry) {
+                match self
+                    .ir_runtime
+                    .execute_program(program, &mut self.module_registry)
+                {
                     Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
-                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_host_call)) => Err(RuntimeError::Generic("Host call required during module-level program execution".to_string())),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_host_call)) => {
+                        Err(RuntimeError::Generic(
+                            "Host call required during module-level program execution".to_string(),
+                        ))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host effect required during module-level program execution".to_string())),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => {
+                        Err(RuntimeError::Generic(
+                            "Host effect required during module-level program execution"
+                                .to_string(),
+                        ))
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -812,11 +940,23 @@ impl ModuleAwareRuntime {
             _ => {
                 // Regular IR node execution
                 let mut env = IrEnvironment::new();
-                match self.ir_runtime.execute_node(form, &mut env, false, &mut self.module_registry) {
+                match self
+                    .ir_runtime
+                    .execute_node(form, &mut env, false, &mut self.module_registry)
+                {
                     Ok(super::execution_outcome::ExecutionOutcome::Complete(v)) => Ok(v),
-                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required during module top-level form execution".to_string())),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => {
+                        Err(RuntimeError::Generic(
+                            "Host call required during module top-level form execution".to_string(),
+                        ))
+                    }
                     #[cfg(feature = "effect-boundary")]
-                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host effect required during module top-level form execution".to_string())),
+                    Ok(super::execution_outcome::ExecutionOutcome::RequiresHost(_)) => {
+                        Err(RuntimeError::Generic(
+                            "Host effect required during module top-level form execution"
+                                .to_string(),
+                        ))
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -833,7 +973,8 @@ impl ModuleAwareRuntime {
         } = module_node
         {
             // Create module environment
-            let module_env: Arc<RwLock<IrEnvironment>> = Arc::new(RwLock::new(IrEnvironment::new()));
+            let module_env: Arc<RwLock<IrEnvironment>> =
+                Arc::new(RwLock::new(IrEnvironment::new()));
             let mut module_exports = HashMap::new();
 
             // First, execute all definitions and collect them in the environment
@@ -859,8 +1000,14 @@ impl ModuleAwareRuntime {
                             refer_all: false, // This needs to be determined from AST
                         };
                         {
-                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            self.module_registry.import_symbols(&import_spec, &mut *guard, &mut self.ir_runtime)?;
+                            let mut guard = module_env.write().map_err(|e| {
+                                RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                            })?;
+                            self.module_registry.import_symbols(
+                                &import_spec,
+                                &mut *guard,
+                                &mut self.ir_runtime,
+                            )?;
                         }
                     }
                     IrNode::FunctionDef {
@@ -868,47 +1015,84 @@ impl ModuleAwareRuntime {
                         lambda,
                         ..
                     } => {
-                        {
-                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            let func_outcome = self.ir_runtime.execute_node(lambda, &mut *guard, false, &mut self.module_registry)?;
-                            let func_value = match func_outcome {
-                                super::execution_outcome::ExecutionOutcome::Complete(v) => v,
-                                super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module function definition".to_string())),
-                                #[cfg(feature = "effect-boundary")]
-                                super::execution_outcome::ExecutionOutcome::RequiresHost(_) => return Err(RuntimeError::Generic("Host effect required during module function definition".to_string())),
-                            };
-                            guard.define(func_name.clone(), func_value.clone());
-                        }
+                        let mut guard = module_env.write().map_err(|e| {
+                            RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                        })?;
+                        let func_outcome = self.ir_runtime.execute_node(
+                            lambda,
+                            &mut *guard,
+                            false,
+                            &mut self.module_registry,
+                        )?;
+                        let func_value = match func_outcome {
+                            super::execution_outcome::ExecutionOutcome::Complete(v) => v,
+                            super::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host call required during module function definition"
+                                        .to_string(),
+                                ))
+                            }
+                            #[cfg(feature = "effect-boundary")]
+                            super::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host effect required during module function definition"
+                                        .to_string(),
+                                ))
+                            }
+                        };
+                        guard.define(func_name.clone(), func_value.clone());
                     }
                     IrNode::VariableDef {
                         name: var_name,
                         init_expr,
                         ..
                     } => {
-                        {
-                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            let var_outcome = self.ir_runtime.execute_node(init_expr, &mut *guard, false, &mut self.module_registry)?;
-                            let var_value = match var_outcome {
-                                super::execution_outcome::ExecutionOutcome::Complete(v) => v,
-                                super::execution_outcome::ExecutionOutcome::RequiresHost(_)=> return Err(RuntimeError::Generic("Host call required during module variable definition".to_string())),
-                                #[cfg(feature = "effect-boundary")]
-                                super::execution_outcome::ExecutionOutcome::RequiresHost(_) => return Err(RuntimeError::Generic("Host effect required during module variable definition".to_string())),
-                            };
-                            guard.define(var_name.clone(), var_value.clone());
-                        }
+                        let mut guard = module_env.write().map_err(|e| {
+                            RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                        })?;
+                        let var_outcome = self.ir_runtime.execute_node(
+                            init_expr,
+                            &mut *guard,
+                            false,
+                            &mut self.module_registry,
+                        )?;
+                        let var_value = match var_outcome {
+                            super::execution_outcome::ExecutionOutcome::Complete(v) => v,
+                            super::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host call required during module variable definition"
+                                        .to_string(),
+                                ))
+                            }
+                            #[cfg(feature = "effect-boundary")]
+                            super::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host effect required during module variable definition"
+                                        .to_string(),
+                                ))
+                            }
+                        };
+                        guard.define(var_name.clone(), var_value.clone());
                     }
                     _ => {
-                        {
-                            let mut guard = module_env.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
-                            self.ir_runtime.execute_node(definition, &mut *guard, false, &mut self.module_registry)?;
-                        }
+                        let mut guard = module_env.write().map_err(|e| {
+                            RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
+                        })?;
+                        self.ir_runtime.execute_node(
+                            definition,
+                            &mut *guard,
+                            false,
+                            &mut self.module_registry,
+                        )?;
                     }
                 }
             }
 
             // Now, register all exports listed in the exports vector
             for export_name in exports {
-                let guard = module_env.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+                let guard = module_env
+                    .read()
+                    .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
                 if let Some(value) = guard.get(export_name) {
                     let export_type = match &value {
                         Value::Function(_) => ExportType::Function,
@@ -1006,7 +1190,6 @@ impl ModuleAwareRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_module_registry_creation() {
@@ -1017,10 +1200,16 @@ mod tests {
     fn test_module_loading_from_file() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
-            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        let causal_chain = Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
         ));
+        let capability_marketplace = Arc::new(
+            crate::ccos::capability_marketplace::CapabilityMarketplace::new(Arc::new(
+                tokio::sync::RwLock::new(
+                    crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+                ),
+            )),
+        );
         let security_context = crate::runtime::security::RuntimeContext {
             security_level: crate::runtime::security::SecurityLevel::Controlled,
             max_execution_time: Some(30000), // 30 seconds in milliseconds
@@ -1053,7 +1242,11 @@ mod tests {
         let expected_exports = vec!["add", "multiply", "square"];
         for export in expected_exports {
             assert!(
-                module.exports.read().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?.contains_key(export),
+                module
+                    .exports
+                    .read()
+                    .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?
+                    .contains_key(export),
                 "Missing export: {}",
                 export
             );
@@ -1064,10 +1257,16 @@ mod tests {
     fn test_qualified_symbol_resolution() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
         registry.add_module_path(std::path::PathBuf::from("test_modules"));
-        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
-            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        let causal_chain = Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
         ));
+        let capability_marketplace = Arc::new(
+            crate::ccos::capability_marketplace::CapabilityMarketplace::new(Arc::new(
+                tokio::sync::RwLock::new(
+                    crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+                ),
+            )),
+        );
         let security_context = crate::runtime::security::RuntimeContext {
             security_level: crate::runtime::security::SecurityLevel::Controlled,
             max_execution_time: Some(30000), // 30 seconds in milliseconds
@@ -1096,9 +1295,9 @@ mod tests {
         registry.load_module("math.utils", &mut ir_runtime).unwrap();
 
         // Resolve qualified symbol - should succeed now
-    let result = registry.resolve_qualified_symbol("math.utils/add");
-    assert!(result.is_ok(), "Should resolve math.utils/add symbol");
-    Ok(())
+        let result = registry.resolve_qualified_symbol("math.utils/add");
+        assert!(result.is_ok(), "Should resolve math.utils/add symbol");
+        Ok(())
     }
 
     #[test]
@@ -1111,10 +1310,16 @@ mod tests {
             .unwrap()
             .push("module-a".to_string());
         // Try to load module-a again, which is already in the loading stack
-        let causal_chain = Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
-        let capability_marketplace = Arc::new(crate::ccos::capability_marketplace::CapabilityMarketplace::new(
-            Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()))
+        let causal_chain = Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
         ));
+        let capability_marketplace = Arc::new(
+            crate::ccos::capability_marketplace::CapabilityMarketplace::new(Arc::new(
+                tokio::sync::RwLock::new(
+                    crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+                ),
+            )),
+        );
         let security_context = crate::runtime::security::RuntimeContext {
             security_level: crate::runtime::security::SecurityLevel::Controlled,
             max_execution_time: Some(30000), // 30 seconds in milliseconds
@@ -1142,7 +1347,12 @@ mod tests {
         assert!(result.is_ok()); // Should now return a placeholder instead of an error
         let module = result.unwrap();
         assert_eq!(module.metadata.name, "module-a");
-    assert!(module.metadata.docstring.as_deref().unwrap_or("").contains("placeholder"));
+        assert!(module
+            .metadata
+            .docstring
+            .as_deref()
+            .unwrap_or("")
+            .contains("placeholder"));
     }
     #[test]
     fn test_module_aware_runtime() {

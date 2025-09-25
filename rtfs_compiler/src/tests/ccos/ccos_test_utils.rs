@@ -1,16 +1,16 @@
 //! CCOS integration test utilities
-//! 
+//!
 //! These utilities use RuntimeHost and are designed for testing CCOS integration,
 //! capabilities, delegation, and orchestration features.
 
-use crate::parser;
-use crate::runtime::{
-    evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
-    values::Value, security::RuntimeContext,
-};
 use crate::ccos::capabilities::registry::CapabilityRegistry;
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::host::RuntimeHost;
+use crate::parser;
+use crate::runtime::{
+    evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
+    security::RuntimeContext, values::Value,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -29,10 +29,10 @@ pub fn create_ccos_capability_marketplace() -> Arc<CapabilityMarketplace> {
 pub fn create_ccos_runtime_host() -> Arc<RuntimeHost> {
     let marketplace = create_ccos_capability_marketplace();
     let causal_chain = Arc::new(std::sync::Mutex::new(
-        crate::ccos::causal_chain::CausalChain::new().unwrap()
+        crate::ccos::causal_chain::CausalChain::new().unwrap(),
     ));
     let security_context = RuntimeContext::pure();
-    
+
     Arc::new(RuntimeHost::new(
         causal_chain,
         marketplace,
@@ -45,7 +45,7 @@ pub fn create_ccos_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    
+
     Evaluator::new(Arc::new(module_registry), security_context, host)
 }
 
@@ -53,19 +53,18 @@ pub fn create_ccos_evaluator() -> Evaluator {
 pub fn create_ccos_evaluator_with_context(ctx: RuntimeContext) -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let host = create_ccos_runtime_host();
-    
+
     Evaluator::new(Arc::new(module_registry), ctx, host)
 }
 
 /// Creates a new AST evaluator with stdlib loaded for CCOS testing.
 pub fn create_ccos_evaluator_with_stdlib() -> Evaluator {
     let mut module_registry = ModuleRegistry::new();
-    crate::runtime::stdlib::load_stdlib(&mut module_registry)
-        .expect("Failed to load stdlib");
-    
+    crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
+
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    
+
     Evaluator::new(Arc::new(module_registry), security_context, host)
 }
 
@@ -74,7 +73,7 @@ pub fn create_ccos_ir_runtime() -> IrRuntime {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_ccos_runtime_host();
-    
+
     IrRuntime::new(host, security_context)
 }
 
@@ -82,15 +81,15 @@ pub fn create_ccos_ir_runtime() -> IrRuntime {
 pub fn parse_and_evaluate_ccos(input: &str) -> crate::runtime::error::RuntimeResult<Value> {
     let parsed = parser::parse(input).expect("Failed to parse");
     let evaluator = create_ccos_evaluator();
-    
+
     if let Some(last_item) = parsed.last() {
         match last_item {
-            crate::ast::TopLevel::Expression(expr) => {
-                match evaluator.evaluate(expr)? {
-                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
-                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                        Err(crate::runtime::error::RuntimeError::Generic("Host call required in CCOS test".to_string()))
-                    }
+            crate::ast::TopLevel::Expression(expr) => match evaluator.evaluate(expr)? {
+                crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                    Err(crate::runtime::error::RuntimeError::Generic(
+                        "Host call required in CCOS test".to_string(),
+                    ))
                 }
             },
             _ => Ok(Value::String("object_defined".to_string())),
@@ -101,18 +100,20 @@ pub fn parse_and_evaluate_ccos(input: &str) -> crate::runtime::error::RuntimeRes
 }
 
 /// Parses and evaluates RTFS code with stdlib loaded using CCOS evaluator.
-pub fn parse_and_evaluate_ccos_with_stdlib(input: &str) -> crate::runtime::error::RuntimeResult<Value> {
+pub fn parse_and_evaluate_ccos_with_stdlib(
+    input: &str,
+) -> crate::runtime::error::RuntimeResult<Value> {
     let parsed = parser::parse(input).expect("Failed to parse");
     let evaluator = create_ccos_evaluator_with_stdlib();
-    
+
     if let Some(last_item) = parsed.last() {
         match last_item {
-            crate::ast::TopLevel::Expression(expr) => {
-                match evaluator.evaluate(expr)? {
-                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
-                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                        Err(crate::runtime::error::RuntimeError::Generic("Host call required in CCOS test".to_string()))
-                    }
+            crate::ast::TopLevel::Expression(expr) => match evaluator.evaluate(expr)? {
+                crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                    Err(crate::runtime::error::RuntimeError::Generic(
+                        "Host call required in CCOS test".to_string(),
+                    ))
                 }
             },
             _ => Ok(Value::String("object_defined".to_string())),
@@ -131,13 +132,13 @@ pub fn create_ccos_sandboxed_evaluator(allowed_capabilities: Vec<String>) -> Eva
 /// Creates a shared marketplace and evaluator for testing CCOS capabilities.
 pub async fn create_ccos_capability_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
     let marketplace = create_ccos_capability_marketplace();
-    
+
     // TODO: Register test capabilities when proper CapabilityManifest is available
     // For now, we'll create the evaluator without registering capabilities
-    
+
     let security_context = RuntimeContext::controlled(vec![]);
     let evaluator = create_ccos_evaluator_with_context(security_context);
-    
+
     (marketplace, evaluator)
 }
 
@@ -152,10 +153,13 @@ mod tests {
         // For debugging: let's see what symbols are actually present
         let symbols = evaluator.env.symbol_names();
         println!("CCOS evaluator symbols: {:?}", symbols);
-        
+
         // Basic test: evaluator should be created successfully
         // The environment might not contain symbols directly, they might be in the capability marketplace
-        assert!(symbols.len() >= 0, "CCOS evaluator should be created successfully");
+        assert!(
+            symbols.len() >= 0,
+            "CCOS evaluator should be created successfully"
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! MicroVM Configuration Types
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 
 /// Configuration for MicroVM execution
 #[derive(Debug, Clone, Serialize, Deserialize)]

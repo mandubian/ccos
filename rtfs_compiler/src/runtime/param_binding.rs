@@ -29,8 +29,12 @@ where
     let mut out: BoundParams = HashMap::new();
     for (k, expr) in params.iter() {
         match eval_cb(expr) {
-            Ok(v) => { out.insert(k.clone(), v); }
-            Err(e) => { return Err(ParamError::EvalError(e.to_string())); }
+            Ok(v) => {
+                out.insert(k.clone(), v);
+            }
+            Err(e) => {
+                return Err(ParamError::EvalError(e.to_string()));
+            }
         }
     }
     Ok(out)
@@ -47,7 +51,10 @@ mod tests {
     fn bind_simple_literals() {
         let mut params: HashMap<String, Expression> = HashMap::new();
         params.insert("a".to_string(), Expression::Literal(Literal::Integer(42)));
-        params.insert("b".to_string(), Expression::Literal(Literal::String("x".to_string())));
+        params.insert(
+            "b".to_string(),
+            Expression::Literal(Literal::String("x".to_string())),
+        );
 
         let res = bind_parameters(&params, |e| {
             // very small fake evaluator supporting literals only
