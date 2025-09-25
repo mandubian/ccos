@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use rtfs_compiler::runtime::{
     streaming::{InMemoryStreamPersistence, McpStreamingProvider, StreamingCapability},
     values::Value,
 };
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_stream_persists_and_resumes_state() {
@@ -15,11 +15,20 @@ async fn test_stream_persists_and_resumes_state() {
 
     use rtfs_compiler::ast::{Keyword, MapKey};
     let mut map = std::collections::HashMap::new();
-    map.insert(MapKey::Keyword(Keyword("endpoint".into())), Value::String("weather.monitor.v1".into()));
-    map.insert(MapKey::Keyword(Keyword("processor".into())), Value::String("process-weather-chunk".into()));
+    map.insert(
+        MapKey::Keyword(Keyword("endpoint".into())),
+        Value::String("weather.monitor.v1".into()),
+    );
+    map.insert(
+        MapKey::Keyword(Keyword("processor".into())),
+        Value::String("process-weather-chunk".into()),
+    );
     let mut initial_state_map = std::collections::HashMap::new();
     initial_state_map.insert(MapKey::Keyword(Keyword("count".into())), Value::Integer(0));
-    map.insert(MapKey::Keyword(Keyword("initial-state".into())), Value::Map(initial_state_map));
+    map.insert(
+        MapKey::Keyword(Keyword("initial-state".into())),
+        Value::Map(initial_state_map),
+    );
     let params = Value::Map(map);
 
     let handle = provider.start_stream(&params).expect("start stream");
@@ -29,7 +38,11 @@ async fn test_stream_persists_and_resumes_state() {
     chunk_map.insert(MapKey::Keyword(Keyword("seq".into())), Value::Integer(0));
     let chunk = Value::Map(chunk_map);
     provider
-        .process_chunk(&stream_id, chunk, Value::Map(std::collections::HashMap::new()))
+        .process_chunk(
+            &stream_id,
+            chunk,
+            Value::Map(std::collections::HashMap::new()),
+        )
         .await
         .expect("process chunk");
 
@@ -50,9 +63,13 @@ async fn test_stream_persists_and_resumes_state() {
         .expect("state after resume");
     if let Value::Map(state_map) = state {
         let key = MapKey::Keyword(Keyword("count".into()));
-        let count_val = state_map
-            .get(&key)
-            .and_then(|v| if let Value::Integer(i) = v { Some(*i) } else { None });
+        let count_val = state_map.get(&key).and_then(|v| {
+            if let Value::Integer(i) = v {
+                Some(*i)
+            } else {
+                None
+            }
+        });
         assert_eq!(count_val, Some(1), "Expected persisted count == 1");
     } else {
         panic!("Expected map state after resume");

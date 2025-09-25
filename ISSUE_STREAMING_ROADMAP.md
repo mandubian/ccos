@@ -56,13 +56,15 @@ Implemented:
 3. Queue overflow automatically pauses intake until resumed; resuming drains queued items with latency tracking.
 4. Tests (`mcp_streaming_phase5_tests.rs`) cover overflow pause/resume cycle and cancel semantics.
 
-## Phase 6 – Real MCP Transport
+## Phase 6 – Real MCP Transport (In Progress)
 Goal: Replace mock loop with actual MCP streaming (WS/SSE or tool polling).
+Status: MVP local SSE transport in-progress (using bundled `mcp-local-server`). Legacy Cloudflare endpoint kept as fallback only.
 Tasks:
-1. Implement low-level client abstraction (trait) with mock + real impl.
+1. Implement transport trait abstraction with mock + SSE client (WebSocket planned next).
 2. Parse MCP incremental messages → `Value` chunk maps.
 3. Pluggable retry + exponential backoff (configurable).
 4. Test using embedded mock server harness.
+5. Wire environment overrides (`CCOS_MCP_STREAM_ENDPOINT`, `CCOS_MCP_LOCAL_SSE_URL`, `CCOS_MCP_CLOUDFLARE_DOCS_SSE_URL`, `CCOS_MCP_STREAM_AUTH_HEADER`, `CCOS_MCP_STREAM_BEARER_TOKEN`).
 
 ## Phase 7 – Observability & Tooling
 Goal: Introspection and developer experience.

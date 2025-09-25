@@ -51,6 +51,10 @@ path = "src/viewer/main.rs"
 name = "diagnose_storage"
 path = "src/bin/diagnose_storage.rs"
 
+[[bin]]
+name = "mcp-local-server"
+path = "src/bin/mcp_local_server.rs"
+
 [dependencies]
 # Parser dependencies
 pest = { version = "2.7", optional = true }
@@ -73,8 +77,9 @@ sha2 = "0.10"
 rusqlite = { version = "0.29", features = ["bundled"] }
 
 # Networking/API
-reqwest = { version = "0.11", features = ["json", "blocking"] }
+reqwest = { version = "0.11", features = ["json", "blocking", "cookies"] }
 tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
 url = "2.5"  # Add URL dependency for type validation
 atty = "0.2"  # For stdin detection in input handling
@@ -84,6 +89,8 @@ atty = "0.2"  # For stdin detection in input handling
 
 # MCP (Model Context Protocol) dependencies - using tokio directly
 # rmcp = { version = "0.3.0", features = ["client", "server", "transport-child-process"] }
+reqwest-eventsource = "0.5"
+eventsource-stream = "0.2"
 
 # REPL dependencies
 clap = { version = "4.0", features = ["derive"] }

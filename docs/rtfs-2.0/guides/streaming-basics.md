@@ -15,6 +15,14 @@ This guide shows how to use streaming from RTFS while keeping RTFS pure. All ope
 > `{:action :pause}`). The host records snapshots on each chunk, can `resume_stream` after a restart, and throttles
 > intake when the per-stream queue reaches `queue-capacity` (default 32).
 
+### Phase 6 Preview – Real Transport & Environment Overrides
+
+- **Local SSE server (default)** – CCOS now ships with `mcp-local-server`, a reference SSE service bound to `http://127.0.0.1:2025/sse`. Override its base URL with `CCOS_MCP_LOCAL_SSE_URL`.
+- **Custom endpoints** – Set `CCOS_MCP_STREAM_ENDPOINT` to point the provider at any MCP-compatible SSE/WS endpoint (e.g., PayPal sandbox, internal services).
+- **Legacy Cloudflare docs** – `CCOS_MCP_CLOUDFLARE_DOCS_SSE_URL` remains supported for backwards compatibility if you still need the public Cloudflare demo.
+- **Authentication** – Supply `CCOS_MCP_STREAM_AUTH_HEADER` for full header injection (e.g., `Authorization: Bearer <token>`). As a shortcut, `CCOS_MCP_STREAM_BEARER_TOKEN` auto-builds the header.
+- **Resolution order** – explicit `server_url` argument → `CCOS_MCP_STREAM_ENDPOINT` → `CCOS_MCP_LOCAL_SSE_URL` → `CCOS_MCP_CLOUDFLARE_DOCS_SSE_URL` → built-in local SSE.
+
 MCP streaming uses a continuation-chain pattern where RTFS processes each data chunk reactively:
 
 ```rtfs
