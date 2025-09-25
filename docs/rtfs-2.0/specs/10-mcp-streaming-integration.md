@@ -98,6 +98,18 @@ MCP streaming uses a **continuation chain** where each data chunk triggers RTFS 
 - **`:cancel`**: Terminate stream immediately; host clears the queue and marks stream cancelled.
 - **`:complete`**: End stream successfully
 
+### 4.4 Transport Configuration (Environment Overrides)
+
+Phase 6 introduces environment-driven overrides so deployments can point the MCP streaming provider at real transports without code changes:
+
+- `CCOS_MCP_STREAM_ENDPOINT` – highest-priority override; set to any MCP stream URL (SSE, WS, etc.)
+- `CCOS_MCP_LOCAL_SSE_URL` – preferred override for local/offline development, defaults to `http://127.0.0.1:2025/sse`
+- `CCOS_MCP_CLOUDFLARE_DOCS_SSE_URL` – legacy convenience variable for Cloudflare’s public docs server (still honoured for backward compatibility)
+- `CCOS_MCP_STREAM_AUTH_HEADER` – full header string (for example `Authorization: Bearer <token>`)
+- `CCOS_MCP_STREAM_BEARER_TOKEN` – alternative to the full header; host constructs `Authorization: Bearer …`
+
+The provider resolves configuration in this order: explicit `server_url` argument → `CCOS_MCP_STREAM_ENDPOINT` → `CCOS_MCP_LOCAL_SSE_URL` → `CCOS_MCP_CLOUDFLARE_DOCS_SSE_URL` → baked-in default (`http://127.0.0.1:2025/sse`).
+
 ## 5. Continuation-Based Execution Flow
 
 ### 5.1 Stream Initiation
