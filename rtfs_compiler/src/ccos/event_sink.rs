@@ -4,12 +4,12 @@
 //! defines the mandatory `IntentEventSink` audit surface used by lifecycle
 //! code paths.
 
+use super::causal_chain::CausalChain;
 use crate::ccos::types::{Action, IntentId};
 use crate::runtime::RuntimeError;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
-use super::causal_chain::CausalChain;
 use std::result::Result;
+use std::sync::{Arc, Mutex};
 
 /// Mandatory audit surface for intent lifecycle transitions.
 /// The API uses stable string status representations for compatibility across versions.
@@ -66,10 +66,9 @@ impl IntentEventSink for CausalChainIntentEventSink {
         reason: &str,
         triggering_action_id: Option<&str>,
     ) -> Result<(), RuntimeError> {
-        let mut guard = self
-            .chain
-            .lock()
-            .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain for intent status audit".to_string()))?;
+        let mut guard = self.chain.lock().map_err(|_| {
+            RuntimeError::Generic("Failed to lock CausalChain for intent status audit".to_string())
+        })?;
 
         // CausalChain.log_intent_status_change takes PlanId-ish string and other params
         guard
@@ -99,4 +98,3 @@ pub trait CausalChainEventSink: Debug + Send + Sync {
         false
     }
 }
-

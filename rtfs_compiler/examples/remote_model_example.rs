@@ -1,18 +1,18 @@
 //! Example: Using Remote Model Providers with RTFS
-//! 
-//! This example demonstrates how to use various remote LLM providers (OpenAI, Gemini, 
+//!
+//! This example demonstrates how to use various remote LLM providers (OpenAI, Gemini,
 //! Claude, OpenRouter) with the RTFS delegation engine. It shows how to configure
 //! different providers and route functions to specific models.
 
-use rtfs_compiler::ccos::delegation::{ExecTarget, ModelRegistry, StaticDelegationEngine, ModelProvider};
-use rtfs_compiler::ccos::remote_models::{
-    RemoteModelFactory, RemoteModelConfig
+use reqwest::blocking::Client;
+use rtfs_compiler::ccos::delegation::{
+    ExecTarget, ModelProvider, ModelRegistry, StaticDelegationEngine,
 };
+use rtfs_compiler::ccos::remote_models::{RemoteModelConfig, RemoteModelFactory};
 use rtfs_compiler::parser;
 use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
-use reqwest::blocking::Client;
 
 /// Custom OpenRouter model with unique ID
 #[derive(Debug)]
@@ -29,12 +29,8 @@ impl CustomOpenRouterModel {
             model_name.to_string(),
         );
         let client = Arc::new(Client::new());
-        
-        Self {
-            id,
-            config,
-            client,
-        }
+
+        Self { id, config, client }
     }
 }
 
@@ -116,10 +112,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create evaluator
     let module_registry = Arc::new(ModuleRegistry::new());
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()),
+    );
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
-        Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+        Arc::new(std::sync::Mutex::new(
+            rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+        )),
         capability_marketplace,
         rtfs_compiler::runtime::security::RuntimeContext::pure(),
     ));
@@ -137,14 +139,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         //     "OpenAI GPT-4 Analysis",
         //     "openai-gpt4",
         //     r#"
-        //     (defn ai-analyze-openai [text] 
+        //     (defn ai-analyze-openai [text]
         //       "Analyze the sentiment and key themes of the given text using OpenAI")
         //     (ai-analyze-openai "The RTFS system represents a breakthrough in programming language design, combining functional programming with cognitive computing capabilities.")
         //     "#,
         // ),
         // (
         //     "Gemini Pro Summarization",
-        //     "gemini-pro", 
+        //     "gemini-pro",
         //     r#"
         //     (defn ai-summarize-gemini [text]
         //       "Summarize the given text in one sentence using Gemini")
@@ -184,7 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("🧪 Testing: {}", name);
         println!("Provider: {}", provider_id);
         println!("Code: {}", code.trim());
-        
+
         match parser::parse(code) {
             Ok(parsed) => {
                 match evaluator.eval_toplevel(&parsed) {
@@ -218,7 +220,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demonstrate provider switching
     println!("🔄 Demonstrating Provider Switching");
     println!("===================================");
-    
+
     let providers = vec![
         ("OpenAI GPT-4", "openai:gpt-4"),
         ("OpenAI GPT-3.5", "openai:gpt-3.5-turbo"),
@@ -228,7 +230,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Claude 3 Sonnet", "claude:claude-3-sonnet-20240229"),
         ("OpenRouter GPT-4", "openrouter:openai/gpt-4"),
         ("OpenRouter Claude", "openrouter:anthropic/claude-3-opus"),
-        ("OpenRouter Llama", "openrouter:meta-llama/llama-3-8b-instruct"),
+        (
+            "OpenRouter Llama",
+            "openrouter:meta-llama/llama-3-8b-instruct",
+        ),
     ];
 
     for (name, config) in providers {
@@ -264,28 +269,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn check_api_keys() -> Vec<String> {
     let mut available = Vec::new();
-    
-    if !std::env::var("OPENAI_API_KEY").unwrap_or_default().is_empty() {
+
+    if !std::env::var("OPENAI_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         available.push("OpenAI".to_string());
     }
-    if !std::env::var("GEMINI_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("GEMINI_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         available.push("Gemini".to_string());
     }
-    if !std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("ANTHROPIC_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         available.push("Anthropic".to_string());
     }
-    if !std::env::var("OPENROUTER_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("OPENROUTER_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         available.push("OpenRouter".to_string());
     }
-    
+
     available
 }
 
 fn register_available_models(registry: &ModelRegistry) {
     println!("📦 Registering available models...");
-    
+
     // OpenAI models
-    if !std::env::var("OPENAI_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("OPENAI_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         let openai_gpt4 = RemoteModelFactory::openai("gpt-4");
         let openai_gpt35 = RemoteModelFactory::openai("gpt-3.5-turbo");
         registry.register(openai_gpt4);
@@ -294,9 +314,12 @@ fn register_available_models(registry: &ModelRegistry) {
     } else {
         println!("  ❌ OpenAI: No API key");
     }
-    
+
     // Gemini models
-    if !std::env::var("GEMINI_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("GEMINI_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         let gemini_pro = RemoteModelFactory::gemini("gemini-pro");
         let gemini_flash = RemoteModelFactory::gemini("gemini-1.5-flash");
         registry.register(gemini_pro);
@@ -305,9 +328,12 @@ fn register_available_models(registry: &ModelRegistry) {
     } else {
         println!("  ❌ Gemini: No API key");
     }
-    
+
     // Claude models
-    if !std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("ANTHROPIC_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         let claude_opus = RemoteModelFactory::claude("claude-3-opus-20240229");
         let claude_sonnet = RemoteModelFactory::claude("claude-3-sonnet-20240229");
         let claude_haiku = RemoteModelFactory::claude("claude-3-haiku-20240307");
@@ -318,15 +344,21 @@ fn register_available_models(registry: &ModelRegistry) {
     } else {
         println!("  ❌ Claude: No API key");
     }
-    
+
     // OpenRouter models
-    if !std::env::var("OPENROUTER_API_KEY").unwrap_or_default().is_empty() {
+    if !std::env::var("OPENROUTER_API_KEY")
+        .unwrap_or_default()
+        .is_empty()
+    {
         // Create custom OpenRouter models with unique IDs
         // let openrouter_gpt4 = CustomOpenRouterModel::new("openrouter-gpt4", "openai/gpt-4");
         // let openrouter_claude = CustomOpenRouterModel::new("openrouter-claude", "anthropic/claude-3-opus");
         // let openrouter_gemini = CustomOpenRouterModel::new("openrouter-gemini", "google/gemini-pro");
         // let openrouter_llama = CustomOpenRouterModel::new("openrouter-llama", "meta-llama/llama-3-8b-instruct");
-        let openrouter_hunyuan_a13b_instruct = CustomOpenRouterModel::new("openrouter-hunyuan-a13b-instruct", "tencent/hunyuan-a13b-instruct:free");
+        let openrouter_hunyuan_a13b_instruct = CustomOpenRouterModel::new(
+            "openrouter-hunyuan-a13b-instruct",
+            "tencent/hunyuan-a13b-instruct:free",
+        );
         // registry.register(openrouter_gpt4);
         // registry.register(openrouter_claude);
         // registry.register(openrouter_gemini);
@@ -337,27 +369,54 @@ fn register_available_models(registry: &ModelRegistry) {
     } else {
         println!("  ❌ OpenRouter: No API key");
     }
-    
+
     println!();
 }
 
 fn setup_delegation_engine() -> Arc<StaticDelegationEngine> {
     let mut static_map = HashMap::new();
-    
+
     // Route specific functions to specific providers
-    static_map.insert("ai-analyze-openai".to_string(), ExecTarget::RemoteModel("openai-gpt4".to_string()));
-    static_map.insert("ai-summarize-gemini".to_string(), ExecTarget::RemoteModel("gemini-pro".to_string()));
-    static_map.insert("ai-classify-claude".to_string(), ExecTarget::RemoteModel("claude-opus".to_string()));
-    static_map.insert("ai-generate-openrouter".to_string(), ExecTarget::RemoteModel("openrouter-gpt4".to_string()));
+    static_map.insert(
+        "ai-analyze-openai".to_string(),
+        ExecTarget::RemoteModel("openai-gpt4".to_string()),
+    );
+    static_map.insert(
+        "ai-summarize-gemini".to_string(),
+        ExecTarget::RemoteModel("gemini-pro".to_string()),
+    );
+    static_map.insert(
+        "ai-classify-claude".to_string(),
+        ExecTarget::RemoteModel("claude-opus".to_string()),
+    );
+    static_map.insert(
+        "ai-generate-openrouter".to_string(),
+        ExecTarget::RemoteModel("openrouter-gpt4".to_string()),
+    );
     // New: route Hunyuan generator to the custom OpenRouter model
-    static_map.insert("ai-generate-hunyuan".to_string(), ExecTarget::RemoteModel("openrouter-hunyuan-a13b-instruct".to_string()));
-    
+    static_map.insert(
+        "ai-generate-hunyuan".to_string(),
+        ExecTarget::RemoteModel("openrouter-hunyuan-a13b-instruct".to_string()),
+    );
+
     // Add more generic routing patterns
-    static_map.insert("ai-analyze".to_string(), ExecTarget::RemoteModel("openai-gpt4".to_string()));
-    static_map.insert("ai-summarize".to_string(), ExecTarget::RemoteModel("gemini-pro".to_string()));
-    static_map.insert("ai-classify".to_string(), ExecTarget::RemoteModel("claude-opus".to_string()));
-    static_map.insert("ai-generate".to_string(), ExecTarget::RemoteModel("openrouter-gpt4".to_string()));
-    
+    static_map.insert(
+        "ai-analyze".to_string(),
+        ExecTarget::RemoteModel("openai-gpt4".to_string()),
+    );
+    static_map.insert(
+        "ai-summarize".to_string(),
+        ExecTarget::RemoteModel("gemini-pro".to_string()),
+    );
+    static_map.insert(
+        "ai-classify".to_string(),
+        ExecTarget::RemoteModel("claude-opus".to_string()),
+    );
+    static_map.insert(
+        "ai-generate".to_string(),
+        ExecTarget::RemoteModel("openrouter-gpt4".to_string()),
+    );
+
     Arc::new(StaticDelegationEngine::new(static_map))
 }
 
@@ -398,4 +457,4 @@ mod tests {
         // Verify the engine was created successfully
         assert!(std::sync::Arc::strong_count(&engine) > 0);
     }
-} 
+}

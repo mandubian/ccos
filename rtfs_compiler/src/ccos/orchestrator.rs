@@ -17,33 +17,35 @@
 //! - Determinism flags for reproducible execution
 //! - Resource limits and isolation levels
 
-use std::sync::{Arc, Mutex};
-use serde_json::{self, Value as JsonValue};
-use crate::ccos::capability_marketplace::CapabilityMarketplace;
-use crate::runtime::values::Value;
 use crate::ast::MapKey;
-use crate::runtime::security::RuntimeContext;
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::execution_context::IsolationLevel;
+use crate::ccos::host::RuntimeHost;
+use crate::parser::parse_expression;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::execution_outcome::ExecutionOutcome;
-use crate::ccos::host::RuntimeHost;
-use crate::runtime::error::{RuntimeResult, RuntimeError};
-use crate::parser::parse_expression;
-use crate::runtime::microvm::config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
-use crate::ccos::execution_context::IsolationLevel;
+use crate::runtime::microvm::config::{FileSystemPolicy, MicroVMConfig, NetworkPolicy};
+use crate::runtime::security::RuntimeContext;
+use crate::runtime::values::Value;
+use serde_json::{self, Value as JsonValue};
+use std::sync::{Arc, Mutex};
 
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
-use super::types::{Plan, Action, ActionType, ExecutionResult, PlanLanguage, PlanBody, IntentStatus};
+use super::types::{
+    Action, ActionType, ExecutionResult, IntentStatus, Plan, PlanBody, PlanLanguage,
+};
 use crate::ast::{Expression, Literal};
 
-use crate::runtime::module_runtime::ModuleRegistry;
-use crate::runtime::host_interface::HostInterface;
-use std::collections::HashMap;
-use sha2::{Digest, Sha256};
 use super::checkpoint_archive::{CheckpointArchive, CheckpointRecord};
 use super::plan_archive::PlanArchive;
+use crate::runtime::host_interface::HostInterface;
+use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::values::Value as RtfsValue;
 use chrono;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
 /// Represents the security and isolation profile for a single step execution
 #[derive(Debug, Clone)]
@@ -121,9 +123,6 @@ impl StepProfileDeriver {
         // Adjust profile based on runtime context
         Self::adjust_for_runtime_context(&mut profile, base_context);
 
-
-
-
         // Final enforcement: syscall filter only for explicit system operations
         if let Expression::List(exprs) = step_expr {
             let final_has_system = Self::contains_system_operations(exprs);
@@ -162,19 +161,19 @@ impl StepProfileDeriver {
             // Dangerous operations requiring sandboxed execution
             Expression::List(exprs) if Self::contains_dangerous_operations(exprs) => {
                 IsolationLevel::Sandboxed
-            },
+            }
             // Network operations requiring isolation
             Expression::List(exprs) if Self::contains_network_operations(exprs) => {
                 IsolationLevel::Isolated
-            },
+            }
             // File operations requiring isolation
             Expression::List(exprs) if Self::contains_file_operations(exprs) => {
                 IsolationLevel::Isolated
-            },
+            }
             // System operations requiring isolation
             Expression::List(exprs) if Self::contains_system_operations(exprs) => {
                 IsolationLevel::Isolated
-            },
+            }
             // Safe operations can inherit parent context
             _ => IsolationLevel::Inherit,
         }
@@ -211,7 +210,7 @@ impl StepProfileDeriver {
                     config.memory_limit_mb = 1024;
                     config.cpu_limit = 2.0;
                 }
-            },
+            }
             _ => {
                 // Conservative defaults for unknown expressions
                 config.network_policy = NetworkPolicy::Denied;
@@ -229,41 +228,41 @@ impl StepProfileDeriver {
             Expression::List(exprs) if Self::is_pure_function_call(exprs) => {
                 println!("DEBUG DETERMINISM: pure_function_call=true");
                 true
-            },
+            }
             // Math operations are deterministic
             Expression::List(exprs) if Self::contains_math_operations(exprs) => {
                 println!("DEBUG DETERMINISM: math_ops=true");
                 true
-            },
+            }
             // Data parsing/serialization is deterministic
             Expression::List(exprs) if Self::contains_data_operations(exprs) => {
                 println!("DEBUG DETERMINISM: data_ops=true");
                 true
-            },
+            }
             // I/O operations are generally non-deterministic
             Expression::List(exprs) if Self::contains_io_operations(exprs) => {
                 println!("DEBUG DETERMINISM: io_ops=true");
                 false
-            },
+            }
             // Network operations are non-deterministic
             Expression::List(exprs) if Self::contains_network_operations(exprs) => {
                 println!("DEBUG DETERMINISM: network_ops=true");
                 false
-            },
+            }
             // Default to non-deterministic for safety
             _ => {
                 println!("DEBUG DETERMINISM: default=false");
                 false
-            },
+            }
         }
     }
 
     /// Derive resource limits based on step complexity
     fn derive_resource_limits(step_expr: &Expression) -> ResourceLimits {
         let base_limits = ResourceLimits {
-            max_execution_time_ms: 30000, // 30 seconds default
+            max_execution_time_ms: 30000,        // 30 seconds default
             max_memory_bytes: 256 * 1024 * 1024, // 256MB default
-            max_cpu_usage: 1.0, // Single core default
+            max_cpu_usage: 1.0,                  // Single core default
             max_io_operations: Some(1000),
             max_network_bandwidth: Some(1024 * 1024), // 1MB/s default
         };
@@ -272,9 +271,9 @@ impl StepProfileDeriver {
             Expression::List(exprs) => {
                 if Self::is_computationally_intensive(exprs) {
                     ResourceLimits {
-                        max_execution_time_ms: 300000, // 5 minutes for intensive tasks
+                        max_execution_time_ms: 300000,        // 5 minutes for intensive tasks
                         max_memory_bytes: 1024 * 1024 * 1024, // 1GB
-                        max_cpu_usage: 2.0, // Multi-core
+                        max_cpu_usage: 2.0,                   // Multi-core
                         ..base_limits
                     }
                 } else if Self::contains_network_operations(exprs) {
@@ -292,7 +291,7 @@ impl StepProfileDeriver {
                 } else {
                     base_limits
                 }
-            },
+            }
             _ => base_limits,
         }
     }
@@ -315,10 +314,16 @@ impl StepProfileDeriver {
                 let has_system = Self::contains_system_operations(exprs);
                 let has_network = Self::contains_network_operations(exprs);
                 let has_file = Self::contains_file_operations(exprs);
-                
-                println!("DEBUG: has_system={}, has_network={}, has_file={}", has_system, has_network, has_file);
-                println!("DEBUG: Before flags - enable_syscall_filter={}", flags.enable_syscall_filter);
-                
+
+                println!(
+                    "DEBUG: has_system={}, has_network={}, has_file={}",
+                    has_system, has_network, has_file
+                );
+                println!(
+                    "DEBUG: Before flags - enable_syscall_filter={}",
+                    flags.enable_syscall_filter
+                );
+
                 // Explicitly set syscall filter strictly for system/exec operations
                 flags.enable_syscall_filter = has_system;
                 if has_system {
@@ -338,9 +343,12 @@ impl StepProfileDeriver {
                 if has_file {
                     flags.enable_fs_acl = true;
                 }
-                
-                println!("DEBUG: After flags - enable_syscall_filter={}", flags.enable_syscall_filter);
-            },
+
+                println!(
+                    "DEBUG: After flags - enable_syscall_filter={}",
+                    flags.enable_syscall_filter
+                );
+            }
             _ => {}
         }
 
@@ -357,7 +365,9 @@ impl StepProfileDeriver {
             profile.resource_limits.max_memory_bytes
         );
         // If runtime context doesn't allow the derived isolation level, downgrade
-        if !context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::from_ccos(&profile.isolation_level)) {
+        if !context.is_isolation_allowed(&crate::runtime::security::IsolationLevel::from_ccos(
+            &profile.isolation_level,
+        )) {
             match profile.isolation_level {
                 IsolationLevel::Sandboxed => {
                     if context.allow_isolated_isolation {
@@ -365,10 +375,10 @@ impl StepProfileDeriver {
                     } else {
                         profile.isolation_level = IsolationLevel::Inherit;
                     }
-                },
+                }
                 IsolationLevel::Isolated => {
                     profile.isolation_level = IsolationLevel::Inherit;
-                },
+                }
                 _ => {}
             }
         }
@@ -387,8 +397,7 @@ impl StepProfileDeriver {
         }
         println!(
             "DEBUG ADJUST END: profile.time={} profile.mem={}",
-            profile.resource_limits.max_execution_time_ms,
-            profile.resource_limits.max_memory_bytes
+            profile.resource_limits.max_execution_time_ms, profile.resource_limits.max_memory_bytes
         );
     }
 
@@ -412,8 +421,17 @@ impl StepProfileDeriver {
     }
 
     fn contains_network_operations(exprs: &[Expression]) -> bool {
-        let network_capabilities = ["http-fetch", "http.fetch", "network", "socket", "fetch", "http"]; // include generic http fallback
-        if Self::contains_capabilities(exprs, &network_capabilities) { return true; }
+        let network_capabilities = [
+            "http-fetch",
+            "http.fetch",
+            "network",
+            "socket",
+            "fetch",
+            "http",
+        ]; // include generic http fallback
+        if Self::contains_capabilities(exprs, &network_capabilities) {
+            return true;
+        }
         if let Some(name) = Self::extract_call_capability(exprs) {
             return network_capabilities.iter().any(|cap| name.contains(cap));
         }
@@ -422,7 +440,9 @@ impl StepProfileDeriver {
 
     fn contains_file_operations(exprs: &[Expression]) -> bool {
         let file_capabilities = ["file", "io", "read", "write", "open"];
-        if Self::contains_capabilities(exprs, &file_capabilities) { return true; }
+        if Self::contains_capabilities(exprs, &file_capabilities) {
+            return true;
+        }
         if let Some(name) = Self::extract_call_capability(exprs) {
             return file_capabilities.iter().any(|cap| name.contains(cap));
         }
@@ -431,7 +451,9 @@ impl StepProfileDeriver {
 
     fn contains_system_operations(exprs: &[Expression]) -> bool {
         let system_capabilities = ["system", "exec", "shell", "process"];
-        if Self::contains_capabilities(exprs, &system_capabilities) { return true; }
+        if Self::contains_capabilities(exprs, &system_capabilities) {
+            return true;
+        }
         if let Some(name) = Self::extract_call_capability(exprs) {
             return system_capabilities.iter().any(|cap| name.contains(cap));
         }
@@ -451,7 +473,11 @@ impl StepProfileDeriver {
         // Prefer explicit capability names like data.* and common data ops in capability names
         if let Some(name) = Self::extract_call_capability(exprs) {
             let n = name.to_lowercase();
-            if n.starts_with("data.") || n.contains("parse") || n.contains("serialize") || n.contains("json") {
+            if n.starts_with("data.")
+                || n.contains("parse")
+                || n.contains("serialize")
+                || n.contains("json")
+            {
                 return true;
             }
         }
@@ -460,13 +486,19 @@ impl StepProfileDeriver {
             match e {
                 Expression::Symbol(sym) => {
                     let n = sym.0.to_lowercase();
-                    if n.starts_with("data.") || n.contains("parse") || n.contains("serialize") || n.contains("json") {
+                    if n.starts_with("data.")
+                        || n.contains("parse")
+                        || n.contains("serialize")
+                        || n.contains("json")
+                    {
                         return true;
                     }
-                },
+                }
                 Expression::List(list_exprs) => {
-                    if Self::contains_data_operations(list_exprs) { return true; }
-                },
+                    if Self::contains_data_operations(list_exprs) {
+                        return true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -483,7 +515,9 @@ impl StepProfileDeriver {
         let has_cap = Self::contains_capabilities(exprs, &intensive_patterns);
         let call_name_matches = if let Some(name) = Self::extract_call_capability(exprs) {
             intensive_patterns.iter().any(|cap| name.contains(cap))
-        } else { false };
+        } else {
+            false
+        };
         let result = has_cap || call_name_matches;
         println!(
             "DEBUG INTENSIVE: has_cap={} call_name_matches={} result={}",
@@ -506,7 +540,12 @@ impl StepProfileDeriver {
         for e in exprs {
             if let Expression::Symbol(sym) = e {
                 let n = sym.0.to_lowercase();
-                if n == "system.execute" || n.contains("exec") || n.contains("shell") || n.contains("process.run") || n == "system" {
+                if n == "system.execute"
+                    || n.contains("exec")
+                    || n.contains("shell")
+                    || n.contains("process.run")
+                    || n == "system"
+                {
                     return true;
                 }
             }
@@ -515,19 +554,17 @@ impl StepProfileDeriver {
     }
 
     fn contains_capabilities(exprs: &[Expression], capabilities: &[&str]) -> bool {
-        exprs.iter().any(|expr| {
-            match expr {
-                Expression::Symbol(name) => {
-                    let name_lower = name.0.to_lowercase();
-                    capabilities.iter().any(|cap| name_lower.contains(cap))
-                },
-                Expression::Literal(Literal::String(s)) => {
-                    let s_lower = s.to_lowercase();
-                    capabilities.iter().any(|cap| s_lower.contains(cap))
-                },
-                Expression::List(list_exprs) => Self::contains_capabilities(list_exprs, capabilities),
-                _ => false,
+        exprs.iter().any(|expr| match expr {
+            Expression::Symbol(name) => {
+                let name_lower = name.0.to_lowercase();
+                capabilities.iter().any(|cap| name_lower.contains(cap))
             }
+            Expression::Literal(Literal::String(s)) => {
+                let s_lower = s.to_lowercase();
+                capabilities.iter().any(|cap| s_lower.contains(cap))
+            }
+            Expression::List(list_exprs) => Self::contains_capabilities(list_exprs, capabilities),
+            _ => false,
         })
     }
 }
@@ -570,16 +607,18 @@ impl Orchestrator {
     ) -> RuntimeResult<ExecutionOutcome> {
         let current_expr = expr.clone();
         let mut max_iterations = 1000; // Prevent infinite loops
-        
+
         loop {
             if max_iterations == 0 {
-                return Err(RuntimeError::Generic("Maximum execution iterations reached".to_string()));
+                return Err(RuntimeError::Generic(
+                    "Maximum execution iterations reached".to_string(),
+                ));
             }
             max_iterations -= 1;
-            
+
             // Execute the current expression
             let result = evaluator.evaluate(&current_expr)?;
-            
+
             match result {
                 ExecutionOutcome::Complete(value) => {
                     // Execution completed successfully
@@ -600,16 +639,21 @@ impl Orchestrator {
 
     // handle_effect_request removed - unified into handle_host_call
 
-    async fn handle_host_call(&self, host_call: &crate::runtime::execution_outcome::HostCall) -> RuntimeResult<Value> {
+    async fn handle_host_call(
+        &self,
+        host_call: &crate::runtime::execution_outcome::HostCall,
+    ) -> RuntimeResult<Value> {
         // Unified capability handling - all host calls go through capability marketplace
         let args_value = Value::Vector(host_call.args.clone());
-        
+
         // Use enhanced execution with metadata
-        self.capability_marketplace.execute_capability_enhanced(
-            &host_call.capability_id, 
-            &args_value, 
-            host_call.metadata.as_ref()
-        ).await
+        self.capability_marketplace
+            .execute_capability_enhanced(
+                &host_call.capability_id,
+                &args_value,
+                host_call.metadata.as_ref(),
+            )
+            .await
     }
 
     /// Executes a given `Plan` within a specified `RuntimeContext`.
@@ -628,7 +672,8 @@ impl Orchestrator {
                 ActionType::PlanStarted,
                 plan_id.clone(),
                 primary_intent_id.clone(),
-            ).with_parent(None)
+            )
+            .with_parent(None),
         )?;
 
         // Mark primary intent as Executing (transition Active -> Executing) before evaluation begins
@@ -649,11 +694,15 @@ impl Orchestrator {
             self.capability_marketplace.clone(),
             context.clone(),
         ));
-        host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), plan_action_id.clone());
+        host.set_execution_context(
+            plan_id.clone(),
+            plan.intent_ids.clone(),
+            plan_action_id.clone(),
+        );
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let host_iface: Arc<dyn HostInterface> = host.clone();
         let evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
-        
+
         // Initialize context manager for the plan execution
         {
             let mut context_manager = evaluator.context_manager.borrow_mut();
@@ -662,23 +711,31 @@ impl Orchestrator {
 
         // --- 3. Parse and Execute the Plan Body with Yield-Based Control Flow ---
         let final_result = match &plan.language {
-            PlanLanguage::Rtfs20 => {
-                match &plan.body {
-                    PlanBody::Rtfs(rtfs_code) => {
-                        let code = rtfs_code.trim();
-                        if code.is_empty() {
-                            Err(RuntimeError::Generic("Empty RTFS plan body after trimming".to_string()))
-                        } else {
-                            match parse_expression(code) {
-                                Ok(expr) => self.execute_with_yield_handling(&evaluator, &expr).await,
-                                Err(e) => Err(RuntimeError::Generic(format!("Failed to parse RTFS plan body: {:?}", e))),
-                            }
+            PlanLanguage::Rtfs20 => match &plan.body {
+                PlanBody::Rtfs(rtfs_code) => {
+                    let code = rtfs_code.trim();
+                    if code.is_empty() {
+                        Err(RuntimeError::Generic(
+                            "Empty RTFS plan body after trimming".to_string(),
+                        ))
+                    } else {
+                        match parse_expression(code) {
+                            Ok(expr) => self.execute_with_yield_handling(&evaluator, &expr).await,
+                            Err(e) => Err(RuntimeError::Generic(format!(
+                                "Failed to parse RTFS plan body: {:?}",
+                                e
+                            ))),
                         }
                     }
-                    PlanBody::Wasm(_) => Err(RuntimeError::Generic("RTFS plans must use Rtfs body format".to_string())),
                 }
-            }
-            _ => Err(RuntimeError::Generic(format!("Unsupported plan language: {:?}", plan.language))),
+                PlanBody::Wasm(_) => Err(RuntimeError::Generic(
+                    "RTFS plans must use Rtfs body format".to_string(),
+                )),
+            },
+            _ => Err(RuntimeError::Generic(format!(
+                "Unsupported plan language: {:?}",
+                plan.language
+            ))),
         };
 
         host.clear_execution_context();
@@ -687,7 +744,11 @@ impl Orchestrator {
         // The execution loop now handles all RequiresHost outcomes, so we only get Complete results here.
         let (execution_result, error_opt) = match final_result {
             Ok(ExecutionOutcome::Complete(value)) => {
-                let res = ExecutionResult { success: true, value, metadata: Default::default() };
+                let res = ExecutionResult {
+                    success: true,
+                    value,
+                    metadata: Default::default(),
+                };
                 self.log_action(
                     Action::new(
                         ActionType::PlanCompleted,
@@ -695,16 +756,21 @@ impl Orchestrator {
                         primary_intent_id.clone(),
                     )
                     .with_parent(Some(plan_action_id.clone()))
-                    .with_result(res.clone())
+                    .with_result(res.clone()),
                 )?;
                 (res, None)
-            },
+            }
             Ok(ExecutionOutcome::RequiresHost(_)) => {
                 // This should not happen as we handle RequiresHost in the loop
-                let error = RuntimeError::Generic("Unexpected RequiresHost in final result".to_string());
-                let res = ExecutionResult { success: false, value: RtfsValue::String("error: Unexpected RequiresHost".to_string()), metadata: Default::default() };
+                let error =
+                    RuntimeError::Generic("Unexpected RequiresHost in final result".to_string());
+                let res = ExecutionResult {
+                    success: false,
+                    value: RtfsValue::String("error: Unexpected RequiresHost".to_string()),
+                    metadata: Default::default(),
+                };
                 (res, Some(error))
-            },
+            }
             Err(e) => {
                 // Log aborted action first
                 self.log_action(
@@ -714,11 +780,15 @@ impl Orchestrator {
                         primary_intent_id.clone(),
                     )
                     .with_parent(Some(plan_action_id.clone()))
-                    .with_error(&e.to_string())
+                    .with_error(&e.to_string()),
                 )?;
                 // Represent failure value explicitly (string) so ExecutionResult always has a Value
                 let failure_value = RtfsValue::String(format!("error: {}", e));
-                let res = ExecutionResult { success: false, value: failure_value, metadata: Default::default() };
+                let res = ExecutionResult {
+                    success: false,
+                    value: failure_value,
+                    metadata: Default::default(),
+                };
                 (res, Some(e))
             }
         };
@@ -744,16 +814,22 @@ impl Orchestrator {
                             Some(&plan_id),
                             Some(&plan_action_id),
                         )
-                        .map_err(|e| RuntimeError::Generic(format!(
-                            "IntentGraph update failed for {}: {:?}",
-                            primary_intent_id, e
-                        )))?;
+                        .map_err(|e| {
+                            RuntimeError::Generic(format!(
+                                "IntentGraph update failed for {}: {:?}",
+                                primary_intent_id, e
+                            ))
+                        })?;
                 }
             }
         }
 
         // Propagate original error after updating intent status
-        if let Some(err) = error_opt { Err(err) } else { Ok(execution_result) }
+        if let Some(err) = error_opt {
+            Err(err)
+        } else {
+            Ok(execution_result)
+        }
     }
 
     /// Execute an entire intent graph with cross-plan parameter merging
@@ -764,21 +840,27 @@ impl Orchestrator {
         initial_context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
         // Debug logging
-        eprintln!("DEBUG: execute_intent_graph called for root_intent_id: {}", root_intent_id);
-        
+        eprintln!(
+            "DEBUG: execute_intent_graph called for root_intent_id: {}",
+            root_intent_id
+        );
+
         // 1. Start with an empty cross-plan param bag
         let mut enhanced_context = initial_context.clone();
         enhanced_context.cross_plan_params.clear();
-        
+
         // 2. Execute children and merge exported vars
         let mut child_results = Vec::new();
         let children = self.get_children_order(root_intent_id)?;
         eprintln!("DEBUG: Found {} children: {:?}", children.len(), children);
-        
+
         for child_id in children {
             eprintln!("DEBUG: Looking for plan for child_id: {}", child_id);
             if let Some(child_plan) = self.get_plan_for_intent(&child_id)? {
-                eprintln!("DEBUG: Found plan for child_id {}: {:?}", child_id, child_plan.plan_id);
+                eprintln!(
+                    "DEBUG: Found plan for child_id {}: {:?}",
+                    child_id, child_plan.plan_id
+                );
                 let child_result = self.execute_plan(&child_plan, &enhanced_context).await?;
                 let exported = self.extract_exported_variables(&child_result);
                 enhanced_context.cross_plan_params.extend(exported);
@@ -787,7 +869,7 @@ impl Orchestrator {
                 eprintln!("DEBUG: No plan found for child_id: {}", child_id);
             }
         }
-        
+
         // 3. Optionally execute root plan (if any)
         let mut root_result = None;
         if let Some(root_plan) = self.get_plan_for_intent(root_intent_id)? {
@@ -796,10 +878,10 @@ impl Orchestrator {
         } else {
             eprintln!("DEBUG: No root plan found");
         }
-        
+
         // 4. Build a meaningful result that summarizes the execution
         let mut result_summary = Vec::new();
-        
+
         // Add child results
         for (child_id, result) in &child_results {
             if result.success {
@@ -809,7 +891,7 @@ impl Orchestrator {
                 result_summary.push(format!("{}: failed", child_id));
             }
         }
-        
+
         // Add root result if any
         if let Some(ref root) = root_result {
             if root.success {
@@ -819,28 +901,46 @@ impl Orchestrator {
                 result_summary.push("root: failed".to_string());
             }
         }
-        
+
         // Create a meaningful result value. If nothing was executed, mark as failure
         // so callers can detect that no plans ran rather than treating it as success.
         if result_summary.is_empty() {
             let result_value = RtfsValue::String("No plans executed".to_string());
             eprintln!("DEBUG: No plans executed, returning failure");
-            Ok(ExecutionResult { success: false, value: result_value, metadata: Default::default() })
+            Ok(ExecutionResult {
+                success: false,
+                value: result_value,
+                metadata: Default::default(),
+            })
         } else {
-            let result_value = RtfsValue::String(format!("Orchestrated {} plans: {}", child_results.len(), result_summary.join(", ")));
-            eprintln!("DEBUG: Returning success with {} plans: {}", child_results.len(), result_summary.join(", "));
-            Ok(ExecutionResult { success: true, value: result_value, metadata: Default::default() })
+            let result_value = RtfsValue::String(format!(
+                "Orchestrated {} plans: {}",
+                child_results.len(),
+                result_summary.join(", ")
+            ));
+            eprintln!(
+                "DEBUG: Returning success with {} plans: {}",
+                child_results.len(),
+                result_summary.join(", ")
+            );
+            Ok(ExecutionResult {
+                success: true,
+                value: result_value,
+                metadata: Default::default(),
+            })
         }
     }
-    
+
     /// Simple method to get children order
     fn get_children_order(&self, root_id: &str) -> RuntimeResult<Vec<String>> {
-        let graph = self.intent_graph.lock()
+        let graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
-        
+
         // Use the authoritative get_child_intents method instead of the denormalized field
         let children = graph.get_child_intents(&root_id.to_string());
-        
+
         Ok(children.into_iter().map(|child| child.intent_id).collect())
     }
 
@@ -849,7 +949,7 @@ impl Orchestrator {
         self.get_children_order(root_id)
             .map_err(|e| format!("get_children_order failed: {:?}", e))
     }
-    
+
     /// Convert serde_json::Value to runtime::values::Value
     fn json_value_to_runtime_value(json_val: JsonValue) -> Value {
         match json_val {
@@ -863,40 +963,42 @@ impl Orchestrator {
                 } else {
                     Value::String(n.to_string())
                 }
-            },
+            }
             JsonValue::String(s) => Value::String(s),
             JsonValue::Array(arr) => {
-                let runtime_vec: Vec<Value> = arr.into_iter()
+                let runtime_vec: Vec<Value> = arr
+                    .into_iter()
                     .map(Self::json_value_to_runtime_value)
                     .collect();
                 Value::Vector(runtime_vec)
-            },
+            }
             JsonValue::Object(obj) => {
                 let mut runtime_map = std::collections::HashMap::new();
                 for (k, v) in obj {
-                    runtime_map.insert(
-                        MapKey::String(k),
-                        Self::json_value_to_runtime_value(v)
-                    );
+                    runtime_map.insert(MapKey::String(k), Self::json_value_to_runtime_value(v));
                 }
                 Value::Map(runtime_map)
             }
         }
     }
-    
+
     /// Get plan for a specific intent
     pub fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
         // Query the plan archive for plans associated with this intent
-        let archivable_plans = self.plan_archive.get_plans_for_intent(&intent_id.to_string());
-        
+        let archivable_plans = self
+            .plan_archive
+            .get_plans_for_intent(&intent_id.to_string());
+
         // Convert the first available plan back to a Plan object
         if let Some(archivable_plan) = archivable_plans.first() {
             // Helper function to safely deserialize JSON strings
             let deserialize_json = |json_str: &Option<String>| -> Option<Value> {
-                json_str.as_ref().and_then(|s| serde_json::from_str(s).ok())
+                json_str
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str(s).ok())
                     .map(Self::json_value_to_runtime_value)
             };
-            
+
             // Convert ArchivablePlan back to Plan
             let plan = Plan {
                 plan_id: archivable_plan.plan_id.clone(),
@@ -904,32 +1006,44 @@ impl Orchestrator {
                 intent_ids: archivable_plan.intent_ids.clone(),
                 language: super::types::PlanLanguage::Rtfs20, // Default to RTFS 2.0
                 body: super::types::PlanBody::Rtfs(
-                    archivable_plan.body.steps.first()
+                    archivable_plan
+                        .body
+                        .steps
+                        .first()
                         .cloned()
-                        .unwrap_or_else(|| "()".to_string())
+                        .unwrap_or_else(|| "()".to_string()),
                 ),
                 status: archivable_plan.status.clone(),
                 created_at: archivable_plan.created_at,
-                metadata: archivable_plan.metadata.iter()
+                metadata: archivable_plan
+                    .metadata
+                    .iter()
                     .filter_map(|(k, v)| {
-                        serde_json::from_str(v).ok()
+                        serde_json::from_str(v)
+                            .ok()
                             .map(Self::json_value_to_runtime_value)
                             .map(|val| (k.clone(), val))
                     })
                     .collect(),
                 input_schema: deserialize_json(&archivable_plan.input_schema),
                 output_schema: deserialize_json(&archivable_plan.output_schema),
-                policies: archivable_plan.policies.iter()
+                policies: archivable_plan
+                    .policies
+                    .iter()
                     .filter_map(|(k, v)| {
-                        serde_json::from_str(v).ok()
+                        serde_json::from_str(v)
+                            .ok()
                             .map(Self::json_value_to_runtime_value)
                             .map(|val| (k.clone(), val))
                     })
                     .collect(),
                 capabilities_required: archivable_plan.capabilities_required.clone(),
-                annotations: archivable_plan.annotations.iter()
+                annotations: archivable_plan
+                    .annotations
+                    .iter()
                     .filter_map(|(k, v)| {
-                        serde_json::from_str(v).ok()
+                        serde_json::from_str(v)
+                            .ok()
                             .map(Self::json_value_to_runtime_value)
                             .map(|val| (k.clone(), val))
                     })
@@ -940,42 +1054,37 @@ impl Orchestrator {
             Ok(None)
         }
     }
-    
+
     /// Store a plan in the plan archive
     pub fn store_plan(&self, plan: &Plan) -> RuntimeResult<String> {
-        self.plan_archive.archive_plan(plan)
+        self.plan_archive
+            .archive_plan(plan)
             .map_err(|e| RuntimeError::Generic(format!("Failed to archive plan: {}", e)))
     }
-    
+
     /// Extract exported variables from execution result
     /// This is a simplified version - in practice, you'd analyze the result more carefully
     fn extract_exported_variables(&self, result: &ExecutionResult) -> HashMap<String, RtfsValue> {
         let mut exported = HashMap::new();
-        
+
         // For now, we'll just extract the result value as a simple export
         // In practice, you'd want to analyze the execution context for variables
         // that were set during execution
         if result.success {
             exported.insert("result".to_string(), result.value.clone());
         }
-        
+
         exported
     }
 
     /// Serialize the current execution context from an evaluator (checkpoint helper)
     pub fn serialize_context(&self, evaluator: &Evaluator) -> RuntimeResult<String> {
-        evaluator
-            .context_manager
-            .borrow()
-            .serialize()
+        evaluator.context_manager.borrow().serialize()
     }
 
     /// Restore a serialized execution context into an evaluator (resume helper)
     pub fn deserialize_context(&self, evaluator: &Evaluator, data: &str) -> RuntimeResult<()> {
-        evaluator
-            .context_manager
-            .borrow_mut()
-            .deserialize(data)
+        evaluator.context_manager.borrow_mut().deserialize(data)
     }
 
     /// Create a checkpoint: serialize context and log PlanPaused with checkpoint id
@@ -991,11 +1100,17 @@ impl Orchestrator {
         let checkpoint_id = format!("cp-{:x}", hasher.finalize());
 
         // Log lifecycle event with checkpoint metadata
-        let mut chain = self.causal_chain.lock()
+        let mut chain = self
+            .causal_chain
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
-        let action = Action::new(super::types::ActionType::PlanPaused, plan_id.to_string(), intent_id.to_string())
-            .with_name("checkpoint")
-            .with_args(vec![RtfsValue::String(checkpoint_id.clone())]);
+        let action = Action::new(
+            super::types::ActionType::PlanPaused,
+            plan_id.to_string(),
+            intent_id.to_string(),
+        )
+        .with_name("checkpoint")
+        .with_args(vec![RtfsValue::String(checkpoint_id.clone())]);
         let _ = chain.append(&action)?;
 
         // Persist checkpoint
@@ -1004,10 +1119,15 @@ impl Orchestrator {
             plan_id: plan_id.to_string(),
             intent_id: intent_id.to_string(),
             serialized_context: serialized.clone(),
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             metadata: HashMap::new(),
         };
-        let _id = self.checkpoint_archive.store(record)
+        let _id = self
+            .checkpoint_archive
+            .store(record)
             .map_err(|e| RuntimeError::Generic(format!("Failed to store checkpoint: {}", e)))?;
 
         Ok((checkpoint_id, serialized))
@@ -1030,11 +1150,17 @@ impl Orchestrator {
         let checkpoint_id = format!("cp-{:x}", hasher.finalize());
 
         // Log resume event
-        let mut chain = self.causal_chain.lock()
+        let mut chain = self
+            .causal_chain
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
-        let action = Action::new(super::types::ActionType::PlanResumed, plan_id.to_string(), intent_id.to_string())
-            .with_name("resume_from_checkpoint")
-            .with_args(vec![RtfsValue::String(checkpoint_id)]);
+        let action = Action::new(
+            super::types::ActionType::PlanResumed,
+            plan_id.to_string(),
+            intent_id.to_string(),
+        )
+        .with_name("resume_from_checkpoint")
+        .with_args(vec![RtfsValue::String(checkpoint_id)]);
         let _ = chain.append(&action)?;
         Ok(())
     }
@@ -1056,7 +1182,9 @@ impl Orchestrator {
                 .ok_or_else(|| RuntimeError::Generic("Checkpoint not found".to_string()))?
         };
         if rec.plan_id != plan_id || rec.intent_id != intent_id {
-            return Err(RuntimeError::Generic("Checkpoint does not match plan/intent".to_string()));
+            return Err(RuntimeError::Generic(
+                "Checkpoint does not match plan/intent".to_string(),
+            ));
         }
         self.resume_plan(plan_id, intent_id, evaluator, &rec.serialized_context)
     }
@@ -1085,15 +1213,27 @@ impl Orchestrator {
         ]);
 
         // Set metadata directly
-        profile_action.metadata.insert("step_name".to_string(), RtfsValue::String(step_name.to_string()));
-        profile_action.metadata.insert("network_policy".to_string(), RtfsValue::String(format!("{:?}", profile.microvm_config.network_policy)));
-        profile_action.metadata.insert("fs_policy".to_string(), RtfsValue::String(format!("{:?}", profile.microvm_config.fs_policy)));
-        profile_action.metadata.insert("resource_limits".to_string(), RtfsValue::String(format!(
-            "time: {}ms, mem: {}MB, cpu: {}x",
-            profile.resource_limits.max_execution_time_ms,
-            profile.resource_limits.max_memory_bytes / (1024 * 1024),
-            profile.resource_limits.max_cpu_usage
-        )));
+        profile_action.metadata.insert(
+            "step_name".to_string(),
+            RtfsValue::String(step_name.to_string()),
+        );
+        profile_action.metadata.insert(
+            "network_policy".to_string(),
+            RtfsValue::String(format!("{:?}", profile.microvm_config.network_policy)),
+        );
+        profile_action.metadata.insert(
+            "fs_policy".to_string(),
+            RtfsValue::String(format!("{:?}", profile.microvm_config.fs_policy)),
+        );
+        profile_action.metadata.insert(
+            "resource_limits".to_string(),
+            RtfsValue::String(format!(
+                "time: {}ms, mem: {}MB, cpu: {}x",
+                profile.resource_limits.max_execution_time_ms,
+                profile.resource_limits.max_memory_bytes / (1024 * 1024),
+                profile.resource_limits.max_cpu_usage
+            )),
+        );
 
         self.log_action(profile_action)?;
         Ok(())
@@ -1111,7 +1251,9 @@ impl Orchestrator {
 
     /// Helper to log an action to the Causal Chain.
     fn log_action(&self, action: Action) -> RuntimeResult<String> {
-        let mut chain = self.causal_chain.lock()
+        let mut chain = self
+            .causal_chain
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
         chain.append(&action)
     }
@@ -1120,10 +1262,10 @@ impl Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Symbol;
     use crate::ccos::event_sink::CausalChainIntentEventSink;
     use crate::ccos::types::{PlanStatus, StorableIntent};
     use crate::runtime::security::SecurityLevel;
-    use crate::ast::Symbol;
 
     fn test_context() -> RuntimeContext {
         RuntimeContext {
@@ -1134,7 +1276,9 @@ mod tests {
 
     fn make_graph_with_sink(chain: Arc<Mutex<CausalChain>>) -> Arc<Mutex<IntentGraph>> {
         let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&chain)));
-        Arc::new(Mutex::new(IntentGraph::with_event_sink(sink).expect("intent graph")))
+        Arc::new(Mutex::new(
+            IntentGraph::with_event_sink(sink).expect("intent graph"),
+        ))
     }
 
     fn collect_status_changes(chain: &CausalChain, intent_id: &str) -> Vec<Action> {
@@ -1153,11 +1297,16 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Seed an Active intent
-    let stored = StorableIntent::new("test goal".to_string());
-    let intent_id = stored.intent_id.clone();
+        let stored = StorableIntent::new("test goal".to_string());
+        let intent_id = stored.intent_id.clone();
         {
             let mut g = graph.lock().unwrap();
             g.store_intent(stored.clone()).expect("store intent");
@@ -1168,7 +1317,10 @@ mod tests {
         plan.status = PlanStatus::Active;
 
         let ctx = test_context();
-        let result = _orchestrator.execute_plan(&plan, &ctx).await.expect("exec ok");
+        let result = _orchestrator
+            .execute_plan(&plan, &ctx)
+            .await
+            .expect("exec ok");
         assert!(result.success);
 
         // Verify status changes were audited: Active->Executing, Executing->Completed
@@ -1176,7 +1328,11 @@ mod tests {
             let guard = chain.lock().unwrap();
             collect_status_changes(&guard, &intent_id)
         };
-        assert!(changes.len() >= 2, "expected at least 2 status change actions, got {}", changes.len());
+        assert!(
+            changes.len() >= 2,
+            "expected at least 2 status change actions, got {}",
+            changes.len()
+        );
 
         // Find specific transitions via metadata
         let mut saw_active_to_executing = false;
@@ -1186,9 +1342,13 @@ mod tests {
         for a in &changes {
             let old_s = a.metadata.get("old_status").and_then(|v| v.as_string());
             let new_s = a.metadata.get("new_status").and_then(|v| v.as_string());
-            if a.metadata.get("triggering_action_id").is_some() { saw_triggering = true; }
+            if a.metadata.get("triggering_action_id").is_some() {
+                saw_triggering = true;
+            }
             if let Some(reason) = a.metadata.get("reason").and_then(|v| v.as_string()) {
-                if reason == "IntentGraph: explicit status set" || reason == "IntentGraph: update_intent result" {
+                if reason == "IntentGraph: explicit status set"
+                    || reason == "IntentGraph: update_intent result"
+                {
                     saw_reason_set = true;
                 }
             }
@@ -1198,10 +1358,22 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(saw_active_to_executing, "missing Active->Executing status change");
-        assert!(saw_executing_to_completed, "missing Executing->Completed status change");
-        assert!(saw_triggering, "missing triggering_action_id metadata on status change");
-        assert!(saw_reason_set, "missing expected reason metadata on status change");
+        assert!(
+            saw_active_to_executing,
+            "missing Active->Executing status change"
+        );
+        assert!(
+            saw_executing_to_completed,
+            "missing Executing->Completed status change"
+        );
+        assert!(
+            saw_triggering,
+            "missing triggering_action_id metadata on status change"
+        );
+        assert!(
+            saw_reason_set,
+            "missing expected reason metadata on status change"
+        );
     }
 
     #[tokio::test]
@@ -1210,7 +1382,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Seed an Active intent
         let stored = StorableIntent::new("test goal".to_string());
@@ -1233,7 +1410,11 @@ mod tests {
             let guard = chain.lock().unwrap();
             collect_status_changes(&guard, &intent_id)
         };
-        assert!(changes.len() >= 2, "expected at least 2 status change actions, got {}", changes.len());
+        assert!(
+            changes.len() >= 2,
+            "expected at least 2 status change actions, got {}",
+            changes.len()
+        );
 
         let mut saw_active_to_executing = false;
         let mut saw_executing_to_failed = false;
@@ -1242,9 +1423,13 @@ mod tests {
         for a in &changes {
             let old_s = a.metadata.get("old_status").and_then(|v| v.as_string());
             let new_s = a.metadata.get("new_status").and_then(|v| v.as_string());
-            if a.metadata.get("triggering_action_id").is_some() { saw_triggering = true; }
+            if a.metadata.get("triggering_action_id").is_some() {
+                saw_triggering = true;
+            }
             if let Some(reason) = a.metadata.get("reason").and_then(|v| v.as_string()) {
-                if reason == "IntentGraph: explicit status set" || reason == "IntentGraph: update_intent result" {
+                if reason == "IntentGraph: explicit status set"
+                    || reason == "IntentGraph: update_intent result"
+                {
                     saw_reason_set = true;
                 }
             }
@@ -1254,10 +1439,22 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(saw_active_to_executing, "missing Active->Executing status change");
-        assert!(saw_executing_to_failed, "missing Executing->Failed status change");
-        assert!(saw_triggering, "missing triggering_action_id metadata on status change");
-        assert!(saw_reason_set, "missing expected reason metadata on status change");
+        assert!(
+            saw_active_to_executing,
+            "missing Active->Executing status change"
+        );
+        assert!(
+            saw_executing_to_failed,
+            "missing Executing->Failed status change"
+        );
+        assert!(
+            saw_triggering,
+            "missing triggering_action_id metadata on status change"
+        );
+        assert!(
+            saw_reason_set,
+            "missing expected reason metadata on status change"
+        );
     }
 
     #[tokio::test]
@@ -1266,7 +1463,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test pure function call - should get Inherit isolation
         let pure_expr = Expression::List(vec![
@@ -1280,7 +1482,8 @@ mod tests {
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("add-numbers", &pure_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("add-numbers", &pure_expr, &context).unwrap();
 
         assert_eq!(profile.isolation_level, IsolationLevel::Inherit);
         assert_eq!(profile.deterministic, true);
@@ -1295,7 +1498,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test network operation - should get Isolated isolation
         let network_expr = Expression::List(vec![
@@ -1308,14 +1516,21 @@ mod tests {
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("fetch-data", &network_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("fetch-data", &network_expr, &context).unwrap();
 
         assert_eq!(profile.isolation_level, IsolationLevel::Isolated);
         assert_eq!(profile.deterministic, false);
         assert_eq!(profile.security_flags.enable_network_acl, true);
         println!("TEST DEBUG PROFILE (network): {:?}", profile);
-        println!("TEST DEBUG: profile.security_flags.enable_syscall_filter = {}", profile.security_flags.enable_syscall_filter);
-        eprintln!("TEST DEBUG ERR: syscall_filter = {} flags = {:?}", profile.security_flags.enable_syscall_filter, profile.security_flags);
+        println!(
+            "TEST DEBUG: profile.security_flags.enable_syscall_filter = {}",
+            profile.security_flags.enable_syscall_filter
+        );
+        eprintln!(
+            "TEST DEBUG ERR: syscall_filter = {} flags = {:?}",
+            profile.security_flags.enable_syscall_filter, profile.security_flags
+        );
         dbg!(profile.security_flags.enable_syscall_filter);
         assert_eq!(profile.security_flags.enable_syscall_filter, false);
 
@@ -1333,7 +1548,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test file operation - should get Isolated isolation
         let file_expr = Expression::List(vec![
@@ -1346,12 +1566,16 @@ mod tests {
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("read-file", &file_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("read-file", &file_expr, &context).unwrap();
 
         assert_eq!(profile.isolation_level, IsolationLevel::Isolated);
         assert_eq!(profile.deterministic, false);
         assert_eq!(profile.security_flags.enable_fs_acl, true);
-        eprintln!("TEST DEBUG ERR (file): syscall_filter = {} flags = {:?}", profile.security_flags.enable_syscall_filter, profile.security_flags);
+        eprintln!(
+            "TEST DEBUG ERR (file): syscall_filter = {} flags = {:?}",
+            profile.security_flags.enable_syscall_filter, profile.security_flags
+        );
         println!("TEST DEBUG PROFILE (file): {:?}", profile);
 
         // Check that filesystem policy allows specific paths
@@ -1369,7 +1593,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test system operation - should get Sandboxed isolation
         let system_expr = Expression::List(vec![
@@ -1382,7 +1611,8 @@ mod tests {
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("list-files", &system_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("list-files", &system_expr, &context).unwrap();
 
         assert_eq!(profile.isolation_level, IsolationLevel::Sandboxed);
         assert_eq!(profile.deterministic, false);
@@ -1397,7 +1627,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test computationally intensive operation gets higher limits
         let intensive_expr = Expression::List(vec![
@@ -1412,7 +1647,8 @@ mod tests {
         let mut context = test_context();
         context.max_execution_time = None;
         context.max_memory_usage = None;
-        let profile = StepProfileDeriver::derive_profile("analyze-data", &intensive_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("analyze-data", &intensive_expr, &context).unwrap();
 
         // Intensive operations should get higher resource limits
         assert!(profile.resource_limits.max_execution_time_ms >= 300000); // 5+ minutes
@@ -1426,7 +1662,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test that runtime context constraints are respected
         let file_expr = Expression::List(vec![
@@ -1442,7 +1683,8 @@ mod tests {
         let mut context = test_context();
         context.allow_isolated_isolation = false;
 
-        let profile = StepProfileDeriver::derive_profile("read-file", &file_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("read-file", &file_expr, &context).unwrap();
 
         // Should be downgraded to Inherit since Isolated is not allowed
         assert_eq!(profile.isolation_level, IsolationLevel::Inherit);
@@ -1454,7 +1696,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         let network_expr = Expression::List(vec![
             Expression::Symbol(Symbol("call".to_string())),
@@ -1468,15 +1715,22 @@ mod tests {
         let context = test_context();
 
         // Derive profile and check that it's logged to causal chain
-        _orchestrator.derive_step_profile("test-step", &network_expr, &context).unwrap();
+        _orchestrator
+            .derive_step_profile("test-step", &network_expr, &context)
+            .unwrap();
 
         // Check that a StepProfileDerived action was logged
         let profile_action_exists = {
             let guard = chain.lock().unwrap();
             let actions = guard.get_actions_for_intent(&"step-security".to_string());
-            actions.iter().any(|a| a.action_type == ActionType::StepProfileDerived)
+            actions
+                .iter()
+                .any(|a| a.action_type == ActionType::StepProfileDerived)
         };
-        assert!(profile_action_exists, "StepProfileDerived action should be logged");
+        assert!(
+            profile_action_exists,
+            "StepProfileDerived action should be logged"
+        );
     }
 
     #[tokio::test]
@@ -1485,7 +1739,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         let expr = Expression::List(vec![
             Expression::Symbol(Symbol("call".to_string())),
@@ -1503,7 +1762,9 @@ mod tests {
         assert!(_orchestrator.get_current_step_profile().is_none());
 
         // Derive and set profile
-        _orchestrator.derive_step_profile("test-math", &expr, &context).unwrap();
+        _orchestrator
+            .derive_step_profile("test-math", &expr, &context)
+            .unwrap();
         assert!(_orchestrator.get_current_step_profile().is_some());
 
         // Clear profile
@@ -1517,7 +1778,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test that dangerous operations get comprehensive security flags
         let dangerous_expr = Expression::List(vec![
@@ -1530,7 +1796,8 @@ mod tests {
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("dangerous-op", &dangerous_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("dangerous-op", &dangerous_expr, &context).unwrap();
 
         // Dangerous operations should have all security flags enabled
         assert_eq!(profile.security_flags.enable_syscall_filter, true);
@@ -1546,7 +1813,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test that network operations get appropriate bandwidth limits
         let network_expr = Expression::List(vec![
@@ -1554,16 +1826,20 @@ mod tests {
             Expression::Symbol(Symbol("http.download".to_string())),
             Expression::List(vec![
                 Expression::Symbol(Symbol("values".to_string())),
-                Expression::Literal(Literal::String("https://example.com/large-file.zip".to_string())),
+                Expression::Literal(Literal::String(
+                    "https://example.com/large-file.zip".to_string(),
+                )),
             ]),
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("download-file", &network_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("download-file", &network_expr, &context).unwrap();
 
         // Network operations should have bandwidth limits
         assert!(profile.resource_limits.max_network_bandwidth.is_some());
-        assert!(profile.resource_limits.max_network_bandwidth.unwrap() >= 10 * 1024 * 1024); // At least 10MB/s
+        assert!(profile.resource_limits.max_network_bandwidth.unwrap() >= 10 * 1024 * 1024);
+        // At least 10MB/s
     }
 
     #[tokio::test]
@@ -1572,7 +1848,12 @@ mod tests {
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(Arc::clone(&chain), Arc::clone(&graph), Arc::clone(&marketplace), Arc::clone(&plan_archive));
+        let mut _orchestrator = Orchestrator::new(
+            Arc::clone(&chain),
+            Arc::clone(&graph),
+            Arc::clone(&marketplace),
+            Arc::clone(&plan_archive),
+        );
 
         // Test that data operations are marked as deterministic
         let data_expr = Expression::List(vec![
@@ -1585,7 +1866,8 @@ mod tests {
         ]);
 
         let context = test_context();
-        let profile = StepProfileDeriver::derive_profile("parse-json", &data_expr, &context).unwrap();
+        let profile =
+            StepProfileDeriver::derive_profile("parse-json", &data_expr, &context).unwrap();
 
         assert_eq!(profile.deterministic, true);
         assert_eq!(profile.isolation_level, IsolationLevel::Inherit);

@@ -1,5 +1,5 @@
 //! L2 Inference Cache: (Model, Input) -> Output memoization
-//! 
+//!
 //! This layer provides fast lookup for model inference results, caching the mapping
 //! from model-input pairs to outputs with confidence scores. This is the second
 //! layer that operates on actual inference data rather than delegation decisions.
@@ -8,21 +8,26 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use super::{CacheLayer, CacheStats, CacheConfig, CacheEntry, CacheError, EvictionPolicy, keygen};
+use super::{keygen, CacheConfig, CacheEntry, CacheError, CacheLayer, CacheStats, EvictionPolicy};
 
 /// Inference result with metadata
 #[derive(Debug, Clone)]
 pub struct InferenceResult {
-    pub output: String,              // Model output
-    pub confidence: f64,             // Confidence score (0.0 - 1.0)
-    pub model_version: String,       // Model version/identifier
-    pub inference_time_ms: u64,      // Time taken for inference
-    pub created_at: Instant,         // When this result was created
+    pub output: String,                    // Model output
+    pub confidence: f64,                   // Confidence score (0.0 - 1.0)
+    pub model_version: String,             // Model version/identifier
+    pub inference_time_ms: u64,            // Time taken for inference
+    pub created_at: Instant,               // When this result was created
     pub metadata: HashMap<String, String>, // Additional metadata
 }
 
 impl InferenceResult {
-    pub fn new(output: String, confidence: f64, model_version: String, inference_time_ms: u64) -> Self {
+    pub fn new(
+        output: String,
+        confidence: f64,
+        model_version: String,
+        inference_time_ms: u64,
+    ) -> Self {
         Self {
             output,
             confidence,
@@ -32,16 +37,16 @@ impl InferenceResult {
             metadata: HashMap::new(),
         }
     }
-    
+
     pub fn with_metadata(mut self, key: String, value: String) -> Self {
         self.metadata.insert(key, value);
         self
     }
-    
+
     pub fn is_stale(&self, max_age: Duration) -> bool {
         self.created_at.elapsed() > max_age
     }
-    
+
     pub fn is_low_confidence(&self, threshold: f64) -> bool {
         self.confidence < threshold
     }
@@ -66,7 +71,7 @@ impl L2InferenceCache {
             stats: Arc::new(RwLock::new(stats)),
         }
     }
-    
+
     pub fn with_default_config() -> Self {
         let mut config = CacheConfig::default();
         config.max_size = 2000; // Larger default for inference cache
@@ -74,16 +79,16 @@ impl L2InferenceCache {
         config.eviction_policy = EvictionPolicy::LRU;
         Self::new(config)
     }
-    
+
     /// Get cache statistics directly
     pub fn get_stats(&self) -> CacheStats {
         self.stats.read().unwrap().clone()
     }
-    
+
     /// Get an inference result for a model-input pair
     pub fn get_inference(&self, model_id: &str, input: &str) -> Option<InferenceResult> {
         let key = keygen::inference_key(model_id, input);
-        
+
         if let Some(result) = CacheLayer::<String, InferenceResult>::get(self, &key) {
             // Check if result is stale
             if let Some(ttl) = self.config.ttl {
@@ -93,7 +98,7 @@ impl L2InferenceCache {
                     return None;
                 }
             }
-            
+
             // Check if result has low confidence (optional filtering)
             if let Some(confidence_threshold) = self.config.confidence_threshold {
                 if result.is_low_confidence(confidence_threshold) {
@@ -102,27 +107,32 @@ impl L2InferenceCache {
                     return None;
                 }
             }
-            
+
             // Update access order for LRU
             self.update_access_order(&key);
             return Some(result);
         }
-        
+
         None
     }
-    
+
     /// Store an inference result for a model-input pair
-    pub fn put_inference(&self, model_id: &str, input: &str, result: InferenceResult) -> Result<(), CacheError> {
+    pub fn put_inference(
+        &self,
+        model_id: &str,
+        input: &str,
+        result: InferenceResult,
+    ) -> Result<(), CacheError> {
         let key = keygen::inference_key(model_id, input);
         self.put(key, result)
     }
-    
+
     /// Invalidate a specific model-input pair
     pub fn invalidate_inference(&self, model_id: &str, input: &str) -> Result<(), CacheError> {
         let key = keygen::inference_key(model_id, input);
         CacheLayer::<String, InferenceResult>::invalidate(self, &key)
     }
-    
+
     /// Get all results for a specific model
     pub fn get_model_results(&self, model_id: &str) -> Vec<(String, InferenceResult)> {
         let cache = self.cache.read().unwrap();
@@ -135,7 +145,7 @@ impl L2InferenceCache {
             })
             .collect()
     }
-    
+
     /// Get all results for a specific input (across all models)
     pub fn get_input_results(&self, input: &str) -> Vec<(String, InferenceResult)> {
         let cache = self.cache.read().unwrap();
@@ -149,31 +159,31 @@ impl L2InferenceCache {
             })
             .collect()
     }
-    
+
     /// Update access order for LRU eviction
     fn update_access_order(&self, key: &str) {
         let mut order = self.access_order.write().unwrap();
-        
+
         // Remove key from current position
         if let Some(pos) = order.iter().position(|k| k == key) {
             order.remove(pos);
         }
-        
+
         // Add to front (most recently used)
         order.push_front(key.to_string());
     }
-    
+
     /// Evict entries based on the configured policy
     fn evict_if_needed(&self) -> Result<(), CacheError> {
         let mut cache = self.cache.write().unwrap();
         let mut order = self.access_order.write().unwrap();
-        
+
         if cache.len() <= self.config.max_size {
             return Ok(());
         }
-        
+
         let to_evict = cache.len() - self.config.max_size;
-        
+
         match self.config.eviction_policy {
             EvictionPolicy::LRU => {
                 // Remove least recently used entries
@@ -199,7 +209,7 @@ impl L2InferenceCache {
                 use rand::seq::SliceRandom;
                 let mut rng = rand::thread_rng();
                 let to_remove: Vec<&String> = keys.choose_multiple(&mut rng, to_evict).collect();
-                
+
                 for key in to_remove {
                     cache.remove(key);
                     if let Some(pos) = order.iter().position(|k| k == key) {
@@ -216,7 +226,7 @@ impl L2InferenceCache {
                         .filter(|(_, entry)| entry.value.is_stale(ttl))
                         .map(|(key, _)| key.clone())
                         .collect();
-                    
+
                     for key in expired_keys {
                         cache.remove(&key);
                         if let Some(pos) = order.iter().position(|k| k == &key) {
@@ -231,9 +241,9 @@ impl L2InferenceCache {
                     .iter()
                     .map(|(key, entry)| (key.clone(), entry.access_count))
                     .collect();
-                
+
                 entries.sort_by_key(|(_, count)| *count);
-                
+
                 for (key, _) in entries.iter().take(to_evict) {
                     cache.remove(key);
                     if let Some(pos) = order.iter().position(|k| k == key) {
@@ -242,7 +252,7 @@ impl L2InferenceCache {
                 }
             }
         }
-        
+
         Ok(())
     }
 }
@@ -250,7 +260,7 @@ impl L2InferenceCache {
 impl CacheLayer<String, InferenceResult> for L2InferenceCache {
     fn get(&self, key: &String) -> Option<InferenceResult> {
         let mut stats = self.stats.write().unwrap();
-        
+
         if let Some(entry) = self.cache.read().unwrap().get(key) {
             stats.hits += 1;
             stats.update_hit_rate();
@@ -261,59 +271,59 @@ impl CacheLayer<String, InferenceResult> for L2InferenceCache {
             None
         }
     }
-    
+
     fn put(&self, key: String, value: InferenceResult) -> Result<(), CacheError> {
         let mut stats = self.stats.write().unwrap();
-        
+
         // Evict if needed before inserting
         self.evict_if_needed()?;
-        
+
         let entry = CacheEntry::new(value);
-        
+
         self.cache.write().unwrap().insert(key.clone(), entry);
         self.update_access_order(&key);
-        
+
         stats.puts += 1;
         stats.size = self.cache.read().unwrap().len();
-        
+
         Ok(())
     }
-    
+
     fn invalidate(&self, key: &String) -> Result<(), CacheError> {
         let mut stats = self.stats.write().unwrap();
-        
+
         if self.cache.write().unwrap().remove(key).is_some() {
             // Remove from access order
             let mut order = self.access_order.write().unwrap();
             if let Some(pos) = order.iter().position(|k| k == key) {
                 order.remove(pos);
             }
-            
+
             stats.invalidations += 1;
             stats.size = self.cache.read().unwrap().len();
         }
-        
+
         Ok(())
     }
-    
+
     fn stats(&self) -> CacheStats {
         self.stats.read().unwrap().clone()
     }
-    
+
     fn clear(&self) -> Result<(), CacheError> {
         let mut stats = self.stats.write().unwrap();
         let mut cache = self.cache.write().unwrap();
         let mut order = self.access_order.write().unwrap();
-        
+
         cache.clear();
         order.clear();
-        
+
         stats.size = 0;
         stats.invalidations += 1;
-        
+
         Ok(())
     }
-    
+
     fn config(&self) -> &CacheConfig {
         &self.config
     }
@@ -332,7 +342,7 @@ mod tests {
             "gpt4o-v1".to_string(),
             150,
         );
-        
+
         assert_eq!(result.output, "Hello, world!");
         assert_eq!(result.confidence, 0.95);
         assert_eq!(result.model_version, "gpt4o-v1");
@@ -341,120 +351,111 @@ mod tests {
         assert!(!result.is_low_confidence(0.9));
         assert!(result.is_low_confidence(0.99));
     }
-    
+
     #[test]
     fn test_l2_cache_basic_operations() {
         let cache = L2InferenceCache::with_default_config();
-        
+
         let result = InferenceResult::new(
             "Test output".to_string(),
             0.9,
             "test-model".to_string(),
             100,
         );
-        
+
         // Put inference result
-        cache.put_inference("test-model", "test input", result.clone()).unwrap();
-        
+        cache
+            .put_inference("test-model", "test input", result.clone())
+            .unwrap();
+
         // Get inference result
         let retrieved = cache.get_inference("test-model", "test input").unwrap();
         assert_eq!(retrieved.output, "Test output");
         assert_eq!(retrieved.confidence, 0.9);
-        
+
         // Check stats
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 0);
         assert_eq!(stats.puts, 1);
     }
-    
+
     #[test]
     fn test_l2_cache_invalidation() {
         let cache = L2InferenceCache::with_default_config();
-        
+
         let result = InferenceResult::new(
             "Test output".to_string(),
             0.9,
             "test-model".to_string(),
             100,
         );
-        
-        cache.put_inference("test-model", "test input", result).unwrap();
-        
+
+        cache
+            .put_inference("test-model", "test input", result)
+            .unwrap();
+
         // Should exist
         assert!(cache.get_inference("test-model", "test input").is_some());
-        
+
         // Invalidate
-        cache.invalidate_inference("test-model", "test input").unwrap();
-        
+        cache
+            .invalidate_inference("test-model", "test input")
+            .unwrap();
+
         // Should not exist
         assert!(cache.get_inference("test-model", "test input").is_none());
-        
+
         let stats = cache.get_stats();
         assert_eq!(stats.invalidations, 1);
     }
-    
+
     #[test]
     fn test_l2_cache_model_results() {
         let cache = L2InferenceCache::with_default_config();
-        
-        let result1 = InferenceResult::new(
-            "Output 1".to_string(),
-            0.9,
-            "model-a".to_string(),
-            100,
-        );
-        let result2 = InferenceResult::new(
-            "Output 2".to_string(),
-            0.8,
-            "model-a".to_string(),
-            120,
-        );
-        let result3 = InferenceResult::new(
-            "Output 3".to_string(),
-            0.95,
-            "model-b".to_string(),
-            80,
-        );
-        
+
+        let result1 = InferenceResult::new("Output 1".to_string(), 0.9, "model-a".to_string(), 100);
+        let result2 = InferenceResult::new("Output 2".to_string(), 0.8, "model-a".to_string(), 120);
+        let result3 = InferenceResult::new("Output 3".to_string(), 0.95, "model-b".to_string(), 80);
+
         cache.put_inference("model-a", "input 1", result1).unwrap();
         cache.put_inference("model-a", "input 2", result2).unwrap();
         cache.put_inference("model-b", "input 1", result3).unwrap();
-        
+
         let model_a_results = cache.get_model_results("model-a");
         assert_eq!(model_a_results.len(), 2);
-        
+
         let model_b_results = cache.get_model_results("model-b");
         assert_eq!(model_b_results.len(), 1);
     }
-    
+
     #[test]
     fn test_l2_cache_stats() {
         let cache = L2InferenceCache::with_default_config();
-        
+
         let result = InferenceResult::new(
             "Test output".to_string(),
             0.9,
             "test-model".to_string(),
             100,
         );
-        
+
         // Initial stats
         let initial_stats = cache.get_stats();
         assert_eq!(initial_stats.hits, 0);
         assert_eq!(initial_stats.misses, 0);
         assert_eq!(initial_stats.puts, 0);
-        
+
         // Put and get
-        cache.put_inference("test-model", "test input", result).unwrap();
+        cache
+            .put_inference("test-model", "test input", result)
+            .unwrap();
         cache.get_inference("test-model", "test input").unwrap();
-        
+
         let final_stats = cache.get_stats();
         assert_eq!(final_stats.hits, 1);
         assert_eq!(final_stats.misses, 0);
         assert_eq!(final_stats.puts, 1);
         assert!(final_stats.hit_rate > 0.0);
     }
-    
-
-} 
+}

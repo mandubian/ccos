@@ -10,8 +10,8 @@
 //! - Context serialization and checkpoint/resume capability
 //! - Integration with RTFS evaluator and step special forms
 
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
-use crate::runtime::error::{RuntimeResult, RuntimeError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -79,7 +79,7 @@ impl ExecutionContext {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         Self {
             id: Uuid::new_v4().to_string(),
             parent_id: None,
@@ -98,14 +98,18 @@ impl ExecutionContext {
     }
 
     /// Creates a child context that inherits from this one
-    pub fn create_child(&mut self, step_name: Option<String>, isolation_level: IsolationLevel) -> Self {
+    pub fn create_child(
+        &mut self,
+        step_name: Option<String>,
+        isolation_level: IsolationLevel,
+    ) -> Self {
         let mut child = ExecutionContext::new(step_name);
         child.parent_id = Some(self.id.clone());
         child.metadata.isolation_level = isolation_level;
-        
+
         // Add child to parent's children list
         self.children.push(child.id.clone());
-        
+
         child
     }
 
@@ -125,7 +129,11 @@ impl ExecutionContext {
     }
 
     /// Merges data from another context into this one
-    pub fn merge_data(&mut self, other: &ExecutionContext, conflict_resolution: ConflictResolution) {
+    pub fn merge_data(
+        &mut self,
+        other: &ExecutionContext,
+        conflict_resolution: ConflictResolution,
+    ) {
         for (key, value) in &other.data {
             match conflict_resolution {
                 ConflictResolution::KeepExisting => {
@@ -205,12 +213,16 @@ impl ContextStack {
 
     /// Gets the current context
     pub fn current(&self) -> Option<&ExecutionContext> {
-        self.current_id.as_ref().and_then(|id| self.contexts.get(id))
+        self.current_id
+            .as_ref()
+            .and_then(|id| self.contexts.get(id))
     }
 
     /// Gets a mutable reference to the current context
     pub fn current_mut(&mut self) -> Option<&mut ExecutionContext> {
-        self.current_id.as_ref().and_then(|id| self.contexts.get_mut(id))
+        self.current_id
+            .as_ref()
+            .and_then(|id| self.contexts.get_mut(id))
     }
 
     /// Gets a context by ID
@@ -224,7 +236,11 @@ impl ContextStack {
     }
 
     /// Pushes a new context onto the stack
-    pub fn push(&mut self, step_name: Option<String>, isolation_level: IsolationLevel) -> RuntimeResult<String> {
+    pub fn push(
+        &mut self,
+        step_name: Option<String>,
+        isolation_level: IsolationLevel,
+    ) -> RuntimeResult<String> {
         // If the stack was never initialized with a root, create a default root
         if self.current_id.is_none() {
             let mut root = ExecutionContext::new(Some("root".to_string()));
@@ -235,44 +251,48 @@ impl ContextStack {
             self.root_id = Some(root_id);
         }
 
-        let current = self.current_mut()
-            .ok_or_else(|| RuntimeError::Generic("No current context to create child from".to_string()))?;
+        let current = self.current_mut().ok_or_else(|| {
+            RuntimeError::Generic("No current context to create child from".to_string())
+        })?;
 
         let child = current.create_child(step_name, isolation_level);
         let child_id = child.id.clone();
-        
+
         self.contexts.insert(child_id.clone(), child);
         self.current_id = Some(child_id.clone());
-        
+
         Ok(child_id)
     }
 
     /// Pops the current context from the stack
     pub fn pop(&mut self) -> RuntimeResult<Option<ExecutionContext>> {
-        let current_id = self.current_id.take()
+        let current_id = self
+            .current_id
+            .take()
             .ok_or_else(|| RuntimeError::Generic("No current context to pop".to_string()))?;
-        
-        let current_context = self.contexts.remove(&current_id)
-            .ok_or_else(|| RuntimeError::Generic("Current context not found in stack".to_string()))?;
-        
+
+        let current_context = self.contexts.remove(&current_id).ok_or_else(|| {
+            RuntimeError::Generic("Current context not found in stack".to_string())
+        })?;
+
         // Update parent's current_id
         if let Some(parent_id) = &current_context.parent_id {
             self.current_id = Some(parent_id.clone());
         }
-        
+
         Ok(Some(current_context))
     }
 
     /// Looks up a value in the current context hierarchy
     pub fn lookup(&self, key: &str) -> Option<Value> {
         let mut current_id = self.current_id.as_ref()?;
-        
+
         loop {
             if let Some(context) = self.contexts.get(current_id) {
                 if let Some(value) = context.get(key) {
                     return Some(value.clone());
                 }
-                
+
                 // Move to parent if available and isolation level allows
                 if let Some(parent_id) = &context.parent_id {
                     if context.metadata.isolation_level != IsolationLevel::Sandboxed {
@@ -283,24 +303,26 @@ impl ContextStack {
             }
             break;
         }
-        
+
         None
     }
 
     /// Sets a value in the current context
     pub fn set(&mut self, key: String, value: Value) -> RuntimeResult<()> {
-        let current = self.current_mut()
-            .ok_or_else(|| RuntimeError::Generic("No current context to set value in".to_string()))?;
-        
+        let current = self.current_mut().ok_or_else(|| {
+            RuntimeError::Generic("No current context to set value in".to_string())
+        })?;
+
         current.set(key, value);
         Ok(())
     }
 
     /// Creates a checkpoint of the current context state
     pub fn checkpoint(&mut self, checkpoint_id: String) -> RuntimeResult<()> {
-        let current = self.current_mut()
+        let current = self
+            .current_mut()
             .ok_or_else(|| RuntimeError::Generic("No current context to checkpoint".to_string()))?;
-        
+
         current.create_checkpoint(checkpoint_id);
         Ok(())
     }
@@ -312,16 +334,17 @@ impl ContextStack {
             current_id: self.current_id.clone(),
             root_id: self.root_id.clone(),
         };
-        
+
         serde_json::to_string(&stack_data)
             .map_err(|e| RuntimeError::Generic(format!("Failed to serialize context stack: {}", e)))
     }
 
     /// Deserializes a context stack from a string
     pub fn deserialize(data: &str) -> RuntimeResult<Self> {
-        let stack_data: ContextStackData = serde_json::from_str(data)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to deserialize context stack: {}", e)))?;
-        
+        let stack_data: ContextStackData = serde_json::from_str(data).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to deserialize context stack: {}", e))
+        })?;
+
         Ok(Self {
             contexts: stack_data.contexts,
             current_id: stack_data.current_id,
@@ -333,7 +356,7 @@ impl ContextStack {
     pub fn depth(&self) -> usize {
         let mut depth = 0;
         let mut current_id = self.current_id.as_ref();
-        
+
         while let Some(id) = current_id {
             if let Some(context) = self.contexts.get(id) {
                 depth += 1;
@@ -342,7 +365,7 @@ impl ContextStack {
                 break;
             }
         }
-        
+
         depth
     }
 
@@ -350,7 +373,7 @@ impl ContextStack {
     pub fn ancestors(&self) -> Vec<&ExecutionContext> {
         let mut ancestors = Vec::new();
         let mut current_id = self.current_id.as_ref();
-        
+
         while let Some(id) = current_id {
             if let Some(context) = self.contexts.get(id) {
                 if let Some(parent_id) = &context.parent_id {
@@ -367,14 +390,14 @@ impl ContextStack {
                 break;
             }
         }
-        
+
         ancestors
     }
 
     /// Gets all sibling contexts of the current context
     pub fn siblings(&self) -> Vec<&ExecutionContext> {
         let mut siblings = Vec::new();
-        
+
         if let Some(current) = self.current() {
             if let Some(parent_id) = &current.parent_id {
                 if let Some(parent) = self.contexts.get(parent_id) {
@@ -388,49 +411,61 @@ impl ContextStack {
                 }
             }
         }
-        
+
         siblings
     }
 
     /// Creates an isolated context for parallel execution
     pub fn create_parallel_context(&mut self, step_name: Option<String>) -> RuntimeResult<String> {
-        let current = self.current_mut()
-            .ok_or_else(|| RuntimeError::Generic("No current context to create parallel context from".to_string()))?;
-        
+        let current = self.current_mut().ok_or_else(|| {
+            RuntimeError::Generic("No current context to create parallel context from".to_string())
+        })?;
+
         let mut parallel_context = current.create_child(step_name, IsolationLevel::Isolated);
         parallel_context.metadata.is_parallel = true;
-        
+
         let parallel_id = parallel_context.id.clone();
         self.contexts.insert(parallel_id.clone(), parallel_context);
-        
+
         Ok(parallel_id)
     }
 
     /// Switches to a different context
     pub fn switch_to(&mut self, context_id: &str) -> RuntimeResult<()> {
         if !self.contexts.contains_key(context_id) {
-            return Err(RuntimeError::Generic(format!("Context {} not found", context_id)));
+            return Err(RuntimeError::Generic(format!(
+                "Context {} not found",
+                context_id
+            )));
         }
-        
+
         self.current_id = Some(context_id.to_string());
         Ok(())
     }
 
     /// Merges data from a child context back to its parent
-    pub fn merge_child_to_parent(&mut self, child_id: &str, conflict_resolution: ConflictResolution) -> RuntimeResult<()> {
+    pub fn merge_child_to_parent(
+        &mut self,
+        child_id: &str,
+        conflict_resolution: ConflictResolution,
+    ) -> RuntimeResult<()> {
         let child_data = {
-            let child = self.contexts.get(child_id)
-                .ok_or_else(|| RuntimeError::Generic(format!("Child context {} not found", child_id)))?;
-            
-            let parent_id = child.parent_id.as_ref()
+            let child = self.contexts.get(child_id).ok_or_else(|| {
+                RuntimeError::Generic(format!("Child context {} not found", child_id))
+            })?;
+
+            let parent_id = child
+                .parent_id
+                .as_ref()
                 .ok_or_else(|| RuntimeError::Generic("Child context has no parent".to_string()))?;
-            
+
             (parent_id.clone(), child.data.clone())
         };
-        
-        let parent = self.contexts.get_mut(&child_data.0)
-            .ok_or_else(|| RuntimeError::Generic(format!("Parent context {} not found", child_data.0)))?;
-        
+
+        let parent = self.contexts.get_mut(&child_data.0).ok_or_else(|| {
+            RuntimeError::Generic(format!("Parent context {} not found", child_data.0))
+        })?;
+
         for (key, value) in &child_data.1 {
             match conflict_resolution {
                 ConflictResolution::KeepExisting => {
@@ -495,17 +530,23 @@ impl ContextManager {
     }
 
     /// Enters a new step context
-    pub fn enter_step(&mut self, step_name: &str, isolation_level: IsolationLevel) -> RuntimeResult<String> {
-        let context_id = self.stack.push(Some(step_name.to_string()), isolation_level)?;
-        
+    pub fn enter_step(
+        &mut self,
+        step_name: &str,
+        isolation_level: IsolationLevel,
+    ) -> RuntimeResult<String> {
+        let context_id = self
+            .stack
+            .push(Some(step_name.to_string()), isolation_level)?;
+
         // Set step_id in metadata
         if let Some(context) = self.stack.get_mut(&context_id) {
             context.metadata.step_id = Some(context_id.clone());
         }
-        
+
         // Check if we need to create a checkpoint
         self.maybe_checkpoint()?;
-        
+
         Ok(context_id)
     }
 
@@ -551,23 +592,31 @@ impl ContextManager {
     }
 
     /// Merge a child context to its parent using a conflict policy
-    pub fn merge_child_to_parent(&mut self, child_id: &str, policy: ConflictResolution) -> RuntimeResult<()> {
+    pub fn merge_child_to_parent(
+        &mut self,
+        child_id: &str,
+        policy: ConflictResolution,
+    ) -> RuntimeResult<()> {
         self.stack.merge_child_to_parent(child_id, policy)
     }
 
     /// Convenience: begin an isolated child context for a branch
     pub fn begin_isolated(&mut self, step_name: &str) -> RuntimeResult<String> {
-        let child_id = self.stack.create_parallel_context(Some(step_name.to_string()))?;
+        let child_id = self
+            .stack
+            .create_parallel_context(Some(step_name.to_string()))?;
         self.stack.switch_to(&child_id)?;
         Ok(child_id)
     }
 
     /// Convenience: end an isolated child context and merge back to parent
-    pub fn end_isolated(&mut self, child_id: &str, policy: ConflictResolution) -> RuntimeResult<()> {
+    pub fn end_isolated(
+        &mut self,
+        child_id: &str,
+        policy: ConflictResolution,
+    ) -> RuntimeResult<()> {
         // Capture parent before merge
-        let parent_id_opt = self.stack
-            .get(child_id)
-            .and_then(|c| c.parent_id.clone());
+        let parent_id_opt = self.stack.get(child_id).and_then(|c| c.parent_id.clone());
         self.stack.merge_child_to_parent(child_id, policy)?;
         if let Some(parent_id) = parent_id_opt {
             // Switch current context back to parent after merge
@@ -593,7 +642,7 @@ impl ContextManager {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64;
-            
+
             if now - self.last_checkpoint >= interval {
                 let checkpoint_id = format!("auto_{}", now);
                 self.checkpoint(checkpoint_id)?;
@@ -625,7 +674,7 @@ mod tests {
     fn test_context_inheritance() {
         let mut parent = ExecutionContext::new(Some("parent".to_string()));
         parent.set("key".to_string(), Value::String("value".to_string()));
-        
+
         let child = parent.create_child(Some("child".to_string()), IsolationLevel::Inherit);
         assert_eq!(child.parent_id, Some(parent.id));
         assert!(parent.children.contains(&child.id));
@@ -634,15 +683,28 @@ mod tests {
     #[test]
     fn test_context_stack_operations() {
         let mut stack = ContextStack::with_root(Some("root".to_string()));
-        
+
         // Push child context
-        let child_id = stack.push(Some("child".to_string()), IsolationLevel::Inherit).unwrap();
-        assert_eq!(stack.current().unwrap().metadata.step_name, Some("child".to_string()));
-        
+        let child_id = stack
+            .push(Some("child".to_string()), IsolationLevel::Inherit)
+            .unwrap();
+        assert_eq!(
+            stack.current().unwrap().metadata.step_name,
+            Some("child".to_string())
+        );
+
         // Set and get value
-        stack.set("test_key".to_string(), Value::String("test_value".to_string())).unwrap();
-        assert_eq!(stack.lookup("test_key"), Some(Value::String("test_value".to_string())));
-        
+        stack
+            .set(
+                "test_key".to_string(),
+                Value::String("test_value".to_string()),
+            )
+            .unwrap();
+        assert_eq!(
+            stack.lookup("test_key"),
+            Some(Value::String("test_value".to_string()))
+        );
+
         // Pop context
         let popped = stack.pop().unwrap().unwrap();
         assert_eq!(popped.metadata.step_name, Some("child".to_string()));
@@ -652,13 +714,17 @@ mod tests {
     fn test_context_manager() {
         let mut manager = ContextManager::new();
         manager.initialize(Some("root".to_string()));
-        
-        let context_id = manager.enter_step("test_step", IsolationLevel::Inherit).unwrap();
-        manager.set("key".to_string(), Value::String("value".to_string())).unwrap();
-        
+
+        let context_id = manager
+            .enter_step("test_step", IsolationLevel::Inherit)
+            .unwrap();
+        manager
+            .set("key".to_string(), Value::String("value".to_string()))
+            .unwrap();
+
         assert_eq!(manager.get("key"), Some(Value::String("value".to_string())));
         assert_eq!(manager.current_context_id(), Some(context_id.as_str()));
-        
+
         let exited = manager.exit_step().unwrap().unwrap();
         assert_eq!(exited.metadata.step_name, Some("test_step".to_string()));
     }
@@ -667,10 +733,13 @@ mod tests {
     fn test_serialization() {
         let mut context = ExecutionContext::new(Some("test".to_string()));
         context.set("key".to_string(), Value::String("value".to_string()));
-        
+
         let serialized = context.serialize().unwrap();
         let deserialized = ExecutionContext::deserialize(&serialized).unwrap();
-        
-        assert_eq!(deserialized.get("key"), Some(&Value::String("value".to_string())));
+
+        assert_eq!(
+            deserialized.get("key"),
+            Some(&Value::String("value".to_string()))
+        );
     }
 }

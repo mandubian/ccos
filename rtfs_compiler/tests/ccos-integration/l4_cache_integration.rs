@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
+use rtfs_compiler::ast::{Literal, Pattern, Symbol};
 use rtfs_compiler::bytecode::WasmBackend;
 use rtfs_compiler::ccos::caching::l4_content_addressable::{L4CacheClient, RtfsModuleMetadata};
 use rtfs_compiler::ccos::delegation::{DelegationEngine, StaticDelegationEngine};
 use rtfs_compiler::ccos::delegation_l4::L4AwareDelegationEngine;
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry, Value, RuntimeResult};
-use rtfs_compiler::runtime::environment::Environment;
-use rtfs_compiler::runtime::values::{Function};
-use rtfs_compiler::ast::{Literal, Symbol, Pattern};
-use wat::parse_str;
 use rtfs_compiler::parser::parse_expression;
+use rtfs_compiler::runtime::environment::Environment;
+use rtfs_compiler::runtime::values::Function;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry, RuntimeResult, Value};
+use wat::parse_str;
 
 #[test]
 #[ignore = "temporarily disabled: returns Nil instead of expected 3"]
@@ -37,16 +37,26 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     let de: Arc<dyn DelegationEngine> = Arc::new(l4_de);
 
     // 5. Create evaluator with empty env, but register a placeholder `add` so lookup succeeds.
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
     ));
-    let mut evaluator = Evaluator::new(Arc::new(module_registry), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let mut evaluator = Evaluator::new(
+        Arc::new(module_registry),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
     let symbol_add = Symbol("add".to_string());
     // Create a dummy closure that won't actually be executed when delegation takes L4 path.
     let dummy_closure = Function::new_closure(
@@ -60,7 +70,9 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
         Arc::new(Environment::new()),
         None,
     );
-    evaluator.env.define(&symbol_add, Value::Function(dummy_closure));
+    evaluator
+        .env
+        .define(&symbol_add, Value::Function(dummy_closure));
 
     // 6. Parse and evaluate the RTFS expression
     let code = "(add 1 2)";
@@ -69,7 +81,7 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
     match result {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
             assert_eq!(value, Value::Integer(3));
-        },
+        }
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
             panic!("Unexpected host call in pure test");
         }
@@ -94,18 +106,29 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
         .with_bytecode_backend(backend);
 
     let inner = StaticDelegationEngine::new(Default::default());
-    let de: Arc<dyn DelegationEngine> = Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
+    let de: Arc<dyn DelegationEngine> =
+        Arc::new(L4AwareDelegationEngine::new(cache.clone(), inner));
 
-    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new()));
-    let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
-    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap()));
+    let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let capability_marketplace = std::sync::Arc::new(
+        rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry),
+    );
+    let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+        rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+    ));
     let security_context = rtfs_compiler::runtime::security::RuntimeContext::pure();
     let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
         causal_chain,
         capability_marketplace,
         security_context.clone(),
     ));
-    let evaluator = Evaluator::new(Arc::new(module_registry), rtfs_compiler::runtime::security::RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(
+        Arc::new(module_registry),
+        rtfs_compiler::runtime::security::RuntimeContext::pure(),
+        host,
+    );
 
     let code = "(do (defn add [x y] nil) (add 1 2))";
     let expr = parse_expression(code).unwrap();
@@ -113,10 +136,10 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
     match result {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
             assert_eq!(value, Value::Integer(3));
-        },
+        }
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
             panic!("Unexpected host call in pure test");
         }
     }
     Ok(())
-} 
+}

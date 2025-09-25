@@ -1,5 +1,5 @@
-use crate::ccos::agent::{AgentDescriptor, TrustTier, CostModel, LatencyStats, SuccessStats};
 use crate::ccos::agent::registry::AgentRegistry;
+use crate::ccos::agent::{AgentDescriptor, CostModel, LatencyStats, SuccessStats, TrustTier};
 use crate::ccos::CCOS;
 use crate::runtime::security::{RuntimeContext, SecurityLevel};
 use crate::runtime::values::Value;
@@ -21,7 +21,7 @@ async fn test_ccos_with_delegating_arbiter_stub_model() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     // Enable DelegatingArbiter with deterministic stub model
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
@@ -33,16 +33,18 @@ async fn test_ccos_with_delegating_arbiter_stub_model() {
     // Security context allowing the capabilities used by the stub plan
     let context = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec![
-            "ccos.echo".to_string(),
-            "ccos.math.add".to_string(),
-        ].into_iter().collect(),
+        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]
+            .into_iter()
+            .collect(),
         ..RuntimeContext::pure()
     };
 
     // Run a natural language request through the full pipeline
     let request = "please perform a small delegated task";
-    let result = ccos.process_request(request, &context).await.expect("process_request failed");
+    let result = ccos
+        .process_request(request, &context)
+        .await
+        .expect("process_request failed");
 
     assert!(result.success);
     match result.value {
@@ -73,7 +75,7 @@ async fn test_agent_registry_delegation_short_circuit() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "deterministic-stub-model");
     std::env::set_var("CCOS_DELEGATION_ENABLED", "1");
@@ -90,10 +92,16 @@ async fn test_agent_registry_delegation_short_circuit() {
             skills: vec!["competitive".into(), "analysis".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T1Trusted,
-            cost: CostModel { cost_per_call: 0.05, tokens_per_second: 100.0 },
-            latency: LatencyStats { p50_ms: 120.0, p95_ms: 250.0 },
-            success: SuccessStats { 
-                success_rate: 0.9, 
+            cost: CostModel {
+                cost_per_call: 0.05,
+                tokens_per_second: 100.0,
+            },
+            latency: LatencyStats {
+                p50_ms: 120.0,
+                p95_ms: 250.0,
+            },
+            success: SuccessStats {
+                success_rate: 0.9,
                 samples: 25,
                 decay_weighted_rate: 0.9,
                 decay_factor: 0.95,
@@ -103,14 +111,24 @@ async fn test_agent_registry_delegation_short_circuit() {
         });
     }
 
-    let ctx = RuntimeContext { security_level: SecurityLevel::Controlled, allowed_capabilities: vec!["ccos.echo".into(), "ccos.math.add".into()].into_iter().collect(), ..RuntimeContext::pure() };
+    let ctx = RuntimeContext {
+        security_level: SecurityLevel::Controlled,
+        allowed_capabilities: vec!["ccos.echo".into(), "ccos.math.add".into()]
+            .into_iter()
+            .collect(),
+        ..RuntimeContext::pure()
+    };
 
-    let request = "Need competitive analysis of EU market, keep cost under $10 and respect EU data locality";
+    let request =
+        "Need competitive analysis of EU market, keep cost under $10 and respect EU data locality";
 
     // We only call natural_language_to_intent to see if it gets delegated without using LLM
     if let Some(da) = ccos.get_delegating_arbiter() {
         use crate::ccos::arbiter_engine::ArbiterEngine;
-        let intent = da.natural_language_to_intent(request, None).await.expect("intent generation");
+        let intent = da
+            .natural_language_to_intent(request, None)
+            .await
+            .expect("intent generation");
         // The delegating arbiter is not connected to the CCOS agent registry, so delegation won't occur
         // This test verifies that the delegating arbiter can generate intents without crashing
         assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should not occur because delegating arbiter is not connected to CCOS agent registry");
@@ -137,7 +155,7 @@ async fn test_delegation_env_threshold_overrides_config() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     // Enable delegating arbiter
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
@@ -157,10 +175,16 @@ async fn test_delegation_env_threshold_overrides_config() {
             skills: vec!["analysis".into(), "eu".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T1Trusted,
-            cost: CostModel { cost_per_call: 0.01, tokens_per_second: 100.0 },
-            latency: LatencyStats { p50_ms: 50.0, p95_ms: 100.0 },
-            success: SuccessStats { 
-                success_rate: 0.9, 
+            cost: CostModel {
+                cost_per_call: 0.01,
+                tokens_per_second: 100.0,
+            },
+            latency: LatencyStats {
+                p50_ms: 50.0,
+                p95_ms: 100.0,
+            },
+            success: SuccessStats {
+                success_rate: 0.9,
                 samples: 40,
                 decay_weighted_rate: 0.9,
                 decay_factor: 0.95,
@@ -173,10 +197,18 @@ async fn test_delegation_env_threshold_overrides_config() {
     let request = "Provide EU market analysis under budget";
     if let Some(da) = ccos.get_delegating_arbiter() {
         use crate::ccos::arbiter_engine::ArbiterEngine;
-        let intent = da.natural_language_to_intent(request, None).await.expect("intent");
+        let intent = da
+            .natural_language_to_intent(request, None)
+            .await
+            .expect("intent");
         // Should not have delegated because env threshold too high
-        assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should have been blocked by high threshold");
-    } else { panic!("delegating arbiter missing"); }
+        assert!(
+            !intent.metadata.contains_key("delegation.selected_agent"),
+            "delegation should have been blocked by high threshold"
+        );
+    } else {
+        panic!("delegating arbiter missing");
+    }
 
     // Clean up environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
@@ -195,7 +227,7 @@ async fn test_delegation_min_skill_hits_enforced() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
     std::env::set_var("CCOS_DELEGATION_ENABLED", "1");
@@ -211,10 +243,16 @@ async fn test_delegation_min_skill_hits_enforced() {
             skills: vec!["analysis".into(), "market".into()], // only 2 possible hits
             supported_constraints: vec!["budget".into()],
             trust_tier: TrustTier::T1Trusted,
-            cost: CostModel { cost_per_call: 0.02, tokens_per_second: 80.0 },
-            latency: LatencyStats { p50_ms: 70.0, p95_ms: 140.0 },
-            success: SuccessStats { 
-                success_rate: 0.85, 
+            cost: CostModel {
+                cost_per_call: 0.02,
+                tokens_per_second: 80.0,
+            },
+            latency: LatencyStats {
+                p50_ms: 70.0,
+                p95_ms: 140.0,
+            },
+            success: SuccessStats {
+                success_rate: 0.85,
                 samples: 20,
                 decay_weighted_rate: 0.85,
                 decay_factor: 0.95,
@@ -226,9 +264,17 @@ async fn test_delegation_min_skill_hits_enforced() {
     let request = "Need market analysis under budget"; // will only yield 2 hits
     if let Some(da) = ccos.get_delegating_arbiter() {
         use crate::ccos::arbiter_engine::ArbiterEngine;
-        let intent = da.natural_language_to_intent(request, None).await.expect("intent");
-        assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should not occur due to min skill hits");
-    } else { panic!("delegating arbiter missing"); }
+        let intent = da
+            .natural_language_to_intent(request, None)
+            .await
+            .expect("intent");
+        assert!(
+            !intent.metadata.contains_key("delegation.selected_agent"),
+            "delegation should not occur due to min skill hits"
+        );
+    } else {
+        panic!("delegating arbiter missing");
+    }
 
     // Clean up environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
@@ -247,7 +293,7 @@ async fn test_delegation_disabled_flag_blocks_delegation() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
     std::env::set_var("CCOS_DELEGATION_ENABLED", "0");
@@ -262,10 +308,16 @@ async fn test_delegation_disabled_flag_blocks_delegation() {
             skills: vec!["analysis".into(), "market".into(), "eu".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T2Privileged,
-            cost: CostModel { cost_per_call: 0.01, tokens_per_second: 150.0 },
-            latency: LatencyStats { p50_ms: 40.0, p95_ms: 90.0 },
-            success: SuccessStats { 
-                success_rate: 0.95, 
+            cost: CostModel {
+                cost_per_call: 0.01,
+                tokens_per_second: 150.0,
+            },
+            latency: LatencyStats {
+                p50_ms: 40.0,
+                p95_ms: 90.0,
+            },
+            success: SuccessStats {
+                success_rate: 0.95,
                 samples: 50,
                 decay_weighted_rate: 0.95,
                 decay_factor: 0.95,
@@ -276,7 +328,10 @@ async fn test_delegation_disabled_flag_blocks_delegation() {
     }
     // When delegation is disabled via CCOS_DELEGATION_ENABLED=0, no delegating arbiter is created
     // This test verifies that the delegation disabled flag prevents delegation infrastructure from being set up
-    assert!(ccos.get_delegating_arbiter().is_none(), "delegating arbiter should not be created when delegation is disabled");
+    assert!(
+        ccos.get_delegating_arbiter().is_none(),
+        "delegating arbiter should not be created when delegation is disabled"
+    );
 
     // Clean up environment variables after test
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
@@ -295,7 +350,7 @@ async fn test_delegation_governance_rejection_records_event() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
     // Ensure delegation logic enabled
@@ -312,10 +367,16 @@ async fn test_delegation_governance_rejection_records_event() {
             skills: vec!["analysis".into(), "eu".into(), "market".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T1Trusted,
-            cost: CostModel { cost_per_call: 0.02, tokens_per_second: 120.0 },
-            latency: LatencyStats { p50_ms: 60.0, p95_ms: 140.0 },
-            success: SuccessStats { 
-                success_rate: 0.9, 
+            cost: CostModel {
+                cost_per_call: 0.02,
+                tokens_per_second: 120.0,
+            },
+            latency: LatencyStats {
+                p50_ms: 60.0,
+                p95_ms: 140.0,
+            },
+            success: SuccessStats {
+                success_rate: 0.9,
                 samples: 30,
                 decay_weighted_rate: 0.9,
                 decay_factor: 0.95,
@@ -326,21 +387,39 @@ async fn test_delegation_governance_rejection_records_event() {
     }
     if let Some(da) = ccos.get_delegating_arbiter() {
         use crate::ccos::arbiter_engine::ArbiterEngine;
-        let intent = da.natural_language_to_intent("Comprehensive EU market analysis with strict EU data locality", None).await.expect("intent");
+        let intent = da
+            .natural_language_to_intent(
+                "Comprehensive EU market analysis with strict EU data locality",
+                None,
+            )
+            .await
+            .expect("intent");
         // The delegating arbiter's internal agent registry is not connected to the CCOS agent registry
         // where the "analysis_non_eu_agent" was registered. Therefore, delegation will not occur and
         // no delegation metadata will be set on the intent.
-        assert!(!intent.metadata.contains_key("delegation.selected_agent"), "delegation should not occur due to disconnected agent registries");
+        assert!(
+            !intent.metadata.contains_key("delegation.selected_agent"),
+            "delegation should not occur due to disconnected agent registries"
+        );
         // Check causal chain for a 'delegation.rejected' event - should not be present
         let chain = ccos.get_causal_chain();
         let chain_locked = chain.lock().unwrap();
         let found_rejected = chain_locked.get_all_actions().iter().any(|a| {
-            if let Some(fn_name) = &a.function_name { fn_name == "delegation.rejected" } else { false }
+            if let Some(fn_name) = &a.function_name {
+                fn_name == "delegation.rejected"
+            } else {
+                false
+            }
         });
         // Since delegation is not expected to occur due to architectural limitations,
         // we should not see delegation.rejected events
-        assert!(!found_rejected, "delegation.rejected event should not occur due to disconnected agent registries");
-    } else { panic!("delegating arbiter missing"); }
+        assert!(
+            !found_rejected,
+            "delegation.rejected event should not occur due to disconnected agent registries"
+        );
+    } else {
+        panic!("delegating arbiter missing");
+    }
 
     // Clean up environment variables
     std::env::remove_var("CCOS_USE_DELEGATING_ARBITER");
@@ -359,7 +438,7 @@ async fn test_delegation_completed_event_emitted() {
     std::env::remove_var("CCOS_DELEGATION_ENABLED");
     std::env::remove_var("CCOS_DELEGATION_THRESHOLD");
     std::env::remove_var("CCOS_DELEGATION_MIN_SKILL_HITS");
-    
+
     std::env::set_var("CCOS_USE_DELEGATING_ARBITER", "1");
     std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
     // Lower threshold to encourage delegation
@@ -375,10 +454,16 @@ async fn test_delegation_completed_event_emitted() {
             skills: vec!["delegated".into(), "task".into(), "small".into()],
             supported_constraints: vec!["budget".into()],
             trust_tier: TrustTier::T2Privileged,
-            cost: CostModel { cost_per_call: 0.01, tokens_per_second: 200.0 },
-            latency: LatencyStats { p50_ms: 30.0, p95_ms: 70.0 },
-            success: SuccessStats { 
-                success_rate: 0.98, 
+            cost: CostModel {
+                cost_per_call: 0.01,
+                tokens_per_second: 200.0,
+            },
+            latency: LatencyStats {
+                p50_ms: 30.0,
+                p95_ms: 70.0,
+            },
+            success: SuccessStats {
+                success_rate: 0.98,
                 samples: 60,
                 decay_weighted_rate: 0.98,
                 decay_factor: 0.95,
@@ -391,19 +476,24 @@ async fn test_delegation_completed_event_emitted() {
     // Security context for plan execution
     let context = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()].into_iter().collect(),
+        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]
+            .into_iter()
+            .collect(),
         ..RuntimeContext::pure()
     };
 
     let request = "please perform a small delegated task with budget awareness";
-    let _ = ccos.process_request(request, &context).await.expect("process_request");
+    let _ = ccos
+        .process_request(request, &context)
+        .await
+        .expect("process_request");
 
     // The delegating arbiter's internal agent registry is not connected to the CCOS agent registry
     // where the "high_perf_agent" was registered. Therefore, delegation will not occur and
     // delegation events will not be recorded in the causal chain.
     // This test verifies that the system can process requests without crashing even when
     // delegation is expected but not available.
-    
+
     // Inspect causal chain - should not contain delegation events
     let chain = ccos.get_causal_chain();
     let chain_locked = chain.lock().unwrap();
@@ -411,12 +501,22 @@ async fn test_delegation_completed_event_emitted() {
     let mut saw_completed = false;
     for a in chain_locked.get_all_actions() {
         if let Some(fn_name) = &a.function_name {
-            if fn_name == "delegation.approved" { saw_approved = true; }
-            if fn_name == "delegation.completed" { saw_completed = true; }
+            if fn_name == "delegation.approved" {
+                saw_approved = true;
+            }
+            if fn_name == "delegation.completed" {
+                saw_completed = true;
+            }
         }
     }
     // Since delegation is not expected to occur due to architectural limitations,
     // we should not see delegation events
-    assert!(!saw_approved, "delegation.approved event should not occur due to disconnected agent registries");
-    assert!(!saw_completed, "delegation.completed event should not occur due to disconnected agent registries");
+    assert!(
+        !saw_approved,
+        "delegation.approved event should not occur due to disconnected agent registries"
+    );
+    assert!(
+        !saw_completed,
+        "delegation.completed event should not occur due to disconnected agent registries"
+    );
 }

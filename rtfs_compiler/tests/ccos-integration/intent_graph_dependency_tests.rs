@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
+use rtfs_compiler::ccos::intent_graph::core::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::types::{EdgeType, IntentId, IntentStatus, Plan, StorableIntent};
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 
 fn ensure_test_env() {
@@ -41,8 +41,10 @@ fn test_dependency_order_and_root_completion() {
     // Core systems
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
     let intent_graph = Arc::new(Mutex::new(
-        IntentGraph::with_event_sink(Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain))))
-            .unwrap(),
+        IntentGraph::with_event_sink(Arc::new(CausalChainIntentEventSink::new(Arc::clone(
+            &causal_chain,
+        ))))
+        .unwrap(),
     ));
 
     // Orchestrator with an empty capability registry (we use pure RTFS, no capabilities)
@@ -90,16 +92,21 @@ fn test_dependency_order_and_root_completion() {
     // IsSubgoalOf edges (child -> root)
     {
         let mut g = intent_graph.lock().unwrap();
-        g.create_edge(fetch_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf).unwrap();
-        g.create_edge(analyze_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf).unwrap();
-        g.create_edge(announce_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf).unwrap();
+        g.create_edge(fetch_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf)
+            .unwrap();
+        g.create_edge(analyze_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf)
+            .unwrap();
+        g.create_edge(announce_id.clone(), root_id.clone(), EdgeType::IsSubgoalOf)
+            .unwrap();
     }
 
     // Dependencies: analyze depends on fetch; announce depends on analyze
     {
         let mut g = intent_graph.lock().unwrap();
-        g.create_edge(analyze_id.clone(), fetch_id.clone(), EdgeType::DependsOn).unwrap();
-        g.create_edge(announce_id.clone(), analyze_id.clone(), EdgeType::DependsOn).unwrap();
+        g.create_edge(analyze_id.clone(), fetch_id.clone(), EdgeType::DependsOn)
+            .unwrap();
+        g.create_edge(announce_id.clone(), analyze_id.clone(), EdgeType::DependsOn)
+            .unwrap();
     }
 
     // Gating should initially be false for analyze and announce
@@ -107,7 +114,10 @@ fn test_dependency_order_and_root_completion() {
     assert!(!deps_completed(&intent_graph, &announce_id));
 
     // Plans: pure RTFS, no capabilities required
-    let plan_fetch = Plan::new_rtfs("(do (step \"Fetch\" 1))".to_string(), vec![fetch_id.clone()]);
+    let plan_fetch = Plan::new_rtfs(
+        "(do (step \"Fetch\" 1))".to_string(),
+        vec![fetch_id.clone()],
+    );
     let plan_analyze = Plan::new_rtfs(
         "(do (step \"Analyze\" (+ 1 2)))".to_string(),
         vec![analyze_id.clone()],
@@ -120,26 +130,38 @@ fn test_dependency_order_and_root_completion() {
     let ctx = RuntimeContext::pure();
 
     // Execute fetch -> should complete
-    let r1 = futures::executor::block_on(async { orchestrator.execute_plan(&plan_fetch, &ctx).await })
-        .unwrap();
+    let r1 =
+        futures::executor::block_on(async { orchestrator.execute_plan(&plan_fetch, &ctx).await })
+            .unwrap();
     assert!(r1.success);
     let f = intent_graph.lock().unwrap().get_intent(&fetch_id).unwrap();
     assert_eq!(f.status, IntentStatus::Completed);
 
     // Now analyze is unblocked
     assert!(deps_completed(&intent_graph, &analyze_id));
-    let r2 = futures::executor::block_on(async { orchestrator.execute_plan(&plan_analyze, &ctx).await })
-        .unwrap();
+    let r2 =
+        futures::executor::block_on(async { orchestrator.execute_plan(&plan_analyze, &ctx).await })
+            .unwrap();
     assert!(r2.success);
-    let a1 = intent_graph.lock().unwrap().get_intent(&analyze_id).unwrap();
+    let a1 = intent_graph
+        .lock()
+        .unwrap()
+        .get_intent(&analyze_id)
+        .unwrap();
     assert_eq!(a1.status, IntentStatus::Completed);
 
     // Now announce is unblocked
     assert!(deps_completed(&intent_graph, &announce_id));
-    let r3 = futures::executor::block_on(async { orchestrator.execute_plan(&plan_announce, &ctx).await })
-        .unwrap();
+    let r3 = futures::executor::block_on(async {
+        orchestrator.execute_plan(&plan_announce, &ctx).await
+    })
+    .unwrap();
     assert!(r3.success);
-    let a2 = intent_graph.lock().unwrap().get_intent(&announce_id).unwrap();
+    let a2 = intent_graph
+        .lock()
+        .unwrap()
+        .get_intent(&announce_id)
+        .unwrap();
     assert_eq!(a2.status, IntentStatus::Completed);
 
     // If all subgoals completed, mark root Completed (manual policy for now)
@@ -158,7 +180,13 @@ fn test_dependency_order_and_root_completion() {
     let chain = causal_chain.lock().unwrap();
     for id in [&root_id, &fetch_id, &analyze_id, &announce_id] {
         let actions = chain.get_actions_for_intent(id);
-        assert!(actions.iter().any(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::IntentStatusChanged),
-            "Expected IntentStatusChanged in causal chain for {}", id);
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.action_type
+                    == rtfs_compiler::ccos::types::ActionType::IntentStatusChanged),
+            "Expected IntentStatusChanged in causal chain for {}",
+            id
+        );
     }
 }

@@ -17,16 +17,16 @@
 //! - Unit tests colocated in each file for the specific component
 //! - Integration tests placed under /tests for end-to-end flows
 
-pub mod types;
 pub mod backend;
 pub mod backend_inmemory;
+pub mod boundaries;
 pub mod facade;
 pub mod ingestor;
-pub mod boundaries;
+pub mod types;
 
-pub use types::{WorkingMemoryId, WorkingMemoryEntry, WorkingMemoryMeta};
-pub use backend::{WorkingMemoryBackend, WorkingMemoryError, QueryParams, QueryResult};
+pub use backend::{QueryParams, QueryResult, WorkingMemoryBackend, WorkingMemoryError};
 pub use backend_inmemory::InMemoryJsonlBackend;
-pub use facade::WorkingMemory;
-pub use ingestor::{MemoryIngestor, DerivedEntry, WorkingMemorySink};
 pub use boundaries::{Boundary, BoundaryType, ReductionStrategy};
+pub use facade::WorkingMemory;
+pub use ingestor::{DerivedEntry, MemoryIngestor, WorkingMemorySink};
+pub use types::{WorkingMemoryEntry, WorkingMemoryId, WorkingMemoryMeta};

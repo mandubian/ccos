@@ -11,9 +11,9 @@ fn main() {
 
 #[cfg(feature = "metrics_exporter")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::sync::{Arc, Mutex};
     use rtfs_compiler::ccos::causal_chain::CausalChain;
     use rtfs_compiler::runtime::metrics_exporter::start_metrics_server;
+    use std::sync::{Arc, Mutex};
 
     // Create an empty causal chain. Even without events, exporter renders zeroed gauges.
     let chain = Arc::new(Mutex::new(CausalChain::new()?));

@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod primitives_tests {
+    use crate::tests::pure::pure_test_utils::parse_and_evaluate_pure;
     use crate::{
         ast::Keyword,
         runtime::{RuntimeResult, Value},
     };
-    use crate::tests::pure::pure_test_utils::parse_and_evaluate_pure;
 
     #[test]
     fn test_basic_literals() {

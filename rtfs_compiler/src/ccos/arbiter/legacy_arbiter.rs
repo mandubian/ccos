@@ -13,10 +13,10 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 
 use crate::ccos::intent_graph::IntentGraph;
-use crate::ccos::types::{Intent, Plan};
 #[allow(unused_imports)]
 use crate::ccos::types::PlanBody;
 use crate::ccos::types::StorableIntent;
+use crate::ccos::types::{Intent, Plan};
 
 /// The Arbiter - LLM kernel that converts natural language to structured intents and plans.
 pub struct Arbiter {
@@ -57,7 +57,9 @@ impl Arbiter {
         context: Option<HashMap<String, Value>>,
     ) -> Result<Plan, RuntimeError> {
         // Step 1: Convert natural language to structured intent.
-        let intent = self.natural_language_to_intent(natural_language, context).await?;
+        let intent = self
+            .natural_language_to_intent(natural_language, context)
+            .await?;
 
         // Step 2: Generate an appropriate plan for the intent.
         let plan = self.intent_to_plan(&intent).await?;
@@ -86,7 +88,9 @@ impl Arbiter {
 
         // Store the newly created intent in the graph.
         {
-            let mut graph = self.intent_graph.lock()
+            let mut graph = self
+                .intent_graph
+                .lock()
                 .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
             // Minimal StorableIntent mapping; RTFS-specific fields remain empty for now
@@ -162,7 +166,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_arbiter_proposes_plan() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let arbiter = Arbiter::new(ArbiterConfig::default(), intent_graph);
 
         // Test sentiment analysis request

@@ -89,7 +89,11 @@ pub trait WorkingMemoryBackend: Send + Sync {
     fn append(&mut self, entry: WorkingMemoryEntry) -> Result<(), WorkingMemoryError>;
     fn get(&self, id: &WorkingMemoryId) -> Result<Option<WorkingMemoryEntry>, WorkingMemoryError>;
     fn query(&self, params: &QueryParams) -> Result<QueryResult, WorkingMemoryError>;
-    fn prune(&mut self, max_entries: Option<usize>, max_tokens: Option<usize>) -> Result<(), WorkingMemoryError>;
+    fn prune(
+        &mut self,
+        max_entries: Option<usize>,
+        max_tokens: Option<usize>,
+    ) -> Result<(), WorkingMemoryError>;
     fn load(&mut self) -> Result<(), WorkingMemoryError>;
     fn flush(&mut self) -> Result<(), WorkingMemoryError>;
     fn approx_token_count(&self, content: &str) -> usize {
@@ -107,13 +111,20 @@ mod tests {
         fn append(&mut self, _entry: WorkingMemoryEntry) -> Result<(), WorkingMemoryError> {
             Ok(())
         }
-        fn get(&self, _id: &WorkingMemoryId) -> Result<Option<WorkingMemoryEntry>, WorkingMemoryError> {
+        fn get(
+            &self,
+            _id: &WorkingMemoryId,
+        ) -> Result<Option<WorkingMemoryEntry>, WorkingMemoryError> {
             Ok(None)
         }
         fn query(&self, _params: &QueryParams) -> Result<QueryResult, WorkingMemoryError> {
             Ok(QueryResult { entries: vec![] })
         }
-        fn prune(&mut self, _max_entries: Option<usize>, _max_tokens: Option<usize>) -> Result<(), WorkingMemoryError> {
+        fn prune(
+            &mut self,
+            _max_entries: Option<usize>,
+            _max_tokens: Option<usize>,
+        ) -> Result<(), WorkingMemoryError> {
             Ok(())
         }
         fn load(&mut self) -> Result<(), WorkingMemoryError> {

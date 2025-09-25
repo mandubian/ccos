@@ -1,5 +1,7 @@
 use super::{BuilderError, ObjectBuilder};
-use crate::ast::{CapabilityDefinition, Expression, Keyword, Literal, MapKey, Property, Symbol, TypeExpr};
+use crate::ast::{
+    CapabilityDefinition, Expression, Keyword, Literal, MapKey, Property, Symbol, TypeExpr,
+};
 use std::collections::HashMap;
 
 /// Fluent interface builder for RTFS 2.0 Capability objects
@@ -180,7 +182,10 @@ impl CapabilityBuilder {
         }
 
         if self.output_schema.is_none() {
-            suggestions.push("Set output schema with .with_output_schema(TypeExpr::from_str(\":any\").unwrap())".to_string());
+            suggestions.push(
+                "Set output schema with .with_output_schema(TypeExpr::from_str(\":any\").unwrap())"
+                    .to_string(),
+            );
         }
 
         if self.sla.is_none() {

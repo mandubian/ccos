@@ -1,16 +1,16 @@
 // RTFS Interactive REPL with RTFS 2.0 Support
 // Interactive read-eval-print loop with RTFS 2.0 object support and validation
 
-use std::time::Instant;
+use clap::Parser;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use clap::Parser;
+use std::time::Instant;
 
 // Import the RTFS compiler modules
 extern crate rtfs_compiler;
 use rtfs_compiler::{
-    ast::TopLevel,              // Add TopLevel for RTFS 2.0 objects
-    input_handling::{InputConfig, InputSource, read_input_content, validate_input_args},
+    ast::TopLevel, // Add TopLevel for RTFS 2.0 objects
+    input_handling::{read_input_content, validate_input_args, InputConfig, InputSource},
     ir::converter::IrConverter, // Fix import path
     ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
     parser::parse_with_enhanced_errors, // Changed from parse_expression to parse for full programs
@@ -26,15 +26,15 @@ struct Args {
     /// Input source type
     #[arg(short, long, value_enum, default_value_t = InputSource::Interactive)]
     input: InputSource,
-    
+
     /// Input string (when using --input string)
     #[arg(short, long)]
     string: Option<String>,
-    
+
     /// Input file path (when using --input file)
     #[arg(short, long)]
     file: Option<String>,
-    
+
     /// Enable verbose output
     #[arg(short, long)]
     verbose: bool,
@@ -42,7 +42,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    
+
     if args.verbose {
         println!("🚀 RTFS Interactive REPL with RTFS 2.0 Support");
         println!("Input source: {:?}", args.input);
@@ -66,7 +66,7 @@ fn main() {
         InputSource::String | InputSource::File | InputSource::Pipe => {
             // Convert args to PathBuf for file path
             let file_path = args.file.map(std::path::PathBuf::from);
-            
+
             // Validate input arguments
             if let Err(e) = validate_input_args(args.input.clone(), &file_path, &args.string) {
                 eprintln!("{}", e);
@@ -83,9 +83,7 @@ fn main() {
                     let content = args.string.expect("String content should be validated");
                     InputConfig::from_string(content, args.verbose)
                 }
-                InputSource::Pipe => {
-                    InputConfig::from_pipe(args.verbose)
-                }
+                InputSource::Pipe => InputConfig::from_pipe(args.verbose),
                 InputSource::Interactive => unreachable!(),
             };
 
@@ -99,7 +97,12 @@ fn main() {
             };
 
             // Process the input
-            process_rtfs_input(&input_content.content, &mut runtime, &mut ir_converter, &mut optimizer);
+            process_rtfs_input(
+                &input_content.content,
+                &mut runtime,
+                &mut ir_converter,
+                &mut optimizer,
+            );
         }
     }
 }
@@ -130,11 +133,11 @@ fn run_interactive_repl(
 
     loop {
         let prompt = if in_multi_line { "  " } else { "rtfs> " };
-        
+
         match rl.readline(prompt) {
             Ok(line) => {
                 let line = line.trim();
-                
+
                 // Add to history if not empty
                 if !line.is_empty() {
                     let _ = rl.add_history_entry(line);
@@ -171,7 +174,7 @@ fn run_interactive_repl(
                     let input = multi_line_buffer.clone();
                     multi_line_buffer.clear();
                     in_multi_line = false;
-                    
+
                     if !input.trim().is_empty() {
                         process_rtfs_input(&input, runtime, ir_converter, optimizer);
                     }
@@ -179,11 +182,19 @@ fn run_interactive_repl(
                 }
 
                 // Check if this looks like the start of a multi-line construct
-                if !in_multi_line && (line.contains('{') || line.contains('(') || line.contains('[')) {
+                if !in_multi_line
+                    && (line.contains('{') || line.contains('(') || line.contains('['))
+                {
                     // Count opening/closing brackets to see if we need more lines
-                    let open_count = line.chars().filter(|&c| c == '{' || c == '(' || c == '[').count();
-                    let close_count = line.chars().filter(|&c| c == '}' || c == ')' || c == ']').count();
-                    
+                    let open_count = line
+                        .chars()
+                        .filter(|&c| c == '{' || c == '(' || c == '[')
+                        .count();
+                    let close_count = line
+                        .chars()
+                        .filter(|&c| c == '}' || c == ')' || c == ']')
+                        .count();
+
                     if open_count > close_count {
                         in_multi_line = true;
                         multi_line_buffer = line.to_string();
@@ -197,17 +208,23 @@ fn run_interactive_repl(
                         multi_line_buffer.push('\n');
                     }
                     multi_line_buffer.push_str(line);
-                    
+
                     // Check if we have balanced brackets
-                    let open_count = multi_line_buffer.chars().filter(|&c| c == '{' || c == '(' || c == '[').count();
-                    let close_count = multi_line_buffer.chars().filter(|&c| c == '}' || c == ')' || c == ']').count();
-                    
+                    let open_count = multi_line_buffer
+                        .chars()
+                        .filter(|&c| c == '{' || c == '(' || c == '[')
+                        .count();
+                    let close_count = multi_line_buffer
+                        .chars()
+                        .filter(|&c| c == '}' || c == ')' || c == ']')
+                        .count();
+
                     if open_count == close_count && open_count > 0 {
                         // Balanced brackets - process the buffer
                         let input = multi_line_buffer.clone();
                         multi_line_buffer.clear();
                         in_multi_line = false;
-                        
+
                         process_rtfs_input(&input, runtime, ir_converter, optimizer);
                     }
                 } else {

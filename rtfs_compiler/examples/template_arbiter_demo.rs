@@ -1,6 +1,6 @@
 use rtfs_compiler::ccos::arbiter::{
-    ArbiterConfig, ArbiterEngineType, TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior,
-    ArbiterFactory,
+    ArbiterConfig, ArbiterEngineType, ArbiterFactory, FallbackBehavior, IntentPattern,
+    PlanTemplate, TemplateConfig,
 };
 
 #[tokio::main]
@@ -46,7 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     (step "Generate Report" (call :ccos.echo "generating sentiment report"))
     (step "Store Results" (call :ccos.echo "storing analysis results"))
 )
-                "#.trim().to_string(),
+                "#
+                .trim()
+                .to_string(),
                 variables: vec!["analyze_sentiment".to_string(), "source".to_string()],
             },
             PlanTemplate {
@@ -58,7 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     (step "Verify Backup" (call :ccos.echo "verifying backup integrity"))
     (step "Store Backup" (call :ccos.echo "storing backup in secure location"))
 )
-                "#.trim().to_string(),
+                "#
+                .trim()
+                .to_string(),
                 variables: vec!["backup_data".to_string(), "data_type".to_string()],
             },
             PlanTemplate {
@@ -70,7 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     (step "Apply Optimizations" (call :ccos.echo "applying performance optimizations"))
     (step "Test Improvements" (call :ccos.echo "testing performance improvements"))
 )
-                "#.trim().to_string(),
+                "#
+                .trim()
+                .to_string(),
                 variables: vec!["optimize_performance".to_string(), "component".to_string()],
             },
         ],
@@ -89,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create intent graph
     let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?
+        rtfs_compiler::ccos::intent_graph::IntentGraph::new()?,
     ));
 
     // Create arbiter
@@ -108,16 +114,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, (request, context_value)) in demo_requests.iter().enumerate() {
         println!("📝 Demo Request {}: {}", i + 1, request);
-        
+
         // Create context if provided
         let context = context_value.map(|value| {
             let mut ctx = std::collections::HashMap::new();
             if request.contains("sentiment") || request.contains("feeling") {
-                ctx.insert("source".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "source".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             } else if request.contains("backup") || request.contains("save") {
-                ctx.insert("data_type".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "data_type".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             } else if request.contains("optimize") || request.contains("improve") {
-                ctx.insert("component".to_string(), rtfs_compiler::runtime::values::Value::String(value.to_string()));
+                ctx.insert(
+                    "component".to_string(),
+                    rtfs_compiler::runtime::values::Value::String(value.to_string()),
+                );
             }
             ctx
         });

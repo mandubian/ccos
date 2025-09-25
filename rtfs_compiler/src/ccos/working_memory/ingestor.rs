@@ -10,24 +10,24 @@
 //!
 //! Unit tests at the bottom validate derivation helpers and idempotency by content hash.
 
+use crate::ccos::event_sink::CausalChainEventSink;
+use crate::ccos::types::Action;
 use crate::ccos::working_memory::backend::WorkingMemoryError;
 use crate::ccos::working_memory::facade::WorkingMemory;
 use crate::ccos::working_memory::types::{WorkingMemoryEntry, WorkingMemoryId, WorkingMemoryMeta};
-use crate::ccos::event_sink::CausalChainEventSink;
-use crate::ccos::types::Action;
-use std::sync::{Arc, Mutex};
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 /// Minimal action-like record used by the ingestor to derive entries.
 /// In real integration, this should map to the Causal Chain Action.
 #[derive(Debug, Clone)]
 pub struct ActionRecord {
     pub action_id: String,
-    pub kind: String,           // e.g., "PlanStarted", "StepCompleted", "CapabilityCall"
+    pub kind: String, // e.g., "PlanStarted", "StepCompleted", "CapabilityCall"
     pub provider: Option<String>,
     pub timestamp_s: u64,
-    pub summary: String,        // short human-readable summary/title
-    pub content: String,        // compact payload or details
+    pub summary: String, // short human-readable summary/title
+    pub content: String, // compact payload or details
     pub plan_id: Option<String>,
     pub intent_id: Option<String>,
     pub step_id: Option<String>,
@@ -95,7 +95,10 @@ impl MemoryIngestor {
 
     /// Ingest a single action into the working memory, idempotently.
     /// If an entry with the same id already exists, it will be overwritten with identical data.
-    pub fn ingest_action(wm: &mut WorkingMemory, action: &ActionRecord) -> Result<(), WorkingMemoryError> {
+    pub fn ingest_action(
+        wm: &mut WorkingMemory,
+        action: &ActionRecord,
+    ) -> Result<(), WorkingMemoryError> {
         let derived = Self::derive_entries_from_action(action);
         for d in derived {
             wm.append(d.entry)?;
@@ -104,7 +107,10 @@ impl MemoryIngestor {
     }
 
     /// Replay a batch of actions (e.g., from Causal Chain genesis) to rebuild Working Memory.
-    pub fn replay_all(wm: &mut WorkingMemory, actions: &[ActionRecord]) -> Result<(), WorkingMemoryError> {
+    pub fn replay_all(
+        wm: &mut WorkingMemory,
+        actions: &[ActionRecord],
+    ) -> Result<(), WorkingMemoryError> {
         for a in actions {
             Self::ingest_action(wm, a)?;
         }
@@ -177,10 +183,10 @@ impl WorkingMemorySink {
             plan_id: Some(action.plan_id.clone()),
             intent_id: Some(action.intent_id.clone()),
             step_id: None,
-            attestation_hash: action
-                .metadata
-                .get("signature")
-                .and_then(|v| match v { crate::runtime::values::Value::String(s) => Some(s.clone()), _ => None }),
+            attestation_hash: action.metadata.get("signature").and_then(|v| match v {
+                crate::runtime::values::Value::String(s) => Some(s.clone()),
+                _ => None,
+            }),
             content_hash: None,
         }
     }
@@ -199,10 +205,10 @@ impl CausalChainEventSink for WorkingMemorySink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
-    use crate::ccos::working_memory::backend::QueryParams;
     use crate::ccos::causal_chain::CausalChain;
-    use crate::ccos::types::{Intent, ActionType};
+    use crate::ccos::types::{ActionType, Intent};
+    use crate::ccos::working_memory::backend::QueryParams;
+    use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
 
     fn mk_action(id: &str, ts: u64, kind: &str, content: &str) -> ActionRecord {
         ActionRecord {
@@ -284,11 +290,21 @@ mod tests {
         let intent = Intent::new("WM sink goal".to_string());
         let a = chain.create_action(intent.clone(), None).unwrap();
         // Record a result to trigger append + notification
-        let result = crate::ccos::types::ExecutionResult { success: true, value: crate::runtime::values::Value::Nil, metadata: Default::default() };
+        let result = crate::ccos::types::ExecutionResult {
+            success: true,
+            value: crate::runtime::values::Value::Nil,
+            metadata: Default::default(),
+        };
         chain.record_result(a.clone(), result).unwrap();
 
         // Also log a plan lifecycle event, which also notifies sinks
-        chain.log_plan_event(&a.plan_id.clone(), &a.intent_id.clone(), ActionType::PlanStarted).unwrap();
+        chain
+            .log_plan_event(
+                &a.plan_id.clone(),
+                &a.intent_id.clone(),
+                ActionType::PlanStarted,
+            )
+            .unwrap();
 
         // Inspect WM
         let guard = wm_arc.lock().unwrap();

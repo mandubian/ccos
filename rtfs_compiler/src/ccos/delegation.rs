@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
 
+use crate::ccos::caching::l1_delegation::{DelegationPlan, L1DelegationCache};
 use crate::ccos::caching::CacheStats;
-use crate::ccos::caching::l1_delegation::{L1DelegationCache, DelegationPlan};
 use crate::ccos::delegation_keys::intent;
 
 /// Where the evaluator should send the execution.
@@ -49,22 +49,22 @@ impl DelegationMetadata {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     pub fn with_confidence(mut self, confidence: f64) -> Self {
         self.confidence = Some(confidence);
         self
     }
-    
+
     pub fn with_reasoning(mut self, reasoning: String) -> Self {
         self.reasoning = Some(reasoning);
         self
     }
-    
+
     pub fn with_context(mut self, key: String, value: String) -> Self {
         self.context.insert(key, value);
         self
     }
-    
+
     pub fn with_source(mut self, source: String) -> Self {
         self.source = Some(source);
         self
@@ -97,7 +97,7 @@ impl<'a> CallContext<'a> {
             metadata: None,
         }
     }
-    
+
     pub fn with_metadata(mut self, metadata: DelegationMetadata) -> Self {
         self.metadata = Some(metadata);
         self
@@ -139,8 +139,6 @@ pub trait DelegationEngine: Send + Sync + std::fmt::Debug {
     fn decide(&self, ctx: &CallContext) -> ExecTarget;
 }
 
-
-
 /// Simple static mapping + cache implementation.
 #[derive(Debug)]
 pub struct StaticDelegationEngine {
@@ -157,16 +155,26 @@ impl StaticDelegationEngine {
             l1_cache: Arc::new(L1DelegationCache::with_default_config()),
         }
     }
-    
-    pub fn with_l1_cache(static_map: HashMap<String, ExecTarget>, l1_cache: Arc<L1DelegationCache>) -> Self {
+
+    pub fn with_l1_cache(
+        static_map: HashMap<String, ExecTarget>,
+        l1_cache: Arc<L1DelegationCache>,
+    ) -> Self {
         Self {
             static_map,
             l1_cache,
         }
     }
-    
+
     /// Manually cache a delegation decision for future use
-    pub fn cache_decision(&self, agent: &str, task: &str, target: ExecTarget, confidence: f64, reasoning: &str) {
+    pub fn cache_decision(
+        &self,
+        agent: &str,
+        task: &str,
+        target: ExecTarget,
+        confidence: f64,
+        reasoning: &str,
+    ) {
         let plan = DelegationPlan::new(
             match target {
                 ExecTarget::LocalPure => "local-pure".to_string(),
@@ -180,14 +188,23 @@ impl StaticDelegationEngine {
         );
         let _ = self.l1_cache.put_plan(agent, task, plan);
     }
-    
+
     /// Cache a delegation decision with metadata from CCOS components
-    pub fn cache_decision_with_metadata(&self, agent: &str, task: &str, target: ExecTarget, metadata: &DelegationMetadata) {
+    pub fn cache_decision_with_metadata(
+        &self,
+        agent: &str,
+        task: &str,
+        target: ExecTarget,
+        metadata: &DelegationMetadata,
+    ) {
         let confidence = metadata.confidence.unwrap_or(0.8);
         let reasoning = metadata.reasoning.clone().unwrap_or_else(|| {
-            format!("Decision from {}", metadata.source.as_deref().unwrap_or("unknown-component"))
+            format!(
+                "Decision from {}",
+                metadata.source.as_deref().unwrap_or("unknown-component")
+            )
         });
-        
+
         let mut plan = DelegationPlan::new(
             match target {
                 ExecTarget::LocalPure => "local-pure".to_string(),
@@ -199,15 +216,15 @@ impl StaticDelegationEngine {
             confidence,
             reasoning,
         );
-        
+
         // Add context metadata to the plan
         for (key, value) in &metadata.context {
             plan = plan.with_metadata(key.clone(), value.clone());
         }
-        
+
         let _ = self.l1_cache.put_plan(agent, task, plan);
     }
-    
+
     /// Get cache statistics
     pub fn cache_stats(&self) -> CacheStats {
         self.l1_cache.get_stats()
@@ -224,7 +241,7 @@ impl DelegationEngine for StaticDelegationEngine {
         // 2. L1 Cache lookup for delegation plan
         let agent = ctx.fn_symbol;
         let task = format!("{:x}", ctx.arg_type_fingerprint ^ ctx.runtime_context_hash);
-        
+
         if let Some(plan) = self.l1_cache.get_plan(agent, &task) {
             // Convert plan target to ExecTarget
             match plan.target.as_str() {
@@ -233,7 +250,9 @@ impl DelegationEngine for StaticDelegationEngine {
                     return ExecTarget::LocalModel(target.trim_start_matches("local-").to_string());
                 }
                 target if target.starts_with("remote-") => {
-                    return ExecTarget::RemoteModel(target.trim_start_matches("remote-").to_string());
+                    return ExecTarget::RemoteModel(
+                        target.trim_start_matches("remote-").to_string(),
+                    );
                 }
                 _ => {
                     // Fall through to default decision
@@ -243,7 +262,7 @@ impl DelegationEngine for StaticDelegationEngine {
 
         // 3. Use metadata if available, otherwise default fallback
         let decision = ExecTarget::LocalPure;
-        
+
         if let Some(ref metadata) = ctx.metadata {
             // Cache with metadata
             self.cache_decision_with_metadata(agent, &task, decision.clone(), metadata);
@@ -251,13 +270,9 @@ impl DelegationEngine for StaticDelegationEngine {
             // Default fallback
             let confidence = 0.8;
             let reasoning = "Default fallback to local pure execution".to_string();
-            
+
             // Cache the decision as a delegation plan
-            let plan = DelegationPlan::new(
-                "local-pure".to_string(),
-                confidence,
-                reasoning,
-            );
+            let plan = DelegationPlan::new("local-pure".to_string(), confidence, reasoning);
             let _ = self.l1_cache.put_plan(agent, &task, plan);
         }
 
@@ -352,20 +367,29 @@ impl ModelProvider for RemoteArbiterModel {
 pub struct DeterministicStubModel;
 
 impl DeterministicStubModel {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl ModelProvider for DeterministicStubModel {
-    fn id(&self) -> &'static str { "stub-model" }
+    fn id(&self) -> &'static str {
+        "stub-model"
+    }
 
     fn infer(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // If prompt asks for USER_REQUEST -> JSON intent
         if prompt.contains("USER_REQUEST:") {
             // Extract a simple goal by taking the text after USER_REQUEST: (best-effort, deterministic)
-            let goal = prompt.split("USER_REQUEST:").nth(1)
+            let goal = prompt
+                .split("USER_REQUEST:")
+                .nth(1)
                 .map(|s| s.trim())
                 .unwrap_or("generic-task");
-            let json = format!("{{\"name\":\"delegated_task\",\"goal\":\"{}\"}}", goal.replace('"', "'"));
+            let json = format!(
+                "{{\"name\":\"delegated_task\",\"goal\":\"{}\"}}",
+                goal.replace('"', "'")
+            );
             return Ok(json);
         }
         // If prompt contains INTENT_JSON, return a minimal valid RTFS plan using built-in capabilities
@@ -413,14 +437,14 @@ impl ModelRegistry {
         registry.register(RemoteArbiterModel::default());
         // Deterministic stub suitable for CI/integration tests
         registry.register(DeterministicStubModel::new());
-        
+
         // Try to register realistic local model if available
         if let Ok(model_path) = std::env::var("RTFS_LOCAL_MODEL_PATH") {
             if std::path::Path::new(&model_path).exists() {
                 registry.register(crate::ccos::local_models::LocalLlamaModel::default());
             }
         }
-        
+
         registry
     }
 }
@@ -436,11 +460,17 @@ mod tests {
     #[test]
     fn static_map_override() {
         let mut map = HashMap::new();
-        map.insert("math/inc".to_string(), ExecTarget::RemoteModel("gpt4o".to_string()));
+        map.insert(
+            "math/inc".to_string(),
+            ExecTarget::RemoteModel("gpt4o".to_string()),
+        );
         let de = StaticDelegationEngine::new(map);
 
         let ctx = CallContext::new("math/inc", 0, 0);
-        assert_eq!(de.decide(&ctx), ExecTarget::RemoteModel("gpt4o".to_string()));
+        assert_eq!(
+            de.decide(&ctx),
+            ExecTarget::RemoteModel("gpt4o".to_string())
+        );
     }
 
     #[test]
@@ -463,10 +493,19 @@ mod tests {
         // Manually cache a different decision for the same context
         let agent = "user/get_preferences";
         let task = format!("{:x}", 123u64 ^ 456u64);
-        de.cache_decision(agent, &task, ExecTarget::LocalModel("fast-model".to_string()), 0.9, "test decision");
+        de.cache_decision(
+            agent,
+            &task,
+            ExecTarget::LocalModel("fast-model".to_string()),
+            0.9,
+            "test decision",
+        );
 
         // 2. Second call: hit
-        assert_eq!(de.decide(&ctx), ExecTarget::LocalModel("fast-model".to_string()));
+        assert_eq!(
+            de.decide(&ctx),
+            ExecTarget::LocalModel("fast-model".to_string())
+        );
         assert_eq!(de.cache_stats().hits, 1);
     }
 
@@ -476,9 +515,18 @@ mod tests {
         let ctx2 = CallContext::new("agent1", 12345, 67891); // different runtime context
         let ctx3 = CallContext::new("agent2", 12345, 67890); // different agent
 
-        let task1 = format!("{:x}", ctx1.arg_type_fingerprint ^ ctx1.runtime_context_hash);
-        let task2 = format!("{:x}", ctx2.arg_type_fingerprint ^ ctx2.runtime_context_hash);
-        let task3 = format!("{:x}", ctx3.arg_type_fingerprint ^ ctx3.runtime_context_hash);
+        let task1 = format!(
+            "{:x}",
+            ctx1.arg_type_fingerprint ^ ctx1.runtime_context_hash
+        );
+        let task2 = format!(
+            "{:x}",
+            ctx2.arg_type_fingerprint ^ ctx2.runtime_context_hash
+        );
+        let task3 = format!(
+            "{:x}",
+            ctx3.arg_type_fingerprint ^ ctx3.runtime_context_hash
+        );
 
         assert_ne!(task1, task2);
         // agent is not part of task generation, so task1 and task3 should be the same
@@ -490,19 +538,24 @@ mod tests {
         let de = StaticDelegationEngine::new(HashMap::new());
         let agent = "manual/agent";
         let task = "manual_task";
-        
-        de.cache_decision(agent, task, ExecTarget::RemoteModel("test-model".to_string()), 0.99, "manual entry");
-        
+
+        de.cache_decision(
+            agent,
+            task,
+            ExecTarget::RemoteModel("test-model".to_string()),
+            0.99,
+            "manual entry",
+        );
+
         let plan = de.l1_cache.get_plan(agent, task).unwrap();
         assert_eq!(plan.target, "remote-test-model");
         assert_eq!(plan.confidence, 0.99);
     }
-    
+
     #[test]
     fn call_context_with_semantic_hash() {
-        let ctx = CallContext::new("test/fn", 1, 2)
-            .with_semantic_hash(vec![0.1, 0.2, 0.3]);
-        
+        let ctx = CallContext::new("test/fn", 1, 2).with_semantic_hash(vec![0.1, 0.2, 0.3]);
+
         assert_eq!(ctx.fn_symbol, "test/fn");
         assert!(ctx.semantic_hash.is_some());
         assert_eq!(ctx.semantic_hash.unwrap(), vec![0.1, 0.2, 0.3]);
@@ -539,51 +592,59 @@ mod tests {
     #[test]
     fn model_registry_custom_provider() {
         let registry = ModelRegistry::new();
-        
+
         // Register a custom provider
         let custom_model = LocalEchoModel::new("custom-model", "[CUSTOM]");
         registry.register(custom_model);
-        
+
         // Verify it's available
         assert!(registry.get("custom-model").is_some());
-        
+
         // Test inference
         let provider = registry.get("custom-model").unwrap();
         let result = provider.infer("test input").unwrap();
         assert_eq!(result, "[CUSTOM] test input");
     }
-    
+
     #[test]
     fn delegation_with_metadata() {
         // Test that the delegation engine can use metadata from CCOS components
         let de = StaticDelegationEngine::new(HashMap::new());
-        
+
         // Create metadata from a hypothetical intent analyzer
         let metadata = DelegationMetadata::new()
             .with_confidence(0.95)
-            .with_reasoning("Intent analysis suggests local execution for mathematical operations".to_string())
+            .with_reasoning(
+                "Intent analysis suggests local execution for mathematical operations".to_string(),
+            )
             .with_context(intent::INTENT_TYPE.to_string(), "mathematical".to_string())
             .with_context(intent::COMPLEXITY.to_string(), "low".to_string())
             .with_source("intent-analyzer".to_string());
-        
-        let ctx = CallContext::new("math/add", 0x12345678, 0xABCDEF01)
-            .with_metadata(metadata.clone());
-        
+
+        let ctx =
+            CallContext::new("math/add", 0x12345678, 0xABCDEF01).with_metadata(metadata.clone());
+
         // The decision should be cached with the provided metadata
         let result = de.decide(&ctx);
         assert_eq!(result, ExecTarget::LocalPure);
-        
+
         // Verify the cache contains the metadata
         let agent = "math/add";
         let task = format!("{:x}", 0x12345678u64 ^ 0xABCDEF01u64);
         let plans = de.l1_cache.get_agent_plans(agent);
         assert!(!plans.is_empty());
-        
+
         // Check that the plan has the expected metadata
         let (_, plan) = plans.first().unwrap();
         assert_eq!(plan.confidence, 0.95);
         assert!(plan.reasoning.contains("Intent analysis suggests"));
-        assert_eq!(plan.metadata.get(intent::INTENT_TYPE), Some(&"mathematical".to_string()));
-        assert_eq!(plan.metadata.get(intent::COMPLEXITY), Some(&"low".to_string()));
+        assert_eq!(
+            plan.metadata.get(intent::INTENT_TYPE),
+            Some(&"mathematical".to_string())
+        );
+        assert_eq!(
+            plan.metadata.get(intent::COMPLEXITY),
+            Some(&"low".to_string())
+        );
     }
 }

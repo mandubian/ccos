@@ -91,9 +91,7 @@ fn test_parse_simple_literals() {
     );
     assert_expr_parses_to!(
         r#""hello\\world\n""#,
-        Expression::Literal(Literal::String(
-            "hello\\world\n".to_string()
-        ))
+        Expression::Literal(Literal::String("hello\\world\n".to_string()))
     );
     assert_expr_parses_to!("true", Expression::Literal(Literal::Boolean(true)));
     assert_expr_parses_to!("false", Expression::Literal(Literal::Boolean(false)));

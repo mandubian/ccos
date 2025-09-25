@@ -1,5 +1,5 @@
 //! CCOS integration tests
-//! 
+//!
 //! These tests use RuntimeHost and test CCOS orchestration features,
 //! capabilities, delegation, and integration between RTFS and CCOS components.
 

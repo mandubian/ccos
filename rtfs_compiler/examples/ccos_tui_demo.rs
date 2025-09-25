@@ -5,18 +5,20 @@ use std::io::{self};
 use std::sync::Arc;
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::{
     backend::CrosstermBackend,
-    widgets::{Block, Borders, Paragraph, Wrap, List, ListItem},
-    layout::{Layout, Constraint, Direction},
-    style::{Style, Color},
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use tokio::sync::broadcast;
 
-use rtfs_compiler::ccos::{CCOS, runtime_service};
+use rtfs_compiler::ccos::{runtime_service, CCOS};
 
 #[derive(Default)]
 struct AppState {
@@ -30,7 +32,10 @@ struct AppState {
 
 fn main() -> io::Result<()> {
     // Use a current-thread runtime with LocalSet so we can keep non-Send parts local
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
     let local = tokio::task::LocalSet::new();
 
     local.block_on(&rt, async move {
@@ -48,9 +53,9 @@ fn main() -> io::Result<()> {
         let cmd_tx = handle.commands();
 
         let mut app = AppState::default();
-    app.goal_input = "Add 2 and 3 using math.add".to_string();
+        app.goal_input = "Add 2 and 3 using math.add".to_string();
 
-    let frame_sleep = std::time::Duration::from_millis(16);
+        let frame_sleep = std::time::Duration::from_millis(16);
 
         let res = loop {
             // 1) Drain runtime events without blocking UI
@@ -79,7 +84,13 @@ fn main() -> io::Result<()> {
                             // Start with current goal
                             let ctx = runtime_service::default_controlled_context();
                             let goal = app.goal_input.clone();
-                            if cmd_tx.try_send(runtime_service::RuntimeCommand::Start { goal: goal.clone(), context: ctx }).is_ok() {
+                            if cmd_tx
+                                .try_send(runtime_service::RuntimeCommand::Start {
+                                    goal: goal.clone(),
+                                    context: ctx,
+                                })
+                                .is_ok()
+                            {
                                 app.running = true;
                                 app.status_lines.push(format!("Start: {}", goal));
                             } else {
@@ -88,15 +99,23 @@ fn main() -> io::Result<()> {
                         }
                         (KeyCode::Char('c'), _) => {
                             if let Some(id) = app.current_intent.clone() {
-                                let _ = cmd_tx.try_send(runtime_service::RuntimeCommand::Cancel { intent_id: id });
+                                let _ = cmd_tx.try_send(runtime_service::RuntimeCommand::Cancel {
+                                    intent_id: id,
+                                });
                                 app.log_lines.push("Cancel requested".into());
                             } else {
                                 app.log_lines.push("No intent to cancel".into());
                             }
                         }
-                        (KeyCode::Backspace, _) => { app.goal_input.pop(); }
-                        (KeyCode::Char(ch), KeyModifiers::NONE) => { app.goal_input.push(ch); }
-                        (KeyCode::Char(ch), KeyModifiers::SHIFT) => { app.goal_input.push(ch); }
+                        (KeyCode::Backspace, _) => {
+                            app.goal_input.pop();
+                        }
+                        (KeyCode::Char(ch), KeyModifiers::NONE) => {
+                            app.goal_input.push(ch);
+                        }
+                        (KeyCode::Char(ch), KeyModifiers::SHIFT) => {
+                            app.goal_input.push(ch);
+                        }
                         _ => {}
                     }
                 }
@@ -123,15 +142,25 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
             app.running = true;
             app.log_lines.push(format!("Started: {}", goal));
         }
-        E::Status { intent_id: _, status } => {
+        E::Status {
+            intent_id: _,
+            status,
+        } => {
             app.status_lines.push(status);
-            if app.status_lines.len() > 200 { app.status_lines.drain(0..app.status_lines.len()-200); }
+            if app.status_lines.len() > 200 {
+                app.status_lines.drain(0..app.status_lines.len() - 200);
+            }
         }
         E::Step { intent_id: _, desc } => {
             app.log_lines.push(desc);
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
-        E::Result { intent_id: _, result } => {
+        E::Result {
+            intent_id: _,
+            result,
+        } => {
             app.running = false;
             app.last_result = Some(format!("Result: {}", result));
             app.log_lines.push("Result received".into());
@@ -141,15 +170,37 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
             app.log_lines.push(format!("Error: {}", message));
         }
         E::Heartbeat => {}
-        E::Stopped => { app.running = false; }
-        runtime_service::RuntimeEvent::GraphGenerated { root_id, nodes: _, edges: _ } => {
-            app.log_lines.push(format!("GraphGenerated: root_id={}", root_id));
+        E::Stopped => {
+            app.running = false;
         }
-        runtime_service::RuntimeEvent::PlanGenerated { intent_id, plan_id, rtfs_code } => {
-            app.log_lines.push(format!("PlanGenerated: intent={} plan={}", intent_id, plan_id));
+        runtime_service::RuntimeEvent::GraphGenerated {
+            root_id,
+            nodes: _,
+            edges: _,
+        } => {
+            app.log_lines
+                .push(format!("GraphGenerated: root_id={}", root_id));
         }
-        runtime_service::RuntimeEvent::StepLog { step, status, message, details } => {
-            app.log_lines.push(format!("StepLog: {} [{}] {} {:?}", step, status, message, details));
+        runtime_service::RuntimeEvent::PlanGenerated {
+            intent_id,
+            plan_id,
+            rtfs_code,
+        } => {
+            app.log_lines.push(format!(
+                "PlanGenerated: intent={} plan={}",
+                intent_id, plan_id
+            ));
+        }
+        runtime_service::RuntimeEvent::StepLog {
+            step,
+            status,
+            message,
+            details,
+        } => {
+            app.log_lines.push(format!(
+                "StepLog: {} [{}] {} {:?}",
+                step, status, message, details
+            ));
         }
         runtime_service::RuntimeEvent::ReadyForNext { next_step } => {
             app.log_lines.push(format!("ReadyForNext: {}", next_step));
@@ -168,7 +219,11 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
         .split(f.size());
 
     let input = Paragraph::new(app.goal_input.as_str())
-        .block(Block::default().title("Goal (type) • s=Start c=Cancel q=Quit").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Goal (type) • s=Start c=Cancel q=Quit")
+                .borders(Borders::ALL),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(input, chunks[0]);
 
@@ -177,19 +232,37 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
 
-    let status_items: Vec<ListItem> = app.status_lines.iter().rev().take(100).map(|s| ListItem::new(s.clone())).collect();
-    let status = List::new(status_items)
-        .block(Block::default().title("Status").borders(Borders::ALL));
+    let status_items: Vec<ListItem> = app
+        .status_lines
+        .iter()
+        .rev()
+        .take(100)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let status =
+        List::new(status_items).block(Block::default().title("Status").borders(Borders::ALL));
     f.render_widget(status, cols[0]);
 
-    let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(200).map(|s| ListItem::new(s.clone())).collect();
-    let log = List::new(log_items)
-        .block(Block::default().title("Log").borders(Borders::ALL));
+    let log_items: Vec<ListItem> = app
+        .log_lines
+        .iter()
+        .rev()
+        .take(200)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let log = List::new(log_items).block(Block::default().title("Log").borders(Borders::ALL));
     f.render_widget(log, cols[1]);
 
-    let result_text = app.last_result.as_deref().unwrap_or(if app.running { "Running..." } else { "Idle" });
+    let result_text =
+        app.last_result
+            .as_deref()
+            .unwrap_or(if app.running { "Running..." } else { "Idle" });
     let result = Paragraph::new(result_text)
-        .style(Style::default().fg(if app.running { Color::Yellow } else { Color::Cyan }))
+        .style(Style::default().fg(if app.running {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        }))
         .block(Block::default().title("Result").borders(Borders::ALL));
     f.render_widget(result, chunks[2]);
 }

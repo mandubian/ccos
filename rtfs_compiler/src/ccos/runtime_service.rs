@@ -10,20 +10,23 @@
 //! - Forward audit/status via IntentEventSink and CausalChain event adapters
 
 use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::{timeout, Duration};
-use tokio::sync::{mpsc, broadcast};
 
 use super::types::IntentId;
-use super::{CCOS};
-use crate::runtime::security::{RuntimeContext, SecurityLevel};
+use super::CCOS;
 use crate::ccos::event_sink::IntentEventSink;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::security::{RuntimeContext, SecurityLevel};
 
 /// Commands a frontend can send to the runtime service
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
     /// Start processing a new natural language goal
-    Start { goal: String, context: RuntimeContext },
+    Start {
+        goal: String,
+        context: RuntimeContext,
+    },
     /// Attempt to cancel an in-flight intent/plan by root intent id (best-effort)
     Cancel { intent_id: IntentId },
     /// Graceful shutdown of the service
@@ -33,18 +36,47 @@ pub enum RuntimeCommand {
 /// Events emitted by the runtime service for UI consumption
 #[derive(Debug, Clone)]
 pub enum RuntimeEvent {
-    Started { intent_id: IntentId, goal: String },
-    Status { intent_id: IntentId, status: String },
-    Step { intent_id: IntentId, desc: String },
-    Result { intent_id: IntentId, result: String }, // RTFS-formatted result string
-    Error { message: String },
+    Started {
+        intent_id: IntentId,
+        goal: String,
+    },
+    Status {
+        intent_id: IntentId,
+        status: String,
+    },
+    Step {
+        intent_id: IntentId,
+        desc: String,
+    },
+    Result {
+        intent_id: IntentId,
+        result: String,
+    }, // RTFS-formatted result string
+    Error {
+        message: String,
+    },
     Heartbeat,
     Stopped,
     // New events for graph generation and plan execution
-    GraphGenerated { root_id: IntentId, nodes: Vec<serde_json::Value>, edges: Vec<serde_json::Value> },
-    PlanGenerated { intent_id: IntentId, plan_id: String, rtfs_code: String },
-    StepLog { step: String, status: String, message: String, details: Option<serde_json::Value> },
-    ReadyForNext { next_step: String },
+    GraphGenerated {
+        root_id: IntentId,
+        nodes: Vec<serde_json::Value>,
+        edges: Vec<serde_json::Value>,
+    },
+    PlanGenerated {
+        intent_id: IntentId,
+        plan_id: String,
+        rtfs_code: String,
+    },
+    StepLog {
+        step: String,
+        status: String,
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    ReadyForNext {
+        next_step: String,
+    },
 }
 
 /// Handle returned to callers for interacting with the service
@@ -54,8 +86,12 @@ pub struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
-    pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> { self.evt_tx.subscribe() }
-    pub fn commands(&self) -> mpsc::Sender<RuntimeCommand> { self.cmd_tx.clone() }
+    pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
+        self.evt_tx.subscribe()
+    }
+    pub fn commands(&self) -> mpsc::Sender<RuntimeCommand> {
+        self.cmd_tx.clone()
+    }
 }
 
 /// Start the runtime service. Spawns an internal task and returns a handle.
@@ -68,7 +104,8 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
         if let Ok(mut g) = ccos.get_intent_graph().lock() {
             let original = g.intent_event_sink.clone();
             let bcast_sink = Arc::new(BroadcastIntentEventSink::new(evt_tx.clone()));
-            g.intent_event_sink = Arc::new(CompositeIntentEventSink::new(vec![original, bcast_sink]));
+            g.intent_event_sink =
+                Arc::new(CompositeIntentEventSink::new(vec![original, bcast_sink]));
         }
     }
 
@@ -87,7 +124,9 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
             match cmd {
                 RuntimeCommand::Start { goal, context } => {
                     // If a task is already running, abort it to start a fresh one
-                    if let Some(handle) = current_task.take() { handle.abort(); }
+                    if let Some(handle) = current_task.take() {
+                        handle.abort();
+                    }
 
                     let tx = evt_tx_for_loop.clone();
                     // Generate a temporary intent id now so UI can bind Cancel
@@ -98,33 +137,54 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
                     let ccos_req = Arc::clone(&ccos);
                     let handle = tokio::task::spawn_local(async move {
                         println!("Starting to process request for goal: {}", goal.clone());
-                        let _ = tx.send(RuntimeEvent::Started { intent_id: tmp_intent_id.clone(), goal: goal.clone() });
+                        let _ = tx.send(RuntimeEvent::Started {
+                            intent_id: tmp_intent_id.clone(),
+                            goal: goal.clone(),
+                        });
                         // Avoid indefinite hangs: timebox orchestration
-                        match timeout(Duration::from_secs(25), ccos_req.process_request(&goal, &context)).await {
+                        match timeout(
+                            Duration::from_secs(25),
+                            ccos_req.process_request(&goal, &context),
+                        )
+                        .await
+                        {
                             Ok(Ok(result)) => {
                                 println!("Request processed successfully: {:?}", result);
-                                let intent_id = ccos_req.get_intent_graph().lock().ok().and_then(|g| {
-                                    let intents = g.storage.get_all_intents_sync();
-                                    intents.into_iter()
-                                        .filter(|i| i.goal == goal)
-                                        .max_by_key(|i| i.updated_at)
-                                        .map(|i| i.intent_id)
-                                }).unwrap_or(tmp_intent_id.clone());
+                                let intent_id = ccos_req
+                                    .get_intent_graph()
+                                    .lock()
+                                    .ok()
+                                    .and_then(|g| {
+                                        let intents = g.storage.get_all_intents_sync();
+                                        intents
+                                            .into_iter()
+                                            .filter(|i| i.goal == goal)
+                                            .max_by_key(|i| i.updated_at)
+                                            .map(|i| i.intent_id)
+                                    })
+                                    .unwrap_or(tmp_intent_id.clone());
                                 // Convert ExecutionResult value to RTFS-formatted string
                                 let rtfs_result = if result.success {
                                     format!("{}", result.value)
                                 } else {
                                     format!("Error: {}", result.value)
                                 };
-                                let _ = tx.send(RuntimeEvent::Result { intent_id, result: rtfs_result });
+                                let _ = tx.send(RuntimeEvent::Result {
+                                    intent_id,
+                                    result: rtfs_result,
+                                });
                             }
                             Ok(Err(e)) => {
                                 println!("Request processing failed: {:?}", e);
-                                let _ = tx.send(RuntimeEvent::Error { message: format!("process_request error: {e}") });
+                                let _ = tx.send(RuntimeEvent::Error {
+                                    message: format!("process_request error: {e}"),
+                                });
                             }
                             Err(_) => {
                                 println!("Request processing timed out");
-                                let _ = tx.send(RuntimeEvent::Error { message: "process_request timed out after 25s".to_string() });
+                                let _ = tx.send(RuntimeEvent::Error {
+                                    message: "process_request timed out after 25s".to_string(),
+                                });
                             }
                         }
                     });
@@ -134,7 +194,9 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
                 RuntimeCommand::Cancel { intent_id: _ } => {
                     let msg = if let Some(handle) = current_task.take() {
                         handle.abort();
-                        let id = current_intent_id.take().unwrap_or_else(|| "unknown-intent".to_string());
+                        let id = current_intent_id
+                            .take()
+                            .unwrap_or_else(|| "unknown-intent".to_string());
                         format!("Canceled intent {}", id)
                     } else {
                         "No running intent to cancel".to_string()
@@ -142,7 +204,9 @@ pub async fn start_service(ccos: Arc<CCOS>) -> RuntimeHandle {
                     let _ = evt_tx_for_loop.send(RuntimeEvent::Error { message: msg });
                 }
                 RuntimeCommand::Shutdown => {
-                    if let Some(handle) = current_task.take() { handle.abort(); }
+                    if let Some(handle) = current_task.take() {
+                        handle.abort();
+                    }
                     let _ = evt_tx_for_loop.send(RuntimeEvent::Stopped);
                     break;
                 }
@@ -161,8 +225,10 @@ pub fn default_controlled_context() -> RuntimeContext {
         allowed_capabilities: [
             "ccos.echo".to_string(),
             "ccos.math.add".to_string(), // offline
-            // Avoid online/LLM capabilities by default in demos
-        ].into_iter().collect::<HashSet<_>>(),
+                                         // Avoid online/LLM capabilities by default in demos
+        ]
+        .into_iter()
+        .collect::<HashSet<_>>(),
         ..RuntimeContext::controlled(Vec::new())
     }
 }
@@ -181,7 +247,9 @@ impl std::fmt::Debug for BroadcastIntentEventSink {
 }
 
 impl BroadcastIntentEventSink {
-    fn new(tx: broadcast::Sender<RuntimeEvent>) -> Self { Self { tx } }
+    fn new(tx: broadcast::Sender<RuntimeEvent>) -> Self {
+        Self { tx }
+    }
 }
 
 impl IntentEventSink for BroadcastIntentEventSink {
@@ -194,14 +262,17 @@ impl IntentEventSink for BroadcastIntentEventSink {
         _reason: &str,
         _triggering_action_id: Option<&str>,
     ) -> Result<(), RuntimeError> {
-        let _ = self.tx.send(RuntimeEvent::Status { intent_id: intent_id.clone(), status: new_status.to_string() });
+        let _ = self.tx.send(RuntimeEvent::Status {
+            intent_id: intent_id.clone(),
+            status: new_status.to_string(),
+        });
         Ok(())
     }
 }
 
 #[derive(Clone)]
 struct CompositeIntentEventSink {
-    sinks: Vec<Arc<dyn IntentEventSink>>, 
+    sinks: Vec<Arc<dyn IntentEventSink>>,
 }
 
 impl std::fmt::Debug for CompositeIntentEventSink {
@@ -211,7 +282,9 @@ impl std::fmt::Debug for CompositeIntentEventSink {
 }
 
 impl CompositeIntentEventSink {
-    fn new(sinks: Vec<Arc<dyn IntentEventSink>>) -> Self { Self { sinks } }
+    fn new(sinks: Vec<Arc<dyn IntentEventSink>>) -> Self {
+        Self { sinks }
+    }
 }
 
 impl IntentEventSink for CompositeIntentEventSink {
@@ -226,7 +299,14 @@ impl IntentEventSink for CompositeIntentEventSink {
     ) -> Result<(), RuntimeError> {
         for s in &self.sinks {
             // Best-effort: forward to all, ignore individual sink errors to keep UI responsive
-            let _ = s.log_intent_status_change(plan_id, intent_id, old_status, new_status, reason, triggering_action_id);
+            let _ = s.log_intent_status_change(
+                plan_id,
+                intent_id,
+                old_status,
+                new_status,
+                reason,
+                triggering_action_id,
+            );
         }
         Ok(())
     }

@@ -4,17 +4,17 @@
 //! context window of the core Arbiter LLM through virtualization and distillation.
 
 use super::types::Intent;
+use super::types::IntentId;
 use crate::ccos::working_memory::backend::QueryParams;
 use crate::ccos::working_memory::boundaries::{Boundary, BoundaryType};
-use super::types::IntentId;
 use crate::runtime::error::RuntimeError;
 use std::collections::HashMap;
 
 use std::sync::{Arc, Mutex};
 
 // Integration: Working Memory (new modular API)
-use crate::ccos::working_memory::facade::WorkingMemory;
 use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
+use crate::ccos::working_memory::facade::WorkingMemory;
 use crate::ccos::working_memory::types::WorkingMemoryEntry;
 
 // Minimal AbstractStep and ResourceId types to resolve missing type errors
@@ -151,13 +151,25 @@ impl ContextHorizonManager {
             let reduced_wisdom = self.reduce_wisdom(wisdom, self.config.max_wisdom_tokens)?;
             let reduced_plan = self.reduce_plan(plan, self.config.max_plan_tokens)?;
 
-            context.data.insert("intents".to_string(), format!("{:?}", reduced_intents));
-            context.data.insert("wisdom".to_string(), format!("{:?}", reduced_wisdom));
-            context.data.insert("plan".to_string(), format!("{:?}", reduced_plan));
+            context
+                .data
+                .insert("intents".to_string(), format!("{:?}", reduced_intents));
+            context
+                .data
+                .insert("wisdom".to_string(), format!("{:?}", reduced_wisdom));
+            context
+                .data
+                .insert("plan".to_string(), format!("{:?}", reduced_plan));
         } else {
-            context.data.insert("intents".to_string(), format!("{:?}", intents));
-            context.data.insert("wisdom".to_string(), format!("{:?}", wisdom));
-            context.data.insert("plan".to_string(), format!("{:?}", plan));
+            context
+                .data
+                .insert("intents".to_string(), format!("{:?}", intents));
+            context
+                .data
+                .insert("wisdom".to_string(), format!("{:?}", wisdom));
+            context
+                .data
+                .insert("plan".to_string(), format!("{:?}", plan));
         }
 
         Ok(context)
@@ -432,7 +444,8 @@ impl ContextHorizonManager {
             .working_memory
             .lock()
             .map_err(|_| RuntimeError::Generic("WorkingMemory lock poisoned".into()))?;
-        wm.append(entry).map_err(|e| RuntimeError::Generic(format!("WorkingMemory append failed: {}", e)))
+        wm.append(entry)
+            .map_err(|e| RuntimeError::Generic(format!("WorkingMemory append failed: {}", e)))
     }
 
     /// Get current configuration
@@ -611,7 +624,8 @@ impl WisdomDistiller {
         // Add placeholder data for other fields
         wisdom
             // Placeholder for agent reliability scores
-            .content.push_str("agent_reliability_score");
+            .content
+            .push_str("agent_reliability_score");
         // Placeholder for cost insights
         wisdom.content.push_str("avg_cost");
         // Placeholder for performance metrics
@@ -658,10 +672,7 @@ impl HierarchicalPlanBuilder {
         Self
     }
 
-    pub fn create_abstract_steps(
-        &self,
-        task: &Task,
-    ) -> Result<Vec<AbstractStep>, RuntimeError> {
+    pub fn create_abstract_steps(&self, task: &Task) -> Result<Vec<AbstractStep>, RuntimeError> {
         // Placeholder implementation
         // In a real implementation, this would convert concrete plan steps to abstract ones
         Ok(vec![AbstractStep {
@@ -678,10 +689,7 @@ impl DataHandleManager {
         Self
     }
 
-    pub fn create_data_handles(
-        &self,
-        task: &Task,
-    ) -> Result<Vec<ResourceId>, RuntimeError> {
+    pub fn create_data_handles(&self, task: &Task) -> Result<Vec<ResourceId>, RuntimeError> {
         // Placeholder implementation
         // In a real implementation, this would identify and create handles for large data
         Ok(vec!["resource-1".to_string()])
@@ -751,15 +759,21 @@ mod tests {
     fn test_persist_wisdom_to_working_memory() {
         let manager = ContextHorizonManager::new().unwrap();
         let task = Task::new("unit-test".to_string(), "desc".to_string());
-        let wisdom = DistilledWisdom { content: "some compact summary".to_string() };
+        let wisdom = DistilledWisdom {
+            content: "some compact summary".to_string(),
+        };
 
         // Should append an entry without error
-        manager.persist_wisdom_to_working_memory(&task, &wisdom).unwrap();
+        manager
+            .persist_wisdom_to_working_memory(&task, &wisdom)
+            .unwrap();
 
         let wm = manager.working_memory();
         let guard = wm.lock().unwrap();
         use crate::ccos::working_memory::backend::QueryParams;
-        let results = guard.query(&QueryParams::with_tags(["wisdom"]).with_limit(Some(10))).unwrap();
+        let results = guard
+            .query(&QueryParams::with_tags(["wisdom"]).with_limit(Some(10)))
+            .unwrap();
         assert!(!results.entries.is_empty());
     }
 
@@ -790,15 +804,27 @@ mod tests {
 
         // Seed WM with a few entries at different timestamps
         let task = Task::new("wm-boundary-test".to_string(), "desc".to_string());
-        let w1 = DistilledWisdom { content: "w1".into() };
-        let w2 = DistilledWisdom { content: "w2".into() };
-        let w3 = DistilledWisdom { content: "w3".into() };
+        let w1 = DistilledWisdom {
+            content: "w1".into(),
+        };
+        let w2 = DistilledWisdom {
+            content: "w2".into(),
+        };
+        let w3 = DistilledWisdom {
+            content: "w3".into(),
+        };
 
         // Inject entries with controlled timestamps by temporarily appending directly
         // through WorkingMemory facade after building entries via persist helper but adjusting timestamps.
-        manager.persist_wisdom_to_working_memory(&task, &w1).unwrap();
-        manager.persist_wisdom_to_working_memory(&task, &w2).unwrap();
-        manager.persist_wisdom_to_working_memory(&task, &w3).unwrap();
+        manager
+            .persist_wisdom_to_working_memory(&task, &w1)
+            .unwrap();
+        manager
+            .persist_wisdom_to_working_memory(&task, &w2)
+            .unwrap();
+        manager
+            .persist_wisdom_to_working_memory(&task, &w3)
+            .unwrap();
 
         // Define a time window using current time bounds to likely include all
         let now = chrono::Utc::now().timestamp() as u64;
@@ -814,7 +840,9 @@ mod tests {
                 .with_constraint("max_tokens", serde_json::json!(10usize)),
         ];
 
-        let entries = manager.fetch_wisdom_from_working_memory(&boundaries).unwrap();
+        let entries = manager
+            .fetch_wisdom_from_working_memory(&boundaries)
+            .unwrap();
         assert!(!entries.is_empty());
     }
 }

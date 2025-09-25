@@ -18,8 +18,8 @@ use crate::runtime::security::RuntimeContext;
 use super::orchestrator::Orchestrator;
 
 use super::intent_graph::IntentGraph;
-use super::types::{Plan, StorableIntent, ExecutionResult, PlanBody};
 use super::types::Intent; // for delegation validation
+use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use crate::runtime::error::RuntimeError;
 
 /// Represents the system's constitution, a set of human-authored rules.
@@ -33,7 +33,6 @@ impl Default for Constitution {
         Self { rules: vec![] }
     }
 }
-
 
 /// The Governance Kernel is the root of trust in the CCOS.
 /// Its logic is designed to be simple, verifiable, and secure.
@@ -100,19 +99,26 @@ impl GovernanceKernel {
     fn sanitize_intent(&self, intent: &StorableIntent, plan: &Plan) -> RuntimeResult<()> {
         // Check for common prompt injection phrases in the original request.
         let lower_request = intent.original_request.to_lowercase();
-        const INJECTION_PHRASES: &[&str] = &["ignore all previous instructions", "you are now in developer mode"];
+        const INJECTION_PHRASES: &[&str] = &[
+            "ignore all previous instructions",
+            "you are now in developer mode",
+        ];
         for phrase in INJECTION_PHRASES {
             if lower_request.contains(phrase) {
-                return Err(RuntimeError::Generic("Potential prompt injection detected".to_string()));
+                return Err(RuntimeError::Generic(
+                    "Potential prompt injection detected".to_string(),
+                ));
             }
         }
 
         // Check for logical inconsistencies between the intent and the plan.
         // Example: If intent is to send an email, the plan shouldn't be deleting files.
         if intent.goal.contains("email") {
-                if let PlanBody::Rtfs(body_text) = &plan.body {
+            if let PlanBody::Rtfs(body_text) = &plan.body {
                 if body_text.contains("delete-file") {
-                    return Err(RuntimeError::Generic("Plan action contradicts intent goal".to_string()));
+                    return Err(RuntimeError::Generic(
+                        "Plan action contradicts intent goal".to_string(),
+                    ));
                 }
             }
         }
@@ -125,7 +131,11 @@ impl GovernanceKernel {
         // Extract the original body text
         let original_body = match &plan.body {
             PlanBody::Rtfs(text) => text.clone(),
-            PlanBody::Wasm(_) => return Err(RuntimeError::Generic("Cannot scaffold binary plan body".to_string())),
+            PlanBody::Wasm(_) => {
+                return Err(RuntimeError::Generic(
+                    "Cannot scaffold binary plan body".to_string(),
+                ))
+            }
         };
 
         // Wrap the original body in a `(do ...)` block if it isn't already.
@@ -146,9 +156,12 @@ impl GovernanceKernel {
     fn validate_against_constitution(&self, plan: &Plan) -> RuntimeResult<()> {
         // TODO: Implement actual validation logic based on loaded constitutional rules.
         // For now, this is a placeholder.
-                if let PlanBody::Rtfs(body_text) = &plan.body {
+        if let PlanBody::Rtfs(body_text) = &plan.body {
             if body_text.contains("launch-nukes") {
-                return Err(RuntimeError::Generic("Plan violates Constitution: Rule against global thermonuclear war.".to_string()));
+                return Err(RuntimeError::Generic(
+                    "Plan violates Constitution: Rule against global thermonuclear war."
+                        .to_string(),
+                ));
             }
         }
         Ok(())
@@ -157,12 +170,18 @@ impl GovernanceKernel {
     /// Delegation validation hook (M4): governance pre-approval of agent selection.
     /// Extend with constitutional / policy checks (e.g., trust tier allowlist, cost ceilings, jurisdiction constraints).
     /// Return Err(...) to veto delegation (arbiter will fall back to LLM planning path).
-    pub fn validate_delegation(&self, intent: &Intent, agent_id: &str, score: f64) -> RuntimeResult<()> {
+    pub fn validate_delegation(
+        &self,
+        intent: &Intent,
+        agent_id: &str,
+        score: f64,
+    ) -> RuntimeResult<()> {
         // Placeholder policy examples (expand as specs evolve):
         // 1. Reject extremely low scores (defense in depth even if arbiter threshold handles it).
         if score < 0.50 {
             return Err(crate::runtime::error::RuntimeError::Generic(format!(
-                "Delegation rejected: score {:.2} below governance floor for agent {}", score, agent_id
+                "Delegation rejected: score {:.2} below governance floor for agent {}",
+                score, agent_id
             )));
         }
         // 2. Enforce simple constraint: if intent goal mentions "EU" ensure agent id does not contain "non_eu" (placeholder heuristic).

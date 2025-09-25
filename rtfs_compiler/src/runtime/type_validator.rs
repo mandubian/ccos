@@ -1,7 +1,9 @@
-use crate::ast::{TypeExpr, TypePredicate, ArrayDimension, Literal, PrimitiveType, Keyword, MapKey};
+use crate::ast::{
+    ArrayDimension, Keyword, Literal, MapKey, PrimitiveType, TypeExpr, TypePredicate,
+};
 use crate::runtime::values::Value;
-use std::collections::HashMap;
 use regex::Regex;
+use std::collections::HashMap;
 
 /// Validation error types
 #[derive(Debug, Clone)]
@@ -97,7 +99,7 @@ impl VerificationContext {
             trust_level: TrustLevel::Untrusted,
         }
     }
-    
+
     /// Create context for external data validation
     pub fn external_data(source: &str) -> Self {
         Self {
@@ -108,7 +110,7 @@ impl VerificationContext {
             trust_level: TrustLevel::Untrusted,
         }
     }
-    
+
     /// Create context for compile-time verified types
     pub fn compile_time_verified() -> Self {
         Self {
@@ -119,19 +121,19 @@ impl VerificationContext {
             trust_level: TrustLevel::Trusted,
         }
     }
-    
+
     /// Check if this context should skip runtime validation
     pub fn should_skip_validation(&self, config: &TypeCheckingConfig) -> bool {
         // Never skip validation at capability boundaries
         if self.is_capability_boundary && config.enforce_capability_boundaries {
             return false;
         }
-        
+
         // Never skip validation for external data
         if self.is_external_data && config.validate_external_data {
             return false;
         }
-        
+
         // Skip if compile-time verified and optimization enabled
         config.skip_compile_time_verified && self.compile_time_verified
     }
@@ -151,14 +153,38 @@ pub enum TrustLevel {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::TypeMismatch { expected, actual, path } => {
-                write!(f, "Type mismatch at {}: expected {}, got {}", path, expected, actual)
+            ValidationError::TypeMismatch {
+                expected,
+                actual,
+                path,
+            } => {
+                write!(
+                    f,
+                    "Type mismatch at {}: expected {}, got {}",
+                    path, expected, actual
+                )
             }
-            ValidationError::PredicateViolation { predicate, value, path } => {
-                write!(f, "Predicate violation at {}: {} failed for value {}", path, predicate, value)
+            ValidationError::PredicateViolation {
+                predicate,
+                value,
+                path,
+            } => {
+                write!(
+                    f,
+                    "Predicate violation at {}: {} failed for value {}",
+                    path, predicate, value
+                )
             }
-            ValidationError::ShapeViolation { expected_shape, actual_shape, path } => {
-                write!(f, "Shape violation at {}: expected {:?}, got {:?}", path, expected_shape, actual_shape)
+            ValidationError::ShapeViolation {
+                expected_shape,
+                actual_shape,
+                path,
+            } => {
+                write!(
+                    f,
+                    "Shape violation at {}: expected {:?}, got {:?}",
+                    path, expected_shape, actual_shape
+                )
             }
             ValidationError::InvalidRegexPattern(pattern) => {
                 write!(f, "Invalid regex pattern: {}", pattern)
@@ -185,7 +211,10 @@ pub struct TypeValidator {
 impl std::fmt::Debug for TypeValidator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TypeValidator")
-            .field("stdlib_predicates", &format!("{} predicates", self.stdlib_predicates.len()))
+            .field(
+                "stdlib_predicates",
+                &format!("{} predicates", self.stdlib_predicates.len()),
+            )
             .finish()
     }
 }
@@ -210,7 +239,7 @@ impl TypeValidator {
                 } else {
                     false
                 }
-            })
+            }),
         );
 
         // Email validation predicate
@@ -219,12 +248,14 @@ impl TypeValidator {
             Box::new(|value| {
                 if let Value::String(s) = value {
                     // Simple email regex - in production, use a proper email validation library
-                    let email_regex = regex::Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
+                    let email_regex =
+                        regex::Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+                            .unwrap();
                     email_regex.is_match(s)
                 } else {
                     false
                 }
-            })
+            }),
         );
     }
 
@@ -234,7 +265,7 @@ impl TypeValidator {
         let context = VerificationContext::default();
         self.validate_with_config(value, rtfs_type, &config, &context)
     }
-    
+
     /// Optimized validation with configuration and context
     pub fn validate_with_config(
         &self,
@@ -247,15 +278,17 @@ impl TypeValidator {
         if context.should_skip_validation(config) && self.is_simple_type(rtfs_type) {
             return Ok(()); // Skip runtime validation for compile-time verified simple types
         }
-        
+
         // Apply validation level
         match config.validation_level {
             ValidationLevel::Basic => self.validate_basic_type(value, rtfs_type, ""),
-            ValidationLevel::Standard => self.validate_with_security_predicates(value, rtfs_type, context, ""),
+            ValidationLevel::Standard => {
+                self.validate_with_security_predicates(value, rtfs_type, context, "")
+            }
             ValidationLevel::Strict => self.validate_value_at_path(value, rtfs_type, ""),
         }
     }
-    
+
     /// Check if a type is simple enough for compile-time verification
     fn is_simple_type(&self, rtfs_type: &TypeExpr) -> bool {
         match rtfs_type {
@@ -263,7 +296,9 @@ impl TypeValidator {
             TypeExpr::Primitive(_) => true,
             // Collections of simple types are simple
             TypeExpr::Vector(element_type) => self.is_simple_type(element_type),
-            TypeExpr::Map { entries, .. } => entries.iter().all(|entry| self.is_simple_type(&entry.value_type)),
+            TypeExpr::Map { entries, .. } => entries
+                .iter()
+                .all(|entry| self.is_simple_type(&entry.value_type)),
             TypeExpr::Tuple(types) => types.iter().all(|t| self.is_simple_type(t)),
             // Refined types are NOT simple (need predicate validation)
             TypeExpr::Refined { .. } => false,
@@ -278,9 +313,14 @@ impl TypeValidator {
             _ => false,
         }
     }
-    
+
     /// Basic type validation (types only, no predicates)
-    fn validate_basic_type(&self, value: &Value, rtfs_type: &TypeExpr, path: &str) -> ValidationResult<()> {
+    fn validate_basic_type(
+        &self,
+        value: &Value,
+        rtfs_type: &TypeExpr,
+        path: &str,
+    ) -> ValidationResult<()> {
         match (value, rtfs_type) {
             // Primitive types
             (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Int)) => Ok(()),
@@ -306,12 +346,12 @@ impl TypeValidator {
             (value, TypeExpr::Refined { base_type, .. }) => {
                 self.validate_basic_type(value, base_type, path)
             }
-            
+
             // Other types get full validation even in basic mode
             _ => self.validate_value_at_path(value, rtfs_type, path),
         }
     }
-    
+
     /// Security-focused validation (types + security-critical predicates only)
     fn validate_with_security_predicates(
         &self,
@@ -322,10 +362,13 @@ impl TypeValidator {
     ) -> ValidationResult<()> {
         // First validate basic type
         self.validate_basic_type(value, rtfs_type, path)?;
-        
+
         // Then validate predicates
         match rtfs_type {
-            TypeExpr::Refined { base_type: _, predicates } => {
+            TypeExpr::Refined {
+                base_type: _,
+                predicates,
+            } => {
                 // For refined types, ALL predicates define the type and must be validated
                 for predicate in predicates {
                     self.validate_predicate(value, predicate, path)?;
@@ -337,7 +380,12 @@ impl TypeValidator {
     }
 
     /// Validate value with path tracking for better error messages
-    pub fn validate_value_at_path(&self, value: &Value, rtfs_type: &TypeExpr, path: &str) -> ValidationResult<()> {
+    pub fn validate_value_at_path(
+        &self,
+        value: &Value,
+        rtfs_type: &TypeExpr,
+        path: &str,
+    ) -> ValidationResult<()> {
         match (value, rtfs_type) {
             // Primitive types
             (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Int)) => Ok(()),
@@ -372,10 +420,16 @@ impl TypeValidator {
             }
 
             // Array types with shape validation
-            (Value::Vector(items), TypeExpr::Array { element_type, shape }) => {
+            (
+                Value::Vector(items),
+                TypeExpr::Array {
+                    element_type,
+                    shape,
+                },
+            ) => {
                 // Validate shape
                 self.validate_array_shape(items, shape, path)?;
-                
+
                 // Validate element types
                 for (i, item) in items.iter().enumerate() {
                     let item_path = format!("{}[{}]", path, i);
@@ -393,7 +447,7 @@ impl TypeValidator {
                         path: path.to_string(),
                     });
                 }
-                
+
                 for (i, (item, expected_type)) in items.iter().zip(types.iter()).enumerate() {
                     let item_path = format!("{}[{}]", path, i);
                     self.validate_value_at_path(item, expected_type, &item_path)?;
@@ -402,7 +456,13 @@ impl TypeValidator {
             }
 
             // Map types
-            (Value::Map(map), TypeExpr::Map { entries, wildcard: _ }) => {
+            (
+                Value::Map(map),
+                TypeExpr::Map {
+                    entries,
+                    wildcard: _,
+                },
+            ) => {
                 for entry in entries {
                     let key = MapKey::Keyword(entry.key.clone());
                     if let Some(value) = map.get(&key) {
@@ -447,10 +507,16 @@ impl TypeValidator {
             }
 
             // Refined types (base type + predicates)
-            (val, TypeExpr::Refined { base_type, predicates }) => {
+            (
+                val,
+                TypeExpr::Refined {
+                    base_type,
+                    predicates,
+                },
+            ) => {
                 // First validate against base type
                 self.validate_value_at_path(val, base_type, path)?;
-                
+
                 // Then validate all predicates
                 for predicate in predicates {
                     self.validate_predicate(val, predicate, path)?;
@@ -490,7 +556,12 @@ impl TypeValidator {
     }
 
     /// Validate array shape constraints
-    fn validate_array_shape(&self, items: &[Value], shape: &[ArrayDimension], path: &str) -> ValidationResult<()> {
+    fn validate_array_shape(
+        &self,
+        items: &[Value],
+        shape: &[ArrayDimension],
+        path: &str,
+    ) -> ValidationResult<()> {
         if shape.is_empty() {
             return Ok(()); // No shape constraints
         }
@@ -517,119 +588,132 @@ impl TypeValidator {
     }
 
     /// Validate a predicate against a value
-    fn validate_predicate(&self, value: &Value, predicate: &TypePredicate, path: &str) -> ValidationResult<()> {
+    fn validate_predicate(
+        &self,
+        value: &Value,
+        predicate: &TypePredicate,
+        path: &str,
+    ) -> ValidationResult<()> {
         match predicate {
-            TypePredicate::GreaterThan(threshold) => {
-                match (value, threshold) {
-                    (Value::Integer(v), Literal::Integer(t)) => {
-                        if v > t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("> {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
+            TypePredicate::GreaterThan(threshold) => match (value, threshold) {
+                (Value::Integer(v), Literal::Integer(t)) => {
+                    if v > t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("> {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
                     }
-                    (Value::Float(v), Literal::Float(t)) => {
-                        if v > t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("> {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
-                    }
-                    _ => Err(ValidationError::PredicateViolation {
-                        predicate: "type mismatch for comparison".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    })
                 }
-            }
-            
-            TypePredicate::GreaterEqual(threshold) => {
-                match (value, threshold) {
-                    (Value::Integer(v), Literal::Integer(t)) => {
-                        if v >= t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!(">= {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
+                (Value::Float(v), Literal::Float(t)) => {
+                    if v > t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("> {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
                     }
-                    (Value::Float(v), Literal::Float(t)) => {
-                        if v >= t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!(">= {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
-                    }
-                    _ => Err(ValidationError::PredicateViolation {
-                        predicate: "type mismatch for comparison".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    })
                 }
-            }
+                _ => Err(ValidationError::PredicateViolation {
+                    predicate: "type mismatch for comparison".to_string(),
+                    value: value.type_name().to_string(),
+                    path: path.to_string(),
+                }),
+            },
 
-            TypePredicate::LessThan(threshold) => {
-                match (value, threshold) {
-                    (Value::Integer(v), Literal::Integer(t)) => {
-                        if v < t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("< {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
+            TypePredicate::GreaterEqual(threshold) => match (value, threshold) {
+                (Value::Integer(v), Literal::Integer(t)) => {
+                    if v >= t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!(">= {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
                     }
-                    (Value::Float(v), Literal::Float(t)) => {
-                        if v < t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("< {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
-                    }
-                    _ => Err(ValidationError::PredicateViolation {
-                        predicate: "type mismatch for comparison".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    })
                 }
-            }
+                (Value::Float(v), Literal::Float(t)) => {
+                    if v >= t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!(">= {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
+                    }
+                }
+                _ => Err(ValidationError::PredicateViolation {
+                    predicate: "type mismatch for comparison".to_string(),
+                    value: value.type_name().to_string(),
+                    path: path.to_string(),
+                }),
+            },
 
-            TypePredicate::LessEqual(threshold) => {
-                match (value, threshold) {
-                    (Value::Integer(v), Literal::Integer(t)) => {
-                        if v <= t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("<= {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
+            TypePredicate::LessThan(threshold) => match (value, threshold) {
+                (Value::Integer(v), Literal::Integer(t)) => {
+                    if v < t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("< {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
                     }
-                    (Value::Float(v), Literal::Float(t)) => {
-                        if v <= t { Ok(()) } else { 
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("<= {}", t),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
-                    }
-                    _ => Err(ValidationError::PredicateViolation {
-                        predicate: "type mismatch for comparison".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    })
                 }
-            }
+                (Value::Float(v), Literal::Float(t)) => {
+                    if v < t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("< {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
+                    }
+                }
+                _ => Err(ValidationError::PredicateViolation {
+                    predicate: "type mismatch for comparison".to_string(),
+                    value: value.type_name().to_string(),
+                    path: path.to_string(),
+                }),
+            },
+
+            TypePredicate::LessEqual(threshold) => match (value, threshold) {
+                (Value::Integer(v), Literal::Integer(t)) => {
+                    if v <= t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("<= {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
+                    }
+                }
+                (Value::Float(v), Literal::Float(t)) => {
+                    if v <= t {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("<= {}", t),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
+                    }
+                }
+                _ => Err(ValidationError::PredicateViolation {
+                    predicate: "type mismatch for comparison".to_string(),
+                    value: value.type_name().to_string(),
+                    path: path.to_string(),
+                }),
+            },
 
             TypePredicate::Equal(expected) => {
                 let val_as_literal = value_to_literal(value)?;
@@ -657,37 +741,35 @@ impl TypeValidator {
                 }
             }
 
-            TypePredicate::InRange(min, max) => {
-                match (value, min, max) {
-                    (Value::Integer(v), Literal::Integer(min_val), Literal::Integer(max_val)) => {
-                        if v >= min_val && v <= max_val {
-                            Ok(())
-                        } else {
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("in-range {} {}", min_val, max_val),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
+            TypePredicate::InRange(min, max) => match (value, min, max) {
+                (Value::Integer(v), Literal::Integer(min_val), Literal::Integer(max_val)) => {
+                    if v >= min_val && v <= max_val {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("in-range {} {}", min_val, max_val),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
                     }
-                    (Value::Float(v), Literal::Float(min_val), Literal::Float(max_val)) => {
-                        if v >= min_val && v <= max_val {
-                            Ok(())
-                        } else {
-                            Err(ValidationError::PredicateViolation {
-                                predicate: format!("in-range {} {}", min_val, max_val),
-                                value: v.to_string(),
-                                path: path.to_string(),
-                            })
-                        }
-                    }
-                    _ => Err(ValidationError::PredicateViolation {
-                        predicate: "type mismatch for range".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    })
                 }
-            }
+                (Value::Float(v), Literal::Float(min_val), Literal::Float(max_val)) => {
+                    if v >= min_val && v <= max_val {
+                        Ok(())
+                    } else {
+                        Err(ValidationError::PredicateViolation {
+                            predicate: format!("in-range {} {}", min_val, max_val),
+                            value: v.to_string(),
+                            path: path.to_string(),
+                        })
+                    }
+                }
+                _ => Err(ValidationError::PredicateViolation {
+                    predicate: "type mismatch for range".to_string(),
+                    value: value.type_name().to_string(),
+                    path: path.to_string(),
+                }),
+            },
 
             TypePredicate::MinLength(min_len) => {
                 if let Value::String(s) = value {
@@ -807,13 +889,15 @@ impl TypeValidator {
                 let actual_count = match value {
                     Value::Vector(v) => v.len(),
                     Value::Map(m) => m.len(),
-                    _ => return Err(ValidationError::PredicateViolation {
-                        predicate: "min-count requires collection".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    }),
+                    _ => {
+                        return Err(ValidationError::PredicateViolation {
+                            predicate: "min-count requires collection".to_string(),
+                            value: value.type_name().to_string(),
+                            path: path.to_string(),
+                        })
+                    }
                 };
-                
+
                 if actual_count >= *min_count {
                     Ok(())
                 } else {
@@ -829,13 +913,15 @@ impl TypeValidator {
                 let actual_count = match value {
                     Value::Vector(v) => v.len(),
                     Value::Map(m) => m.len(),
-                    _ => return Err(ValidationError::PredicateViolation {
-                        predicate: "max-count requires collection".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    }),
+                    _ => {
+                        return Err(ValidationError::PredicateViolation {
+                            predicate: "max-count requires collection".to_string(),
+                            value: value.type_name().to_string(),
+                            path: path.to_string(),
+                        })
+                    }
                 };
-                
+
                 if actual_count <= *max_count {
                     Ok(())
                 } else {
@@ -851,13 +937,15 @@ impl TypeValidator {
                 let actual_count = match value {
                     Value::Vector(v) => v.len(),
                     Value::Map(m) => m.len(),
-                    _ => return Err(ValidationError::PredicateViolation {
-                        predicate: "count requires collection".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    }),
+                    _ => {
+                        return Err(ValidationError::PredicateViolation {
+                            predicate: "count requires collection".to_string(),
+                            value: value.type_name().to_string(),
+                            path: path.to_string(),
+                        })
+                    }
                 };
-                
+
                 if actual_count == *expected_count {
                     Ok(())
                 } else {
@@ -874,13 +962,15 @@ impl TypeValidator {
                     Value::Vector(v) => v.is_empty(),
                     Value::Map(m) => m.is_empty(),
                     Value::String(s) => s.is_empty(),
-                    _ => return Err(ValidationError::PredicateViolation {
-                        predicate: "non-empty requires collection or string".to_string(),
-                        value: value.type_name().to_string(),
-                        path: path.to_string(),
-                    }),
+                    _ => {
+                        return Err(ValidationError::PredicateViolation {
+                            predicate: "non-empty requires collection or string".to_string(),
+                            value: value.type_name().to_string(),
+                            path: path.to_string(),
+                        })
+                    }
                 };
-                
+
                 if !is_empty {
                     Ok(())
                 } else {
@@ -970,107 +1060,133 @@ fn value_to_literal(value: &Value) -> ValidationResult<Literal> {
 mod tests {
     use super::*;
     use crate::ast::Keyword;
-    
+
     #[test]
     fn test_primitive_type_validation() {
         let validator = TypeValidator::new();
-        
+
         // Integer validation
-        assert!(validator.validate_value(
-            &Value::Integer(42),
-            &TypeExpr::Primitive(PrimitiveType::Int)
-        ).is_ok());
-        
+        assert!(validator
+            .validate_value(
+                &Value::Integer(42),
+                &TypeExpr::Primitive(PrimitiveType::Int)
+            )
+            .is_ok());
+
         // String validation
-        assert!(validator.validate_value(
-            &Value::String("hello".to_string()),
-            &TypeExpr::Primitive(PrimitiveType::String)
-        ).is_ok());
-        
+        assert!(validator
+            .validate_value(
+                &Value::String("hello".to_string()),
+                &TypeExpr::Primitive(PrimitiveType::String)
+            )
+            .is_ok());
+
         // Type mismatch
-        assert!(validator.validate_value(
-            &Value::String("hello".to_string()),
-            &TypeExpr::Primitive(PrimitiveType::Int)
-        ).is_err());
+        assert!(validator
+            .validate_value(
+                &Value::String("hello".to_string()),
+                &TypeExpr::Primitive(PrimitiveType::Int)
+            )
+            .is_err());
     }
-    
+
     #[test]
     fn test_refined_type_validation() {
         let validator = TypeValidator::new();
-        
+
         // Positive integer constraint
         let positive_int = TypeExpr::Refined {
             base_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
             predicates: vec![TypePredicate::GreaterThan(Literal::Integer(0))],
         };
-        
-        assert!(validator.validate_value(&Value::Integer(5), &positive_int).is_ok());
-        assert!(validator.validate_value(&Value::Integer(0), &positive_int).is_err());
-        assert!(validator.validate_value(&Value::Integer(-1), &positive_int).is_err());
+
+        assert!(validator
+            .validate_value(&Value::Integer(5), &positive_int)
+            .is_ok());
+        assert!(validator
+            .validate_value(&Value::Integer(0), &positive_int)
+            .is_err());
+        assert!(validator
+            .validate_value(&Value::Integer(-1), &positive_int)
+            .is_err());
     }
-    
+
     #[test]
     fn test_string_length_validation() {
         let validator = TypeValidator::new();
-        
+
         // String with minimum length constraint
         let min_length_string = TypeExpr::Refined {
             base_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
             predicates: vec![TypePredicate::MinLength(3)],
         };
-        
-        assert!(validator.validate_value(&Value::String("hello".to_string()), &min_length_string).is_ok());
-        assert!(validator.validate_value(&Value::String("hi".to_string()), &min_length_string).is_err());
+
+        assert!(validator
+            .validate_value(&Value::String("hello".to_string()), &min_length_string)
+            .is_ok());
+        assert!(validator
+            .validate_value(&Value::String("hi".to_string()), &min_length_string)
+            .is_err());
     }
-    
+
     #[test]
     fn test_enum_validation() {
         let validator = TypeValidator::new();
-        
+
         // Color enum
         let color_enum = TypeExpr::Enum(vec![
             Literal::Keyword(Keyword::new("red")),
             Literal::Keyword(Keyword::new("green")),
             Literal::Keyword(Keyword::new("blue")),
         ]);
-        
-        assert!(validator.validate_value(&Value::Keyword(Keyword::new("red")), &color_enum).is_ok());
-        assert!(validator.validate_value(&Value::Keyword(Keyword::new("yellow")), &color_enum).is_err());
+
+        assert!(validator
+            .validate_value(&Value::Keyword(Keyword::new("red")), &color_enum)
+            .is_ok());
+        assert!(validator
+            .validate_value(&Value::Keyword(Keyword::new("yellow")), &color_enum)
+            .is_err());
     }
-    
+
     #[test]
     fn test_array_shape_validation() {
         let validator = TypeValidator::new();
-        
+
         // Fixed size array [3]
         let fixed_array = TypeExpr::Array {
             element_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
             shape: vec![ArrayDimension::Fixed(3)],
         };
-        
+
         let valid_array = Value::Vector(vec![
             Value::Integer(1),
             Value::Integer(2),
             Value::Integer(3),
         ]);
-        
-        let invalid_array = Value::Vector(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-        ]);
-        
+
+        let invalid_array = Value::Vector(vec![Value::Integer(1), Value::Integer(2)]);
+
         assert!(validator.validate_value(&valid_array, &fixed_array).is_ok());
-        assert!(validator.validate_value(&invalid_array, &fixed_array).is_err());
+        assert!(validator
+            .validate_value(&invalid_array, &fixed_array)
+            .is_err());
     }
-    
+
     #[test]
     fn test_optional_type_validation() {
         let validator = TypeValidator::new();
-        
-        let optional_string = TypeExpr::Optional(Box::new(TypeExpr::Primitive(PrimitiveType::String)));
-        
-        assert!(validator.validate_value(&Value::String("hello".to_string()), &optional_string).is_ok());
-        assert!(validator.validate_value(&Value::Nil, &optional_string).is_ok());
-        assert!(validator.validate_value(&Value::Integer(42), &optional_string).is_err());
+
+        let optional_string =
+            TypeExpr::Optional(Box::new(TypeExpr::Primitive(PrimitiveType::String)));
+
+        assert!(validator
+            .validate_value(&Value::String("hello".to_string()), &optional_string)
+            .is_ok());
+        assert!(validator
+            .validate_value(&Value::Nil, &optional_string)
+            .is_ok());
+        assert!(validator
+            .validate_value(&Value::Integer(42), &optional_string)
+            .is_err());
     }
 }

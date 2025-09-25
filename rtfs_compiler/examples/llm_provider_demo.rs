@@ -2,10 +2,10 @@
 //!
 //! This example demonstrates the LLM provider abstraction and individual components.
 
-use rtfs_compiler::ccos::arbiter::{
-    LlmProvider, LlmProviderConfig, LlmProviderType, StubLlmProvider
-};
 use rtfs_compiler::ccos::arbiter::llm_provider::ValidationResult;
+use rtfs_compiler::ccos::arbiter::{
+    LlmProvider, LlmProviderConfig, LlmProviderType, StubLlmProvider,
+};
 use rtfs_compiler::ccos::types::{Plan, PlanBody, StorableIntent};
 
 #[tokio::main]
@@ -30,7 +30,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test intent generation
     println!("📝 Testing Intent Generation...");
-    let intent = provider.generate_intent("analyze user sentiment", None).await?;
+    let intent = provider
+        .generate_intent("analyze user sentiment", None)
+        .await?;
     print_intent(&intent);
     println!();
 

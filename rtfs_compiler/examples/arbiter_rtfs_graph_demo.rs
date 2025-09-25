@@ -15,18 +15,24 @@ use std::sync::Arc;
 
 use clap::Parser;
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::{
     backend::CrosstermBackend,
-    widgets::{Block, Borders, Paragraph, Wrap, List, ListItem, Clear},
-    layout::{Layout, Constraint, Direction, Rect},
-    style::{Style, Color, Modifier},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use tokio::sync::{broadcast, mpsc};
 
-use rtfs_compiler::ccos::{CCOS, runtime_service, types::{IntentId, IntentStatus}};
+use rtfs_compiler::ccos::{
+    runtime_service,
+    types::{IntentId, IntentStatus},
+    CCOS,
+};
 
 #[derive(Parser)]
 struct Args {
@@ -54,7 +60,6 @@ struct AppState {
     expanded_nodes: HashSet<IntentId>,
     view_mode: ViewMode,
     selected_intent_index: usize,
-
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -164,10 +169,14 @@ fn toggle_expand_current(app: &mut AppState) {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {    let args = Args::parse();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
 
     // Use a current-thread runtime with LocalSet so we can keep non-Send parts local
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
     let local = tokio::task::LocalSet::new();
 
     local.block_on(&rt, async move {
@@ -423,7 +432,10 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 status: IntentStatus::Active,
                 children: vec![],
                 parent: None,
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 metadata: HashMap::new(),
             };
             app.intent_graph.insert(intent_id.clone(), root_node);
@@ -432,7 +444,9 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
         }
         runtime_service::RuntimeEvent::Status { intent_id, status } => {
             app.status_lines.push(status.clone());
-            if app.status_lines.len() > 200 { app.status_lines.drain(0..app.status_lines.len()-200); }
+            if app.status_lines.len() > 200 {
+                app.status_lines.drain(0..app.status_lines.len() - 200);
+            }
             if let Some(node) = app.intent_graph.get_mut(&intent_id) {
                 if status.contains("Executing") {
                     node.status = IntentStatus::Executing;
@@ -449,29 +463,52 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 plan_info.execution_steps.push(desc.clone());
                 plan_info.status = "Executing".to_string();
             }
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
         runtime_service::RuntimeEvent::Result { intent_id, result } => {
             app.running = false;
             app.last_result = Some(result.clone());
-            app.log_lines.push(format!("🏁 Execution completed: {}", result));
-            let success = !result.to_lowercase().contains("error") && !result.to_lowercase().contains("failed");
+            app.log_lines
+                .push(format!("🏁 Execution completed: {}", result));
+            let success = !result.to_lowercase().contains("error")
+                && !result.to_lowercase().contains("failed");
             if let Some(node) = app.intent_graph.get_mut(&intent_id) {
-                node.status = if success { IntentStatus::Completed } else { IntentStatus::Failed };
+                node.status = if success {
+                    IntentStatus::Completed
+                } else {
+                    IntentStatus::Failed
+                };
             }
             if let Some(plan_info) = app.plans_by_intent.get_mut(&intent_id) {
-                plan_info.status = if success { "Completed".into() } else { "Failed".into() };
+                plan_info.status = if success {
+                    "Completed".into()
+                } else {
+                    "Failed".into()
+                };
             }
         }
         runtime_service::RuntimeEvent::Error { message } => {
             app.running = false;
             app.log_lines.push(format!("❌ Error: {}", message));
         }
-        runtime_service::RuntimeEvent::GraphGenerated { root_id, nodes: _nodes, edges: _edges } => {
-            app.log_lines.push(format!("🧭 Runtime generated graph root: {}", root_id));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+        runtime_service::RuntimeEvent::GraphGenerated {
+            root_id,
+            nodes: _nodes,
+            edges: _edges,
+        } => {
+            app.log_lines
+                .push(format!("🧭 Runtime generated graph root: {}", root_id));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
-        runtime_service::RuntimeEvent::PlanGenerated { intent_id, plan_id, rtfs_code } => {
+        runtime_service::RuntimeEvent::PlanGenerated {
+            intent_id,
+            plan_id,
+            rtfs_code,
+        } => {
             let plan_info = PlanInfo {
                 plan_id: plan_id.clone(),
                 name: None,
@@ -481,16 +518,32 @@ fn on_event(app: &mut AppState, evt: runtime_service::RuntimeEvent) {
                 execution_steps: vec![],
             };
             app.plans_by_intent.insert(intent_id.clone(), plan_info);
-             app.log_lines.push(format!("📋 Plan generated for {}: {}", intent_id, plan_id));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            app.log_lines
+                .push(format!("📋 Plan generated for {}: {}", intent_id, plan_id));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
-        runtime_service::RuntimeEvent::StepLog { step, status, message, details } => {
-            app.log_lines.push(format!("🪵 StepLog {} [{}]: {} ({:?})", step, status, message, details));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+        runtime_service::RuntimeEvent::StepLog {
+            step,
+            status,
+            message,
+            details,
+        } => {
+            app.log_lines.push(format!(
+                "🪵 StepLog {} [{}]: {} ({:?})",
+                step, status, message, details
+            ));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
         runtime_service::RuntimeEvent::ReadyForNext { next_step } => {
-            app.log_lines.push(format!("➡️ Ready for next step: {}", next_step));
-            if app.log_lines.len() > 500 { app.log_lines.drain(0..app.log_lines.len()-500); }
+            app.log_lines
+                .push(format!("➡️ Ready for next step: {}", next_step));
+            if app.log_lines.len() > 500 {
+                app.log_lines.drain(0..app.log_lines.len() - 500);
+            }
         }
         runtime_service::RuntimeEvent::Stopped => {
             app.running = false;
@@ -517,7 +570,14 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
         .split(size);
 
     // Tab bar
-    let tab_titles = vec!["1:Graph", "2:Status", "3:Logs", "4:Debug", "5:Plans", "6:Capabilities"];
+    let tab_titles = vec![
+        "1:Graph",
+        "2:Status",
+        "3:Logs",
+        "4:Debug",
+        "5:Plans",
+        "6:Capabilities",
+    ];
     let tab_block = Block::default()
         .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
         .title("Tabs • Ctrl+D:Toggle Debug • ?:Help");
@@ -527,9 +587,14 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
         .enumerate()
         .map(|(i, &title)| {
             let style = match (app.current_tab, i) {
-                (Tab::Graph, 0) | (Tab::Status, 1) | (Tab::Logs, 2) | (Tab::Debug, 3) | (Tab::Plans, 4) | (Tab::Capabilities, 5) => {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                }
+                (Tab::Graph, 0)
+                | (Tab::Status, 1)
+                | (Tab::Logs, 2)
+                | (Tab::Debug, 3)
+                | (Tab::Plans, 4)
+                | (Tab::Capabilities, 5) => Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
                 _ => Style::default().fg(Color::White),
             };
             ListItem::new(title).style(style)
@@ -549,9 +614,13 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
         Tab::Capabilities => "⚙️ Capability Calls",
     };
 
-    let input = Paragraph::new(if matches!(app.current_tab, Tab::Graph) { app.goal_input.as_str() } else { "" })
-        .block(Block::default().title(input_title).borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
+    let input = Paragraph::new(if matches!(app.current_tab, Tab::Graph) {
+        app.goal_input.as_str()
+    } else {
+        ""
+    })
+    .block(Block::default().title(input_title).borders(Borders::ALL))
+    .wrap(Wrap { trim: true });
     f.render_widget(input, tabs[1]);
 
     // Main content based on current tab
@@ -584,7 +653,7 @@ fn ui(f: &mut ratatui::Frame<'_>, app: &AppState) {
         .block(Block::default().borders(Borders::TOP));
     f.render_widget(status_bar, tabs[3]);
 
-        // Help overlay
+    // Help overlay
     if app.help_visible {
         render_help_overlay(f, size);
     }
@@ -599,10 +668,18 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     // Intent graph visualization with selection
     let mut graph_items: Vec<ListItem> = Vec::new();
     let mut item_index = 0;
-    
+
     if let Some(root_id) = &app.root_intent_id {
         if let Some(_root) = app.intent_graph.get(root_id) {
-            build_graph_display_with_selection(&app.intent_graph, root_id, &mut graph_items, &mut item_index, 0, &app.selected_intent, &app.expanded_nodes);
+            build_graph_display_with_selection(
+                &app.intent_graph,
+                root_id,
+                &mut graph_items,
+                &mut item_index,
+                0,
+                &app.selected_intent,
+                &app.expanded_nodes,
+            );
         } else {
             graph_items.push(ListItem::new("No graph data available".to_string()));
         }
@@ -611,8 +688,16 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     }
 
     let graph = List::new(graph_items)
-        .block(Block::default().title("🗺️  Intent Graph • ↑↓:Navigate • Enter:Select • Space:Expand").borders(Borders::ALL))
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan));
+        .block(
+            Block::default()
+                .title("🗺️  Intent Graph • ↑↓:Navigate • Enter:Select • Space:Expand")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
+        );
     f.render_widget(graph, chunks[0]);
 
     // Detailed intent information
@@ -638,29 +723,60 @@ fn render_graph_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let details = Paragraph::new(detail_text)
         .style(Style::default().fg(Color::White))
-        .block(Block::default().title("📋 Intent Details").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("📋 Intent Details")
+                .borders(Borders::ALL),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(details, chunks[1]);
 }
 
 fn render_status_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
-    let status_items: Vec<ListItem> = app.status_lines.iter().rev().take(100).map(|s| ListItem::new(s.clone())).collect();
-    let status = List::new(status_items)
-        .block(Block::default().title("📊 Status Updates").borders(Borders::ALL));
+    let status_items: Vec<ListItem> = app
+        .status_lines
+        .iter()
+        .rev()
+        .take(100)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let status = List::new(status_items).block(
+        Block::default()
+            .title("📊 Status Updates")
+            .borders(Borders::ALL),
+    );
     f.render_widget(status, area);
 }
 
 fn render_logs_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
-    let log_items: Vec<ListItem> = app.log_lines.iter().rev().take(200).map(|s| ListItem::new(s.clone())).collect();
-    let log = List::new(log_items)
-        .block(Block::default().title("📝 Application Logs").borders(Borders::ALL));
+    let log_items: Vec<ListItem> = app
+        .log_lines
+        .iter()
+        .rev()
+        .take(200)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let log = List::new(log_items).block(
+        Block::default()
+            .title("📝 Application Logs")
+            .borders(Borders::ALL),
+    );
     f.render_widget(log, area);
 }
 
 fn render_debug_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
-    let debug_items: Vec<ListItem> = app.debug_lines.iter().rev().take(200).map(|s| ListItem::new(s.clone())).collect();
-    let debug = List::new(debug_items)
-        .block(Block::default().title("🔧 Debug Logs").borders(Borders::ALL));
+    let debug_items: Vec<ListItem> = app
+        .debug_lines
+        .iter()
+        .rev()
+        .take(200)
+        .map(|s| ListItem::new(s.clone()))
+        .collect();
+    let debug = List::new(debug_items).block(
+        Block::default()
+            .title("🔧 Debug Logs")
+            .borders(Borders::ALL),
+    );
     f.render_widget(debug, area);
 }
 
@@ -669,40 +785,74 @@ fn render_plans_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         if let Some(plan_info) = app.plans_by_intent.get(selected_id) {
             vec![
                 ListItem::new(format!("📋 Plan ID: {}", plan_info.plan_id)),
-                ListItem::new(format!("📝 Name: {}", plan_info.name.as_deref().unwrap_or("<unnamed>"))),
+                ListItem::new(format!(
+                    "📝 Name: {}",
+                    plan_info.name.as_deref().unwrap_or("<unnamed>")
+                )),
                 ListItem::new(format!("📊 Status: {}", plan_info.status)),
-                ListItem::new(format!("⚙️ Capabilities: {}", plan_info.capabilities_required.join(", "))),
+                ListItem::new(format!(
+                    "⚙️ Capabilities: {}",
+                    plan_info.capabilities_required.join(", ")
+                )),
                 ListItem::new("📄 Plan Body:".to_string()),
-            ].into_iter().chain(
-                plan_info.body.lines().map(|line| ListItem::new(format!("  {}", line)))
-            ).chain(
-                plan_info.execution_steps.iter().map(|step| ListItem::new(format!("▶️ {}", step)))
-            ).collect()
+            ]
+            .into_iter()
+            .chain(
+                plan_info
+                    .body
+                    .lines()
+                    .map(|line| ListItem::new(format!("  {}", line))),
+            )
+            .chain(
+                plan_info
+                    .execution_steps
+                    .iter()
+                    .map(|step| ListItem::new(format!("▶️ {}", step))),
+            )
+            .collect()
         } else {
             vec![ListItem::new("No plan selected or available".to_string())]
         }
     } else {
-        vec![ListItem::new("Select an intent to view its plan".to_string())]
+        vec![ListItem::new(
+            "Select an intent to view its plan".to_string(),
+        )]
     };
 
-    let plans = List::new(plan_items)
-        .block(Block::default().title("📋 Plan Details").borders(Borders::ALL));
+    let plans = List::new(plan_items).block(
+        Block::default()
+            .title("📋 Plan Details")
+            .borders(Borders::ALL),
+    );
     f.render_widget(plans, area);
 }
 
 fn render_capabilities_tab(f: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let cap_items: Vec<ListItem> = if app.capability_calls.is_empty() {
-        vec![ListItem::new("No capability calls recorded yet".to_string())]
+        vec![ListItem::new(
+            "No capability calls recorded yet".to_string(),
+        )]
     } else {
-        app.capability_calls.iter().rev().take(50).map(|call| {
-            let status = if call.success { "✅" } else { "❌" };
-            let result = call.result.as_deref().unwrap_or("pending");
-            ListItem::new(format!("{} {}({}) → {}", status, call.capability_id, call.args, result))
-        }).collect()
+        app.capability_calls
+            .iter()
+            .rev()
+            .take(50)
+            .map(|call| {
+                let status = if call.success { "✅" } else { "❌" };
+                let result = call.result.as_deref().unwrap_or("pending");
+                ListItem::new(format!(
+                    "{} {}({}) → {}",
+                    status, call.capability_id, call.args, result
+                ))
+            })
+            .collect()
     };
 
-    let capabilities = List::new(cap_items)
-        .block(Block::default().title("⚙️ Capability Calls").borders(Borders::ALL));
+    let capabilities = List::new(cap_items).block(
+        Block::default()
+            .title("⚙️ Capability Calls")
+            .borders(Borders::ALL),
+    );
     f.render_widget(capabilities, area);
 }
 
@@ -766,19 +916,19 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn build_graph_display_with_selection(
-    graph: &HashMap<IntentId, IntentNode>, 
-    current_id: &IntentId, 
-    items: &mut Vec<ListItem>, 
+    graph: &HashMap<IntentId, IntentNode>,
+    current_id: &IntentId,
+    items: &mut Vec<ListItem>,
     item_index: &mut usize,
     depth: usize,
     selected_id: &Option<IntentId>,
-    expanded_nodes: &HashSet<IntentId>
+    expanded_nodes: &HashSet<IntentId>,
 ) {
     if let Some(node) = graph.get(current_id) {
         let indent = "  ".repeat(depth);
         let is_selected = selected_id.as_ref() == Some(current_id);
         let is_expanded = expanded_nodes.contains(current_id) || depth == 0;
-        
+
         let status_emoji = match node.status {
             IntentStatus::Active => "🟡",
             IntentStatus::Executing => "🔵",
@@ -789,10 +939,20 @@ fn build_graph_display_with_selection(
         };
 
         let expand_indicator = if !node.children.is_empty() {
-            if is_expanded { "▼" } else { "▶" }
-        } else { "  " };
+            if is_expanded {
+                "▼"
+            } else {
+                "▶"
+            }
+        } else {
+            "  "
+        };
 
-        let display_name = if node.name.is_empty() { "<unnamed>".to_string() } else { node.name.clone() };
+        let display_name = if node.name.is_empty() {
+            "<unnamed>".to_string()
+        } else {
+            node.name.clone()
+        };
         let goal_preview = if node.goal.len() > 30 {
             format!("{}...", &node.goal[..27])
         } else {
@@ -804,13 +964,27 @@ fn build_graph_display_with_selection(
             style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
         }
 
-        items.push(ListItem::new(format!("{}{}{}[{:?}] {} — {}", indent, expand_indicator, status_emoji, node.status, display_name, goal_preview)).style(style));
+        items.push(
+            ListItem::new(format!(
+                "{}{}{}[{:?}] {} — {}",
+                indent, expand_indicator, status_emoji, node.status, display_name, goal_preview
+            ))
+            .style(style),
+        );
         *item_index += 1;
 
         // Recursively display children if expanded
         if is_expanded {
             for child_id in &node.children {
-                build_graph_display_with_selection(graph, child_id, items, item_index, depth + 1, selected_id, expanded_nodes);
+                build_graph_display_with_selection(
+                    graph,
+                    child_id,
+                    items,
+                    item_index,
+                    depth + 1,
+                    selected_id,
+                    expanded_nodes,
+                );
             }
         }
     }

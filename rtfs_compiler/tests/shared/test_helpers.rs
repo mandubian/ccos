@@ -1,27 +1,29 @@
 // Minimal test helpers for RTFS-only tests
 // This provides only the essential functions needed for pure RTFS testing
 
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
+use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::ccos::host::RuntimeHost;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::stdlib::StandardLibrary;
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
-use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::Mutex;
-use tokio::sync::RwLock;
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::io::{Read, Write};
-use std::thread;
 use std::sync::Once;
+use std::thread;
+use tokio::sync::RwLock;
 
 /// Creates a minimal host for RTFS tests with specified security context
-fn create_minimal_host_with_context(security_context: RuntimeContext) -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
+fn create_minimal_host_with_context(
+    security_context: RuntimeContext,
+) -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-    
+
     Arc::new(RuntimeHost::new(
         causal_chain,
         capability_marketplace,
@@ -40,11 +42,11 @@ pub fn create_pure_evaluator() -> Evaluator {
     let security_context = RuntimeContext::pure();
     let host = create_minimal_host();
     let mut evaluator = Evaluator::new(module_registry, security_context, host);
-    
+
     // Load the standard library
     let stdlib_env = StandardLibrary::create_global_environment();
     evaluator.env = stdlib_env;
-    
+
     evaluator
 }
 
@@ -53,11 +55,11 @@ pub fn create_pure_evaluator_with_context(security_context: RuntimeContext) -> E
     let module_registry = Arc::new(ModuleRegistry::new());
     let host = create_minimal_host_with_context(security_context.clone());
     let mut evaluator = Evaluator::new(module_registry, security_context, host);
-    
+
     // Load the standard library
     let stdlib_env = StandardLibrary::create_global_environment();
     evaluator.env = stdlib_env;
-    
+
     evaluator
 }
 
@@ -67,11 +69,11 @@ pub fn create_full_evaluator() -> Evaluator {
     let security_context = RuntimeContext::full();
     let host = create_minimal_host_with_context(security_context.clone());
     let mut evaluator = Evaluator::new(module_registry, security_context, host);
-    
+
     // Load the standard library
     let stdlib_env = StandardLibrary::create_global_environment();
     evaluator.env = stdlib_env;
-    
+
     evaluator
 }
 
@@ -86,7 +88,7 @@ impl MockHttpServer {
     pub fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let addr = SocketAddr::from(([127, 0, 0, 1], 9999));
         let listener = TcpListener::bind(addr)?;
-        
+
         // Start the server in a background thread
         let handle = thread::spawn(move || {
             for stream in listener.incoming() {
@@ -103,16 +105,16 @@ impl MockHttpServer {
                 }
             }
         });
-        
+
         // Give the server a moment to start
         std::thread::sleep(std::time::Duration::from_millis(100));
-        
-        Ok(MockHttpServer { 
-            addr, 
-            _handle: handle 
+
+        Ok(MockHttpServer {
+            addr,
+            _handle: handle,
         })
     }
-    
+
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -121,14 +123,14 @@ impl MockHttpServer {
 /// Handle a single HTTP connection
 fn handle_connection(mut stream: TcpStream) {
     let mut buffer = [0; 1024];
-    
+
     if let Ok(size) = stream.read(&mut buffer) {
         let request = String::from_utf8_lossy(&buffer[..size]);
-        
+
         // Parse the request to extract method and path
         let (method, path) = parse_request(&request);
         let response_body = get_mock_response(&path, &method);
-        
+
         // Create HTTP response
         let response = format!(
             "HTTP/1.1 200 OK\r\n\
@@ -139,7 +141,7 @@ fn handle_connection(mut stream: TcpStream) {
             response_body.len(),
             response_body
         );
-        
+
         if let Err(e) = stream.write_all(response.as_bytes()) {
             eprintln!("Error writing response: {}", e);
         }
@@ -164,15 +166,32 @@ fn parse_request(request: &str) -> (String, String) {
 pub fn get_mock_response(path: &str, method: &str) -> String {
     match (method, path) {
         ("GET", "/mock") => r#"{"message": "Mock GET response", "status": "ok"}"#.to_string(),
-        ("GET", "/mock/get") => r#"{"method": "GET", "url": "/mock/get", "status": "success"}"#.to_string(),
-        ("GET", "/mock/headers") => r#"{"headers": "received", "method": "GET", "status": "success"}"#.to_string(),
-        ("POST", "/mock/post") => r#"{"method": "POST", "status": "success", "data": "received"}"#.to_string(),
-        ("PUT", "/mock/put") => r#"{"method": "PUT", "status": "success", "data": "updated"}"#.to_string(),
-        ("DELETE", "/mock/delete") => r#"{"method": "DELETE", "status": "success", "data": "deleted"}"#.to_string(),
-        ("PATCH", "/mock/patch") => r#"{"method": "PATCH", "status": "success", "data": "patched"}"#.to_string(),
-        ("HEAD", "/mock/headers") => r#"{"headers": "received", "method": "HEAD", "status": "success"}"#.to_string(),
+        ("GET", "/mock/get") => {
+            r#"{"method": "GET", "url": "/mock/get", "status": "success"}"#.to_string()
+        }
+        ("GET", "/mock/headers") => {
+            r#"{"headers": "received", "method": "GET", "status": "success"}"#.to_string()
+        }
+        ("POST", "/mock/post") => {
+            r#"{"method": "POST", "status": "success", "data": "received"}"#.to_string()
+        }
+        ("PUT", "/mock/put") => {
+            r#"{"method": "PUT", "status": "success", "data": "updated"}"#.to_string()
+        }
+        ("DELETE", "/mock/delete") => {
+            r#"{"method": "DELETE", "status": "success", "data": "deleted"}"#.to_string()
+        }
+        ("PATCH", "/mock/patch") => {
+            r#"{"method": "PATCH", "status": "success", "data": "patched"}"#.to_string()
+        }
+        ("HEAD", "/mock/headers") => {
+            r#"{"headers": "received", "method": "HEAD", "status": "success"}"#.to_string()
+        }
         ("GET", "/mock/json") => r#"{"name": "test", "value": 42, "active": true}"#.to_string(),
-        _ => format!(r#"{{"error": "Not found", "path": "{}", "method": "{}"}}"#, path, method),
+        _ => format!(
+            r#"{{"error": "Not found", "path": "{}", "method": "{}"}}"#,
+            path, method
+        ),
     }
 }
 

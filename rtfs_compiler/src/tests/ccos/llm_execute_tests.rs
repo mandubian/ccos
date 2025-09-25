@@ -12,12 +12,19 @@ mod llm_execute_tests {
         for form in parsed {
             if let crate::ast::TopLevel::Expression(expr) = form {
                 match evaluator.evaluate(&expr).expect("eval") {
-                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => last = value,
-                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call in test"),
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                        last = value
+                    }
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                        panic!("Unexpected host call in test")
+                    }
                 }
             }
         }
-        match last { Value::String(s) => assert!(s.contains("Hello")), _ => panic!("unexpected") }
+        match last {
+            Value::String(s) => assert!(s.contains("Hello")),
+            _ => panic!("unexpected"),
+        }
     }
 
     #[test]
@@ -29,12 +36,19 @@ mod llm_execute_tests {
         for form in parsed {
             if let crate::ast::TopLevel::Expression(expr) = form {
                 match evaluator.evaluate(&expr).expect("eval") {
-                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => last = value,
-                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => panic!("Unexpected host call in test"),
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                        last = value
+                    }
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                        panic!("Unexpected host call in test")
+                    }
                 }
             }
         }
-        match last { Value::String(s) => assert!(s.contains("Ping")), _ => panic!("unexpected") }
+        match last {
+            Value::String(s) => assert!(s.contains("Ping")),
+            _ => panic!("unexpected"),
+        }
     }
 
     #[test]

@@ -3,10 +3,10 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use async_trait::async_trait;
 use chrono::Utc;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::path::Path;
 use std::any::Any;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 use tokio::fs;
 
 /// Enhanced discovery providers for different capability sources
@@ -34,7 +34,9 @@ impl StaticDiscoveryProvider {
                     name: "Static Hello".to_string(),
                     description: "A static hello capability".to_string(),
                     provider: ProviderType::Local(LocalCapability {
-                        handler: Arc::new(|_| Ok(Value::String("Hello from static discovery!".to_string()))),
+                        handler: Arc::new(|_| {
+                            Ok(Value::String("Hello from static discovery!".to_string()))
+                        }),
                     }),
                     version: "1.0.0".to_string(),
                     input_schema: None,
@@ -60,11 +62,11 @@ impl CapabilityDiscovery for StaticDiscoveryProvider {
     async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
         Ok(self.capabilities.clone())
     }
-    
+
     fn name(&self) -> &str {
         "StaticDiscovery"
     }
-    
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -88,19 +90,23 @@ impl CapabilityDiscovery for FileManifestDiscoveryProvider {
             return Ok(vec![]); // Return empty if file doesn't exist
         }
 
-        let content = fs::read_to_string(&self.manifest_path).await
+        let content = fs::read_to_string(&self.manifest_path)
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to read manifest file: {}", e)))?;
 
         // For now, return empty since we don't have serde support
         // In a real implementation, you'd parse JSON manifests here
-        eprintln!("File manifest discovery not yet implemented for: {}", self.manifest_path);
+        eprintln!(
+            "File manifest discovery not yet implemented for: {}",
+            self.manifest_path
+        );
         Ok(vec![])
     }
-    
+
     fn name(&self) -> &str {
         "FileManifestDiscovery"
     }
-    
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -128,16 +134,19 @@ impl CapabilityDiscovery for NetworkDiscoveryProvider {
         // 1. Make HTTP request to endpoint_url
         // 2. Parse response for capability manifests
         // 3. Validate and return discovered capabilities
-        
+
         // For now, return empty vector to avoid network dependencies
-        eprintln!("Network discovery not yet implemented for endpoint: {}", self.endpoint_url);
+        eprintln!(
+            "Network discovery not yet implemented for endpoint: {}",
+            self.endpoint_url
+        );
         Ok(vec![])
     }
-    
+
     fn name(&self) -> &str {
         "NetworkDiscovery"
     }
-    
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -151,32 +160,50 @@ pub struct NetworkDiscoveryAgent {
 }
 
 impl NetworkDiscoveryAgent {
-    pub fn new(registry_endpoint: String, auth_token: Option<String>, refresh_interval_secs: u64) -> Self {
+    pub fn new(
+        registry_endpoint: String,
+        auth_token: Option<String>,
+        refresh_interval_secs: u64,
+    ) -> Self {
         Self {
             registry_endpoint,
             auth_token,
             refresh_interval: std::time::Duration::from_secs(refresh_interval_secs),
-            last_discovery: std::time::Instant::now() - std::time::Duration::from_secs(refresh_interval_secs),
+            last_discovery: std::time::Instant::now()
+                - std::time::Duration::from_secs(refresh_interval_secs),
         }
     }
 
-    async fn parse_capability_manifest(&self, cap_json: &serde_json::Value) -> Result<CapabilityManifest, RuntimeError> {
+    async fn parse_capability_manifest(
+        &self,
+        cap_json: &serde_json::Value,
+    ) -> Result<CapabilityManifest, RuntimeError> {
         let id = cap_json
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| RuntimeError::Generic("Missing capability ID".to_string()))?
             .to_string();
-        let name = cap_json.get("name").and_then(|v| v.as_str()).unwrap_or(&id).to_string();
+        let name = cap_json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&id)
+            .to_string();
         let description = cap_json
             .get("description")
             .and_then(|v| v.as_str())
             .unwrap_or("No description available")
             .to_string();
-        let version = cap_json.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0").to_string();
+        let version = cap_json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1.0.0")
+            .to_string();
         let provider = ProviderType::Local(LocalCapability {
-            handler: Arc::new(|_| Err(crate::runtime::error::RuntimeError::Generic(
-                "Discovered capability not implemented".to_string(),
-            ))),
+            handler: Arc::new(|_| {
+                Err(crate::runtime::error::RuntimeError::Generic(
+                    "Discovered capability not implemented".to_string(),
+                ))
+            }),
         });
         Ok(CapabilityManifest {
             id: id.clone(),
@@ -224,12 +251,14 @@ impl CapabilityDiscovery for NetworkDiscoveryAgent {
             .await
             .map_err(|e| RuntimeError::Generic(format!("Network discovery failed: {}", e)))?;
         if !response.status().is_success() {
-            return Err(RuntimeError::Generic(format!("Registry error: {}", response.status())));
+            return Err(RuntimeError::Generic(format!(
+                "Registry error: {}",
+                response.status()
+            )));
         }
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse discovery response: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse discovery response: {}", e))
+        })?;
         let capabilities = if let Some(result) = response_json.get("result") {
             if let Some(caps) = result.get("capabilities") {
                 if let serde_json::Value::Array(caps_array) = caps {
@@ -251,11 +280,11 @@ impl CapabilityDiscovery for NetworkDiscoveryAgent {
         };
         Ok(capabilities)
     }
-    
+
     fn name(&self) -> &str {
         "NetworkDiscoveryAgent"
     }
-    
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -268,7 +297,10 @@ pub struct LocalFileDiscoveryAgent {
 
 impl LocalFileDiscoveryAgent {
     pub fn new(discovery_path: std::path::PathBuf, file_pattern: String) -> Self {
-        Self { discovery_path, file_pattern }
+        Self {
+            discovery_path,
+            file_pattern,
+        }
     }
 }
 
@@ -284,8 +316,12 @@ impl CapabilityDiscovery for LocalFileDiscoveryAgent {
                         if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
                             if filename.contains(&self.file_pattern) {
                                 if let Ok(content) = std::fs::read_to_string(&path) {
-                                    if let Ok(cap_json) = serde_json::from_str::<serde_json::Value>(&content) {
-                                        if let Ok(manifest) = parse_capability_manifest_from_json(&cap_json).await {
+                                    if let Ok(cap_json) =
+                                        serde_json::from_str::<serde_json::Value>(&content)
+                                    {
+                                        if let Ok(manifest) =
+                                            parse_capability_manifest_from_json(&cap_json).await
+                                        {
                                             manifests.push(manifest);
                                         }
                                     }
@@ -298,46 +334,123 @@ impl CapabilityDiscovery for LocalFileDiscoveryAgent {
         }
         Ok(manifests)
     }
-    
+
     fn name(&self) -> &str {
         "LocalFileDiscoveryAgent"
     }
-    
+
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
-async fn parse_capability_manifest_from_json(cap_json: &serde_json::Value) -> Result<CapabilityManifest, RuntimeError> {
+async fn parse_capability_manifest_from_json(
+    cap_json: &serde_json::Value,
+) -> Result<CapabilityManifest, RuntimeError> {
     let id = cap_json
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| RuntimeError::Generic("Missing capability id".to_string()))?
         .to_string();
-    let name = cap_json.get("name").and_then(|v| v.as_str()).unwrap_or(&id).to_string();
-    let description = cap_json.get("description").and_then(|v| v.as_str()).unwrap_or("Discovered capability").to_string();
-    let version = cap_json.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0").to_string();
+    let name = cap_json
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&id)
+        .to_string();
+    let description = cap_json
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Discovered capability")
+        .to_string();
+    let version = cap_json
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1.0.0")
+        .to_string();
     let provider = if let Some(endpoint) = cap_json.get("endpoint").and_then(|v| v.as_str()) {
-        ProviderType::Http(HttpCapability { base_url: endpoint.to_string(), auth_token: None, timeout_ms: 30000 })
+        ProviderType::Http(HttpCapability {
+            base_url: endpoint.to_string(),
+            auth_token: None,
+            timeout_ms: 30000,
+        })
     } else {
-        ProviderType::Local(LocalCapability { handler: Arc::new(|_| Err(crate::runtime::error::RuntimeError::Generic("Discovered capability not implemented".to_string()))) })
+        ProviderType::Local(LocalCapability {
+            handler: Arc::new(|_| {
+                Err(crate::runtime::error::RuntimeError::Generic(
+                    "Discovered capability not implemented".to_string(),
+                ))
+            }),
+        })
     };
-    let attestation = cap_json.get("attestation").and_then(|att_json| parse_capability_attestation(att_json).ok());
-    let provenance = Some(CapabilityProvenance { source: "local_file_discovery".to_string(), version: Some(version.clone()), content_hash: compute_content_hash(&format!("{}{}{}", id, name, description)), custody_chain: vec!["local_file_discovery".to_string()], registered_at: Utc::now() });
-    Ok(CapabilityManifest { id, name, description, provider, version, input_schema: None, output_schema: None, attestation, provenance, permissions: vec![], metadata: HashMap::new() })
+    let attestation = cap_json
+        .get("attestation")
+        .and_then(|att_json| parse_capability_attestation(att_json).ok());
+    let provenance = Some(CapabilityProvenance {
+        source: "local_file_discovery".to_string(),
+        version: Some(version.clone()),
+        content_hash: compute_content_hash(&format!("{}{}{}", id, name, description)),
+        custody_chain: vec!["local_file_discovery".to_string()],
+        registered_at: Utc::now(),
+    });
+    Ok(CapabilityManifest {
+        id,
+        name,
+        description,
+        provider,
+        version,
+        input_schema: None,
+        output_schema: None,
+        attestation,
+        provenance,
+        permissions: vec![],
+        metadata: HashMap::new(),
+    })
 }
 
-fn parse_capability_attestation(att_json: &serde_json::Value) -> Result<CapabilityAttestation, RuntimeError> {
-    let signature = att_json.get("signature").and_then(|v| v.as_str()).ok_or_else(|| RuntimeError::Generic("Missing attestation signature".to_string()))?.to_string();
-    let authority = att_json.get("authority").and_then(|v| v.as_str()).ok_or_else(|| RuntimeError::Generic("Missing attestation authority".to_string()))?.to_string();
-    let created_at = att_json.get("created_at").and_then(|v| v.as_str()).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|dt| dt.with_timezone(&Utc)).unwrap_or_else(|| Utc::now());
-    let expires_at = att_json.get("expires_at").and_then(|v| v.as_str()).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|dt| dt.with_timezone(&Utc));
-    let metadata = att_json.get("metadata").and_then(|v| v.as_object()).map(|obj| obj.iter().filter_map(|(k,v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()).unwrap_or_default();
-    Ok(CapabilityAttestation { signature, authority, created_at, expires_at, metadata })
+fn parse_capability_attestation(
+    att_json: &serde_json::Value,
+) -> Result<CapabilityAttestation, RuntimeError> {
+    let signature = att_json
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RuntimeError::Generic("Missing attestation signature".to_string()))?
+        .to_string();
+    let authority = att_json
+        .get("authority")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RuntimeError::Generic("Missing attestation authority".to_string()))?
+        .to_string();
+    let created_at = att_json
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|| Utc::now());
+    let expires_at = att_json
+        .get("expires_at")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+    let metadata = att_json
+        .get("metadata")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(CapabilityAttestation {
+        signature,
+        authority,
+        created_at,
+        expires_at,
+        metadata,
+    })
 }
 
 pub fn compute_content_hash(content: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())

@@ -3,15 +3,8 @@
 //! This example demonstrates the LLM arbiter functionality using the stub provider
 //! to show how the LLM integration works without the async trait complications.
 
-use rtfs_compiler::ccos::arbiter::{
-    ArbiterConfig, 
-    LlmProviderType,
-};
-use rtfs_compiler::ccos::arbiter::llm_provider::{
-    StubLlmProvider, 
-    LlmProviderConfig,
-    LlmProvider,
-};
+use rtfs_compiler::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderConfig, StubLlmProvider};
+use rtfs_compiler::ccos::arbiter::{ArbiterConfig, LlmProviderType};
 use rtfs_compiler::ccos::types::StorableIntent;
 use std::collections::HashMap;
 
@@ -33,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create stub LLM provider
     let provider = StubLlmProvider::new(llm_config);
-    
+
     println!("✅ Created LLM Provider: {}", provider.get_info().name);
     println!("   Model: {}", provider.get_info().model);
     println!("   Version: {}", provider.get_info().version);
@@ -43,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test intent generation
     println!("🧠 Testing Intent Generation");
     println!("----------------------------");
-    
+
     let test_requests = vec![
         "analyze user sentiment from chat logs",
         "optimize database performance",
@@ -53,9 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for request in test_requests {
         println!("\n📝 Request: \"{}\"", request);
-        
+
         let intent = provider.generate_intent(request, None).await?;
-        
+
         println!("   ✅ Generated Intent:");
         println!("      ID: {}", intent.intent_id);
         println!("      Name: {:?}", intent.name);
@@ -68,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test plan generation
     println!("\n📋 Testing Plan Generation");
     println!("--------------------------");
-    
+
     let mut constraints = HashMap::new();
     constraints.insert("accuracy".to_string(), "high".to_string());
 
@@ -89,30 +82,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         triggered_by: rtfs_compiler::ccos::types::TriggerSource::HumanRequest,
         generation_context: rtfs_compiler::ccos::types::GenerationContext {
             arbiter_version: "example".to_string(),
-            generation_timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            generation_timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             input_context: HashMap::new(),
             reasoning_trace: None,
         },
         status: rtfs_compiler::ccos::types::IntentStatus::Active,
         priority: 0,
-        created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-        updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+        updated_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         metadata: HashMap::new(),
     };
 
     println!("📝 Intent: {:?}", test_intent.name);
     println!("🎯 Goal: {}", test_intent.goal);
-    
+
     let plan = provider.generate_plan(&test_intent, None).await?;
-    
+
     println!("   ✅ Generated Plan:");
     println!("      ID: {}", plan.plan_id);
     // Description field may be absent on some Plan shapes; show metadata keys instead
     println!("      Name: {:?}", plan.name);
-    println!("      Metadata keys: {:?}", plan.metadata.keys().collect::<Vec<_>>());
+    println!(
+        "      Metadata keys: {:?}",
+        plan.metadata.keys().collect::<Vec<_>>()
+    );
     println!("      Language: {:?}", plan.language);
     println!("      Status: {:?}", plan.status);
-    
+
     if let rtfs_compiler::ccos::types::PlanBody::Rtfs(rtfs_code) = &plan.body {
         println!("      RTFS Code:");
         println!("      {}", rtfs_code);
@@ -132,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Show configuration example
     println!("\n⚙️  Configuration Example");
     println!("------------------------");
-    
+
     let arbiter_config = ArbiterConfig {
         engine_type: rtfs_compiler::ccos::arbiter::arbiter_config::ArbiterEngineType::Llm,
         llm_config: Some(rtfs_compiler::ccos::arbiter::arbiter_config::LlmConfig {
@@ -146,7 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
         }),
         delegation_config: None,
-        capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
+        capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(
+        ),
         security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(),
         template_config: None,
     };
@@ -168,4 +174,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

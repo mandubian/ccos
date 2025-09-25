@@ -4,14 +4,14 @@
 //! in any context without security concerns. All dangerous operations (file I/O,
 //! network access, system calls) are moved to CCOS capabilities.
 
-use crate::ast::{MapKey, Expression};
-use crate::runtime::values::Value;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::values::{BuiltinFunction, Arity, Function, BuiltinFunctionWithContext};
+use crate::ast::Symbol;
+use crate::ast::{Expression, MapKey};
 use crate::runtime::environment::Environment;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::evaluator::Evaluator;
 use crate::runtime::execution_outcome::ExecutionOutcome;
-use crate::ast::Symbol;
+use crate::runtime::values::Value;
+use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ impl SecureStandardLibrary {
     /// Create a secure global environment with only safe functions
     pub fn create_secure_environment() -> Environment {
         let mut env = Environment::new();
-        
+
         // Load only safe functions
         Self::load_arithmetic_functions(&mut env);
         Self::load_comparison_functions(&mut env);
@@ -30,10 +30,10 @@ impl SecureStandardLibrary {
         Self::load_string_functions(&mut env);
         Self::load_collection_functions(&mut env);
         Self::load_type_predicate_functions(&mut env);
-        
+
         env
     }
-    
+
     pub(crate) fn load_arithmetic_functions(env: &mut Environment) {
         // Arithmetic functions (safe, pure)
         env.define(
@@ -44,7 +44,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::add),
             })),
         );
-        
+
         env.define(
             &Symbol("-".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -53,7 +53,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::subtract),
             })),
         );
-        
+
         env.define(
             &Symbol("*".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -62,7 +62,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::multiply),
             })),
         );
-        
+
         env.define(
             &Symbol("/".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -184,7 +184,7 @@ impl SecureStandardLibrary {
             })),
         );
     }
-    
+
     pub(crate) fn load_comparison_functions(env: &mut Environment) {
         // Comparison functions (safe, pure)
         env.define(
@@ -195,7 +195,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::equal),
             })),
         );
-        
+
         env.define(
             &Symbol("!=".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -204,7 +204,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::not_equal),
             })),
         );
-        
+
         env.define(
             &Symbol("not=".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -213,7 +213,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::not_equal),
             })),
         );
-        
+
         env.define(
             &Symbol(">".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -250,7 +250,7 @@ impl SecureStandardLibrary {
             })),
         );
     }
-    
+
     pub(crate) fn load_boolean_functions(env: &mut Environment) {
         // Boolean logic functions (safe, pure)
         env.define(
@@ -261,7 +261,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(|args| Self::and(args)),
             })),
         );
-        
+
         env.define(
             &Symbol("or".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -270,7 +270,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(|args| Self::or(args)),
             })),
         );
-        
+
         env.define(
             &Symbol("not".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -280,7 +280,7 @@ impl SecureStandardLibrary {
             })),
         );
     }
-    
+
     pub(crate) fn load_string_functions(env: &mut Environment) {
         // String functions (safe, pure)
         env.define(
@@ -291,7 +291,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::str),
             })),
         );
-        
+
         env.define(
             &Symbol("string-length".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -309,7 +309,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::substring),
             })),
         );
-        
+
         env.define(
             &Symbol("string-contains".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -349,7 +349,7 @@ impl SecureStandardLibrary {
             })),
         );
     }
-    
+
     pub(crate) fn load_collection_functions(env: &mut Environment) {
         // Collection functions (safe, pure)
         // Map function - now supports user-defined functions with evaluator context
@@ -451,7 +451,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::cons),
             })),
         );
-        
+
         env.define(
             &Symbol("first".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -460,7 +460,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::first),
             })),
         );
-        
+
         env.define(
             &Symbol("rest".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -499,7 +499,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::conj),
             })),
         );
-        
+
         env.define(
             &Symbol("get".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -517,7 +517,11 @@ impl SecureStandardLibrary {
                 arity: Arity::Fixed(2),
                 func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
                     if args.len() != 2 {
-                        return Err(RuntimeError::ArityMismatch { function: "find".into(), expected: "2".into(), actual: args.len() });
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "find".into(),
+                            expected: "2".into(),
+                            actual: args.len(),
+                        });
                     }
                     let map_value = &args[0];
                     let key_value = &args[1];
@@ -526,7 +530,11 @@ impl SecureStandardLibrary {
                         (Value::Map(m), Value::String(s)) => (m, MapKey::String(s.clone())),
                         (Value::Map(m), Value::Integer(i)) => (m, MapKey::Integer(*i)),
                         (other, _) => {
-                            return Err(RuntimeError::TypeError { expected: "map".into(), actual: other.type_name().into(), operation: "find".into() })
+                            return Err(RuntimeError::TypeError {
+                                expected: "map".into(),
+                                actual: other.type_name().into(),
+                                operation: "find".into(),
+                            })
                         }
                     };
                     if let Some(v) = map.get(&key) {
@@ -596,7 +604,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::dissoc),
             })),
         );
-        
+
         env.define(
             &Symbol("count".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -605,7 +613,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::count),
             })),
         );
-        
+
         env.define(
             &Symbol("vector".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -614,7 +622,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::vector),
             })),
         );
-        
+
         env.define(
             &Symbol("hash-map".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -715,7 +723,7 @@ impl SecureStandardLibrary {
             })),
         );
     }
-    
+
     pub(crate) fn load_type_predicate_functions(env: &mut Environment) {
         // Type predicate functions (safe, pure)
         env.define(
@@ -726,7 +734,7 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::int_p),
             })),
         );
-        
+
         env.define(
             &Symbol("float?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -826,7 +834,7 @@ impl SecureStandardLibrary {
             })),
         );
     }
-    
+
     // Implementation of pure functions (copied from StandardLibrary)
     fn add(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -869,7 +877,7 @@ impl SecureStandardLibrary {
             Ok(Value::Integer(result_int.unwrap_or(0)))
         }
     }
-    
+
     fn subtract(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -931,7 +939,7 @@ impl SecureStandardLibrary {
             }
         }
     }
-    
+
     fn multiply(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -973,7 +981,7 @@ impl SecureStandardLibrary {
             Ok(Value::Integer(result_int.unwrap_or(1)))
         }
     }
-    
+
     fn divide(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -1023,7 +1031,7 @@ impl SecureStandardLibrary {
             Ok(Value::Float(result))
         }
     }
-    
+
     fn equal(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.is_empty() {
@@ -1038,7 +1046,7 @@ impl SecureStandardLibrary {
         }
         Ok(Value::Boolean(true))
     }
-    
+
     fn not_equal(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1134,7 +1142,7 @@ impl SecureStandardLibrary {
 
         Ok(Value::Boolean(cmp(a_val, b_val)))
     }
-    
+
     fn and(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         for arg in args {
@@ -1146,7 +1154,7 @@ impl SecureStandardLibrary {
         // If all arguments are truthy or no arguments, return Boolean(true)
         Ok(Value::Boolean(true))
     }
-    
+
     fn or(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         for arg in args {
@@ -1158,7 +1166,7 @@ impl SecureStandardLibrary {
         // If all arguments are falsy or no arguments, return Boolean(false)
         Ok(Value::Boolean(false))
     }
-    
+
     fn not(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1170,10 +1178,10 @@ impl SecureStandardLibrary {
         }
         Ok(Value::Boolean(!args[0].is_truthy()))
     }
-    
+
     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
         let mut result = String::new();
-        
+
         // Convert all arguments to strings and concatenate them
         for arg in args {
             match arg {
@@ -1194,7 +1202,7 @@ impl SecureStandardLibrary {
         }
         Ok(Value::String(result))
     }
-    
+
     fn substring(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 2 || args.len() > 3 {
@@ -1257,7 +1265,7 @@ impl SecureStandardLibrary {
             }),
         }
     }
-    
+
     fn string_length(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1277,7 +1285,7 @@ impl SecureStandardLibrary {
             }),
         }
     }
-    
+
     fn string_contains(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 2 {
@@ -1312,12 +1320,12 @@ impl SecureStandardLibrary {
 
         Ok(Value::Boolean(haystack.contains(needle)))
     }
-    
+
     fn vector(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         Ok(Value::Vector(args.to_vec()))
     }
-    
+
     fn hash_map(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() % 2 != 0 {
@@ -1337,7 +1345,7 @@ impl SecureStandardLibrary {
 
         Ok(Value::Map(result))
     }
-    
+
     fn get(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 2 || args.len() > 3 {
@@ -1366,7 +1374,7 @@ impl SecureStandardLibrary {
             }),
         }
     }
-    
+
     fn count(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1388,7 +1396,7 @@ impl SecureStandardLibrary {
             }),
         }
     }
-    
+
     fn first(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1407,7 +1415,7 @@ impl SecureStandardLibrary {
             }),
         }
     }
-    
+
     fn rest(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1432,7 +1440,7 @@ impl SecureStandardLibrary {
             }),
         }
     }
-    
+
     fn int_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1471,7 +1479,7 @@ impl SecureStandardLibrary {
             Value::Integer(_) | Value::Float(_)
         )))
     }
-    
+
     fn string_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -1567,7 +1575,7 @@ impl SecureStandardLibrary {
         }
         Ok(Value::Boolean(matches!(args[0], Value::Function(_))))
     }
-    
+
     fn map_with_context(
         args: Vec<Value>,
         evaluator: &Evaluator,
@@ -1613,9 +1621,17 @@ impl SecureStandardLibrary {
                     func_env.define(&closure.params[0], item);
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => result.push(v),
-                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in map closure".into())),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in map closure".to_string())),
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(
+                                "Host call required in map closure".into(),
+                            ))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in map closure".to_string(),
+                            ))
+                        }
                     }
                 }
                 _ => {
@@ -1672,9 +1688,17 @@ impl SecureStandardLibrary {
                     func_env.define(&closure.params[0], item.clone());
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => v.is_truthy(),
-                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in filter closure".into())),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in filter closure".to_string())),
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(
+                                "Host call required in filter closure".into(),
+                            ))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in filter closure".to_string(),
+                            ))
+                        }
                     }
                 }
                 _ => {
@@ -1708,9 +1732,10 @@ impl SecureStandardLibrary {
             Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             Value::List(list) => list.clone(),
             _ => {
-                return Err(RuntimeError::new(
-                    &format!("reduce expects a vector, string, or list as its last argument, got {}", collection_val.type_name()),
-                ))
+                return Err(RuntimeError::new(&format!(
+                    "reduce expects a vector, string, or list as its last argument, got {}",
+                    collection_val.type_name()
+                )))
             }
         };
         if collection.is_empty() {
@@ -1740,9 +1765,17 @@ impl SecureStandardLibrary {
                     func_env.define(&closure.params[1], value.clone());
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic("Host call required in reduce closure".into())),
-                    #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect required in reduce closure".to_string())),
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(
+                                "Host call required in reduce closure".into(),
+                            ))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in reduce closure".to_string(),
+                            ))
+                        }
                     }
                 }
                 _ => {
@@ -2197,7 +2230,11 @@ impl SecureStandardLibrary {
             }
         };
 
-        let default = if args.len() == 3 { Some(&args[2]) } else { None };
+        let default = if args.len() == 3 {
+            Some(&args[2])
+        } else {
+            None
+        };
 
         match collection {
             Value::Vector(v) => {
@@ -2374,15 +2411,11 @@ impl SecureStandardLibrary {
                     Ok(Value::Integer(base.pow(*exp as u32)))
                 }
             }
-            (Value::Float(base), Value::Float(exp)) => {
-                Ok(Value::Float(base.powf(*exp)))
-            }
+            (Value::Float(base), Value::Float(exp)) => Ok(Value::Float(base.powf(*exp))),
             (Value::Integer(base), Value::Float(exp)) => {
                 Ok(Value::Float((*base as f64).powf(*exp)))
             }
-            (Value::Float(base), Value::Integer(exp)) => {
-                Ok(Value::Float(base.powf(*exp as f64)))
-            }
+            (Value::Float(base), Value::Integer(exp)) => Ok(Value::Float(base.powf(*exp as f64))),
             _ => Err(RuntimeError::TypeError {
                 expected: "numbers".to_string(),
                 actual: format!("{}, {}", args[0].type_name(), args[1].type_name()),
@@ -2397,7 +2430,7 @@ impl SecureStandardLibrary {
         }
 
         let mut result = Vec::new();
-        
+
         for arg in &args {
             match arg {
                 Value::Vector(v) => {
@@ -2681,26 +2714,26 @@ impl SecureStandardLibrary {
         match &args[0] {
             Value::Vector(v) => {
                 let mut distinct = Vec::new();
-                
+
                 for item in v {
                     if !distinct.contains(item) {
                         distinct.push(item.clone());
                     }
                 }
-                
+
                 Ok(Value::Vector(distinct))
             }
             Value::String(s) => {
                 let mut seen = std::collections::HashSet::new();
                 let mut distinct = String::new();
-                
+
                 for c in s.chars() {
                     if !seen.contains(&c) {
                         seen.insert(c);
                         distinct.push(c);
                     }
                 }
-                
+
                 Ok(Value::String(distinct))
             }
             _ => Err(RuntimeError::TypeError {
@@ -2731,23 +2764,26 @@ impl SecureStandardLibrary {
         match collection {
             Value::Vector(v) => {
                 for item in v {
-                    let outcome = evaluator.evaluate(
-                        &crate::ast::Expression::FunctionCall {
-                            callee: Box::new(Expression::try_from(predicate.clone())?),
-                            arguments: vec![Expression::try_from(item.clone())?],
-                        },
-                    )?;
+                    let outcome = evaluator.evaluate(&crate::ast::Expression::FunctionCall {
+                        callee: Box::new(Expression::try_from(predicate.clone())?),
+                        arguments: vec![Expression::try_from(item.clone())?],
+                    })?;
 
                     // Unwrap ExecutionOutcome produced by evaluator. If a host-call was requested
                     // from inside a secure stdlib predicate, treat it as an error for now (short-term shim).
                     let result = match outcome {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(_hc) => {
-                            return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc)));
+                            return Err(RuntimeError::Generic(format!(
+                                "host-call requested inside secure stdlib predicate: {:?}",
+                                _hc
+                            )));
                         }
                         #[cfg(feature = "effect-boundary")]
                         ExecutionOutcome::RequiresHostEffect(_) => {
-                            return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string()));
+                            return Err(RuntimeError::Generic(
+                                "Host effect requested inside secure stdlib predicate".to_string(),
+                            ));
                         }
                     };
 
@@ -2768,18 +2804,25 @@ impl SecureStandardLibrary {
             Value::String(s) => {
                 for c in s.chars() {
                     let char_value = Value::String(c.to_string());
-                    let outcome = evaluator.evaluate(
-                        &crate::ast::Expression::FunctionCall {
-                            callee: Box::new(Expression::try_from(predicate.clone())?),
-                            arguments: vec![Expression::try_from(char_value)?],
-                        },
-                    )?;
+                    let outcome = evaluator.evaluate(&crate::ast::Expression::FunctionCall {
+                        callee: Box::new(Expression::try_from(predicate.clone())?),
+                        arguments: vec![Expression::try_from(char_value)?],
+                    })?;
 
                     let result = match outcome {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc))),
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "host-call requested inside secure stdlib predicate: {:?}",
+                                _hc
+                            )))
+                        }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string())),
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect requested inside secure stdlib predicate".to_string(),
+                            ))
+                        }
                     };
 
                     match result {
@@ -2823,21 +2866,24 @@ impl SecureStandardLibrary {
         match collection {
             Value::Vector(v) => {
                 for item in v {
-                    let outcome = evaluator.evaluate(
-                        &crate::ast::Expression::FunctionCall {
-                            callee: Box::new(Expression::try_from(predicate.clone())?),
-                            arguments: vec![Expression::try_from(item.clone())?],
-                        },
-                    )?;
+                    let outcome = evaluator.evaluate(&crate::ast::Expression::FunctionCall {
+                        callee: Box::new(Expression::try_from(predicate.clone())?),
+                        arguments: vec![Expression::try_from(item.clone())?],
+                    })?;
 
                     let result = match outcome {
                         ExecutionOutcome::Complete(v) => v,
                         ExecutionOutcome::RequiresHost(_hc) => {
-                            return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc)));
+                            return Err(RuntimeError::Generic(format!(
+                                "host-call requested inside secure stdlib predicate: {:?}",
+                                _hc
+                            )));
                         }
                         #[cfg(feature = "effect-boundary")]
                         ExecutionOutcome::RequiresHostEffect(_) => {
-                            return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string()));
+                            return Err(RuntimeError::Generic(
+                                "Host effect requested inside secure stdlib predicate".to_string(),
+                            ));
                         }
                     };
 
@@ -2858,18 +2904,25 @@ impl SecureStandardLibrary {
             Value::String(s) => {
                 for c in s.chars() {
                     let char_value = Value::String(c.to_string());
-                    let outcome = evaluator.evaluate(
-                        &crate::ast::Expression::FunctionCall {
-                            callee: Box::new(Expression::try_from(predicate.clone())?),
-                            arguments: vec![Expression::try_from(char_value)?],
-                        },
-                    )?;
+                    let outcome = evaluator.evaluate(&crate::ast::Expression::FunctionCall {
+                        callee: Box::new(Expression::try_from(predicate.clone())?),
+                        arguments: vec![Expression::try_from(char_value)?],
+                    })?;
 
                     let result = match outcome {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(_hc) => return Err(RuntimeError::Generic(format!("host-call requested inside secure stdlib predicate: {:?}", _hc))),
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "host-call requested inside secure stdlib predicate: {:?}",
+                                _hc
+                            )))
+                        }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => return Err(RuntimeError::Generic("Host effect requested inside secure stdlib predicate".to_string())),
+                        ExecutionOutcome::RequiresHostEffect(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect requested inside secure stdlib predicate".to_string(),
+                            ))
+                        }
                     };
 
                     match result {
@@ -2926,7 +2979,7 @@ impl SecureStandardLibrary {
                 actual: args.len(),
             });
         }
-        
+
         match &args[0] {
             Value::Integer(n) => Ok(Value::Boolean(n % 2 == 1)),
             Value::Float(f) => Ok(Value::Boolean((*f as i64) % 2 == 1)),
@@ -3009,7 +3062,7 @@ impl SecureStandardLibrary {
         if args.is_empty() {
             return Ok(Value::Map(HashMap::new()));
         }
-        
+
         let mut out: HashMap<MapKey, Value> = HashMap::new();
         for arg in args {
             match arg {

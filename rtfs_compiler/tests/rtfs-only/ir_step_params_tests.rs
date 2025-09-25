@@ -1,17 +1,20 @@
-use rtfs_compiler::runtime::ir_runtime::IrRuntime;
-use rtfs_compiler::ir::core::{IrNode, IrMapEntry};
-use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::ir::core::{IrMapEntry, IrNode};
+use rtfs_compiler::runtime::ir_runtime::IrRuntime;
+use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::values::Value;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
 
 // Helper function to create test runtime components
-fn create_test_runtime() -> (Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface>, RuntimeContext) {
+fn create_test_runtime() -> (
+    Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface>,
+    RuntimeContext,
+) {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
@@ -35,8 +38,24 @@ fn step_params_bind_as_percent_params() {
     // Construct a params map: {"k": 123}
     let map_node = IrNode::Map {
         id: 1,
-        entries: vec![IrMapEntry { key: IrNode::Literal { id: 2, value: rtfs_compiler::ast::Literal::Keyword(rtfs_compiler::ast::Keyword::new("k")), ir_type: rtfs_compiler::ir::core::IrType::Keyword, source_location: None }, value: IrNode::Literal { id: 3, value: rtfs_compiler::ast::Literal::Integer(123), ir_type: rtfs_compiler::ir::core::IrType::Int, source_location: None } }],
-        ir_type: rtfs_compiler::ir::core::IrType::Map { entries: vec![], wildcard: None },
+        entries: vec![IrMapEntry {
+            key: IrNode::Literal {
+                id: 2,
+                value: rtfs_compiler::ast::Literal::Keyword(rtfs_compiler::ast::Keyword::new("k")),
+                ir_type: rtfs_compiler::ir::core::IrType::Keyword,
+                source_location: None,
+            },
+            value: IrNode::Literal {
+                id: 3,
+                value: rtfs_compiler::ast::Literal::Integer(123),
+                ir_type: rtfs_compiler::ir::core::IrType::Int,
+                source_location: None,
+            },
+        }],
+        ir_type: rtfs_compiler::ir::core::IrType::Map {
+            entries: vec![],
+            wildcard: None,
+        },
         source_location: None,
     };
 
@@ -44,8 +63,22 @@ fn step_params_bind_as_percent_params() {
     let body = vec![IrNode::Apply {
         id: 10,
         // Use a Keyword literal for :k so apply treats it as a keyword lookup on the map argument.
-        function: Box::new(IrNode::Literal { id: 11, value: rtfs_compiler::ast::Literal::Keyword(rtfs_compiler::ast::Keyword::new("k")), ir_type: rtfs_compiler::ir::core::IrType::Keyword, source_location: None }),
-        arguments: vec![IrNode::VariableRef { id: 12, name: "%params".to_string(), binding_id: 0, ir_type: rtfs_compiler::ir::core::IrType::Map { entries: vec![], wildcard: None }, source_location: None }],
+        function: Box::new(IrNode::Literal {
+            id: 11,
+            value: rtfs_compiler::ast::Literal::Keyword(rtfs_compiler::ast::Keyword::new("k")),
+            ir_type: rtfs_compiler::ir::core::IrType::Keyword,
+            source_location: None,
+        }),
+        arguments: vec![IrNode::VariableRef {
+            id: 12,
+            name: "%params".to_string(),
+            binding_id: 0,
+            ir_type: rtfs_compiler::ir::core::IrType::Map {
+                entries: vec![],
+                wildcard: None,
+            },
+            source_location: None,
+        }],
         ir_type: rtfs_compiler::ir::core::IrType::Any,
         source_location: None,
     }];
@@ -63,7 +96,12 @@ fn step_params_bind_as_percent_params() {
 
     let mut module_registry = rtfs_compiler::runtime::module_runtime::ModuleRegistry::new();
     // Execute the step as a program
-    let program = IrNode::Program { id: 100, version: "1.0".to_string(), forms: vec![step], source_location: None };
+    let program = IrNode::Program {
+        id: 100,
+        version: "1.0".to_string(),
+        forms: vec![step],
+        source_location: None,
+    };
 
     let res = runtime.execute_program(&program, &mut module_registry);
     if let Err(e) = &res {

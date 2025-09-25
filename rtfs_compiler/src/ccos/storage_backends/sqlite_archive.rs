@@ -1,8 +1,8 @@
+use crate::ccos::storage::{Archivable, ArchiveStats, ContentAddressableArchive};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Serialize, Deserialize};
-use crate::ccos::storage::{ContentAddressableArchive, Archivable, ArchiveStats};
 
 #[derive(Debug)]
 pub struct SqliteArchive {
@@ -21,8 +21,12 @@ impl SqliteArchive {
                 stored_at INTEGER NOT NULL,
                 size INTEGER NOT NULL
             );CREATE INDEX IF NOT EXISTS idx_objects_stored_at ON objects(stored_at);COMMIT;",
-        ).map_err(|e| e.to_string())?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)), db_path })
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            db_path,
+        })
     }
 }
 
@@ -40,7 +44,10 @@ where
             .as_secs() as i64;
 
         // Insert or ignore to preserve immutability
-        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
+        let conn_guard = self
+            .conn
+            .lock()
+            .map_err(|_| "connection lock poisoned".to_string())?;
         conn_guard.execute(
             "INSERT OR IGNORE INTO objects(hash, payload, stored_at, size) VALUES (?1, ?2, ?3, ?4)",
             params![hash, payload, ts, size],
@@ -50,8 +57,13 @@ where
     }
 
     fn retrieve(&self, hash: &str) -> Result<Option<T>, String> {
-        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
-        let mut stmt = conn_guard.prepare("SELECT payload FROM objects WHERE hash = ?1").map_err(|e| e.to_string())?;
+        let conn_guard = self
+            .conn
+            .lock()
+            .map_err(|_| "connection lock poisoned".to_string())?;
+        let mut stmt = conn_guard
+            .prepare("SELECT payload FROM objects WHERE hash = ?1")
+            .map_err(|e| e.to_string())?;
         let payload: Option<String> = stmt
             .query_row(params![hash], |row| row.get(0))
             .optional()
@@ -77,8 +89,12 @@ where
     }
 
     fn delete(&self, hash: &str) -> Result<(), String> {
-        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
-        conn_guard.execute("DELETE FROM objects WHERE hash = ?1", params![hash])
+        let conn_guard = self
+            .conn
+            .lock()
+            .map_err(|_| "connection lock poisoned".to_string())?;
+        conn_guard
+            .execute("DELETE FROM objects WHERE hash = ?1", params![hash])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -86,13 +102,22 @@ where
     fn stats(&self) -> ArchiveStats {
         let conn_guard = match self.conn.lock() {
             Ok(g) => g,
-            Err(_) => return ArchiveStats { total_entities: 0, total_size_bytes: 0, oldest_timestamp: None, newest_timestamp: None },
+            Err(_) => {
+                return ArchiveStats {
+                    total_entities: 0,
+                    total_size_bytes: 0,
+                    oldest_timestamp: None,
+                    newest_timestamp: None,
+                }
+            }
         };
         let total_entities: usize = conn_guard
             .query_row("SELECT COUNT(1) FROM objects", [], |r| r.get(0))
             .unwrap_or(0);
         let total_size_bytes: usize = conn_guard
-            .query_row("SELECT COALESCE(SUM(size),0) FROM objects", [], |r| r.get(0))
+            .query_row("SELECT COALESCE(SUM(size),0) FROM objects", [], |r| {
+                r.get(0)
+            })
             .unwrap_or(0);
         let oldest_ts: Option<u64> = conn_guard
             .query_row("SELECT MIN(stored_at) FROM objects", [], |r| r.get(0))
@@ -110,9 +135,17 @@ where
     }
 
     fn verify_integrity(&self) -> Result<bool, String> {
-        let conn_guard = self.conn.lock().map_err(|_| "connection lock poisoned".to_string())?;
-        let mut stmt = conn_guard.prepare("SELECT hash, payload FROM objects").map_err(|e| e.to_string())?;
-        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        let conn_guard = self
+            .conn
+            .lock()
+            .map_err(|_| "connection lock poisoned".to_string())?;
+        let mut stmt = conn_guard
+            .prepare("SELECT hash, payload FROM objects")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| e.to_string())?;
         for row in rows {
             let (hash, payload) = row.map_err(|e| e.to_string())?;
@@ -133,7 +166,9 @@ where
         if let Ok(mut stmt) = conn_guard.prepare("SELECT hash FROM objects") {
             let rows = stmt.query_map([], |row| row.get(0));
             if let Ok(iter) = rows {
-                for r in iter.flatten() { out.push(r); }
+                for r in iter.flatten() {
+                    out.push(r);
+                }
             }
         }
         out
@@ -143,8 +178,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use crate::ccos::storage_backends::file_archive::FileArchive;
+    use tempfile::NamedTempFile;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestEntity {
@@ -153,8 +188,12 @@ mod tests {
     }
 
     impl Archivable for TestEntity {
-        fn entity_id(&self) -> String { self.id.clone() }
-        fn entity_type(&self) -> &'static str { "TestEntity" }
+        fn entity_id(&self) -> String {
+            self.id.clone()
+        }
+        fn entity_type(&self) -> &'static str {
+            "TestEntity"
+        }
     }
 
     #[test]
@@ -163,14 +202,23 @@ mod tests {
         let path = tmp.path().to_path_buf();
         let archive = SqliteArchive::new(path).expect("create sqlite archive");
 
-        let e = TestEntity { id: "a".to_string(), n: 5 };
+        let e = TestEntity {
+            id: "a".to_string(),
+            n: 5,
+        };
         let h = archive.store(e.clone()).expect("store");
-    assert!(<SqliteArchive as ContentAddressableArchive<TestEntity>>::exists(&archive, &h));
-    let got: TestEntity = <SqliteArchive as ContentAddressableArchive<TestEntity>>::retrieve(&archive, &h).expect("retrieve").unwrap();
-    assert_eq!(got.id, e.id);
+        assert!(<SqliteArchive as ContentAddressableArchive<TestEntity>>::exists(&archive, &h));
+        let got: TestEntity =
+            <SqliteArchive as ContentAddressableArchive<TestEntity>>::retrieve(&archive, &h)
+                .expect("retrieve")
+                .unwrap();
+        assert_eq!(got.id, e.id);
 
-    // Verify integrity
-    assert!(<SqliteArchive as ContentAddressableArchive<TestEntity>>::verify_integrity(&archive).unwrap());
+        // Verify integrity
+        assert!(
+            <SqliteArchive as ContentAddressableArchive<TestEntity>>::verify_integrity(&archive)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -179,12 +227,17 @@ mod tests {
         let path = tmp.path().to_path_buf();
         let s = SqliteArchive::new(path).expect("sqlite");
 
-        let e = TestEntity { id: "x".to_string(), n: 9 };
-    let hs = <SqliteArchive as ContentAddressableArchive<TestEntity>>::store(&s, e.clone()).expect("store sqlite");
+        let e = TestEntity {
+            id: "x".to_string(),
+            n: 9,
+        };
+        let hs = <SqliteArchive as ContentAddressableArchive<TestEntity>>::store(&s, e.clone())
+            .expect("store sqlite");
 
         let dir = tempfile::tempdir().unwrap();
         let f = FileArchive::new(dir.path()).expect("file archive");
-        let hf = <FileArchive as ContentAddressableArchive<TestEntity>>::store(&f, e).expect("store file");
+        let hf = <FileArchive as ContentAddressableArchive<TestEntity>>::store(&f, e)
+            .expect("store file");
 
         assert_eq!(hs, hf);
     }

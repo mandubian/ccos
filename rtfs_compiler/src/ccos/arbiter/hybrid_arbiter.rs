@@ -5,19 +5,23 @@
 //! first attempts to match against predefined templates for speed and determinism,
 //! then falls back to LLM reasoning for complex or novel requests.
 
-use std::collections::HashMap;
 use async_trait::async_trait;
 use regex::Regex;
+use std::collections::HashMap;
 
+use crate::ast::TopLevel;
+use crate::ccos::arbiter::arbiter_config::{
+    FallbackBehavior, IntentPattern, LlmConfig, PlanTemplate, TemplateConfig,
+};
+use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
+use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
+use crate::ccos::arbiter::prompt::{FilePromptStore, PromptConfig, PromptManager};
+use crate::ccos::delegation_keys::generation;
+use crate::ccos::types::{
+    ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
+};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
-use crate::ccos::types::{Intent, Plan, PlanBody, PlanLanguage, PlanStatus, IntentStatus, StorableIntent, ExecutionResult};
-use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
-use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, FallbackBehavior, LlmConfig};
-use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
-use crate::ccos::delegation_keys::generation;
-use crate::ccos::arbiter::prompt::{PromptManager, FilePromptStore, PromptConfig};
-use crate::ast::TopLevel;
 
 /// Extract the first top-level `(intent …)` s-expression from the given text.
 /// Returns `None` if no well-formed intent block is found.
@@ -49,9 +53,8 @@ fn extract_intent(text: &str) -> Option<String> {
 fn sanitize_regex_literals(text: &str) -> String {
     // Matches #rx"..." with minimal escaping (no nested quotes inside pattern)
     let re = Regex::new(r#"#rx\"([^\"]*)\""#).unwrap();
-    re.replace_all(text, |caps: &regex::Captures| {
-        format!("\"{}\"", &caps[1])
-    }).into_owned()
+    re.replace_all(text, |caps: &regex::Captures| format!("\"{}\"", &caps[1]))
+        .into_owned()
 }
 
 /// Convert parser Literal to runtime Value (basic subset)
@@ -67,7 +70,7 @@ fn lit_to_val(lit: &crate::ast::Literal) -> Value {
 }
 
 fn expr_to_value(expr: &crate::ast::Expression) -> Value {
-    use crate::ast::{Expression as E};
+    use crate::ast::Expression as E;
     match expr {
         E::Literal(lit) => lit_to_val(lit),
         E::Map(m) => {
@@ -79,7 +82,11 @@ fn expr_to_value(expr: &crate::ast::Expression) -> Value {
         }
         E::Vector(vec) | E::List(vec) => {
             let vals = vec.iter().map(expr_to_value).collect();
-            if matches!(expr, E::Vector(_)) { Value::Vector(vals) } else { Value::List(vals) }
+            if matches!(expr, E::Vector(_)) {
+                Value::Vector(vals)
+            } else {
+                Value::List(vals)
+            }
         }
         E::Symbol(s) => Value::Symbol(crate::ast::Symbol(s.0.clone())),
         E::FunctionCall { callee, arguments } => {
@@ -91,26 +98,31 @@ fn expr_to_value(expr: &crate::ast::Expression) -> Value {
         E::Fn(fn_expr) => {
             // Convert fn expressions to a list representation: (fn params body...)
             let mut fn_list = vec![Value::Symbol(crate::ast::Symbol("fn".to_string()))];
-            
+
             // Add parameters as a vector
             let mut params = Vec::new();
             for param in &fn_expr.params {
-                params.push(Value::Symbol(crate::ast::Symbol(format!("{:?}", param.pattern))));
+                params.push(Value::Symbol(crate::ast::Symbol(format!(
+                    "{:?}",
+                    param.pattern
+                ))));
             }
             fn_list.push(Value::Vector(params));
-            
+
             // Add body expressions
             for body_expr in &fn_expr.body {
                 fn_list.push(expr_to_value(body_expr));
             }
-            
+
             Value::List(fn_list)
         }
         _ => Value::Nil,
     }
 }
 
-fn map_expr_to_string_value(expr: &crate::ast::Expression) -> Option<std::collections::HashMap<String, Value>> {
+fn map_expr_to_string_value(
+    expr: &crate::ast::Expression,
+) -> Option<std::collections::HashMap<String, Value>> {
     use crate::ast::{Expression as E, MapKey};
     if let E::Map(m) = expr {
         let mut out = std::collections::HashMap::new();
@@ -131,10 +143,18 @@ fn map_expr_to_string_value(expr: &crate::ast::Expression) -> Option<std::collec
 fn intent_from_function_call(expr: &crate::ast::Expression) -> Option<Intent> {
     use crate::ast::{Expression as E, Literal, Symbol};
 
-    let E::FunctionCall { callee, arguments } = expr else { return None; };
-    let E::Symbol(Symbol(sym)) = &**callee else { return None; };
-    if sym != "intent" { return None; }
-    if arguments.is_empty() { return None; }
+    let E::FunctionCall { callee, arguments } = expr else {
+        return None;
+    };
+    let E::Symbol(Symbol(sym)) = &**callee else {
+        return None;
+    };
+    if sym != "intent" {
+        return None;
+    }
+    if arguments.is_empty() {
+        return None;
+    }
 
     // The first argument is the intent name/type, can be either a symbol or string literal
     let name = if let E::Symbol(Symbol(name_sym)) = &arguments[0] {
@@ -153,16 +173,30 @@ fn intent_from_function_call(expr: &crate::ast::Expression) -> Option<Intent> {
         }
     }
 
-    let original_request = properties.get("original-request")
-        .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
+    let original_request = properties
+        .get("original-request")
+        .and_then(|expr| {
+            if let E::Literal(Literal::String(s)) = expr {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_default();
-    
-    let goal = properties.get("goal")
-        .and_then(|expr| if let E::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None })
+
+    let goal = properties
+        .get("goal")
+        .and_then(|expr| {
+            if let E::Literal(Literal::String(s)) = expr {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| original_request.clone());
 
     let mut intent = Intent::new(goal).with_name(name);
-    
+
     if let Some(expr) = properties.get("constraints") {
         if let Some(m) = map_expr_to_string_value(expr) {
             intent.constraints = m;
@@ -179,7 +213,7 @@ fn intent_from_function_call(expr: &crate::ast::Expression) -> Option<Intent> {
         let value = expr_to_value(expr);
         intent.success_criteria = Some(value);
     }
-    
+
     Some(intent)
 }
 
@@ -202,13 +236,14 @@ impl HybridArbiter {
         intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
     ) -> Result<Self, RuntimeError> {
         // Create LLM provider
-        let llm_provider = LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?;
-        
+        let llm_provider =
+            LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?;
+
         // Load intent patterns and plan templates from configuration
         let intent_patterns = template_config.intent_patterns.clone();
         let plan_templates = template_config.plan_templates.clone();
         let fallback_behavior = template_config.fallback.clone();
-        
+
         Ok(Self {
             template_config,
             llm_config,
@@ -223,7 +258,7 @@ impl HybridArbiter {
     /// Match natural language input against intent patterns
     fn match_intent_pattern(&self, natural_language: &str) -> Option<&IntentPattern> {
         let lower_nl = natural_language.to_lowercase();
-        
+
         for pattern in &self.intent_patterns {
             // Check regex pattern
             if let Ok(regex) = Regex::new(&pattern.pattern) {
@@ -232,7 +267,7 @@ impl HybridArbiter {
                 }
             }
         }
-        
+
         None
     }
 
@@ -243,7 +278,7 @@ impl HybridArbiter {
                 return Some(template);
             }
         }
-        
+
         None
     }
 
@@ -258,14 +293,14 @@ impl HybridArbiter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Convert context to string format for template substitution
         let context_str = context.map(|ctx| {
             ctx.into_iter()
                 .map(|(k, v)| (k, format!("{}", v)))
                 .collect::<HashMap<String, String>>()
         });
-        
+
         // Apply template substitution to goal
         let mut goal = pattern.goal_template.clone();
         if let Some(ctx) = &context_str {
@@ -273,7 +308,7 @@ impl HybridArbiter {
                 goal = goal.replace(&format!("{{{}}}", key), value);
             }
         }
-        
+
         Intent {
             intent_id: format!("hybrid_template_intent_{}", uuid::Uuid::new_v4()),
             name: Some(pattern.intent_name.clone()),
@@ -299,8 +334,14 @@ impl HybridArbiter {
             updated_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::TEMPLATE.to_string()));
-                meta.insert("pattern_name".to_string(), Value::String(pattern.name.clone()));
+                meta.insert(
+                    generation::GENERATION_METHOD.to_string(),
+                    Value::String(generation::methods::TEMPLATE.to_string()),
+                );
+                meta.insert(
+                    "pattern_name".to_string(),
+                    Value::String(pattern.name.clone()),
+                );
                 meta
             },
         }
@@ -317,29 +358,32 @@ impl HybridArbiter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Convert context to string format for template substitution
         let context_str = context.map(|ctx| {
             ctx.into_iter()
                 .map(|(k, v)| (k, format!("{}", v)))
                 .collect::<HashMap<String, String>>()
         });
-        
+
         // Apply template substitution to RTFS content
         let mut rtfs_content = template.rtfs_template.clone();
-        
+
         // Substitute intent variables
         rtfs_content = rtfs_content.replace("{intent_id}", &intent.intent_id);
-        rtfs_content = rtfs_content.replace("{intent_name}", intent.name.as_ref().unwrap_or(&"".to_string()));
+        rtfs_content = rtfs_content.replace(
+            "{intent_name}",
+            intent.name.as_ref().unwrap_or(&"".to_string()),
+        );
         rtfs_content = rtfs_content.replace("{goal}", &intent.goal);
-        
+
         // Substitute context variables
         if let Some(ctx) = &context_str {
             for (key, value) in ctx {
                 rtfs_content = rtfs_content.replace(&format!("{{{}}}", key), value);
             }
         }
-        
+
         Plan {
             plan_id: format!("hybrid_template_plan_{}", uuid::Uuid::new_v4()),
             name: Some(template.name.clone()),
@@ -350,8 +394,14 @@ impl HybridArbiter {
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::TEMPLATE.to_string()));
-                meta.insert("template_name".to_string(), Value::String(template.name.clone()));
+                meta.insert(
+                    generation::GENERATION_METHOD.to_string(),
+                    Value::String(generation::methods::TEMPLATE.to_string()),
+                );
+                meta.insert(
+                    "template_name".to_string(),
+                    Value::String(template.name.clone()),
+                );
                 meta
             },
             input_schema: None,
@@ -369,12 +419,12 @@ impl HybridArbiter {
         context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         let prompt = self.create_intent_prompt(natural_language, context.clone());
-        
+
         let response = self.llm_provider.generate_text(&prompt).await?;
-        
+
         // Parse LLM response into intent structure
         let intent = self.parse_llm_intent_response(&response, natural_language, context)?;
-        
+
         Ok(intent)
     }
 
@@ -385,31 +435,46 @@ impl HybridArbiter {
         context: Option<HashMap<String, Value>>,
     ) -> Result<Plan, RuntimeError> {
         let prompt = self.create_plan_prompt(intent, context.clone());
-        
+
         let response = self.llm_provider.generate_text(&prompt).await?;
-        
+
         // Parse LLM response into plan structure
         let plan = self.parse_llm_plan_response(&response, intent)?;
-        
+
         Ok(plan)
     }
 
     /// Create prompt for intent generation (centralized, versioned)
-    fn create_intent_prompt(&self, natural_language: &str, context: Option<HashMap<String, Value>>) -> String {
+    fn create_intent_prompt(
+        &self,
+        natural_language: &str,
+        context: Option<HashMap<String, Value>>,
+    ) -> String {
         let prompt_cfg: PromptConfig = PromptConfig::default();
         let store = FilePromptStore::new("assets/prompts/arbiter");
         let manager = PromptManager::new(store);
         let mut vars = std::collections::HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());
         vars.insert("context".to_string(), format!("{:?}", context));
-        vars.insert("available_capabilities".to_string(), ":ccos.echo, :ccos.math.add".to_string());
+        vars.insert(
+            "available_capabilities".to_string(),
+            ":ccos.echo, :ccos.math.add".to_string(),
+        );
         manager
-            .render(&prompt_cfg.intent_prompt_id, &prompt_cfg.intent_prompt_version, &vars)
+            .render(
+                &prompt_cfg.intent_prompt_id,
+                &prompt_cfg.intent_prompt_version,
+                &vars,
+            )
             .unwrap_or_else(|_| "".to_string())
     }
 
     /// Create prompt for plan generation
-    fn create_plan_prompt(&self, intent: &Intent, context: Option<HashMap<String, Value>>) -> String {
+    fn create_plan_prompt(
+        &self,
+        intent: &Intent,
+        context: Option<HashMap<String, Value>>,
+    ) -> String {
         format!(
             r#"Generate an RTFS plan to achieve this intent:
 
@@ -475,22 +540,28 @@ Plan:"#,
         _context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
         // Extract the first top-level `(intent …)` s-expression from the response
-        let intent_block = extract_intent(response)
-            .ok_or_else(|| RuntimeError::Generic("Could not locate a complete (intent …) block".to_string()))?;
-        
+        let intent_block = extract_intent(response).ok_or_else(|| {
+            RuntimeError::Generic("Could not locate a complete (intent …) block".to_string())
+        })?;
+
         // Sanitize regex literals for parsing
         let sanitized = sanitize_regex_literals(&intent_block);
-        
+
         // Parse using RTFS parser
         let ast_items = crate::parser::parse(&sanitized)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse RTFS intent: {:?}", e)))?;
-        
+
         // Find the first expression and convert to Intent
         if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
-            intent_from_function_call(&expr)
-                .ok_or_else(|| RuntimeError::Generic("Parsed AST expression was not a valid intent definition".to_string()))
+            intent_from_function_call(&expr).ok_or_else(|| {
+                RuntimeError::Generic(
+                    "Parsed AST expression was not a valid intent definition".to_string(),
+                )
+            })
         } else {
-            Err(RuntimeError::Generic("Parsed AST did not contain a top-level expression for the intent".to_string()))
+            Err(RuntimeError::Generic(
+                "Parsed AST did not contain a top-level expression for the intent".to_string(),
+            ))
         }
     }
 
@@ -504,13 +575,16 @@ Plan:"#,
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
-        
+
         Ok(Plan {
             plan_id: format!("hybrid_llm_plan_{}", uuid::Uuid::new_v4()),
-            name: Some(format!("llm_generated_plan_{}", intent.name.as_ref().unwrap_or(&"unknown".to_string()))),
+            name: Some(format!(
+                "llm_generated_plan_{}",
+                intent.name.as_ref().unwrap_or(&"unknown".to_string())
+            )),
             intent_ids: vec![intent.intent_id.clone()],
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_content),
@@ -518,8 +592,14 @@ Plan:"#,
             created_at: now,
             metadata: {
                 let mut meta = HashMap::new();
-                meta.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::LLM.to_string()));
-                meta.insert("llm_provider".to_string(), Value::String(format!("{:?}", self.llm_config.provider_type)));
+                meta.insert(
+                    generation::GENERATION_METHOD.to_string(),
+                    Value::String(generation::methods::LLM.to_string()),
+                );
+                meta.insert(
+                    "llm_provider".to_string(),
+                    Value::String(format!("{:?}", self.llm_config.provider_type)),
+                );
                 meta
             },
             input_schema: None,
@@ -541,7 +621,7 @@ Plan:"#,
                 }
             }
         }
-        
+
         // If no parentheses found, try to extract from code blocks
         if let Some(start) = response.find("```rtfs") {
             if let Some(end) = response.find("```") {
@@ -549,16 +629,18 @@ Plan:"#,
                 return Ok(content.to_string());
             }
         }
-        
+
         // Fallback: return the entire response
         Ok(response.trim().to_string())
     }
 
     /// Store intent in the intent graph
     async fn store_intent(&self, intent: &Intent) -> Result<(), RuntimeError> {
-        let mut graph = self.intent_graph.lock()
+        let mut graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
-        
+
         // Convert to storable intent
         let storable = StorableIntent {
             intent_id: intent.intent_id.clone(),
@@ -566,14 +648,17 @@ Plan:"#,
             original_request: intent.original_request.clone(),
             rtfs_intent_source: "hybrid_generated".to_string(),
             goal: intent.goal.clone(),
-            constraints: intent.constraints.iter()
+            constraints: intent
+                .constraints
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{}", v)))
                 .collect(),
-            preferences: intent.preferences.iter()
+            preferences: intent
+                .preferences
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{}", v)))
                 .collect(),
-            success_criteria: intent.success_criteria.as_ref()
-                .map(|v| format!("{}", v)),
+            success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
             triggered_by: crate::ccos::types::TriggerSource::HumanRequest,
@@ -589,10 +674,13 @@ Plan:"#,
             updated_at: intent.updated_at,
             metadata: HashMap::new(),
         };
-        
-        graph.storage.store_intent(storable).await
+
+        graph
+            .storage
+            .store_intent(storable)
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to store intent: {}", e)))?;
-        
+
         Ok(())
     }
 }
@@ -606,21 +694,27 @@ impl ArbiterEngine for HybridArbiter {
     ) -> Result<Intent, RuntimeError> {
         // First, try template-based matching
         if let Some(pattern) = self.match_intent_pattern(natural_language) {
-            let intent = self.generate_intent_from_pattern(pattern, natural_language, context.clone());
-            
+            let intent =
+                self.generate_intent_from_pattern(pattern, natural_language, context.clone());
+
             // Store the intent
             self.store_intent(&intent).await?;
-            
+
             return Ok(intent);
         }
-        
+
         // Template matching failed, use LLM fallback based on configuration
         match self.fallback_behavior {
             FallbackBehavior::Llm => {
-                let mut intent = self.generate_intent_with_llm(natural_language, context).await?;
+                let mut intent = self
+                    .generate_intent_with_llm(natural_language, context)
+                    .await?;
 
                 // Mark this as LLM-generated for tests and downstream code
-                intent.metadata.insert(generation::GENERATION_METHOD.to_string(), Value::String(generation::methods::LLM.to_string()));
+                intent.metadata.insert(
+                    generation::GENERATION_METHOD.to_string(),
+                    Value::String(generation::methods::LLM.to_string()),
+                );
 
                 // Store the intent
                 self.store_intent(&intent).await?;
@@ -630,63 +724,61 @@ impl ArbiterEngine for HybridArbiter {
             FallbackBehavior::Default => {
                 // Use default template
                 if let Some(default_pattern) = self.intent_patterns.first() {
-                    let intent = self.generate_intent_from_pattern(default_pattern, natural_language, context.clone());
-                    
+                    let intent = self.generate_intent_from_pattern(
+                        default_pattern,
+                        natural_language,
+                        context.clone(),
+                    );
+
                     // Store the intent
                     self.store_intent(&intent).await?;
-                    
+
                     Ok(intent)
                 } else {
-                    Err(RuntimeError::Generic("No default template available".to_string()))
+                    Err(RuntimeError::Generic(
+                        "No default template available".to_string(),
+                    ))
                 }
             }
-            FallbackBehavior::Error => {
-                Err(RuntimeError::Generic(format!(
-                    "No template pattern found for request: '{}' and LLM fallback disabled",
-                    natural_language
-                )))
-            }
+            FallbackBehavior::Error => Err(RuntimeError::Generic(format!(
+                "No template pattern found for request: '{}' and LLM fallback disabled",
+                natural_language
+            ))),
         }
     }
 
-    async fn intent_to_plan(
-        &self,
-        intent: &Intent,
-    ) -> Result<Plan, RuntimeError> {
-        let intent_name = intent.name.as_ref()
+    async fn intent_to_plan(&self, intent: &Intent) -> Result<Plan, RuntimeError> {
+        let intent_name = intent
+            .name
+            .as_ref()
             .ok_or_else(|| RuntimeError::Generic("Intent has no name".to_string()))?;
-        
+
         // First, try to find a matching plan template
         if let Some(template) = self.find_plan_template(intent_name) {
             return Ok(self.generate_plan_from_template(template, intent, None));
         }
-        
+
         // Template matching failed, use LLM fallback based on configuration
         match self.fallback_behavior {
-            FallbackBehavior::Llm => {
-                self.generate_plan_with_llm(intent, None).await
-            }
+            FallbackBehavior::Llm => self.generate_plan_with_llm(intent, None).await,
             FallbackBehavior::Default => {
                 // Use default template
                 if let Some(default_template) = self.plan_templates.first() {
                     Ok(self.generate_plan_from_template(default_template, intent, None))
                 } else {
-                    Err(RuntimeError::Generic("No default plan template available".to_string()))
+                    Err(RuntimeError::Generic(
+                        "No default plan template available".to_string(),
+                    ))
                 }
             }
-            FallbackBehavior::Error => {
-                Err(RuntimeError::Generic(format!(
-                    "No plan template found for intent: '{}' and LLM fallback disabled",
-                    intent_name
-                )))
-            }
+            FallbackBehavior::Error => Err(RuntimeError::Generic(format!(
+                "No plan template found for intent: '{}' and LLM fallback disabled",
+                intent_name
+            ))),
         }
     }
 
-    async fn execute_plan(
-        &self,
-        plan: &Plan,
-    ) -> Result<ExecutionResult, RuntimeError> {
+    async fn execute_plan(&self, plan: &Plan) -> Result<ExecutionResult, RuntimeError> {
         // For hybrid arbiter, we return a placeholder execution result
         // In a real implementation, this would execute the RTFS plan
         Ok(ExecutionResult {
@@ -695,9 +787,15 @@ impl ArbiterEngine for HybridArbiter {
             metadata: {
                 let mut meta = HashMap::new();
                 meta.insert("plan_id".to_string(), Value::String(plan.plan_id.clone()));
-                meta.insert("hybrid_engine".to_string(), Value::String("hybrid".to_string()));
+                meta.insert(
+                    "hybrid_engine".to_string(),
+                    Value::String("hybrid".to_string()),
+                );
                 if let Some(generation_method) = plan.metadata.get(generation::GENERATION_METHOD) {
-                    meta.insert(generation::GENERATION_METHOD.to_string(), generation_method.clone());
+                    meta.insert(
+                        generation::GENERATION_METHOD.to_string(),
+                        generation_method.clone(),
+                    );
                 }
                 meta
             },
@@ -708,7 +806,9 @@ impl ArbiterEngine for HybridArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::arbiter::arbiter_config::{TemplateConfig, IntentPattern, PlanTemplate, LlmConfig, LlmProviderType};
+    use crate::ccos::arbiter::arbiter_config::{
+        IntentPattern, LlmConfig, LlmProviderType, PlanTemplate, TemplateConfig,
+    };
 
     fn create_test_config() -> (TemplateConfig, LlmConfig) {
         let template_config = TemplateConfig {
@@ -739,7 +839,9 @@ mod tests {
     (step "Analyze Sentiment" (call :ccos.echo "analyzing sentiment"))
     (step "Generate Report" (call :ccos.echo "generating sentiment report"))
 )
-                    "#.trim().to_string(),
+                    "#
+                    .trim()
+                    .to_string(),
                     variables: vec!["analyze_sentiment".to_string(), "source".to_string()],
                 },
                 PlanTemplate {
@@ -750,7 +852,9 @@ mod tests {
     (step "Create Backup" (call :ccos.echo "creating encrypted backup"))
     (step "Verify Backup" (call :ccos.echo "verifying backup integrity"))
 )
-                    "#.trim().to_string(),
+                    "#
+                    .trim()
+                    .to_string(),
                     variables: vec!["backup_data".to_string(), "data_type".to_string()],
                 },
             ],
@@ -775,9 +879,9 @@ mod tests {
     async fn test_hybrid_arbiter_creation() {
         let (template_config, llm_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
+
         let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph).await;
         assert!(arbiter.is_ok());
     }
@@ -786,17 +890,19 @@ mod tests {
     async fn test_template_fallback() {
         let (template_config, llm_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
-        let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph).await.unwrap();
-        
+
+        let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph)
+            .await
+            .unwrap();
+
         // Test template matching
-        let intent = arbiter.natural_language_to_intent(
-            "analyze user sentiment from chat logs",
-            None
-        ).await.unwrap();
-        
+        let intent = arbiter
+            .natural_language_to_intent("analyze user sentiment from chat logs", None)
+            .await
+            .unwrap();
+
         assert!(intent.name.is_some() && intent.name.as_ref().unwrap().contains("sentiment"));
         if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {
@@ -813,19 +919,21 @@ mod tests {
     async fn test_llm_fallback() {
         let (mut template_config, llm_config) = create_test_config();
         template_config.fallback = FallbackBehavior::Llm;
-        
+
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::ccos::intent_graph::IntentGraph::new().unwrap()
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
-        
-        let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph).await.unwrap();
-        
+
+        let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph)
+            .await
+            .unwrap();
+
         // Test LLM fallback for unknown request
-        let intent = arbiter.natural_language_to_intent(
-            "random unknown request",
-            None
-        ).await.unwrap();
-        
+        let intent = arbiter
+            .natural_language_to_intent("random unknown request", None)
+            .await
+            .unwrap();
+
         if let Some(v) = intent.metadata.get(generation::GENERATION_METHOD) {
             if let Some(s) = v.as_string() {
                 assert!(s.to_lowercase().contains("llm") || s.to_lowercase().contains("language"));

@@ -1,12 +1,12 @@
-use crate::runtime::streaming::{StreamingCapability, StreamHandle, StreamConfig, StreamType};
+use crate::ast::{Expression, Keyword, Literal, MapKey, Symbol};
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::runtime::error::RuntimeResult;
+use crate::runtime::streaming::{StreamConfig, StreamHandle, StreamType, StreamingCapability};
 use crate::runtime::values::Value;
-use tokio::sync::mpsc;
-use crate::ast::{Expression, Keyword, Symbol, MapKey, Literal};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use uuid::Uuid;
-use crate::ccos::capability_marketplace::CapabilityMarketplace;
 
 /// Minimal local streaming provider for tests
 pub struct LocalStreamingProvider;
@@ -15,27 +15,47 @@ pub struct LocalStreamingProvider;
 impl StreamingCapability for LocalStreamingProvider {
     fn start_stream(&self, _params: &Value) -> RuntimeResult<StreamHandle> {
         let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
-        Ok(StreamHandle { stream_id: Uuid::new_v4().to_string(), stop_tx: tx })
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
     }
     fn stop_stream(&self, _handle: &StreamHandle) -> RuntimeResult<()> {
         // Signal shutdown if needed; ignore errors in tests
         let _ = _handle.stop_tx.clone().try_send(());
         Ok(())
     }
-    async fn start_stream_with_config(&self, _params: &Value, _config: &StreamConfig) -> RuntimeResult<StreamHandle> {
+    async fn start_stream_with_config(
+        &self,
+        _params: &Value,
+        _config: &StreamConfig,
+    ) -> RuntimeResult<StreamHandle> {
         let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
-        Ok(StreamHandle { stream_id: Uuid::new_v4().to_string(), stop_tx: tx })
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
     }
     async fn send_to_stream(&self, _handle: &StreamHandle, _data: &Value) -> RuntimeResult<()> {
         Ok(())
     }
     fn start_bidirectional_stream(&self, _params: &Value) -> RuntimeResult<StreamHandle> {
         let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
-        Ok(StreamHandle { stream_id: Uuid::new_v4().to_string(), stop_tx: tx })
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
     }
-    async fn start_bidirectional_stream_with_config(&self, _params: &Value, _config: &StreamConfig) -> RuntimeResult<StreamHandle> {
+    async fn start_bidirectional_stream_with_config(
+        &self,
+        _params: &Value,
+        _config: &StreamConfig,
+    ) -> RuntimeResult<StreamHandle> {
         let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
-        Ok(StreamHandle { stream_id: Uuid::new_v4().to_string(), stop_tx: tx })
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
     }
 }
 
@@ -50,16 +70,24 @@ impl StreamingCapability for LocalStreamingProvider {
 pub fn maybe_lower_mcp_stream_macro(expr: &Expression) -> Expression {
     // Internal helper to extract symbol name
     fn symbol_name(e: &Expression) -> Option<String> {
-        if let Expression::Symbol(Symbol(s)) = e { Some(s.clone()) } else { None }
+        if let Expression::Symbol(Symbol(s)) = e {
+            Some(s.clone())
+        } else {
+            None
+        }
     }
     // List structure is raw Vec<Expression>
     if let Expression::List(items) = expr {
-        if items.is_empty() { return expr.clone(); }
+        if items.is_empty() {
+            return expr.clone();
+        }
         if let Some(head) = items.get(0) {
             if let Some(sym) = symbol_name(head) {
                 if sym == "mcp-stream" {
                     // Need at least endpoint and processor
-                    if items.len() < 3 { return expr.clone(); }
+                    if items.len() < 3 {
+                        return expr.clone();
+                    }
                     // Endpoint literal (symbol or string literal currently represented as Literal::String)
                     let endpoint = match &items[1] {
                         Expression::Literal(Literal::String(s)) => s.clone(),
@@ -71,18 +99,33 @@ pub fn maybe_lower_mcp_stream_macro(expr: &Expression) -> Expression {
                         Expression::Literal(Literal::String(s)) => s.clone(),
                         _ => return expr.clone(),
                     };
-                    let initial_state = if items.len() > 3 { items[3].clone() } else { Expression::Map(std::collections::HashMap::new()) };
+                    let initial_state = if items.len() > 3 {
+                        items[3].clone()
+                    } else {
+                        Expression::Map(std::collections::HashMap::new())
+                    };
 
                     // Build map with keyword keys (without leading ':') because MapKey::Keyword wraps raw value
                     let mut m = std::collections::HashMap::new();
-                    m.insert(MapKey::Keyword(Keyword("endpoint".to_string())), Expression::Literal(Literal::String(endpoint)));
-                    m.insert(MapKey::Keyword(Keyword("processor".to_string())), Expression::Literal(Literal::String(processor)));
-                    m.insert(MapKey::Keyword(Keyword("initial-state".to_string())), initial_state);
+                    m.insert(
+                        MapKey::Keyword(Keyword("endpoint".to_string())),
+                        Expression::Literal(Literal::String(endpoint)),
+                    );
+                    m.insert(
+                        MapKey::Keyword(Keyword("processor".to_string())),
+                        Expression::Literal(Literal::String(processor)),
+                    );
+                    m.insert(
+                        MapKey::Keyword(Keyword("initial-state".to_string())),
+                        initial_state,
+                    );
                     let map_expr = Expression::Map(m);
 
                     // Form: (call :mcp.stream.start { ... })
                     let call_sym = Expression::Symbol(Symbol("call".to_string()));
-                    let capability_kw = Expression::Literal(Literal::Keyword(Keyword("mcp.stream.start".to_string())));
+                    let capability_kw = Expression::Literal(Literal::Keyword(Keyword(
+                        "mcp.stream.start".to_string(),
+                    )));
                     return Expression::List(vec![call_sym, capability_kw, map_expr]);
                 }
             }
@@ -152,11 +195,13 @@ impl RtfsStreamingSyntaxExecutor {
         })
     }
 
-    pub async fn stop_stream(&self, handle: StreamHandle) -> Result<(), crate::runtime::error::RuntimeError> {
+    pub async fn stop_stream(
+        &self,
+        handle: StreamHandle,
+    ) -> Result<(), crate::runtime::error::RuntimeError> {
         let mut stop_tx = handle.stop_tx;
-        stop_tx
-            .send(())
-            .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(format!("failed to signal stop: {}", e)))
+        stop_tx.send(()).await.map_err(|e| {
+            crate::runtime::error::RuntimeError::Generic(format!("failed to signal stop: {}", e))
+        })
     }
 }

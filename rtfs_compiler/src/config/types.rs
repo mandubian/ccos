@@ -480,17 +480,13 @@ impl Default for HTTPEgressConfig {
 
 impl Default for FSCapabilityConfig {
     fn default() -> Self {
-        Self {
-            enabled: false,
-        }
+        Self { enabled: false }
     }
 }
 
 impl Default for LLMCapabilityConfig {
     fn default() -> Self {
-        Self {
-            enabled: false,
-        }
+        Self { enabled: false }
     }
 }
 
@@ -531,9 +527,7 @@ impl Default for StorageConfig {
 
 impl Default for AnchorConfig {
     fn default() -> Self {
-        Self {
-            enabled: false,
-        }
+        Self { enabled: false }
     }
 }
 
@@ -595,26 +589,40 @@ impl DelegationConfig {
             threshold: self.threshold.unwrap_or(0.65),
             max_candidates: self.max_candidates.unwrap_or(3) as usize,
             min_skill_hits: self.min_skill_hits.map(|hits| hits as usize),
-            agent_registry: self.agent_registry.as_ref().map(|registry| {
-                crate::ccos::arbiter::arbiter_config::AgentRegistryConfig {
-                    registry_type: match registry.registry_type {
-                        RegistryType::InMemory => crate::ccos::arbiter::arbiter_config::RegistryType::InMemory,
-                        RegistryType::Database => crate::ccos::arbiter::arbiter_config::RegistryType::Database,
-                        RegistryType::File => crate::ccos::arbiter::arbiter_config::RegistryType::File,
+            agent_registry: self
+                .agent_registry
+                .as_ref()
+                .map(
+                    |registry| crate::ccos::arbiter::arbiter_config::AgentRegistryConfig {
+                        registry_type: match registry.registry_type {
+                            RegistryType::InMemory => {
+                                crate::ccos::arbiter::arbiter_config::RegistryType::InMemory
+                            }
+                            RegistryType::Database => {
+                                crate::ccos::arbiter::arbiter_config::RegistryType::Database
+                            }
+                            RegistryType::File => {
+                                crate::ccos::arbiter::arbiter_config::RegistryType::File
+                            }
+                        },
+                        database_url: registry.database_url.clone(),
+                        agents: registry
+                            .agents
+                            .iter()
+                            .map(
+                                |agent| crate::ccos::arbiter::arbiter_config::AgentDefinition {
+                                    agent_id: agent.agent_id.clone(),
+                                    name: agent.name.clone(),
+                                    capabilities: agent.capabilities.clone(),
+                                    cost: agent.cost,
+                                    trust_score: agent.trust_score,
+                                    metadata: agent.metadata.clone(),
+                                },
+                            )
+                            .collect(),
                     },
-                    database_url: registry.database_url.clone(),
-                    agents: registry.agents.iter().map(|agent| {
-                        crate::ccos::arbiter::arbiter_config::AgentDefinition {
-                            agent_id: agent.agent_id.clone(),
-                            name: agent.name.clone(),
-                            capabilities: agent.capabilities.clone(),
-                            cost: agent.cost,
-                            trust_score: agent.trust_score,
-                            metadata: agent.metadata.clone(),
-                        }
-                    }).collect(),
-                }
-            }).unwrap_or_default(),
+                )
+                .unwrap_or_default(),
             adaptive_threshold: self.adaptive_threshold.clone(),
         }
     }
@@ -670,16 +678,14 @@ mod tests {
         let agent_registry = AgentRegistryConfig {
             registry_type: RegistryType::InMemory,
             database_url: None,
-            agents: vec![
-                AgentDefinition {
-                    agent_id: "test_agent".to_string(),
-                    name: "Test Agent".to_string(),
-                    capabilities: vec!["test".to_string()],
-                    cost: 0.1,
-                    trust_score: 0.9,
-                    metadata: HashMap::new(),
-                }
-            ],
+            agents: vec![AgentDefinition {
+                agent_id: "test_agent".to_string(),
+                name: "Test Agent".to_string(),
+                capabilities: vec!["test".to_string()],
+                cost: 0.1,
+                trust_score: 0.9,
+                metadata: HashMap::new(),
+            }],
         };
         agent_config.agent_registry = Some(agent_registry);
 
@@ -698,14 +704,17 @@ mod tests {
         agent_config.adaptive_threshold = Some(adaptive_config);
 
         let arbiter_config = agent_config.to_arbiter_config();
-        
+
         assert_eq!(arbiter_config.enabled, true);
         assert_eq!(arbiter_config.threshold, 0.8);
         assert_eq!(arbiter_config.max_candidates, 5);
         assert_eq!(arbiter_config.min_skill_hits, Some(2));
         assert_eq!(arbiter_config.agent_registry.agents.len(), 1);
-        assert_eq!(arbiter_config.agent_registry.agents[0].agent_id, "test_agent");
-        
+        assert_eq!(
+            arbiter_config.agent_registry.agents[0].agent_id,
+            "test_agent"
+        );
+
         // Verify adaptive threshold configuration is preserved
         let adaptive_threshold = arbiter_config.adaptive_threshold.unwrap();
         assert_eq!(adaptive_threshold.enabled, Some(true));
@@ -716,14 +725,17 @@ mod tests {
         assert_eq!(adaptive_threshold.historical_weight, Some(0.4));
         assert_eq!(adaptive_threshold.decay_factor, Some(0.85));
         assert_eq!(adaptive_threshold.min_samples, Some(3));
-        assert_eq!(adaptive_threshold.env_prefix, Some("TEST_DELEGATION_".to_string()));
+        assert_eq!(
+            adaptive_threshold.env_prefix,
+            Some("TEST_DELEGATION_".to_string())
+        );
     }
 
     #[test]
     fn test_delegation_config_to_arbiter_config_defaults() {
         let agent_config = DelegationConfig::default();
         let arbiter_config = agent_config.to_arbiter_config();
-        
+
         assert_eq!(arbiter_config.enabled, true); // default when None
         assert_eq!(arbiter_config.threshold, 0.65); // default when None
         assert_eq!(arbiter_config.max_candidates, 3); // default when None
@@ -738,20 +750,18 @@ mod tests {
         agent_config.delegation.enabled = Some(true);
         agent_config.delegation.threshold = Some(0.75);
         agent_config.delegation.max_candidates = Some(10);
-        
+
         let agent_registry = AgentRegistryConfig {
             registry_type: RegistryType::InMemory,
             database_url: None,
-            agents: vec![
-                AgentDefinition {
-                    agent_id: "sentiment_agent".to_string(),
-                    name: "Sentiment Analysis Agent".to_string(),
-                    capabilities: vec!["sentiment_analysis".to_string()],
-                    cost: 0.1,
-                    trust_score: 0.9,
-                    metadata: HashMap::new(),
-                }
-            ],
+            agents: vec![AgentDefinition {
+                agent_id: "sentiment_agent".to_string(),
+                name: "Sentiment Analysis Agent".to_string(),
+                capabilities: vec!["sentiment_analysis".to_string()],
+                cost: 0.1,
+                trust_score: 0.9,
+                metadata: HashMap::new(),
+            }],
         };
         agent_config.delegation.agent_registry = Some(agent_registry);
 
@@ -770,13 +780,16 @@ mod tests {
         agent_config.delegation.adaptive_threshold = Some(adaptive_config);
 
         let arbiter_config = agent_config.delegation.to_arbiter_config();
-        
+
         assert_eq!(arbiter_config.enabled, true);
         assert_eq!(arbiter_config.threshold, 0.75);
         assert_eq!(arbiter_config.max_candidates, 10);
         assert_eq!(arbiter_config.agent_registry.agents.len(), 1);
-        assert_eq!(arbiter_config.agent_registry.agents[0].agent_id, "sentiment_agent");
-        
+        assert_eq!(
+            arbiter_config.agent_registry.agents[0].agent_id,
+            "sentiment_agent"
+        );
+
         // Verify adaptive threshold configuration
         let adaptive_threshold = arbiter_config.adaptive_threshold.unwrap();
         assert_eq!(adaptive_threshold.enabled, Some(true));
@@ -785,7 +798,10 @@ mod tests {
         assert_eq!(adaptive_threshold.historical_weight, Some(0.2));
         assert_eq!(adaptive_threshold.decay_factor, Some(0.9));
         assert_eq!(adaptive_threshold.min_samples, Some(4));
-        assert_eq!(adaptive_threshold.env_prefix, Some("SENTIMENT_DELEGATION_".to_string()));
+        assert_eq!(
+            adaptive_threshold.env_prefix,
+            Some("SENTIMENT_DELEGATION_".to_string())
+        );
     }
 
     #[test]
@@ -805,25 +821,25 @@ mod tests {
         // Test serialization/deserialization
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: AdaptiveThresholdConfig = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(config, deserialized);
     }
 
     #[test]
     fn test_adaptive_threshold_config_partial() {
         let mut config = AdaptiveThresholdConfig::default();
-        
+
         // Test with only some fields set
         config.enabled = Some(false);
         config.base_threshold = Some(0.8);
         config.min_threshold = None; // Use default
         config.max_threshold = None; // Use default
-        
+
         assert_eq!(config.enabled, Some(false));
         assert_eq!(config.base_threshold, Some(0.8));
         assert_eq!(config.min_threshold, None);
         assert_eq!(config.max_threshold, None);
-        
+
         // Test that defaults are applied correctly
         let default_config = AdaptiveThresholdConfig::default();
         assert_eq!(default_config.min_threshold, Some(0.3));

@@ -2,13 +2,13 @@
 //!
 //! This module defines security policies and execution contexts for RTFS programs.
 
-use std::collections::{HashSet, HashMap};
-use crate::runtime::microvm::config::MicroVMConfig;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::microvm::config::MicroVMConfig;
 use crate::runtime::values::Value;
+use std::collections::{HashMap, HashSet};
 
 /// RTFS-local isolation levels for security contexts
-/// 
+///
 /// This enum defines the isolation levels that RTFS can express.
 /// CCOS will map these to its own isolation levels during execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -37,7 +37,7 @@ pub struct SecurityAuthorizer;
 
 impl SecurityAuthorizer {
     /// Authorize a capability execution request
-    /// 
+    ///
     /// This is the central point for all capability authorization decisions.
     /// It validates the request against the runtime context and returns
     /// the minimal set of permissions needed for this specific execution.
@@ -51,7 +51,10 @@ impl SecurityAuthorizer {
             return Err(RuntimeError::SecurityViolation {
                 operation: "capability_authorization".to_string(),
                 capability: capability_id.to_string(),
-                context: format!("Capability '{}' not allowed by runtime context", capability_id),
+                context: format!(
+                    "Capability '{}' not allowed by runtime context",
+                    capability_id
+                ),
             });
         }
 
@@ -66,15 +69,15 @@ impl SecurityAuthorizer {
                     // Could add path-based permissions here
                     required_permissions.push("ccos.io.file-access".to_string());
                 }
-            },
+            }
             // Network operations might need additional network permissions
             "ccos.network.http-fetch" => {
                 required_permissions.push("ccos.network.outbound".to_string());
-            },
+            }
             // System operations might need additional system permissions
             "ccos.system.get-env" => {
                 required_permissions.push("ccos.system.environment".to_string());
-            },
+            }
             _ => {
                 // For other capabilities, just the capability ID is sufficient
             }
@@ -84,7 +87,7 @@ impl SecurityAuthorizer {
     }
 
     /// Authorize a program execution request
-    /// 
+    ///
     /// This validates program execution against the runtime context and
     /// determines what permissions are needed for the program to run.
     pub fn authorize_program(
@@ -118,7 +121,7 @@ impl SecurityAuthorizer {
                     });
                 }
                 required_permissions.push("external_program".to_string());
-            },
+            }
             crate::runtime::microvm::core::Program::NativeFunction(_) => {
                 // Native functions require special permission
                 if !runtime_context.is_capability_allowed("native_function") {
@@ -129,7 +132,7 @@ impl SecurityAuthorizer {
                     });
                 }
                 required_permissions.push("native_function".to_string());
-            },
+            }
             _ => {
                 // RTFS programs are generally allowed if the capability is authorized
             }
@@ -139,7 +142,7 @@ impl SecurityAuthorizer {
     }
 
     /// Validate that the execution context has the required permissions
-    /// 
+    ///
     /// This is a final validation step that ensures the execution context
     /// contains all the permissions that were authorized.
     pub fn validate_execution_context(
@@ -147,7 +150,10 @@ impl SecurityAuthorizer {
         execution_context: &crate::runtime::microvm::core::ExecutionContext,
     ) -> RuntimeResult<()> {
         for permission in required_permissions {
-            if !execution_context.capability_permissions.contains(permission) {
+            if !execution_context
+                .capability_permissions
+                .contains(permission)
+            {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "execution_context_validation".to_string(),
                     capability: permission.clone(),
@@ -213,7 +219,7 @@ impl RuntimeContext {
             security_level: SecurityLevel::Pure,
             allowed_capabilities: HashSet::new(),
             use_microvm: false,
-            max_execution_time: Some(1000), // 1 second
+            max_execution_time: Some(1000),           // 1 second
             max_memory_usage: Some(16 * 1024 * 1024), // 16MB
             log_capability_calls: true,
             allow_inherit_isolation: true,
@@ -227,14 +233,14 @@ impl RuntimeContext {
             cross_plan_params: HashMap::new(),
         }
     }
-    
+
     /// Create a controlled runtime context with specific capabilities
     pub fn controlled(allowed_capabilities: Vec<String>) -> Self {
         Self {
             security_level: SecurityLevel::Controlled,
             allowed_capabilities: allowed_capabilities.into_iter().collect(),
             use_microvm: true,
-            max_execution_time: Some(5000), // 5 seconds
+            max_execution_time: Some(5000),           // 5 seconds
             max_memory_usage: Some(64 * 1024 * 1024), // 64MB
             log_capability_calls: true,
             allow_inherit_isolation: true,
@@ -248,7 +254,7 @@ impl RuntimeContext {
             cross_plan_params: HashMap::new(),
         }
     }
-    
+
     /// Create a full-access runtime context (for trusted code)
     pub fn full() -> Self {
         Self {
@@ -269,7 +275,7 @@ impl RuntimeContext {
             cross_plan_params: HashMap::new(),
         }
     }
-    
+
     /// Check if a capability is allowed in this context
     pub fn is_capability_allowed(&self, capability_id: &str) -> bool {
         match self.security_level {
@@ -278,29 +284,29 @@ impl RuntimeContext {
             SecurityLevel::Full => true, // All capabilities allowed
         }
     }
-    
+
     /// Create a new RuntimeContext with cross-plan parameters enabled
     pub fn with_cross_plan_context(mut self) -> Self {
         self.cross_plan_params.clear();
         self
     }
-    
+
     /// Add a cross-plan parameter
     pub fn add_cross_plan_param(&mut self, key: String, value: Value) {
         self.cross_plan_params.insert(key, value);
     }
-    
+
     /// Get a cross-plan parameter
     pub fn get_cross_plan_param(&self, key: &str) -> Option<&Value> {
         self.cross_plan_params.get(key)
     }
-    
+
     /// Check if dangerous operations should run in microVM
     pub fn requires_microvm(&self, capability_id: &str) -> bool {
         if !self.use_microvm {
             return false;
         }
-        
+
         // Define which capabilities require microVM execution
         let dangerous_capabilities = [
             "ccos.io.open-file",
@@ -310,7 +316,7 @@ impl RuntimeContext {
             "ccos.network.http-fetch",
             "ccos.system.get-env",
         ];
-        
+
         dangerous_capabilities.contains(&capability_id)
     }
 
@@ -331,14 +337,22 @@ impl RuntimeContext {
     /// Check whether a capability may receive the sanitized context snapshot using
     /// dynamic policies: exact ID allowlist, prefix allowlist, or tag allowlist.
     /// `capability_tags` is derived from capability metadata (e.g., manifest.metadata["tags"]).
-    pub fn is_context_exposure_allowed_for(&self, capability_id: &str, capability_tags: Option<&[String]>) -> bool {
+    pub fn is_context_exposure_allowed_for(
+        &self,
+        capability_id: &str,
+        capability_tags: Option<&[String]>,
+    ) -> bool {
         if !self.expose_readonly_context {
             return false;
         }
         if self.exposed_context_caps.contains(capability_id) {
             return true;
         }
-        if self.exposed_context_prefixes.iter().any(|p| capability_id.starts_with(p)) {
+        if self
+            .exposed_context_prefixes
+            .iter()
+            .any(|p| capability_id.starts_with(p))
+        {
             return true;
         }
         if let Some(tags) = capability_tags {
@@ -352,7 +366,9 @@ impl RuntimeContext {
     /// Enable read-only context exposure for a set of capability IDs (builder-style)
     pub fn with_context_exposure(mut self, capability_ids: &[&str]) -> Self {
         self.expose_readonly_context = true;
-        for id in capability_ids { self.exposed_context_caps.insert((*id).to_string()); }
+        for id in capability_ids {
+            self.exposed_context_caps.insert((*id).to_string());
+        }
         self
     }
 
@@ -365,7 +381,9 @@ impl RuntimeContext {
     /// Enable exposure for capabilities matching any of the provided prefixes (builder-style)
     pub fn with_context_prefixes(mut self, prefixes: &[&str]) -> Self {
         self.expose_readonly_context = true;
-        for p in prefixes { self.exposed_context_prefixes.push((*p).to_string()); }
+        for p in prefixes {
+            self.exposed_context_prefixes.push((*p).to_string());
+        }
         self
     }
 
@@ -378,7 +396,9 @@ impl RuntimeContext {
     /// Enable exposure for capabilities that declare any of the provided tags (builder-style)
     pub fn with_context_tags(mut self, tags: &[&str]) -> Self {
         self.expose_readonly_context = true;
-        for t in tags { self.exposed_context_tags.insert((*t).to_string()); }
+        for t in tags {
+            self.exposed_context_tags.insert((*t).to_string());
+        }
         self
     }
 
@@ -414,7 +434,7 @@ impl SecurityPolicies {
             "ccos.ai.llm-execute".to_string(),
         ])
     }
-    
+
     /// Policy for running system management code
     pub fn system_management() -> RuntimeContext {
         RuntimeContext::controlled(vec![
@@ -430,7 +450,7 @@ impl SecurityPolicies {
             "ccos.ai.llm-execute".to_string(),
         ])
     }
-    
+
     /// Policy for running data processing code
     pub fn data_processing() -> RuntimeContext {
         RuntimeContext::controlled(vec![
@@ -445,7 +465,7 @@ impl SecurityPolicies {
             "ccos.ai.llm-execute".to_string(),
         ])
     }
-    
+
     /// Policy for running agent coordination code
     pub fn agent_coordination() -> RuntimeContext {
         RuntimeContext::controlled(vec![
@@ -459,7 +479,7 @@ impl SecurityPolicies {
             "ccos.ai.llm-execute".to_string(),
         ])
     }
-    
+
     /// Policy for running file operations (high security)
     pub fn file_operations() -> RuntimeContext {
         let mut ctx = RuntimeContext::controlled(vec![
@@ -471,15 +491,15 @@ impl SecurityPolicies {
             "ccos.io.close-file".to_string(),
             // LLM execution disabled here by default for tighter isolation
         ]);
-        
+
         // Force microVM for all file operations
         ctx.use_microvm = true;
         ctx.max_execution_time = Some(10000); // 10 seconds
         ctx.max_memory_usage = Some(32 * 1024 * 1024); // 32MB
-        
+
         ctx
     }
-    
+
     /// Policy for testing capabilities (includes all test capabilities)
     pub fn test_capabilities() -> RuntimeContext {
         RuntimeContext::controlled(vec![
@@ -503,71 +523,84 @@ impl SecurityValidator {
     pub fn validate(ctx: &RuntimeContext) -> Result<(), String> {
         // Check execution time limits
         if let Some(time_limit) = ctx.max_execution_time {
-            if time_limit > 60000 { // 60 seconds
+            if time_limit > 60000 {
+                // 60 seconds
                 return Err("Execution time limit too high".to_string());
             }
         }
-        
+
         // Check memory limits
         if let Some(memory_limit) = ctx.max_memory_usage {
-            if memory_limit > 512 * 1024 * 1024 { // 512MB
+            if memory_limit > 512 * 1024 * 1024 {
+                // 512MB
                 return Err("Memory limit too high".to_string());
             }
         }
-        
+
         // Validate capability combinations
-        if ctx.allowed_capabilities.contains("ccos.io.open-file") 
-            && !ctx.use_microvm 
-            && ctx.security_level != SecurityLevel::Full {
+        if ctx.allowed_capabilities.contains("ccos.io.open-file")
+            && !ctx.use_microvm
+            && ctx.security_level != SecurityLevel::Full
+        {
             return Err("File operations require microVM execution".to_string());
         }
-        
+
         if ctx.allowed_capabilities.contains("ccos.network.http-fetch")
             && !ctx.use_microvm
-            && ctx.security_level != SecurityLevel::Full {
+            && ctx.security_level != SecurityLevel::Full
+        {
             return Err("Network operations require microVM execution".to_string());
         }
-        
+
         Ok(())
     }
-    
+
     /// Check if a capability requires additional permissions
     pub fn requires_elevated_permissions(capability_id: &str) -> bool {
         let elevated_capabilities = [
             "ccos.io.open-file",
-            "ccos.io.read-line", 
+            "ccos.io.read-line",
             "ccos.io.write-line",
             "ccos.io.close-file",
             "ccos.network.http-fetch",
             "ccos.system.get-env",
         ];
-        
+
         elevated_capabilities.contains(&capability_id)
     }
-    
+
     /// Get recommended security level for a capability
     pub fn recommended_security_level(capability_id: &str) -> SecurityLevel {
         match capability_id {
             // Pure capabilities
             "ccos.io.log" | "ccos.io.print" | "ccos.io.println" => SecurityLevel::Controlled,
-            
+
             // Data processing capabilities
             "ccos.data.parse-json" | "ccos.data.serialize-json" => SecurityLevel::Controlled,
-            
+
             // Time capabilities
-            "ccos.system.current-time" | "ccos.system.current-timestamp-ms" => SecurityLevel::Controlled,
-            
+            "ccos.system.current-time" | "ccos.system.current-timestamp-ms" => {
+                SecurityLevel::Controlled
+            }
+
             // LLM execution is controlled with auditing
             "ccos.ai.llm-execute" => SecurityLevel::Controlled,
-            
+
             // Dangerous capabilities
-            "ccos.io.open-file" | "ccos.io.read-line" | "ccos.io.write-line" | "ccos.io.close-file" |
-            "ccos.network.http-fetch" | "ccos.system.get-env" => SecurityLevel::Full,
-            
+            "ccos.io.open-file"
+            | "ccos.io.read-line"
+            | "ccos.io.write-line"
+            | "ccos.io.close-file"
+            | "ccos.network.http-fetch"
+            | "ccos.system.get-env" => SecurityLevel::Full,
+
             // Agent capabilities
-            "ccos.agent.discover-agents" | "ccos.agent.task-coordination" | "ccos.agent.ask-human" |
-            "ccos.agent.discover-and-assess-agents" | "ccos.agent.establish-system-baseline" => SecurityLevel::Controlled,
-            
+            "ccos.agent.discover-agents"
+            | "ccos.agent.task-coordination"
+            | "ccos.agent.ask-human"
+            | "ccos.agent.discover-and-assess-agents"
+            | "ccos.agent.establish-system-baseline" => SecurityLevel::Controlled,
+
             // Default to full security for unknown capabilities
             _ => SecurityLevel::Full,
         }

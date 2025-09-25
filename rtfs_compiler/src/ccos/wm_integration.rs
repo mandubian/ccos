@@ -32,30 +32,42 @@ impl WmIngestionSink {
 
     /// Map a Causal Chain Action to a Working Memory ActionRecord
     pub fn map_action_to_record(action: &Action) -> ActionRecord {
-        // Convert millis to seconds for WM ingestor  
+        // Convert millis to seconds for WM ingestor
         let ts_s = action.timestamp / 1000;
 
         let kind = format!("{:?}", action.action_type);
         let provider = action.function_name.clone();
 
         // Extract attestation if present
-        let attestation_hash = action.metadata.get("signature")
-            .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None });
+        let attestation_hash = action.metadata.get("signature").and_then(|v| {
+            if let Value::String(s) = v {
+                Some(s.clone())
+            } else {
+                None
+            }
+        });
 
         // Compact content payload for idempotent hashing and human scan
-        let args_str = action.arguments.as_ref()
+        let args_str = action
+            .arguments
+            .as_ref()
             .map(|args| format!("{:?}", args))
             .unwrap_or_default();
-        let result_str = action.result.as_ref()
+        let result_str = action
+            .result
+            .as_ref()
             .map(|r| format!("{:?}", r))
             .unwrap_or_default();
-        let meta_str = if action.metadata.is_empty() { 
-            String::new() 
-        } else { 
-            format!("{:?}", action.metadata) 
+        let meta_str = if action.metadata.is_empty() {
+            String::new()
+        } else {
+            format!("{:?}", action.metadata)
         };
 
-        let content = format!("args={}; result={}; meta={}", args_str, result_str, meta_str);
+        let content = format!(
+            "args={}; result={}; meta={}",
+            args_str, result_str, meta_str
+        );
         let summary = provider.clone().unwrap_or_else(|| kind.clone());
 
         ActionRecord {
@@ -100,11 +112,11 @@ pub fn rebuild_working_memory_from_ledger(
 mod tests {
     use super::*;
     use crate::ccos::types::{Action, ActionType, ExecutionResult};
-    use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
     use crate::ccos::working_memory::backend::QueryParams;
+    use crate::ccos::working_memory::backend_inmemory::InMemoryJsonlBackend;
     use crate::runtime::values::Value;
     use std::collections::HashMap;
-    
+
     use uuid::Uuid;
 
     fn create_test_action(action_type: ActionType, function_name: Option<String>) -> Action {
@@ -128,14 +140,20 @@ mod tests {
         action = action.with_result(result);
 
         // Add signature metadata like CausalChain does
-        action.metadata.insert("signature".to_string(), Value::String("test-signature".to_string()));
+        action.metadata.insert(
+            "signature".to_string(),
+            Value::String("test-signature".to_string()),
+        );
 
         action
     }
 
     #[test]
     fn test_action_mapping() {
-        let action = create_test_action(ActionType::CapabilityCall, Some("test-capability".to_string()));
+        let action = create_test_action(
+            ActionType::CapabilityCall,
+            Some("test-capability".to_string()),
+        );
         let record = WmIngestionSink::map_action_to_record(&action);
 
         assert_eq!(record.action_id, action.action_id);
@@ -162,7 +180,7 @@ mod tests {
         let wm_lock = wm.lock().unwrap();
         let results = wm_lock.query(&QueryParams::default()).unwrap();
         assert_eq!(results.entries.len(), 1);
-        
+
         let entry = &results.entries[0];
         assert!(entry.tags.contains("causal-chain"));
         assert!(entry.tags.contains("distillation"));
@@ -177,23 +195,33 @@ mod tests {
         let mut chain = CausalChain::new().unwrap();
         let action1 = create_test_action(ActionType::PlanStarted, None);
         let action2 = create_test_action(ActionType::CapabilityCall, Some("test-cap".to_string()));
-        
+
         // Simulate adding actions to the chain (simplified)
-        chain.record_result(action1.clone(), ExecutionResult {
-            success: true,
-            value: Value::String("result1".to_string()),
-            metadata: HashMap::new(),
-        }).unwrap();
-        chain.record_result(action2.clone(), ExecutionResult {
-            success: true,
-            value: Value::String("result2".to_string()),
-            metadata: HashMap::new(),
-        }).unwrap();
+        chain
+            .record_result(
+                action1.clone(),
+                ExecutionResult {
+                    success: true,
+                    value: Value::String("result1".to_string()),
+                    metadata: HashMap::new(),
+                },
+            )
+            .unwrap();
+        chain
+            .record_result(
+                action2.clone(),
+                ExecutionResult {
+                    success: true,
+                    value: Value::String("result2".to_string()),
+                    metadata: HashMap::new(),
+                },
+            )
+            .unwrap();
 
         // Now rebuild working memory from the chain
         let backend = InMemoryJsonlBackend::new(None, Some(10), Some(10_000));
         let mut wm = WorkingMemory::new(Box::new(backend));
-        
+
         rebuild_working_memory_from_ledger(&mut wm, &chain).unwrap();
 
         let results = wm.query(&QueryParams::default()).unwrap();

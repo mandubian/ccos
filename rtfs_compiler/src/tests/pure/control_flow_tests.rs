@@ -4,13 +4,10 @@ mod control_flow_tests {
         parser,
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
     };
-    
-    
+
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
-    
-    
 
     #[test]
     fn test_if_expressions() {
@@ -50,14 +47,17 @@ mod control_flow_tests {
         crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
             capability_marketplace,
             security_context.clone(),
         ));
-    let mut evaluator = Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
+        let mut evaluator =
+            Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
 
         // Evaluate all top-level forms in sequence using the evaluator's environment
         let result = evaluator.eval_toplevel(&parsed);
@@ -67,7 +67,9 @@ mod control_flow_tests {
         match result? {
             crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
             crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
+                Err(crate::runtime::error::RuntimeError::Generic(
+                    "Host call required in pure test".to_string(),
+                ))
             }
         }
     }

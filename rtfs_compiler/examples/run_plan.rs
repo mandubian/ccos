@@ -1,41 +1,61 @@
+use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
 use rtfs_compiler::parser;
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
-use rtfs_compiler::runtime::stdlib::StandardLibrary;
-use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::stdlib::StandardLibrary;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::env;
+use std::sync::Arc;
 
 /// Run a generated plan file with all capabilities enabled (Full security context)
-pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_plan_with_full_security_context(
+    plan_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Recursively convert all keyword literals in an expression to string literals
-    fn normalize_keywords_to_strings(expr: &rtfs_compiler::Expression) -> rtfs_compiler::Expression {
+    fn normalize_keywords_to_strings(
+        expr: &rtfs_compiler::Expression,
+    ) -> rtfs_compiler::Expression {
         use rtfs_compiler::Expression::*;
         match expr {
             Literal(rtfs_compiler::ast::Literal::Keyword(k)) => {
                 Literal(rtfs_compiler::ast::Literal::String(k.0.clone()))
+            }
+            FunctionCall { callee, arguments } => FunctionCall {
+                callee: Box::new(normalize_keywords_to_strings(callee)),
+                arguments: arguments
+                    .iter()
+                    .map(|a| normalize_keywords_to_strings(a))
+                    .collect(),
             },
-            FunctionCall { callee, arguments } => {
-                FunctionCall {
-                    callee: Box::new(normalize_keywords_to_strings(callee)),
-                    arguments: arguments.iter().map(|a| normalize_keywords_to_strings(a)).collect(),
-                }
-            },
-            Vector(vec) => Vector(vec.iter().map(|e| normalize_keywords_to_strings(e)).collect()),
-            Map(map) => Map(map.iter().map(|(k, v)| (k.clone(), normalize_keywords_to_strings(v))).collect()),
+            Vector(vec) => Vector(
+                vec.iter()
+                    .map(|e| normalize_keywords_to_strings(e))
+                    .collect(),
+            ),
+            Map(map) => Map(map
+                .iter()
+                .map(|(k, v)| (k.clone(), normalize_keywords_to_strings(v)))
+                .collect()),
             Let(let_expr) => {
                 let mut new_let = let_expr.clone();
-                new_let.bindings = new_let.bindings.iter().map(|b| {
-                    let mut nb = b.clone();
-                    // Only normalize value, not pattern
-                    nb.value = Box::new(normalize_keywords_to_strings(&nb.value));
-                    nb
-                }).collect();
-                new_let.body = new_let.body.iter().map(|b| normalize_keywords_to_strings(b)).collect();
+                new_let.bindings = new_let
+                    .bindings
+                    .iter()
+                    .map(|b| {
+                        let mut nb = b.clone();
+                        // Only normalize value, not pattern
+                        nb.value = Box::new(normalize_keywords_to_strings(&nb.value));
+                        nb
+                    })
+                    .collect();
+                new_let.body = new_let
+                    .body
+                    .iter()
+                    .map(|b| normalize_keywords_to_strings(b))
+                    .collect();
                 Let(new_let)
-            },
+            }
             _ => expr.clone(),
         }
     }
@@ -51,7 +71,9 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
         }
     });
     // Helper to extract plan name and :steps property from plan expression
-    fn extract_plan_name_and_steps(expr: &rtfs_compiler::Expression) -> (Option<String>, Option<&Vec<rtfs_compiler::Expression>>) {
+    fn extract_plan_name_and_steps(
+        expr: &rtfs_compiler::Expression,
+    ) -> (Option<String>, Option<&Vec<rtfs_compiler::Expression>>) {
         use rtfs_compiler::Expression::*;
         let mut plan_name: Option<String> = None;
         let mut steps: Option<&Vec<rtfs_compiler::Expression>> = None;
@@ -68,7 +90,7 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
                             k.0.clone()
                         };
                         plan_name = Some(name);
-                    },
+                    }
                     Literal(rtfs_compiler::ast::Literal::String(s)) => plan_name = Some(s.clone()),
                     _ => {}
                 }
@@ -94,10 +116,18 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
             // Setup evaluator with Full context
             let delegation = Arc::new(StaticDelegationEngine::new(HashMap::new()));
             let stdlib_env = StandardLibrary::create_global_environment();
-            let registry = std::sync::Arc::new(tokio::sync::RwLock::new(rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new()));
-            let capability_marketplace = std::sync::Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry.clone()));
+            let registry = std::sync::Arc::new(tokio::sync::RwLock::new(
+                rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ));
+            let capability_marketplace = std::sync::Arc::new(
+                rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(
+                    registry.clone(),
+                ),
+            );
             let host = std::sync::Arc::new(rtfs_compiler::ccos::host::RuntimeHost::new(
-                Arc::new(std::sync::Mutex::new(rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap())),
+                Arc::new(std::sync::Mutex::new(
+                    rtfs_compiler::ccos::causal_chain::CausalChain::new().unwrap(),
+                )),
                 capability_marketplace,
                 rtfs_compiler::runtime::security::RuntimeContext::full(),
             ));
@@ -113,8 +143,8 @@ pub fn run_plan_with_full_security_context(plan_path: &str) -> Result<(), Box<dy
                 let normalized_step = normalize_keywords_to_strings(step_expr);
                 let result = evaluator.eval_expr(&normalized_step, &mut evaluator.env.clone());
                 match result {
-                    Ok(val) => println!("  ✅ Step {} result: {:?}", i+1, val),
-                    Err(e) => println!("  ❌ Step {} error: {}", i+1, e),
+                    Ok(val) => println!("  ✅ Step {} result: {:?}", i + 1, val),
+                    Err(e) => println!("  ❌ Step {} error: {}", i + 1, e),
                 }
             }
         } else {

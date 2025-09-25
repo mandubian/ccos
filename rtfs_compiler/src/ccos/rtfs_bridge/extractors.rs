@@ -1,70 +1,82 @@
-use crate::ast::{Expression, MapKey, Literal, Keyword};
-use crate::ccos::types::{Intent, Plan, IntentStatus};
-use crate::runtime::values::Value;
 use super::errors::RtfsBridgeError;
+use crate::ast::{Expression, Keyword, Literal, MapKey};
+use crate::ccos::types::{Intent, IntentStatus, Plan};
+use crate::runtime::values::Value;
 use std::collections::HashMap;
 
 /// Extracts a CCOS Intent from an RTFS expression
-/// 
+///
 /// Supports both function call format: `(ccos/intent "name" :goal "..." :constraints {...})`
 /// and map format: `{:type "intent" :name "..." :goal "..."}`
 pub fn extract_intent_from_rtfs(expr: &Expression) -> Result<Intent, RtfsBridgeError> {
     match expr {
-        Expression::FunctionCall { callee, arguments } => extract_intent_from_function_call(callee, arguments),
+        Expression::FunctionCall { callee, arguments } => {
+            extract_intent_from_function_call(callee, arguments)
+        }
         Expression::Map(map) => extract_intent_from_map(map),
         _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!("Expected FunctionCall or Map for Intent, got {:?}", expr)
-        })
+            message: format!("Expected FunctionCall or Map for Intent, got {:?}", expr),
+        }),
     }
 }
 
 /// Extracts a CCOS Plan from an RTFS expression
-/// 
+///
 /// Supports both function call format: `(ccos/plan "name" :body (...))`
 /// and map format: `{:type "plan" :name "..." :body (...)}`
 pub fn extract_plan_from_rtfs(expr: &Expression) -> Result<Plan, RtfsBridgeError> {
     match expr {
-        Expression::FunctionCall { callee, arguments } => extract_plan_from_function_call(callee, arguments),
+        Expression::FunctionCall { callee, arguments } => {
+            extract_plan_from_function_call(callee, arguments)
+        }
         Expression::Map(map) => extract_plan_from_map(map),
         _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!("Expected FunctionCall or Map for Plan, got {:?}", expr)
-        })
+            message: format!("Expected FunctionCall or Map for Plan, got {:?}", expr),
+        }),
     }
 }
 
-fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expression]) -> Result<Intent, RtfsBridgeError> {
+fn extract_intent_from_function_call(
+    callee: &Expression,
+    arguments: &[Expression],
+) -> Result<Intent, RtfsBridgeError> {
     // Check if this is a CCOS intent function call
     let callee_name = if let Expression::Symbol(symbol) = callee {
         &symbol.0
     } else {
         return Err(RtfsBridgeError::InvalidCcosFunctionCall {
-            message: "Expected symbol as function name".to_string()
+            message: "Expected symbol as function name".to_string(),
         });
     };
-    
+
     // Accept both "ccos/intent" and "intent" for flexibility with LLM-generated code
     if callee_name != "ccos/intent" && callee_name != "intent" {
         return Err(RtfsBridgeError::InvalidCcosFunctionCall {
-            message: format!("Expected ccos/intent or intent function call, got {}", callee_name)
+            message: format!(
+                "Expected ccos/intent or intent function call, got {}",
+                callee_name
+            ),
         });
     }
-    
+
     // Extract name from first argument
     let name = if let Some(first_arg) = arguments.first() {
         match first_arg {
             Expression::Literal(Literal::String(s)) => s.clone(),
-            _ => return Err(RtfsBridgeError::InvalidFieldType {
-                field: "name".to_string(),
-                expected: "string literal".to_string(),
-                actual: format!("{:?}", first_arg)
-            })
+            _ => {
+                return Err(RtfsBridgeError::InvalidFieldType {
+                    field: "name".to_string(),
+                    expected: "string literal".to_string(),
+                    actual: format!("{:?}", first_arg),
+                })
+            }
         }
     } else {
         return Err(RtfsBridgeError::MissingRequiredField {
-            field: "name".to_string()
+            field: "name".to_string(),
         });
     };
-    
+
     // Extract other fields from keyword arguments or a single Map arg
     let mut goal = None;
     let mut constraints = HashMap::new();
@@ -82,14 +94,16 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
                 ":constraints" | "constraints" => {
                     if let Expression::Map(constraints_map) = value {
                         for (c_key, c_value) in constraints_map {
-                            constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
+                            constraints
+                                .insert(map_key_to_string(c_key), expression_to_value(c_value));
                         }
                     }
                 }
                 ":preferences" | "preferences" => {
                     if let Expression::Map(prefs_map) = value {
                         for (p_key, p_value) in prefs_map {
-                            preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
+                            preferences
+                                .insert(map_key_to_string(p_key), expression_to_value(p_value));
                         }
                     }
                 }
@@ -122,18 +136,26 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
                             let val = &arguments[i + 1];
                             // insert based on kw
                             match kw.0.as_str() {
-                                "goal" => { goal = Some(expression_to_string(val)); }
+                                "goal" => {
+                                    goal = Some(expression_to_string(val));
+                                }
                                 "constraints" => {
                                     if let Expression::Map(constraints_map) = val {
                                         for (c_key, c_value) in constraints_map {
-                                            constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
+                                            constraints.insert(
+                                                map_key_to_string(c_key),
+                                                expression_to_value(c_value),
+                                            );
                                         }
                                     }
                                 }
                                 "preferences" => {
                                     if let Expression::Map(prefs_map) = val {
                                         for (p_key, p_value) in prefs_map {
-                                            preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
+                                            preferences.insert(
+                                                map_key_to_string(p_key),
+                                                expression_to_value(p_value),
+                                            );
                                         }
                                     }
                                 }
@@ -143,25 +165,35 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
                                 _ => {}
                             }
                             i += 2;
-                        } else { break; }
+                        } else {
+                            break;
+                        }
                     }
                     // Accept bare symbol keys too
                     Expression::Symbol(sym) => {
                         if i + 1 < arguments.len() {
                             let val = &arguments[i + 1];
                             match sym.0.as_str() {
-                                "goal" => { goal = Some(expression_to_string(val)); }
+                                "goal" => {
+                                    goal = Some(expression_to_string(val));
+                                }
                                 "constraints" => {
                                     if let Expression::Map(constraints_map) = val {
                                         for (c_key, c_value) in constraints_map {
-                                            constraints.insert(map_key_to_string(c_key), expression_to_value(c_value));
+                                            constraints.insert(
+                                                map_key_to_string(c_key),
+                                                expression_to_value(c_value),
+                                            );
                                         }
                                     }
                                 }
                                 "preferences" => {
                                     if let Expression::Map(prefs_map) = val {
                                         for (p_key, p_value) in prefs_map {
-                                            preferences.insert(map_key_to_string(p_key), expression_to_value(p_value));
+                                            preferences.insert(
+                                                map_key_to_string(p_key),
+                                                expression_to_value(p_value),
+                                            );
                                         }
                                     }
                                 }
@@ -171,7 +203,9 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
                                 _ => {}
                             }
                             i += 2;
-                        } else { break; }
+                        } else {
+                            break;
+                        }
                     }
                     _ => {
                         // skip unknown shapes
@@ -181,16 +215,16 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
             }
         }
     }
-    
+
     let goal = goal.ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-        field: "goal".to_string()
+        field: "goal".to_string(),
     })?;
-    
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     Ok(Intent {
         intent_id: format!("intent-{}", uuid::Uuid::new_v4()),
         name: Some(name),
@@ -208,53 +242,53 @@ fn extract_intent_from_function_call(callee: &Expression, arguments: &[Expressio
 
 fn extract_intent_from_map(map: &HashMap<MapKey, Expression>) -> Result<Intent, RtfsBridgeError> {
     // Check if this is a CCOS intent map
-    let object_type = get_string_from_map(map, ":type")
-        .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-            field: "type".to_string()
+    let object_type =
+        get_string_from_map(map, ":type").ok_or_else(|| RtfsBridgeError::MissingRequiredField {
+            field: "type".to_string(),
         })?;
-    
+
     if object_type != "intent" {
         return Err(RtfsBridgeError::UnsupportedObjectType {
-            object_type: object_type.clone()
+            object_type: object_type.clone(),
         });
     }
-    
-    let name = get_string_from_map(map, ":name")
-        .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-            field: "name".to_string()
+
+    let name =
+        get_string_from_map(map, ":name").ok_or_else(|| RtfsBridgeError::MissingRequiredField {
+            field: "name".to_string(),
         })?;
-    
-    let goal = get_string_from_map(map, ":goal")
-        .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-            field: "goal".to_string()
+
+    let goal =
+        get_string_from_map(map, ":goal").ok_or_else(|| RtfsBridgeError::MissingRequiredField {
+            field: "goal".to_string(),
         })?;
-    
+
     // Extract other fields...
     let mut constraints = HashMap::new();
     let mut preferences = HashMap::new();
     let mut success_criteria = None;
-    
+
     if let Some(Expression::Map(constraints_map)) = map_get(map, ":constraints") {
         for (key, value) in constraints_map {
             constraints.insert(map_key_to_string(key), expression_to_value(value));
         }
     }
-    
+
     if let Some(Expression::Map(prefs_map)) = map_get(map, ":preferences") {
         for (key, value) in prefs_map {
             preferences.insert(map_key_to_string(key), expression_to_value(value));
         }
     }
-    
+
     if let Some(criteria_expr) = map_get(map, ":success-criteria") {
         success_criteria = Some(Value::from(criteria_expr.clone()));
     }
-    
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     Ok(Intent {
         intent_id: format!("intent-{}", uuid::Uuid::new_v4()),
         name: Some(name),
@@ -270,39 +304,47 @@ fn extract_intent_from_map(map: &HashMap<MapKey, Expression>) -> Result<Intent, 
     })
 }
 
-fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]) -> Result<Plan, RtfsBridgeError> {
+fn extract_plan_from_function_call(
+    callee: &Expression,
+    arguments: &[Expression],
+) -> Result<Plan, RtfsBridgeError> {
     // Check if this is a CCOS plan function call
     let callee_name = if let Expression::Symbol(symbol) = callee {
         &symbol.0
     } else {
         return Err(RtfsBridgeError::InvalidCcosFunctionCall {
-            message: "Expected symbol as function name".to_string()
+            message: "Expected symbol as function name".to_string(),
         });
     };
-    
+
     // Accept both "ccos/plan" and "plan" for flexibility with LLM-generated code
     if callee_name != "ccos/plan" && callee_name != "plan" {
         return Err(RtfsBridgeError::InvalidCcosFunctionCall {
-            message: format!("Expected ccos/plan or plan function call, got {}", callee_name)
+            message: format!(
+                "Expected ccos/plan or plan function call, got {}",
+                callee_name
+            ),
         });
     }
-    
+
     // Extract name from first argument
     let name = if let Some(first_arg) = arguments.first() {
         match first_arg {
             Expression::Literal(Literal::String(s)) => s.clone(),
-            _ => return Err(RtfsBridgeError::InvalidFieldType {
-                field: "name".to_string(),
-                expected: "string literal".to_string(),
-                actual: format!("{:?}", first_arg)
-            })
+            _ => {
+                return Err(RtfsBridgeError::InvalidFieldType {
+                    field: "name".to_string(),
+                    expected: "string literal".to_string(),
+                    actual: format!("{:?}", first_arg),
+                })
+            }
         }
     } else {
         return Err(RtfsBridgeError::MissingRequiredField {
-            field: "name".to_string()
+            field: "name".to_string(),
         });
     };
-    
+
     // Extract body and other fields from keyword arguments
     let mut body = None;
     let mut intent_ids = Vec::new();
@@ -311,7 +353,7 @@ fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]
     let mut policies = HashMap::new();
     let mut capabilities_required = Vec::new();
     let mut annotations = HashMap::new();
-    
+
     for arg in &arguments[1..] {
         if let Expression::Map(map) = arg {
             for (key, value) in map {
@@ -336,7 +378,8 @@ fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]
                     ":policies" | "policies" => {
                         if let Expression::Map(policies_map) = value {
                             for (p_key, p_value) in policies_map {
-                                policies.insert(map_key_to_string(p_key), Value::from(p_value.clone()));
+                                policies
+                                    .insert(map_key_to_string(p_key), Value::from(p_value.clone()));
                             }
                         }
                     }
@@ -350,7 +393,8 @@ fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]
                     ":annotations" | "annotations" => {
                         if let Expression::Map(ann_map) = value {
                             for (a_key, a_value) in ann_map {
-                                annotations.insert(map_key_to_string(a_key), Value::from(a_value.clone()));
+                                annotations
+                                    .insert(map_key_to_string(a_key), Value::from(a_value.clone()));
                             }
                         }
                     }
@@ -361,11 +405,11 @@ fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]
             }
         }
     }
-    
+
     let body = body.ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-        field: "body".to_string()
+        field: "body".to_string(),
     })?;
-    
+
     Ok(Plan {
         plan_id: format!("plan-{}", uuid::Uuid::new_v4()),
         name: Some(name),
@@ -388,27 +432,26 @@ fn extract_plan_from_function_call(callee: &Expression, arguments: &[Expression]
 
 fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, RtfsBridgeError> {
     // Check if this is a CCOS plan map
-    let object_type = get_string_from_map(map, ":type")
-        .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-            field: "type".to_string()
+    let object_type =
+        get_string_from_map(map, ":type").ok_or_else(|| RtfsBridgeError::MissingRequiredField {
+            field: "type".to_string(),
         })?;
-    
+
     if object_type != "plan" {
         return Err(RtfsBridgeError::UnsupportedObjectType {
-            object_type: object_type.clone()
+            object_type: object_type.clone(),
         });
     }
-    
-    let name = get_string_from_map(map, ":name")
-        .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-            field: "name".to_string()
+
+    let name =
+        get_string_from_map(map, ":name").ok_or_else(|| RtfsBridgeError::MissingRequiredField {
+            field: "name".to_string(),
         })?;
-    
-    let body = map_get(map, ":body")
-        .ok_or_else(|| RtfsBridgeError::MissingRequiredField {
-            field: "body".to_string()
-        })?;
-    
+
+    let body = map_get(map, ":body").ok_or_else(|| RtfsBridgeError::MissingRequiredField {
+        field: "body".to_string(),
+    })?;
+
     // Extract other fields...
     let mut intent_ids = Vec::new();
     let mut input_schema = None;
@@ -416,39 +459,39 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
     let mut policies = HashMap::new();
     let mut capabilities_required = Vec::new();
     let mut annotations = HashMap::new();
-    
+
     if let Some(Expression::Vector(ids_vec)) = map_get(map, ":intent-ids") {
         for id_expr in ids_vec {
             intent_ids.push(expression_to_string(id_expr));
         }
     }
-    
+
     if let Some(schema) = map_get(map, ":input-schema") {
         input_schema = Some(Value::from(schema.clone()));
     }
-    
+
     if let Some(schema) = map_get(map, ":output-schema") {
         output_schema = Some(Value::from(schema.clone()));
     }
-    
+
     if let Some(Expression::Map(policies_map)) = map_get(map, ":policies") {
         for (key, value) in policies_map {
             policies.insert(map_key_to_string(key), Value::from(value.clone()));
         }
     }
-    
+
     if let Some(Expression::Vector(caps_vec)) = map_get(map, ":capabilities-required") {
         for cap_expr in caps_vec {
             capabilities_required.push(expression_to_string(cap_expr));
         }
     }
-    
+
     if let Some(Expression::Map(ann_map)) = map_get(map, ":annotations") {
         for (key, value) in ann_map {
             annotations.insert(map_key_to_string(key), Value::from(value.clone()));
         }
     }
-    
+
     Ok(Plan {
         plan_id: format!("plan-{}", uuid::Uuid::new_v4()),
         name: Some(name),
@@ -483,19 +526,22 @@ fn expression_to_string(expr: &Expression) -> String {
         Expression::Symbol(s) => s.0.clone(),
         Expression::FunctionCall { callee, arguments } => {
             let callee_str = expression_to_string(callee);
-            let args_str = arguments.iter()
+            let args_str = arguments
+                .iter()
                 .map(expression_to_string)
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("({} {})", callee_str, args_str)
-        },
+        }
         Expression::Do(do_expr) => {
-            let exprs_str = do_expr.expressions.iter()
+            let exprs_str = do_expr
+                .expressions
+                .iter()
                 .map(expression_to_string)
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("(do {})", exprs_str)
-        },
+        }
         _ => format!("{:?}", expr),
     }
 }
@@ -513,19 +559,22 @@ fn expression_to_rtfs_string(expr: &Expression) -> String {
         Expression::Symbol(s) => s.0.clone(),
         Expression::FunctionCall { callee, arguments } => {
             let callee_str = expression_to_rtfs_string(callee);
-            let args_str = arguments.iter()
+            let args_str = arguments
+                .iter()
                 .map(expression_to_rtfs_string)
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("({} {})", callee_str, args_str)
-        },
+        }
         Expression::Do(do_expr) => {
-            let exprs_str = do_expr.expressions.iter()
+            let exprs_str = do_expr
+                .expressions
+                .iter()
                 .map(expression_to_rtfs_string)
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("(do {})", exprs_str)
-        },
+        }
         _ => format!("{:?}", expr),
     }
 }
@@ -550,10 +599,10 @@ fn map_get<'a>(map: &'a HashMap<MapKey, Expression>, key: &str) -> Option<&'a Ex
     let kstr = key.to_string();
     let trimmed = key.trim_start_matches(':');
     map
-    // Try exact string (with colon), then plain string (no colon), then keyword form
-    .get(&MapKey::String(kstr))
-    .or_else(|| map.get(&MapKey::String(trimmed.to_string())))
-    .or_else(|| map.get(&MapKey::Keyword(Keyword(trimmed.to_string()))))
+        // Try exact string (with colon), then plain string (no colon), then keyword form
+        .get(&MapKey::String(kstr))
+        .or_else(|| map.get(&MapKey::String(trimmed.to_string())))
+        .or_else(|| map.get(&MapKey::Keyword(Keyword(trimmed.to_string()))))
 }
 
 fn expression_to_value(expr: &Expression) -> Value {

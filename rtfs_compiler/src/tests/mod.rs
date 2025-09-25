@@ -8,5 +8,5 @@ pub mod pure;
 pub mod ccos;
 
 // Legacy test utilities (to be phased out)
-pub mod test_utils;
 pub mod test_helpers;
+pub mod test_utils;

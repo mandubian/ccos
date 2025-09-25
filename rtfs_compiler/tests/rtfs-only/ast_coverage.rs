@@ -1,13 +1,13 @@
 // tests/ast_coverage.rs
 //
 // Comprehensive AST Coverage Test Suite
-// 
-// This test file systematically verifies that every rule in rtfs.pest 
+//
+// This test file systematically verifies that every rule in rtfs.pest
 // correctly maps to corresponding AST structures in ast.rs.
 
-use std::collections::HashMap;
 use rtfs_compiler::ast::*;
 use rtfs_compiler::parser::parse_expression;
+use std::collections::HashMap;
 
 // Helper macro for asserting expression parsing to specific AST nodes
 macro_rules! assert_expr_parses_to {
@@ -50,7 +50,7 @@ mod literal_coverage {
         assert_expr_parses_to!("3.14", Expression::Literal(Literal::Float(3.14)));
         assert_expr_parses_to!("-2.5", Expression::Literal(Literal::Float(-2.5)));
         assert_expr_parses_to!("+1.0", Expression::Literal(Literal::Float(1.0)));
-        
+
         // Scientific notation
         assert_expr_parses_to!("1.23e10", Expression::Literal(Literal::Float(1.23e10)));
         assert_expr_parses_to!("4.56E-5", Expression::Literal(Literal::Float(4.56e-5)));
@@ -68,7 +68,7 @@ mod literal_coverage {
             r#""""#,
             Expression::Literal(Literal::String("".to_string()))
         );
-        
+
         // Strings with escape sequences
         assert_expr_parses_to!(
             r#""hello\nworld""#,
@@ -107,7 +107,9 @@ mod literal_coverage {
         );
         assert_expr_parses_to!(
             ":versioned.namespace:v1.0/keyword",
-            Expression::Literal(Literal::Keyword(Keyword("versioned.namespace:v1.0/keyword".to_string())))
+            Expression::Literal(Literal::Keyword(Keyword(
+                "versioned.namespace:v1.0/keyword".to_string()
+            )))
         );
     }
 
@@ -127,7 +129,9 @@ mod literal_coverage {
     fn test_uuid_literals() {
         assert_expr_parses_to!(
             "12345678-1234-5678-9abc-123456789def",
-            Expression::Literal(Literal::Uuid("12345678-1234-5678-9abc-123456789def".to_string()))
+            Expression::Literal(Literal::Uuid(
+                "12345678-1234-5678-9abc-123456789def".to_string()
+            ))
         );
     }
 
@@ -135,11 +139,15 @@ mod literal_coverage {
     fn test_resource_handle_literals() {
         assert_expr_parses_to!(
             "resource://my-resource",
-            Expression::Literal(Literal::ResourceHandle("resource://my-resource".to_string()))
+            Expression::Literal(Literal::ResourceHandle(
+                "resource://my-resource".to_string()
+            ))
         );
         assert_expr_parses_to!(
             "resource://namespace/resource-name",
-            Expression::Literal(Literal::ResourceHandle("resource://namespace/resource-name".to_string()))
+            Expression::Literal(Literal::ResourceHandle(
+                "resource://namespace/resource-name".to_string()
+            ))
         );
     }
 }
@@ -150,10 +158,7 @@ mod symbol_coverage {
 
     #[test]
     fn test_simple_symbols() {
-        assert_expr_parses_to!(
-            "symbol",
-            Expression::Symbol(Symbol("symbol".to_string()))
-        );
+        assert_expr_parses_to!("symbol", Expression::Symbol(Symbol("symbol".to_string())));
         assert_expr_parses_to!(
             "my-symbol",
             Expression::Symbol(Symbol("my-symbol".to_string()))
@@ -166,14 +171,8 @@ mod symbol_coverage {
             "$special",
             Expression::Symbol(Symbol("$special".to_string()))
         );
-        assert_expr_parses_to!(
-            "+",
-            Expression::Symbol(Symbol("+".to_string()))
-        );
-        assert_expr_parses_to!(
-            "<=",
-            Expression::Symbol(Symbol("<=".to_string()))
-        );
+        assert_expr_parses_to!("+", Expression::Symbol(Symbol("+".to_string())));
+        assert_expr_parses_to!("<=", Expression::Symbol(Symbol("<=".to_string())));
     }
 
     #[test]
@@ -209,10 +208,10 @@ mod collection_coverage {
     fn test_empty_collections() {
         // Empty vector
         assert_expr_parses_to!("[]", Expression::Vector(vec![]));
-        
+
         // Empty list
         assert_expr_parses_to!("()", Expression::List(vec![]));
-        
+
         // Empty map
         assert_expr_parses_to!("{}", Expression::Map(HashMap::new()));
     }
@@ -227,7 +226,7 @@ mod collection_coverage {
                 Expression::Literal(Literal::Integer(3)),
             ])
         );
-        
+
         assert_expr_parses_to!(
             "[\"hello\" :world true]",
             Expression::Vector(vec![
@@ -236,7 +235,7 @@ mod collection_coverage {
                 Expression::Literal(Literal::Boolean(true)),
             ])
         );
-        
+
         // Nested vectors
         assert_expr_parses_to!(
             "[[1 2] [3 4]]",
@@ -273,41 +272,38 @@ mod collection_coverage {
         let mut expected_map = HashMap::new();
         expected_map.insert(
             MapKey::Keyword(Keyword("name".to_string())),
-            Expression::Literal(Literal::String("John".to_string()))
+            Expression::Literal(Literal::String("John".to_string())),
         );
         expected_map.insert(
             MapKey::Keyword(Keyword("age".to_string())),
-            Expression::Literal(Literal::Integer(30))
+            Expression::Literal(Literal::Integer(30)),
         );
-        
+
         assert_expr_parses_to!(
             r#"{:name "John" :age 30}"#,
             Expression::Map(expected_map.clone())
         );
-        
+
         // Map with string keys
         let mut string_key_map = HashMap::new();
         string_key_map.insert(
             MapKey::String("key1".to_string()),
-            Expression::Literal(Literal::String("value1".to_string()))
+            Expression::Literal(Literal::String("value1".to_string())),
         );
-        
+
         assert_expr_parses_to!(
             r#"{"key1" "value1"}"#,
             Expression::Map(string_key_map.clone())
         );
-        
+
         // Map with integer keys
         let mut int_key_map = HashMap::new();
         int_key_map.insert(
             MapKey::Integer(1),
-            Expression::Literal(Literal::String("first".to_string()))
+            Expression::Literal(Literal::String("first".to_string())),
         );
-        
-        assert_expr_parses_to!(
-            r#"{1 "first"}"#,
-            Expression::Map(int_key_map.clone())
-        );
+
+        assert_expr_parses_to!(r#"{1 "first"}"#, Expression::Map(int_key_map.clone()));
     }
 }
 
@@ -320,32 +316,28 @@ mod special_form_coverage {
         assert_expr_parses_to!(
             "(let [x 10] x)",
             Expression::Let(LetExpr {
-                bindings: vec![
-                    LetBinding {
-                        pattern: Pattern::Symbol(Symbol("x".to_string())),
-                        type_annotation: None,
-                        value: Box::new(Expression::Literal(Literal::Integer(10))),
-                    }
-                ],
+                bindings: vec![LetBinding {
+                    pattern: Pattern::Symbol(Symbol("x".to_string())),
+                    type_annotation: None,
+                    value: Box::new(Expression::Literal(Literal::Integer(10))),
+                }],
                 body: vec![Expression::Symbol(Symbol("x".to_string()))],
             })
         );
-        
+
         // Let with type annotation now parsed into pattern symbol "x" + explicit type annotation :int
         assert_expr_parses_to!(
             "(let [x:int 42] x)",
             Expression::Let(LetExpr {
-                bindings: vec![
-                    LetBinding {
-                        pattern: Pattern::Symbol(Symbol("x".to_string())),
-                        type_annotation: Some(TypeExpr::Primitive(PrimitiveType::Int)),
-                        value: Box::new(Expression::Literal(Literal::Integer(42))),
-                    }
-                ],
+                bindings: vec![LetBinding {
+                    pattern: Pattern::Symbol(Symbol("x".to_string())),
+                    type_annotation: Some(TypeExpr::Primitive(PrimitiveType::Int)),
+                    value: Box::new(Expression::Literal(Literal::Integer(42))),
+                }],
                 body: vec![Expression::Symbol(Symbol("x".to_string()))],
             })
         );
-        
+
         // Multiple bindings
         assert_expr_parses_to!(
             "(let [x 10 y 20] (+ x y))",
@@ -384,7 +376,7 @@ mod special_form_coverage {
                 else_branch: Some(Box::new(Expression::Literal(Literal::Integer(2)))),
             })
         );
-        
+
         // If without else
         assert_expr_parses_to!(
             "(if false 42)",
@@ -408,7 +400,7 @@ mod special_form_coverage {
                 ],
             })
         );
-        
+
         // Single expression do
         assert_expr_parses_to!(
             "(do 42)",
@@ -440,7 +432,7 @@ mod special_form_coverage {
                 delegation_hint: None,
             })
         );
-        
+
         // Function with parameter and return type annotations
         assert_expr_parses_to!(
             "(fn [x:int]:int (* x 2))",
@@ -461,7 +453,7 @@ mod special_form_coverage {
                 delegation_hint: None,
             })
         );
-        
+
         // Function with variadic parameters
         assert_expr_parses_to!(
             "(fn [x & rest] x)",
@@ -491,7 +483,7 @@ mod special_form_coverage {
                 value: Box::new(Expression::Literal(Literal::Integer(42))),
             }))
         );
-        
+
         // Def with type annotation
         assert_expr_parses_to!(
             "(def x:int 42)",
@@ -543,12 +535,16 @@ mod advanced_form_coverage {
                     MatchClause {
                         pattern: MatchPattern::Literal(Literal::Integer(1)),
                         guard: None,
-                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword("one".to_string())))),
+                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword(
+                            "one".to_string()
+                        )))),
                     },
                     MatchClause {
                         pattern: MatchPattern::Literal(Literal::Integer(2)),
                         guard: None,
-                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword("two".to_string())))),
+                        body: Box::new(Expression::Literal(Literal::Keyword(Keyword(
+                            "two".to_string()
+                        )))),
                     },
                 ],
             })
@@ -570,7 +566,9 @@ mod advanced_form_coverage {
                 catch_clauses: vec![CatchClause {
                     pattern: CatchPattern::Symbol(Symbol("Exception".to_string())),
                     binding: Symbol("e".to_string()),
-                    body: vec![Expression::Literal(Literal::Keyword(Keyword("error".to_string())))],
+                    body: vec![Expression::Literal(Literal::Keyword(Keyword(
+                        "error".to_string()
+                    )))],
                 }],
                 finally_body: None,
             })
@@ -630,7 +628,7 @@ mod advanced_form_coverage {
                 location: None,
             }))
         );
-        
+
         // With log level
         assert_expr_parses_to!(
             "(log-step :debug \"Debug info\" x)",
@@ -650,9 +648,9 @@ mod advanced_form_coverage {
         let mut criteria_map = HashMap::new();
         criteria_map.insert(
             MapKey::Keyword(Keyword("capability".to_string())),
-            Expression::Literal(Literal::String("database".to_string()))
+            Expression::Literal(Literal::String("database".to_string())),
         );
-        
+
         assert_expr_parses_to!(
             r#"(discover-agents {:capability "database"})"#,
             Expression::DiscoverAgents(DiscoverAgentsExpr {
@@ -671,11 +669,8 @@ mod context_and_resource_coverage {
     fn test_task_context_access() {
         // Note: Currently the parser returns task context access as Symbol instead of TaskContextAccess
         // This reflects the current implementation where task context access is "represented as a special symbol"
-        assert_expr_parses_to!(
-                    "@plan-id",
-        Expression::ResourceRef("plan-id".to_string())
-        );
-        
+        assert_expr_parses_to!("@plan-id", Expression::ResourceRef("plan-id".to_string()));
+
         assert_expr_parses_to!(
             "@:context-key",
             Expression::Symbol(Symbol("context-key".to_string()))
@@ -702,14 +697,14 @@ mod pattern_coverage {
         assert_expr_parses_to!(
             "(let [_ 42] :ok)",
             Expression::Let(LetExpr {
-                bindings: vec![
-                    LetBinding {
-                        pattern: Pattern::Wildcard,
-                        type_annotation: None,
-                        value: Box::new(Expression::Literal(Literal::Integer(42))),
-                    }
-                ],
-                body: vec![Expression::Literal(Literal::Keyword(Keyword("ok".to_string())))],
+                bindings: vec![LetBinding {
+                    pattern: Pattern::Wildcard,
+                    type_annotation: None,
+                    value: Box::new(Expression::Literal(Literal::Integer(42))),
+                }],
+                body: vec![Expression::Literal(Literal::Keyword(Keyword(
+                    "ok".to_string()
+                )))],
             })
         );
     }
@@ -719,47 +714,43 @@ mod pattern_coverage {
         assert_expr_parses_to!(
             "(let [[x y] [1 2]] x)",
             Expression::Let(LetExpr {
-                bindings: vec![
-                    LetBinding {
-                        pattern: Pattern::VectorDestructuring {
-                            elements: vec![
-                                Pattern::Symbol(Symbol("x".to_string())),
-                                Pattern::Symbol(Symbol("y".to_string())),
-                            ],
-                            rest: None,
-                            as_symbol: None,
-                        },
-                        type_annotation: None,
-                        value: Box::new(Expression::Vector(vec![
-                            Expression::Literal(Literal::Integer(1)),
-                            Expression::Literal(Literal::Integer(2)),
-                        ])),
-                    }
-                ],
+                bindings: vec![LetBinding {
+                    pattern: Pattern::VectorDestructuring {
+                        elements: vec![
+                            Pattern::Symbol(Symbol("x".to_string())),
+                            Pattern::Symbol(Symbol("y".to_string())),
+                        ],
+                        rest: None,
+                        as_symbol: None,
+                    },
+                    type_annotation: None,
+                    value: Box::new(Expression::Vector(vec![
+                        Expression::Literal(Literal::Integer(1)),
+                        Expression::Literal(Literal::Integer(2)),
+                    ])),
+                }],
                 body: vec![Expression::Symbol(Symbol("x".to_string()))],
             })
         );
-        
+
         // With rest binding
         assert_expr_parses_to!(
             "(let [[x & rest] [1 2 3 4]] x)",
             Expression::Let(LetExpr {
-                bindings: vec![
-                    LetBinding {
-                        pattern: Pattern::VectorDestructuring {
-                            elements: vec![Pattern::Symbol(Symbol("x".to_string()))],
-                            rest: Some(Symbol("rest".to_string())),
-                            as_symbol: None,
-                        },
-                        type_annotation: None,
-                        value: Box::new(Expression::Vector(vec![
-                            Expression::Literal(Literal::Integer(1)),
-                            Expression::Literal(Literal::Integer(2)),
-                            Expression::Literal(Literal::Integer(3)),
-                            Expression::Literal(Literal::Integer(4)),
-                        ])),
-                    }
-                ],
+                bindings: vec![LetBinding {
+                    pattern: Pattern::VectorDestructuring {
+                        elements: vec![Pattern::Symbol(Symbol("x".to_string()))],
+                        rest: Some(Symbol("rest".to_string())),
+                        as_symbol: None,
+                    },
+                    type_annotation: None,
+                    value: Box::new(Expression::Vector(vec![
+                        Expression::Literal(Literal::Integer(1)),
+                        Expression::Literal(Literal::Integer(2)),
+                        Expression::Literal(Literal::Integer(3)),
+                        Expression::Literal(Literal::Integer(4)),
+                    ])),
+                }],
                 body: vec![Expression::Symbol(Symbol("x".to_string()))],
             })
         );
@@ -770,31 +761,29 @@ mod pattern_coverage {
         assert_expr_parses_to!(
             r#"(let [{:keys [name age]} {:name "John" :age 30}] name)"#,
             Expression::Let(LetExpr {
-                bindings: vec![
-                    LetBinding {
-                        pattern: Pattern::MapDestructuring {
-                            entries: vec![MapDestructuringEntry::Keys(vec![
-                                Symbol("name".to_string()),
-                                Symbol("age".to_string()),
-                            ])],
-                            rest: None,
-                            as_symbol: None,
-                        },
-                        type_annotation: None,
-                        value: Box::new({
-                            let mut map = HashMap::new();
-                            map.insert(
-                                MapKey::Keyword(Keyword("name".to_string())),
-                                Expression::Literal(Literal::String("John".to_string()))
-                            );
-                            map.insert(
-                                MapKey::Keyword(Keyword("age".to_string())),
-                                Expression::Literal(Literal::Integer(30))
-                            );
-                            Expression::Map(map)
-                        }),
-                    }
-                ],
+                bindings: vec![LetBinding {
+                    pattern: Pattern::MapDestructuring {
+                        entries: vec![MapDestructuringEntry::Keys(vec![
+                            Symbol("name".to_string()),
+                            Symbol("age".to_string()),
+                        ])],
+                        rest: None,
+                        as_symbol: None,
+                    },
+                    type_annotation: None,
+                    value: Box::new({
+                        let mut map = HashMap::new();
+                        map.insert(
+                            MapKey::Keyword(Keyword("name".to_string())),
+                            Expression::Literal(Literal::String("John".to_string())),
+                        );
+                        map.insert(
+                            MapKey::Keyword(Keyword("age".to_string())),
+                            Expression::Literal(Literal::Integer(30)),
+                        );
+                        Expression::Map(map)
+                    }),
+                }],
                 body: vec![Expression::Symbol(Symbol("name".to_string()))],
             })
         );
@@ -805,9 +794,13 @@ mod pattern_coverage {
 #[test]
 fn test_complex_nested_expression() {
     let complex_input = "(let [data {:name \"Alice\" :age 25}] (if (> (:age data) 0) (do (log-step \"Processing user\") (:name data)) \"error\"))";
-    
+
     // This test ensures the parser can handle complex nested structures
     // We don't check the exact AST structure here, just that it parses successfully
     let result = parse_expression(complex_input);
-    assert!(result.is_ok(), "Complex nested expression should parse successfully: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Complex nested expression should parse successfully: {:?}",
+        result.err()
+    );
 }

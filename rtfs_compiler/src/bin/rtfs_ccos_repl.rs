@@ -7,12 +7,11 @@
 //! - Command-line configuration
 
 use clap::{Arg, Command};
+use rtfs_compiler::runtime::{
+    values::Value, CCOSBuilder, CCOSEnvironment, CapabilityCategory, SecurityLevel,
+};
 use rustyline::Editor;
 use std::path::Path;
-use rtfs_compiler::runtime::{
-    CCOSEnvironment, CCOSBuilder, SecurityLevel, CapabilityCategory,
-    values::Value,
-};
 
 const REPL_HISTORY_FILE: &str = ".rtfs_repl_history";
 
@@ -25,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arg::new("file")
                 .help("RTFS file to execute")
                 .value_name("FILE")
-                .index(1)
+                .index(1),
         )
         .arg(
             Arg::new("security")
@@ -33,51 +32,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .short('s')
                 .help("Security level")
                 .value_parser(["minimal", "standard", "paranoid", "custom"])
-                .default_value("standard")
+                .default_value("standard"),
         )
         .arg(
             Arg::new("enable")
                 .long("enable")
                 .help("Enable capability categories")
-                .value_parser(["system", "fileio", "network", "agent", "ai", "data", "logging"])
+                .value_parser([
+                    "system", "fileio", "network", "agent", "ai", "data", "logging",
+                ])
                 .num_args(1..)
-                .action(clap::ArgAction::Append)
+                .action(clap::ArgAction::Append),
         )
         .arg(
             Arg::new("disable")
                 .long("disable")
                 .help("Disable capability categories")
-                .value_parser(["system", "fileio", "network", "agent", "ai", "data", "logging"])
+                .value_parser([
+                    "system", "fileio", "network", "agent", "ai", "data", "logging",
+                ])
                 .num_args(1..)
-                .action(clap::ArgAction::Append)
+                .action(clap::ArgAction::Append),
         )
         .arg(
             Arg::new("timeout")
                 .long("timeout")
                 .help("Maximum execution time in milliseconds")
                 .value_parser(clap::value_parser!(u64))
-                .default_value("30000")
+                .default_value("30000"),
         )
         .arg(
             Arg::new("verbose")
                 .long("verbose")
                 .short('v')
                 .help("Enable verbose output")
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("allow")
                 .long("allow")
                 .help("Allow specific capabilities")
                 .num_args(1..)
-                .action(clap::ArgAction::Append)
+                .action(clap::ArgAction::Append),
         )
         .arg(
             Arg::new("deny")
                 .long("deny")
                 .help("Deny specific capabilities")
                 .num_args(1..)
-                .action(clap::ArgAction::Append)
+                .action(clap::ArgAction::Append),
         )
         .get_matches();
 
@@ -106,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Handle disabled categories  
+    // Handle disabled categories
     if let Some(disabled) = matches.get_many::<String>("disable") {
         for category in disabled {
             let cat = parse_capability_category(category);
@@ -136,7 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env.config().verbose {
         println!("🚀 RTFS CCOS Environment initialized");
         println!("🔒 Security Level: {:?}", env.config().security_level);
-        println!("📦 Available Capabilities: {}", env.list_capabilities().len());
+        println!(
+            "📦 Available Capabilities: {}",
+            env.list_capabilities().len()
+        );
     }
 
     // If file argument provided, execute file and exit
@@ -190,25 +196,28 @@ fn start_repl(env: CCOSEnvironment) -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     let mut rl = Editor::<(), rustyline::history::DefaultHistory>::new()?;
-    
+
     // Load history if it exists
     if Path::new(REPL_HISTORY_FILE).exists() {
         let _ = rl.load_history(REPL_HISTORY_FILE);
     }
 
     loop {
-        let prompt = format!("rtfs[{}]> ", format!("{:?}", env.config().security_level).to_lowercase());
-        
+        let prompt = format!(
+            "rtfs[{}]> ",
+            format!("{:?}", env.config().security_level).to_lowercase()
+        );
+
         match rl.readline(&prompt) {
             Ok(line) => {
                 let line = line.trim();
-                
+
                 if line.is_empty() {
                     continue;
                 }
-                
+
                 rl.add_history_entry(line)?;
-                
+
                 match line {
                     "quit" | "exit" | ":q" => {
                         println!("👋 Goodbye!");
@@ -241,7 +250,7 @@ fn start_repl(env: CCOSEnvironment) -> Result<(), Box<dyn std::error::Error>> {
                         match env.execute_code(line) {
                             Ok(result) => {
                                 match result {
-                                    Value::Nil => {}, // Don't print nil results
+                                    Value::Nil => {} // Don't print nil results
                                     _ => println!("=> {:?}", result),
                                 }
                             }
@@ -267,7 +276,7 @@ fn start_repl(env: CCOSEnvironment) -> Result<(), Box<dyn std::error::Error>> {
 
     // Save history
     let _ = rl.save_history(REPL_HISTORY_FILE);
-    
+
     Ok(())
 }
 
@@ -312,13 +321,16 @@ fn print_capabilities(env: &CCOSEnvironment) {
     println!();
 }
 
-fn interactive_config(env: &CCOSEnvironment, rl: &mut Editor<(), rustyline::history::DefaultHistory>) -> Result<(), Box<dyn std::error::Error>> {
+fn interactive_config(
+    env: &CCOSEnvironment,
+    rl: &mut Editor<(), rustyline::history::DefaultHistory>,
+) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         print_config_menu();
-        
+
         let input = rl.readline("config> ")?;
         let choice = input.trim();
-        
+
         match choice {
             "1" => security_level_menu(env, rl)?,
             "2" => capabilities_menu(env, rl)?,
@@ -358,13 +370,19 @@ fn print_config_help() {
     println!();
 }
 
-fn security_level_menu(env: &CCOSEnvironment, rl: &mut Editor<(), rustyline::history::DefaultHistory>) -> Result<(), Box<dyn std::error::Error>> {
+fn security_level_menu(
+    env: &CCOSEnvironment,
+    rl: &mut Editor<(), rustyline::history::DefaultHistory>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("╔══════════════════════════════════════════════════════════════════════════╗");
     println!("║                          🔒 Security Level Settings                      ║");
     println!("╠══════════════════════════════════════════════════════════════════════════╣");
     println!("║                                                                          ║");
-    println!("║   Current: {:52} ║", format!("{:?}", env.config().security_level));
+    println!(
+        "║   Current: {:52} ║",
+        format!("{:?}", env.config().security_level)
+    );
     println!("║                                                                          ║");
     println!("║   🟢  1. Minimal   - Basic security, most capabilities allowed          ║");
     println!("║   🟡  2. Standard  - Balanced security and functionality                ║");
@@ -373,7 +391,7 @@ fn security_level_menu(env: &CCOSEnvironment, rl: &mut Editor<(), rustyline::his
     println!("║   🔙  4. Back to config menu                                            ║");
     println!("╚══════════════════════════════════════════════════════════════════════════╝");
     println!();
-    
+
     let input = rl.readline("security> ")?;
     match input.trim() {
         "1" | "minimal" => {
@@ -388,19 +406,22 @@ fn security_level_menu(env: &CCOSEnvironment, rl: &mut Editor<(), rustyline::his
             println!("⚠️  Note: Security level changes require REPL restart to take full effect.");
             println!("✅ Would set security level to: Paranoid");
         }
-        "4" | "back" | "b" => {},
+        "4" | "back" | "b" => {}
         _ => println!("❌ Invalid choice."),
     }
     Ok(())
 }
 
-fn capabilities_menu(env: &CCOSEnvironment, rl: &mut Editor<(), rustyline::history::DefaultHistory>) -> Result<(), Box<dyn std::error::Error>> {
+fn capabilities_menu(
+    env: &CCOSEnvironment,
+    rl: &mut Editor<(), rustyline::history::DefaultHistory>,
+) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         println!();
         println!("╔══════════════════════════════════════════════════════════════════════════╗");
         println!("║                        🛡️  Capability Categories                        ║");
         println!("╠══════════════════════════════════════════════════════════════════════════╣");
-        
+
         let categories = [
             ("System", "🖥️", "Environment, time, process operations"),
             ("FileIO", "📁", "File reading, writing, directory access"),
@@ -410,25 +431,36 @@ fn capabilities_menu(env: &CCOSEnvironment, rl: &mut Editor<(), rustyline::histo
             ("Data", "📊", "JSON parsing, data manipulation"),
             ("Logging", "📝", "Output logging, debugging info"),
         ];
-        
+
         for (i, (name, icon, desc)) in categories.iter().enumerate() {
-            let status = if env.list_capabilities().iter().any(|cap| cap.starts_with(&format!("ccos.{}", name.to_lowercase()))) {
+            let status = if env
+                .list_capabilities()
+                .iter()
+                .any(|cap| cap.starts_with(&format!("ccos.{}", name.to_lowercase())))
+            {
                 "🟢 ON "
             } else {
                 "🔴 OFF"
             };
-            println!("║  {}  {}. {} {:20} - {:25} ║", status, i + 1, icon, name, desc);
+            println!(
+                "║  {}  {}. {} {:20} - {:25} ║",
+                status,
+                i + 1,
+                icon,
+                name,
+                desc
+            );
         }
-        
+
         println!("║                                                                          ║");
         println!("║  📋  8. List all capabilities    🔙  9. Back to config               ║");
         println!("╚══════════════════════════════════════════════════════════════════════════╝");
         println!();
         println!("💡 Type number to toggle category, or 'on'/'off' + category name");
-        
+
         let input = rl.readline("capabilities> ")?;
         let choice = input.trim().to_lowercase();
-        
+
         match choice.as_str() {
             "1" => toggle_category_message("System"),
             "2" => toggle_category_message("FileIO"),
@@ -467,24 +499,39 @@ fn show_current_config(env: &CCOSEnvironment) {
     println!("║                           📊 Current Configuration                       ║");
     println!("╠══════════════════════════════════════════════════════════════════════════╣");
     println!("║                                                                          ║");
-    println!("║  🔒 Security Level: {:50} ║", format!("{:?}", env.config().security_level));
+    println!(
+        "║  🔒 Security Level: {:50} ║",
+        format!("{:?}", env.config().security_level)
+    );
     println!("║  ⏱️  Execution Timeout: {:46} ║", "30000ms");
-    println!("║  🔧 Available Capabilities: {:42} ║", env.list_capabilities().len());
+    println!(
+        "║  🔧 Available Capabilities: {:42} ║",
+        env.list_capabilities().len()
+    );
     println!("║                                                                          ║");
-    
+
     // Group capabilities by category
-    let mut categories: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut categories: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for cap in env.list_capabilities() {
-        if let Some(category_end) = cap[5..].find('.') { // Skip "ccos." and find next dot
-            let category = cap[5..5+category_end].to_string();
-            categories.entry(category).or_insert_with(Vec::new).push(cap);
+        if let Some(category_end) = cap[5..].find('.') {
+            // Skip "ccos." and find next dot
+            let category = cap[5..5 + category_end].to_string();
+            categories
+                .entry(category)
+                .or_insert_with(Vec::new)
+                .push(cap);
         }
     }
-    
+
     for (category, caps) in categories {
-        println!("║  📦 {}: {:58} ║", category, format!("{} capabilities", caps.len()));
+        println!(
+            "║  📦 {}: {:58} ║",
+            category,
+            format!("{} capabilities", caps.len())
+        );
     }
-    
+
     println!("║                                                                          ║");
     println!("╚══════════════════════════════════════════════════════════════════════════╝");
     println!();

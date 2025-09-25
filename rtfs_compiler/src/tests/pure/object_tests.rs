@@ -6,13 +6,10 @@ mod object_tests {
         runtime::{module_runtime::ModuleRegistry, Evaluator, RuntimeResult, Value},
         validator::SchemaValidator,
     };
-    
+
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
-    
-    
-    
 
     #[test]
     fn test_intent_definition() {
@@ -127,10 +124,12 @@ mod object_tests {
         }
 
         // Execute the expression
-    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+        let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
@@ -144,7 +143,7 @@ mod object_tests {
             match result.unwrap() {
                 crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
                     assert_eq!(value, Value::Integer(3));
-                },
+                }
                 crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
                     panic!("Host call required in pure test");
                 }
@@ -156,10 +155,12 @@ mod object_tests {
 
     fn parse_and_evaluate(input: &str) -> RuntimeResult<Value> {
         let parsed = parser::parse(input).expect("Failed to parse");
-    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+        let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let registry = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
@@ -169,12 +170,14 @@ mod object_tests {
         let evaluator = Evaluator::new(module_registry, security_context, host);
         if let Some(last_item) = parsed.last() {
             match last_item {
-                TopLevel::Expression(expr) => {
-                    match evaluator.evaluate(expr)? {
-                        crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
-                        crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                            Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
-                        }
+                TopLevel::Expression(expr) => match evaluator.evaluate(expr)? {
+                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
+                        Ok(value)
+                    }
+                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                        Err(crate::runtime::error::RuntimeError::Generic(
+                            "Host call required in pure test".to_string(),
+                        ))
                     }
                 },
                 _ => Ok(Value::String("object_defined".to_string())),

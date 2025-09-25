@@ -39,13 +39,15 @@ pub(super) fn build_literal(pair: Pair<Rule>) -> Result<Literal, PestParseError>
                 "##Inf" => f64::INFINITY,
                 "##-Inf" => f64::NEG_INFINITY,
                 "##NaN" => f64::NAN,
-                _ => return Err(PestParseError::InvalidLiteral {
-                    message: format!("Invalid special float: {}", inner_pair.as_str()),
-                    span: Some(inner_span.clone()),
-                }),
+                _ => {
+                    return Err(PestParseError::InvalidLiteral {
+                        message: format!("Invalid special float: {}", inner_pair.as_str()),
+                        span: Some(inner_span.clone()),
+                    })
+                }
             };
             Ok(Literal::Float(value))
-        },
+        }
         Rule::string => {
             let raw_str = inner_pair.as_str();
             let content = &raw_str[1..raw_str.len() - 1];
@@ -195,21 +197,27 @@ fn build_map_destructuring_parts(
                     // Handle {name :name} syntax - symbol_key_binding contains symbol ~ map_key
                     let symbol_key_binding_pair = entry_inner.next().unwrap();
                     let mut binding_inner = symbol_key_binding_pair.into_inner();
-                    
-                    let symbol_pair = binding_inner.next().ok_or_else(|| PestParseError::MissingToken {
-                        token: "symbol in symbol_key_binding".to_string(),
-                        span: Some(current_entry_span.clone()),
-                    })?;
-                    
-                    let map_key_pair = binding_inner.next().ok_or_else(|| PestParseError::MissingToken {
-                        token: "map_key in symbol_key_binding".to_string(),
-                        span: Some(current_entry_span.clone()),
-                    })?;
-                    
+
+                    let symbol_pair =
+                        binding_inner
+                            .next()
+                            .ok_or_else(|| PestParseError::MissingToken {
+                                token: "symbol in symbol_key_binding".to_string(),
+                                span: Some(current_entry_span.clone()),
+                            })?;
+
+                    let map_key_pair =
+                        binding_inner
+                            .next()
+                            .ok_or_else(|| PestParseError::MissingToken {
+                                token: "map_key in symbol_key_binding".to_string(),
+                                span: Some(current_entry_span.clone()),
+                            })?;
+
                     let symbol = build_symbol(symbol_pair)?;
                     let map_key = build_map_key(map_key_pair)?;
                     let pattern = Pattern::Symbol(symbol);
-                    
+
                     entries.push(MapDestructuringEntry::KeyBinding {
                         key: map_key,
                         pattern: Box::new(pattern),
@@ -451,8 +459,7 @@ pub(super) fn build_match_pattern(pair: Pair<Rule>) -> Result<MatchPattern, Pest
         | Rule::intersection_type
         | Rule::literal_type
         | Rule::array_type
-        | Rule::primitive_type
-        => {
+        | Rule::primitive_type => {
             let ty = super::types::build_type_expr(pair.clone())?;
             Ok(MatchPattern::Type(ty, None))
         }

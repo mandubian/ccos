@@ -20,9 +20,10 @@ pub(crate) fn unescape(s: &str) -> Result<String, PestParseError> {
                         span: None,
                     });
                 }
-                None => {                    return Err(PestParseError::InvalidEscapeSequence { 
-                        sequence: "Incomplete escape sequence at end of string".to_string(), 
-                        span: None 
+                None => {
+                    return Err(PestParseError::InvalidEscapeSequence {
+                        sequence: "Incomplete escape sequence at end of string".to_string(),
+                        span: None,
                     })
                 } // Changed to PestParseError
             }

@@ -67,7 +67,10 @@ impl Boundary {
     }
 
     pub fn get_usize(&self, key: &str) -> Option<usize> {
-        self.constraints.get(key).and_then(|v| v.as_u64()).map(|v| v as usize)
+        self.constraints
+            .get(key)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
     }
 }
 

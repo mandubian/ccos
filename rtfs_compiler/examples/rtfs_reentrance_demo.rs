@@ -9,45 +9,40 @@
 //! 3. Context preservation across execution boundaries
 //! 4. Step-by-step orchestration with audit trails
 
+use rtfs_compiler::ccos::types::{Intent, Plan, PlanBody, PlanLanguage};
 use rtfs_compiler::ccos::{
-    orchestrator::Orchestrator,
-    intent_graph::IntentGraph,
-    causal_chain::CausalChain,
-    capabilities::registry::CapabilityRegistry,
-    capability_marketplace::CapabilityMarketplace,
+    capabilities::registry::CapabilityRegistry, capability_marketplace::CapabilityMarketplace,
+    causal_chain::CausalChain, intent_graph::IntentGraph, orchestrator::Orchestrator,
     plan_archive::PlanArchive,
 };
-use rtfs_compiler::runtime::{
-    security::RuntimeContext,
-};
-use rtfs_compiler::ccos::types::{Intent, Plan, PlanBody, PlanLanguage};
-use std::sync::{Arc, Mutex};
+use rtfs_compiler::runtime::security::RuntimeContext;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== RTFS Runtime Reentrance Demo ===\n");
-    
+
     // Initialize CCOS components
     let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(capability_registry.clone()));
     let plan_archive = Arc::new(PlanArchive::new());
-    
+
     // Register default capabilities (including ccos.echo)
     rtfs_compiler::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
-    
+
     // Register demo capabilities
     register_demo_capabilities(&capability_marketplace).await?;
-    
+
     let orchestrator = Orchestrator::new(
         causal_chain.clone(),
         intent_graph,
         capability_marketplace.clone(),
         plan_archive,
     );
-    
+
     // Create a multi-step RTFS program that demonstrates reentrance
     let rtfs_program = r#"
     (do
@@ -86,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              :counter final-counter
              :state final-state}))))
     "#;
-    
+
     // Create intent and plan
     let intent = Intent {
         intent_id: "reentrance-demo-intent".to_string(),
@@ -101,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         created_at: 0,
         updated_at: 0,
     };
-    
+
     let plan = Plan {
         plan_id: "reentrance-demo-plan".to_string(),
         name: Some("RTFS Reentrance Demo Plan".to_string()),
@@ -123,39 +118,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
         annotations: Default::default(),
     };
-    
+
     // Set up security context allowing all required capabilities
     let context = RuntimeContext {
         security_level: rtfs_compiler::runtime::security::SecurityLevel::Full,
         allowed_capabilities: plan.capabilities_required.clone().into_iter().collect(),
         ..RuntimeContext::pure()
     };
-    
+
     println!("🚀 Executing multi-step RTFS program with reentrance...");
     println!("📋 Program:\n{}\n", rtfs_program);
-    
+
     // Execute the plan - this demonstrates reentrance
     let execution_result = orchestrator.execute_plan(&plan, &context).await?;
-    
+
     println!("\n✅ Execution completed!");
     println!("📊 Result: {:?}", execution_result.value);
-    
+
     // Show audit trail
     if let Ok(chain) = causal_chain.lock() {
         let actions = chain.get_all_actions();
         println!("\n🧾 Audit Trail ({} actions):", actions.len());
         for (i, action) in actions.iter().enumerate() {
-            println!("  {}. {:?} - {}", i + 1, action.action_type, action.function_name.as_deref().unwrap_or("unknown"));
+            println!(
+                "  {}. {:?} - {}",
+                i + 1,
+                action.action_type,
+                action.function_name.as_deref().unwrap_or("unknown")
+            );
         }
     }
-    
+
     println!("\n✨ Reentrance demo completed successfully!");
     println!("This demonstrates:");
     println!("1. ✅ Multi-step RTFS execution");
     println!("2. ✅ Host capability calls requiring reentrance");
     println!("3. ✅ Context preservation across execution boundaries");
     println!("4. ✅ Step-by-step orchestration with audit trails");
-    
+
     Ok(())
 }
 
@@ -166,9 +166,11 @@ async fn register_demo_capabilities(
     // Note: In a real implementation, we would access the registry through the marketplace
     // For this demo, we'll use a simplified approach and just return Ok
     // The actual capability registration would be done through the marketplace API
-    
+
     // The ccos.echo capability should already be registered by default in the marketplace
     // We're just logging that this is where demo capabilities would be registered
-    println!("  📋 Demo capabilities would be registered here (ccos.echo should already be available)");
+    println!(
+        "  📋 Demo capabilities would be registered here (ccos.echo should already be available)"
+    );
     Ok(())
 }

@@ -10,7 +10,7 @@
 //!   cargo run --example rtfs_capability_demo -- --rtfs-file capabilities.json --tool-name my_tool
 
 use clap::Parser;
-use rtfs_compiler::ccos::environment::{CCOSEnvironment, CCOSConfig, SecurityLevel};
+use rtfs_compiler::ccos::environment::{CCOSConfig, CCOSEnvironment, SecurityLevel};
 use rtfs_compiler::runtime::values::Value;
 use std::collections::HashMap;
 
@@ -43,20 +43,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("====================================================");
 
     // Demonstrate RTFS capability loading concept
-    println!("📁 Demonstrating RTFS capability loading from: {}", args.rtfs_file);
+    println!(
+        "📁 Demonstrating RTFS capability loading from: {}",
+        args.rtfs_file
+    );
 
     // Read the RTFS file to show it exists
     let file_content = std::fs::read_to_string(&args.rtfs_file)
         .map_err(|e| format!("Could not read RTFS file '{}': {}", args.rtfs_file, e))?;
 
-    println!("✅ Successfully read RTFS file ({} bytes)", file_content.len());
+    println!(
+        "✅ Successfully read RTFS file ({} bytes)",
+        file_content.len()
+    );
 
     // Parse as JSON to show structure
     let json_value: serde_json::Value = serde_json::from_str(&file_content)
         .map_err(|e| format!("Could not parse RTFS file as JSON: {}", e))?;
 
     if let Some(capabilities) = json_value.get("capabilities").and_then(|c| c.as_array()) {
-        println!("✅ RTFS module contains {} capabilities", capabilities.len());
+        println!(
+            "✅ RTFS module contains {} capabilities",
+            capabilities.len()
+        );
 
         // Find the requested tool by name
         let mut found_tool = None;
@@ -76,9 +85,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tool_capability = found_tool
             .ok_or_else(|| format!("Tool '{}' not found in RTFS module", args.tool_name))?;
 
-        println!("🎯 Found tool: {} - {}",
-                 tool_capability.get("name").and_then(|n| n.as_str()).unwrap_or("unknown"),
-                 tool_capability.get("description").and_then(|d| d.as_str()).unwrap_or("no description"));
+        println!(
+            "🎯 Found tool: {} - {}",
+            tool_capability
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown"),
+            tool_capability
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("no description")
+        );
 
         // Show the capability structure
         println!("\n📋 Capability Structure:");
@@ -118,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(result) => {
                     println!("\n✅ Plan execution completed successfully!");
                     println!("Result: {:?}", result);
-                },
+                }
                 Err(e) => {
                     println!("\n⚠️  Plan execution completed with expected limitations:");
                     println!("Error: {:?}", e);
@@ -129,7 +146,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-
     } else {
         return Err("RTFS file does not contain a valid capabilities array".into());
     }
@@ -144,7 +160,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn convert_json_to_rtfs_value(json: &serde_json::Value) -> Result<Value, Box<dyn std::error::Error>> {
+fn convert_json_to_rtfs_value(
+    json: &serde_json::Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
     match json {
         serde_json::Value::Null => Ok(Value::Nil),
         serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
@@ -156,7 +174,7 @@ fn convert_json_to_rtfs_value(json: &serde_json::Value) -> Result<Value, Box<dyn
             } else {
                 Err("Unsupported number format".into())
             }
-        },
+        }
         serde_json::Value::String(s) => Ok(Value::String(s.clone())),
         serde_json::Value::Array(arr) => {
             let mut values = Vec::new();
@@ -164,23 +182,21 @@ fn convert_json_to_rtfs_value(json: &serde_json::Value) -> Result<Value, Box<dyn
                 values.push(convert_json_to_rtfs_value(item)?);
             }
             Ok(Value::Vector(values))
-        },
+        }
         serde_json::Value::Object(obj) => {
             let mut map = HashMap::new();
             for (key, value) in obj {
                 let rtfs_value = convert_json_to_rtfs_value(value)?;
-                map.insert(
-                    rtfs_compiler::ast::MapKey::String(key.clone()),
-                    rtfs_value
-                );
+                map.insert(rtfs_compiler::ast::MapKey::String(key.clone()), rtfs_value);
             }
             Ok(Value::Map(map))
-        },
+        }
     }
 }
 
 fn generate_rtfs_plan(capability_id: &str, inputs: &Value) -> String {
-    format!(r#"
+    format!(
+        r#"
 ;; CCOS Plan using persisted RTFS capability
 (plan
   :type :ccos.core:plan,
@@ -203,8 +219,8 @@ fn generate_rtfs_plan(capability_id: &str, inputs: &Value) -> String {
 
       ;; Additional processing could go here
       (println "RTFS capability persistence demo completed")))"#,
-    capability_id = capability_id,
-    inputs = format_rtfs_value(inputs)
+        capability_id = capability_id,
+        inputs = format_rtfs_value(inputs)
     )
 }
 
@@ -218,7 +234,7 @@ fn format_rtfs_value(value: &Value) -> String {
         Value::Vector(v) => {
             let items: Vec<String> = v.iter().map(|item| format_rtfs_value(item)).collect();
             format!("[{}]", items.join(" "))
-        },
+        }
         Value::Map(m) => {
             let mut items = Vec::new();
             for (key, value) in m {
@@ -230,7 +246,7 @@ fn format_rtfs_value(value: &Value) -> String {
                 items.push(format!("{} {}", key_str, format_rtfs_value(value)));
             }
             format!("{{{}}}", items.join(" "))
-        },
+        }
         _ => format!("{:?}", value),
     }
 }

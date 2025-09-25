@@ -3,8 +3,8 @@
 //! This module defines the types used for RTFS to yield control back to CCOS
 //! when it encounters non-pure operations that require delegation decisions.
 
-use crate::runtime::values::Value;
 use crate::runtime::security::RuntimeContext;
+use crate::runtime::values::Value;
 
 /// The outcome of executing an RTFS node.
 /// RTFS execution can either complete locally or require host intervention.
@@ -26,13 +26,13 @@ pub struct HostCall {
     pub capability_id: String,
     /// The arguments to pass to the capability.
     pub args: Vec<Value>,
-    
+
     // MANDATORY - CCOS security & audit (required for Causal Chain)
     /// Security context for the call - MANDATORY for CCOS security model
     pub security_context: RuntimeContext,
     /// Causal context tracking the origin of this call - MANDATORY for audit trail
     pub causal_context: Option<CausalContext>,
-    
+
     // OPTIONAL - Performance, reliability, and compatibility metadata
     pub metadata: Option<CallMetadata>,
 }
@@ -44,7 +44,7 @@ pub struct CallMetadata {
     /// OPTIONAL - Performance & reliability
     pub timeout_ms: Option<u64>,
     pub idempotency_key: Option<String>,
-    
+
     /// OPTIONAL - Legacy compatibility
     pub arg_type_fingerprint: u64,
     pub runtime_context_hash: u64,
@@ -151,7 +151,7 @@ mod tests {
         let causal_context = CausalContext::new()
             .with_plan_id("test-plan".to_string())
             .with_intent_id("test-intent".to_string());
-        
+
         let metadata = CallMetadata::new()
             .with_timeout_ms(5000)
             .with_idempotency_key("test-key".to_string());
@@ -182,7 +182,7 @@ mod tests {
         };
 
         let outcome = ExecutionOutcome::RequiresHost(host_call);
-        
+
         match outcome {
             ExecutionOutcome::RequiresHost(call) => {
                 assert_eq!(call.capability_id, "ccos.test");

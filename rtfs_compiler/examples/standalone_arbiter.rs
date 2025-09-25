@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use rtfs_compiler::ccos::{
     arbiter::{ArbiterConfig, ArbiterFactory},
-    intent_graph::{IntentGraph, IntentGraphConfig},
     causal_chain::CausalChain,
+    intent_graph::{IntentGraph, IntentGraphConfig},
 };
 use rtfs_compiler::runtime::values::Value;
 
@@ -15,11 +15,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("==================================");
 
     // Initialize core components
-    let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await?));
+    let intent_graph = Arc::new(Mutex::new(
+        IntentGraph::new_async(IntentGraphConfig::default()).await?,
+    ));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
 
     // Create arbiter from environment variables or use default
-    let arbiter = if let Ok(arbiter) = ArbiterFactory::create_arbiter_from_env(intent_graph.clone(), None).await {
+    let arbiter = if let Ok(arbiter) =
+        ArbiterFactory::create_arbiter_from_env(intent_graph.clone(), None).await
+    {
         println!("✅ Created arbiter from environment configuration");
         arbiter
     } else {
@@ -57,31 +61,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Record success in causal chain
                 {
-                    let mut chain = causal_chain.lock()
+                    let mut chain = causal_chain
+                        .lock()
                         .map_err(|_| "Failed to lock causal chain")?;
-                    
+
                     let mut metadata = HashMap::new();
                     metadata.insert("test_id".to_string(), Value::Integer(i as i64));
-                    metadata.insert("duration_ms".to_string(), Value::Integer(duration.as_millis() as i64));
-                    metadata.insert("success".to_string(), Value::Boolean(execution_result.success));
-                    
+                    metadata.insert(
+                        "duration_ms".to_string(),
+                        Value::Integer(duration.as_millis() as i64),
+                    );
+                    metadata.insert(
+                        "success".to_string(),
+                        Value::Boolean(execution_result.success),
+                    );
+
                     // Use a dummy intent ID for the example
                     let dummy_intent_id = format!("test_intent_{}", i);
-                    chain.record_delegation_event(&dummy_intent_id, "arbiter.test_success", metadata);
+                    chain.record_delegation_event(
+                        &dummy_intent_id,
+                        "arbiter.test_success",
+                        metadata,
+                    );
                 }
             }
             Err(error) => {
                 println!("❌ Error: {}", error);
-                
+
                 // Record error in causal chain
                 {
-                    let mut chain = causal_chain.lock()
+                    let mut chain = causal_chain
+                        .lock()
                         .map_err(|_| "Failed to lock causal chain")?;
-                    
+
                     let mut metadata = HashMap::new();
                     metadata.insert("test_id".to_string(), Value::Integer(i as i64));
                     metadata.insert("error".to_string(), Value::String(error.to_string()));
-                    
+
                     // Use a dummy intent ID for the example
                     let dummy_intent_id = format!("test_intent_{}", i);
                     chain.record_delegation_event(&dummy_intent_id, "arbiter.test_error", metadata);
@@ -94,9 +110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📊 Causal Chain Summary");
     println!("=======================");
     {
-        let chain = causal_chain.lock()
+        let chain = causal_chain
+            .lock()
             .map_err(|_| "Failed to lock causal chain")?;
-        
+
         // Get the chain length as a simple summary
         println!("Causal chain initialized successfully");
         println!("Total actions: {}", chain.get_all_actions().len());
@@ -106,20 +123,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🧠 Intent Graph Summary");
     println!("=======================");
     {
-        let graph = intent_graph.lock()
+        let graph = intent_graph
+            .lock()
             .map_err(|_| "Failed to lock intent graph")?;
-        
+
         // Get intents from storage
-        let intents = graph.storage.list_intents(rtfs_compiler::ccos::intent_storage::IntentFilter::default()).await?;
+        let intents = graph
+            .storage
+            .list_intents(rtfs_compiler::ccos::intent_storage::IntentFilter::default())
+            .await?;
         println!("Total intents stored: {}", intents.len());
-        
+
         for intent in intents.iter().take(3) {
-            println!("  - {}: {}", 
+            println!(
+                "  - {}: {}",
                 intent.name.as_deref().unwrap_or("unnamed"),
                 intent.goal
             );
         }
-        
+
         if intents.len() > 3 {
             println!("  ... and {} more intents", intents.len() - 3);
         }
@@ -135,28 +157,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_standalone_arbiter_basic() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-        
+
         let arbiter = ArbiterFactory::create_dummy_arbiter(intent_graph);
-        
+
         let result = arbiter.process_natural_language("Hello", None).await;
         assert!(result.is_ok());
-        
+
         let execution_result = result.unwrap();
         assert!(execution_result.success);
     }
 
     #[tokio::test]
     async fn test_standalone_arbiter_sentiment() {
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::new_async(IntentGraphConfig::default()).await.unwrap()));
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .unwrap(),
+        ));
         let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-        
+
         let arbiter = ArbiterFactory::create_dummy_arbiter(intent_graph);
-        
-        let result = arbiter.process_natural_language("Analyze sentiment", None).await;
+
+        let result = arbiter
+            .process_natural_language("Analyze sentiment", None)
+            .await;
         assert!(result.is_ok());
-        
+
         let execution_result = result.unwrap();
         assert!(execution_result.success);
     }

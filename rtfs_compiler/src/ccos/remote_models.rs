@@ -1,14 +1,14 @@
 //! Remote Model Providers
-//! 
+//!
 //! This module provides remote model providers for various LLM services including
 //! OpenAI, Gemini, Claude, and OpenRouter. All providers implement the ModelProvider
 //! trait for seamless integration with the delegation engine.
 
 use crate::ccos::delegation::ModelProvider;
+use futures::executor::block_on;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use futures::executor::block_on;
 
 /// Configuration for remote model providers
 #[derive(Debug, Clone)]
@@ -77,15 +77,16 @@ impl BaseRemoteModel {
     }
 
     fn get_base_url(&self) -> String {
-        self.config.base_url.clone().unwrap_or_else(|| {
-            match self.id {
+        self.config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| match self.id {
                 "openai" => "https://api.openai.com/v1".to_string(),
                 "gemini" => "https://generativelanguage.googleapis.com/v1beta".to_string(),
                 "claude" => "https://api.anthropic.com/v1".to_string(),
                 "openrouter" => "https://openrouter.ai/api/v1".to_string(),
                 _ => "https://api.openai.com/v1".to_string(),
-            }
-        })
+            })
     }
 }
 
@@ -158,9 +159,13 @@ impl ModelProvider for OpenAIModel {
         };
 
         let response = block_on(async {
-            self.base.client
+            self.base
+                .client
                 .post(&format!("{}/chat/completions", self.base.get_base_url()))
-                .header("Authorization", format!("Bearer {}", self.base.config.api_key))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.base.config.api_key),
+                )
                 .header("Content-Type", "application/json")
                 .json(&request)
                 .send()
@@ -252,10 +257,13 @@ impl ModelProvider for GeminiModel {
         };
 
         let response = block_on(async {
-            self.base.client
-                .post(&format!("{}/models/{}/generateContent", 
-                    self.base.get_base_url(), 
-                    self.base.config.model_name))
+            self.base
+                .client
+                .post(&format!(
+                    "{}/models/{}/generateContent",
+                    self.base.get_base_url(),
+                    self.base.config.model_name
+                ))
                 .header("x-goog-api-key", &self.base.config.api_key)
                 .header("Content-Type", "application/json")
                 .json(&request)
@@ -345,7 +353,8 @@ impl ModelProvider for ClaudeModel {
         };
 
         let response = block_on(async {
-            self.base.client
+            self.base
+                .client
                 .post(&format!("{}/messages", self.base.get_base_url()))
                 .header("x-api-key", &self.base.config.api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -421,9 +430,13 @@ impl ModelProvider for OpenRouterModel {
         };
 
         let response = block_on(async {
-            self.base.client
+            self.base
+                .client
                 .post(&format!("{}/chat/completions", self.base.get_base_url()))
-                .header("Authorization", format!("Bearer {}", self.base.config.api_key))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.base.config.api_key),
+                )
                 .header("Content-Type", "application/json")
                 .header("HTTP-Referer", "https://rtfs-compiler.example.com")
                 .header("X-Title", "RTFS Compiler")
@@ -476,7 +489,9 @@ impl RemoteModelFactory {
 
     /// Create a provider from a configuration string
     /// Format: "provider:model_name" (e.g., "openai:gpt-4", "claude:claude-3-opus")
-    pub fn from_config(config: &str) -> Result<Box<dyn ModelProvider>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn from_config(
+        config: &str,
+    ) -> Result<Box<dyn ModelProvider>, Box<dyn std::error::Error + Send + Sync>> {
         let parts: Vec<&str> = config.split(':').collect();
         if parts.len() != 2 {
             return Err("Invalid config format. Expected 'provider:model_name'".into());
@@ -517,4 +532,4 @@ mod tests {
         let result = RemoteModelFactory::from_config("invalid:format");
         assert!(result.is_err());
     }
-} 
+}

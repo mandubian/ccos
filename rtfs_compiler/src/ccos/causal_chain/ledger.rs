@@ -1,5 +1,5 @@
-use crate::runtime::error::RuntimeError;
 use super::super::types::{Action, ActionId, ActionType, CapabilityId, IntentId, PlanId};
+use crate::runtime::error::RuntimeError;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -15,7 +15,8 @@ pub struct ImmutableLedger {
 impl ImmutableLedger {
     /// Get children actions for a given parent_action_id
     pub fn get_children(&self, parent_id: &ActionId) -> Vec<&Action> {
-        self.indices.get_children(parent_id)
+        self.indices
+            .get_children(parent_id)
             .iter()
             .filter_map(|id| self.get_action(id))
             .collect()
@@ -58,9 +59,12 @@ impl ImmutableLedger {
     }
 
     pub fn get_action(&self, action_id: &ActionId) -> Option<&Action> {
-    // If an action is appended multiple times with the same ID (e.g.,
-    // initial log then a later result record), prefer the most recent one.
-    self.actions.iter().rev().find(|a| a.action_id == *action_id)
+        // If an action is appended multiple times with the same ID (e.g.,
+        // initial log then a later result record), prefer the most recent one.
+        self.actions
+            .iter()
+            .rev()
+            .find(|a| a.action_id == *action_id)
     }
 
     pub fn get_actions_by_intent(&self, intent_id: &IntentId) -> Vec<&Action> {
@@ -139,7 +143,9 @@ impl ImmutableLedger {
 
         // Hash arguments
         if let Some(args) = &action.arguments {
-            for arg in args { hasher.update(format!("{:?}", arg).as_bytes()); }
+            for arg in args {
+                hasher.update(format!("{:?}", arg).as_bytes());
+            }
         }
 
         // Hash result
@@ -211,8 +217,10 @@ impl LedgerIndices {
             .or_insert_with(Vec::new)
             .push(action.action_id.clone());
 
-    // Index by capability (stored in function_name for capability calls/results)
-    if action.action_type == ActionType::CapabilityCall || action.action_type == ActionType::CapabilityResult {
+        // Index by capability (stored in function_name for capability calls/results)
+        if action.action_type == ActionType::CapabilityCall
+            || action.action_type == ActionType::CapabilityResult
+        {
             if let Some(function_name) = &action.function_name {
                 self.capability_actions
                     .entry(function_name.clone())

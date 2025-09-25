@@ -1,15 +1,15 @@
 //! Test helper functions for creating standardized runtime components
-//! 
+//!
 //! This module provides reusable functions for initializing capability registry,
 //! marketplace, runtime host, and evaluators with consistent patterns across tests.
 
-use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
-use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
-use rtfs_compiler::runtime::security::RuntimeContext;
-use rtfs_compiler::ccos::host::RuntimeHost;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::ccos::delegation::StaticDelegationEngine;
+use rtfs_compiler::ccos::host::RuntimeHost;
+use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::{Evaluator, ModuleRegistry};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -26,7 +26,7 @@ pub fn create_capability_marketplace() -> CapabilityMarketplace {
 
 /// Creates a new capability marketplace with the provided registry
 pub fn create_capability_marketplace_with_registry(
-    registry: Arc<RwLock<CapabilityRegistry>>
+    registry: Arc<RwLock<CapabilityRegistry>>,
 ) -> CapabilityMarketplace {
     CapabilityMarketplace::new(registry)
 }
@@ -50,7 +50,7 @@ pub fn create_module_registry() -> std::sync::Arc<ModuleRegistry> {
 pub fn create_runtime_host(security_context: RuntimeContext) -> std::sync::Arc<RuntimeHost> {
     let marketplace = Arc::new(create_capability_marketplace());
     let causal_chain = create_causal_chain();
-    
+
     std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         marketplace,
@@ -64,7 +64,7 @@ pub fn create_runtime_host_with_marketplace(
     security_context: RuntimeContext,
 ) -> std::sync::Arc<RuntimeHost> {
     let causal_chain = create_causal_chain();
-    
+
     std::sync::Arc::new(RuntimeHost::new(
         causal_chain,
         marketplace,
@@ -76,12 +76,8 @@ pub fn create_runtime_host_with_marketplace(
 pub fn create_evaluator(security_context: RuntimeContext) -> Evaluator {
     let module_registry = create_module_registry();
     let host = create_runtime_host(security_context.clone());
-    
-    Evaluator::new(
-        module_registry,
-        security_context,
-        host,
-    )
+
+    Evaluator::new(module_registry, security_context, host)
 }
 
 /// Creates a complete evaluator with a shared marketplace and security context
@@ -91,12 +87,8 @@ pub fn create_evaluator_with_marketplace(
 ) -> Evaluator {
     let module_registry = create_module_registry();
     let host = create_runtime_host_with_marketplace(marketplace, security_context.clone());
-    
-    Evaluator::new(
-        module_registry,
-        security_context,
-        host,
-    )
+
+    Evaluator::new(module_registry, security_context, host)
 }
 
 /// Test helper: Creates an evaluator with pure security context (no capabilities allowed)
@@ -117,31 +109,34 @@ pub fn create_full_evaluator() -> Evaluator {
 /// Creates a shared marketplace and evaluator for testing HTTP capabilities
 pub async fn create_http_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
     let marketplace = Arc::new(create_capability_marketplace());
-    
+
     // Register basic HTTP capability with mock endpoint to avoid real network calls
-    marketplace.register_http_capability(
-        "http.get".to_string(),
-        "HTTP GET Request".to_string(),
-        "Performs HTTP GET request".to_string(),
-        "http://localhost:9999/mock".to_string(), // Non-existent local endpoint
-        None,
-    ).await.expect("Failed to register HTTP capability");
-    
+    marketplace
+        .register_http_capability(
+            "http.get".to_string(),
+            "HTTP GET Request".to_string(),
+            "Performs HTTP GET request".to_string(),
+            "http://localhost:9999/mock".to_string(), // Non-existent local endpoint
+            None,
+        )
+        .await
+        .expect("Failed to register HTTP capability");
+
     let security_context = RuntimeContext::controlled(vec!["http.get".to_string()]);
     let evaluator = create_evaluator_with_marketplace(marketplace.clone(), security_context);
-    
+
     (marketplace, evaluator)
 }
 
 /// Creates a shared marketplace and evaluator for testing MCP capabilities
 pub fn create_mcp_test_setup() -> (Arc<CapabilityMarketplace>, Evaluator) {
     let marketplace = Arc::new(create_capability_marketplace());
-    
+
     // MCP capabilities would be registered here
     // TODO: Add MCP capability registration when MCP implementation is complete
-    
+
     let security_context = RuntimeContext::controlled(vec!["mcp.test".to_string()]);
     let evaluator = create_evaluator_with_marketplace(marketplace.clone(), security_context);
-    
+
     (marketplace, evaluator)
 }

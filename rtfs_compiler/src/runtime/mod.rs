@@ -3,42 +3,42 @@
 //! High-level runtime entry points and small helpers. The heavy logic is
 //! implemented in the submodules listed below.
 
-pub mod streaming;
+pub mod capabilities;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
+pub mod execution_outcome;
 pub mod host_interface;
-pub mod pure_host;
 pub mod ir_runtime;
 pub mod microvm;
 pub mod module_runtime;
-pub mod stdlib;
+pub mod param_binding;
+pub mod pure_host;
 pub mod secure_stdlib;
+pub mod security;
+pub mod stdlib;
+pub mod streaming;
 pub mod type_validator;
 pub mod values;
-pub mod security;
-pub mod param_binding;
-pub mod execution_outcome;
-pub mod capabilities;
 
 #[cfg(test)]
 mod stdlib_tests;
 
+pub use capabilities::*;
 pub use environment::{Environment, IrEnvironment};
 pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
+pub use execution_outcome::{CallMetadata, ExecutionOutcome, HostCall};
+#[cfg(feature = "effect-boundary")]
+pub use execution_outcome::{CausalContext, EffectRequest};
 pub use ir_runtime::IrRuntime;
 pub use ir_runtime::IrStrategy;
 pub use module_runtime::{Module, ModuleRegistry};
+pub use security::RuntimeContext;
 pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
-pub use execution_outcome::{ExecutionOutcome, HostCall, CallMetadata};
-#[cfg(feature = "effect-boundary")]
-pub use execution_outcome::{EffectRequest, CausalContext};
-pub use security::RuntimeContext;
-pub use capabilities::*;
 
-use crate::ast::{Expression, Literal, TopLevel, DoExpr};
+use crate::ast::{DoExpr, Expression, Literal, TopLevel};
 use crate::parser;
 // IrStrategy is re-exported below; avoid duplicate local import
 use crate::runtime::pure_host::create_pure_host;
@@ -48,7 +48,11 @@ use std::sync::Arc;
 pub trait RTFSRuntime {
     fn parse_expression(&mut self, source: &str) -> Result<Value, RuntimeError>;
     fn value_to_source(&self, value: &Value) -> Result<String, RuntimeError>;
-    fn evaluate_with_ccos(&mut self, expression: &Value, ccos: &crate::ccos::CCOS) -> Result<Value, RuntimeError>;
+    fn evaluate_with_ccos(
+        &mut self,
+        expression: &Value,
+        ccos: &crate::ccos::CCOS,
+    ) -> Result<Value, RuntimeError>;
 }
 
 pub trait RuntimeStrategy: std::fmt::Debug + 'static {
@@ -103,9 +107,10 @@ impl Runtime {
     pub fn run(&mut self, program: &Expression) -> Result<Value, RuntimeError> {
         match self.strategy.run(program)? {
             ExecutionOutcome::Complete(value) => Ok(value),
-            ExecutionOutcome::RequiresHost(host_call) => {
-                Err(RuntimeError::Generic(format!("Host call required but not supported in this context: {:?}", host_call.capability_id)))
-            }
+            ExecutionOutcome::RequiresHost(host_call) => Err(RuntimeError::Generic(format!(
+                "Host call required but not supported in this context: {:?}",
+                host_call.capability_id
+            ))),
         }
     }
 
@@ -130,9 +135,14 @@ impl Runtime {
         let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
-            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.capability_id))),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
+                "Host call required: {}",
+                hc.capability_id
+            ))),
             #[cfg(feature = "effect-boundary")]
-            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required but not supported in this context".to_string())),
+            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic(
+                "Host call required but not supported in this context".to_string(),
+            )),
             Err(e) => Err(e),
         }
     }
@@ -150,9 +160,14 @@ impl Runtime {
         let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
-            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!("Host call required: {}", hc.capability_id))),
+            Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
+                "Host call required: {}",
+                hc.capability_id
+            ))),
             #[cfg(feature = "effect-boundary")]
-            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic("Host call required but not supported in this context".to_string())),
+            Ok(ExecutionOutcome::RequiresHost(_)) => Err(RuntimeError::Generic(
+                "Host call required but not supported in this context".to_string(),
+            )),
             Err(e) => Err(e),
         }
     }
@@ -223,8 +238,11 @@ impl RTFSRuntime for Runtime {
         Ok(value.to_string())
     }
 
-
-    fn evaluate_with_ccos(&mut self, expression: &Value, _ccos: &crate::ccos::CCOS) -> Result<Value, RuntimeError> {
+    fn evaluate_with_ccos(
+        &mut self,
+        expression: &Value,
+        _ccos: &crate::ccos::CCOS,
+    ) -> Result<Value, RuntimeError> {
         // Temporary implementation: run using the current strategy and host already bound
         let expr = Expression::try_from(expression.clone())?;
         self.run(&expr)

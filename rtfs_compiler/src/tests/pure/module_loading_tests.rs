@@ -1,26 +1,26 @@
 #[cfg(test)]
 mod tests {
-    use crate::runtime::module_runtime::ModuleRegistry;
     use crate::runtime::ir_runtime::IrRuntime;
-    
+    use crate::runtime::module_runtime::ModuleRegistry;
+
     use crate::ccos::capabilities::registry::CapabilityRegistry;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
     use crate::ccos::host::RuntimeHost;
     use std::path::PathBuf;
-    
-    
 
     #[test]
     fn test_file_based_module_loading() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = ModuleRegistry::new();
-        
+
         // Add our test modules directory to the search path
         let test_modules_path = PathBuf::from("test_modules");
         registry.add_module_path(test_modules_path);
-        
+
         let registry_cap = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry_cap));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
@@ -28,13 +28,21 @@ mod tests {
             security_context.clone(),
         ));
         let mut ir_runtime = IrRuntime::new(host, security_context);
-        
+
         // Test loading math.utils module
         let result = registry.load_module("math.utils", &mut ir_runtime);
         match result {
             Ok(module) => {
                 println!("✅ Successfully loaded module: {}", module.metadata.name);
-                    println!("   Exports: {:?}", module.exports.read().map_err(|e| format!("RwLock poisoned: {}", e))?.keys().collect::<Vec<_>>());
+                println!(
+                    "   Exports: {:?}",
+                    module
+                        .exports
+                        .read()
+                        .map_err(|e| format!("RwLock poisoned: {}", e))?
+                        .keys()
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(module.metadata.name, "math.utils");
             }
             Err(e) => {
@@ -42,13 +50,21 @@ mod tests {
                 // This might fail due to parser limitations, which is expected
             }
         }
-        
+
         // Test loading string.helpers module
         let result = registry.load_module("string.helpers", &mut ir_runtime);
         match result {
             Ok(module) => {
                 println!("✅ Successfully loaded module: {}", module.metadata.name);
-                println!("   Exports: {:?}", module.exports.read().map_err(|e| format!("RwLock poisoned: {}", e))?.keys().collect::<Vec<_>>());
+                println!(
+                    "   Exports: {:?}",
+                    module
+                        .exports
+                        .read()
+                        .map_err(|e| format!("RwLock poisoned: {}", e))?
+                        .keys()
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(module.metadata.name, "string.helpers");
             }
             Err(e) => {
@@ -56,12 +72,15 @@ mod tests {
                 // This might fail due to parser limitations, which is expected
             }
         }
-        
+
         // Test module with dependencies
         let result = registry.load_module("app.calculator", &mut ir_runtime);
         match result {
             Ok(module) => {
-                println!("✅ Successfully loaded module with dependencies: {}", module.metadata.name);
+                println!(
+                    "✅ Successfully loaded module with dependencies: {}",
+                    module.metadata.name
+                );
                 println!("   Dependencies: {:?}", module.dependencies);
                 assert_eq!(module.metadata.name, "app.calculator");
             }
@@ -70,27 +89,29 @@ mod tests {
                 // This might fail due to parser limitations, which is expected
             }
         }
-        
+
         // Test that we can list loaded modules
         let loaded_modules = registry.loaded_modules();
-    println!("📋 Loaded modules: {:?}", loaded_modules);
-    Ok(())
+        println!("📋 Loaded modules: {:?}", loaded_modules);
+        Ok(())
     }
 
     #[test]
     fn test_module_path_resolution() {
         let _registry = ModuleRegistry::new();
-        
+
         // Test that resolve_module_path works correctly
         // Note: This tests the internal logic, not actual file existence
         println!("🧪 Testing module path resolution logic...");
-        
+
         // The actual path resolution is internal, so we test indirectly
         // by trying to load a non-existent module and checking the error message
         let mut test_registry = ModuleRegistry::new();
         let registry_cap = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry_cap));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
@@ -98,10 +119,10 @@ mod tests {
             security_context.clone(),
         ));
         let mut ir_runtime = IrRuntime::new(host, security_context);
-        
+
         let result = test_registry.load_module("non.existent.module", &mut ir_runtime);
         assert!(result.is_err());
-        
+
         if let Err(e) = result {
             let error_msg = format!("{:?}", e);
             println!("📝 Error message for non-existent module: {}", error_msg);
@@ -115,7 +136,9 @@ mod tests {
         let mut registry = ModuleRegistry::new();
         let registry_cap = std::sync::Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
         let capability_marketplace = std::sync::Arc::new(CapabilityMarketplace::new(registry_cap));
-        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(crate::ccos::causal_chain::CausalChain::new().unwrap()));
+        let causal_chain = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::causal_chain::CausalChain::new().unwrap(),
+        ));
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = std::sync::Arc::new(RuntimeHost::new(
             causal_chain,
@@ -123,14 +146,14 @@ mod tests {
             security_context.clone(),
         ));
         let mut ir_runtime = IrRuntime::new(host, security_context);
-        
+
         // Since loading_stack is private, we can't directly test circular dependency detection.
         // Instead, we test that loading a non-existent module fails appropriately.
         // In a real scenario, circular dependencies would be detected during actual module loading.
         println!("🧪 Testing error handling for module loading failures...");
-        
+
         let result = registry.load_module("non.existent.module", &mut ir_runtime);
-        
+
         assert!(result.is_err());
         if let Err(e) = result {
             let error_msg = format!("{:?}", e);
@@ -138,6 +161,4 @@ mod tests {
             assert!(error_msg.contains("Module file not found") || error_msg.contains("not found"));
         }
     }
-
-
 }

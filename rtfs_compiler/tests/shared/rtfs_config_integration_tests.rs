@@ -1,5 +1,5 @@
 //! RTFS Configuration Integration Tests
-//! 
+//!
 //! This module tests the integration between RTFS parsing and agent configuration,
 //! specifically validating the (agent.config ...) form parsing and conversion.
 
@@ -19,11 +19,11 @@ fn test_rtfs_agent_config_parsing() -> RuntimeResult<()> {
       :agent-id "agent.test"
       :profile :microvm)
     "#;
-    
+
     let expr = parse_expression(config_content.trim())
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let config = AgentConfigParser::extract_agent_config_from_expression(&expr)?;
-    
+
     assert_eq!(config.version, "0.1");
     assert_eq!(config.agent_id, "agent.test");
     assert_eq!(config.profile, "microvm");
@@ -62,26 +62,29 @@ fn test_rtfs_agent_config_parsing() -> RuntimeResult<()> {
          :attestation {:enabled true
                       :expect-rootfs-hash "sha256:abc123"}})
     "#;
-    
+
     let expr = parse_expression(complex_config.trim())
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let config = AgentConfigParser::extract_agent_config_from_expression(&expr)?;
-    
+
     assert_eq!(config.version, "1.0");
     assert_eq!(config.agent_id, "agent.complex");
     assert_eq!(config.profile, "microvm");
     assert_eq!(config.features, vec!["network", "telemetry", "attestation"]);
-    
+
     // Check orchestrator config
     assert_eq!(config.orchestrator.isolation.mode, "microvm");
     assert_eq!(config.orchestrator.isolation.fs.ephemeral, true);
-    
+
     // Check network config
     assert_eq!(config.network.enabled, true);
     assert_eq!(config.network.egress.via, "proxy");
-    assert_eq!(config.network.egress.allow_domains, vec!["example.com", "api.github.com"]);
+    assert_eq!(
+        config.network.egress.allow_domains,
+        vec!["example.com", "api.github.com"]
+    );
     assert_eq!(config.network.egress.mtls, true);
-    
+
     // Check microvm config
     let microvm = config.microvm.unwrap();
     assert_eq!(microvm.kernel.image, "kernels/vmlinuz-min");
@@ -106,15 +109,15 @@ fn test_rtfs_agent_config_parsing() -> RuntimeResult<()> {
       :agent-id "agent.minimal"
       :profile :minimal)
     "#;
-    
+
     let expr = parse_expression(minimal_config.trim())
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let config = AgentConfigParser::extract_agent_config_from_expression(&expr)?;
-    
+
     assert_eq!(config.version, "0.1");
     assert_eq!(config.agent_id, "agent.minimal");
     assert_eq!(config.profile, "minimal");
-    
+
     // Should have defaults for other fields
     assert_eq!(config.orchestrator.isolation.mode, "wasm");
     assert_eq!(config.network.enabled, false);
@@ -124,7 +127,7 @@ fn test_rtfs_agent_config_parsing() -> RuntimeResult<()> {
     // Test 4: Agent config with different profile types
     println!("\n4. Testing different profile types:");
     let profiles = vec!["minimal", "microvm", "wasm", "process"];
-    
+
     for profile in profiles {
         let profile_config = format!(
             r#"
@@ -135,11 +138,11 @@ fn test_rtfs_agent_config_parsing() -> RuntimeResult<()> {
             "#,
             profile, profile
         );
-        
+
         let expr = parse_expression(profile_config.trim())
             .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
         let config = AgentConfigParser::extract_agent_config_from_expression(&expr)?;
-        
+
         assert_eq!(config.profile, profile);
         println!("  ✅ Profile '{}' parsed successfully", profile);
     }
@@ -160,11 +163,11 @@ fn test_rtfs_config_error_handling() -> RuntimeResult<()> {
       :version "0.1"
       :agent-id "agent.test")
     "#;
-    
+
     let expr = parse_expression(invalid_config.trim())
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let result = AgentConfigParser::extract_agent_config_from_expression(&expr);
-    
+
     match result {
         Ok(_) => panic!("❌ Should have failed for invalid config form"),
         Err(e) => {
@@ -179,11 +182,11 @@ fn test_rtfs_config_error_handling() -> RuntimeResult<()> {
     (agent.config
       :version "0.1")
     "#;
-    
+
     let expr = parse_expression(incomplete_config.trim())
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let result = AgentConfigParser::extract_agent_config_from_expression(&expr);
-    
+
     match result {
         Ok(config) => {
             // Should use defaults for missing fields
@@ -191,7 +194,7 @@ fn test_rtfs_config_error_handling() -> RuntimeResult<()> {
             assert_eq!(config.agent_id, "agent.default");
             assert_eq!(config.profile, "minimal");
             println!("  ✅ Used defaults for missing fields");
-        },
+        }
         Err(e) => {
             println!("  ❌ Unexpected error: {}", e);
             return Err(e);
@@ -201,11 +204,11 @@ fn test_rtfs_config_error_handling() -> RuntimeResult<()> {
     // Test 3: Invalid expression type
     println!("\n3. Testing invalid expression type:");
     let invalid_expr = r#"42"#; // Just a number, not a function call
-    
+
     let expr = parse_expression(invalid_expr)
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let result = AgentConfigParser::extract_agent_config_from_expression(&expr);
-    
+
     match result {
         Ok(_) => panic!("❌ Should have failed for invalid expression type"),
         Err(e) => {
@@ -245,16 +248,16 @@ fn test_rtfs_config_integration_with_microvm() -> RuntimeResult<()> {
          :attestation {:enabled true
                       :expect-rootfs-hash "sha256:abc123"}})
     "#;
-    
+
     let expr = parse_expression(microvm_config.trim())
         .map_err(|e| RuntimeError::Generic(format!("Parse error: {:?}", e)))?;
     let config = AgentConfigParser::extract_agent_config_from_expression(&expr)?;
-    
+
     // Validate MicroVM-specific fields
     assert_eq!(config.profile, "microvm");
     assert!(config.features.contains(&"network".to_string()));
     assert!(config.features.contains(&"attestation".to_string()));
-    
+
     let microvm = config.microvm.unwrap();
     assert_eq!(microvm.kernel.image, "kernels/vmlinuz-min");
     assert_eq!(microvm.kernel.cmdline, "console=ttyS0");

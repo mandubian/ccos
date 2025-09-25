@@ -4,12 +4,14 @@
 //! allowing the Arbiter to work with various LLM services while maintaining
 //! a consistent interface.
 
-use std::collections::HashMap;
+use crate::ccos::types::{
+    GenerationContext, IntentStatus, Plan, PlanBody, PlanLanguage, StorableIntent, TriggerSource,
+};
+use crate::parser;
+use crate::runtime::error::RuntimeError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use crate::runtime::error::RuntimeError;
-use crate::ccos::types::{Plan, PlanBody, PlanLanguage, StorableIntent, IntentStatus, TriggerSource, GenerationContext};
-use crate::parser; // for validating reduced-grammar RTFS plans
+use std::collections::HashMap; // for validating reduced-grammar RTFS plans
 
 /// Result of plan validation by an LLM provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,26 +53,20 @@ pub trait LlmProvider: Send + Sync {
         prompt: &str,
         context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError>;
-    
+
     /// Generate a Plan from an Intent
     async fn generate_plan(
         &self,
         intent: &StorableIntent,
         context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError>;
-    
+
     /// Validate a generated Plan (using string representation to avoid Send/Sync issues)
-    async fn validate_plan(
-        &self,
-        plan_content: &str,
-    ) -> Result<ValidationResult, RuntimeError>;
-    
+    async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError>;
+
     /// Generate text from a prompt (generic text generation)
-    async fn generate_text(
-        &self,
-        prompt: &str,
-    ) -> Result<String, RuntimeError>;
-    
+    async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError>;
+
     /// Get provider information
     fn get_info(&self) -> LlmProviderInfo;
 }
@@ -93,23 +89,30 @@ pub struct OpenAILlmProvider {
 impl OpenAILlmProvider {
     pub fn new(config: LlmProviderConfig) -> Result<Self, RuntimeError> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(config.timeout_seconds.unwrap_or(30)))
+            .timeout(std::time::Duration::from_secs(
+                config.timeout_seconds.unwrap_or(30),
+            ))
             .build()
             .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         Ok(Self { config, client })
     }
-    
+
     /// Extracts the first top-level (do ...) s-expression from a text blob.
     fn extract_do_block(text: &str) -> Option<String> {
         let start = text.find("(do");
-        let start = match start { Some(s) => s, None => return None };
+        let start = match start {
+            Some(s) => s,
+            None => return None,
+        };
         let mut depth = 0usize;
         for (idx, ch) in text[start..].char_indices() {
             match ch {
                 '(' => depth += 1,
                 ')' => {
-                    if depth == 0 { return None; }
+                    if depth == 0 {
+                        return None;
+                    }
                     depth -= 1;
                     if depth == 0 {
                         let end = start + idx + 1;
@@ -125,13 +128,18 @@ impl OpenAILlmProvider {
     /// Extracts the first top-level (plan ...) s-expression from a text blob.
     fn extract_plan_block(text: &str) -> Option<String> {
         let start = text.find("(plan");
-        let start = match start { Some(s) => s, None => return None };
+        let start = match start {
+            Some(s) => s,
+            None => return None,
+        };
         let mut depth = 0usize;
         for (idx, ch) in text[start..].char_indices() {
             match ch {
                 '(' => depth += 1,
                 ')' => {
-                    if depth == 0 { return None; }
+                    if depth == 0 {
+                        return None;
+                    }
                     depth -= 1;
                     if depth == 0 {
                         let end = start + idx + 1;
@@ -192,7 +200,9 @@ impl OpenAILlmProvider {
             match ch {
                 '(' => depth += 1,
                 ')' => {
-                    if depth == 0 { return None; }
+                    if depth == 0 {
+                        return None;
+                    }
                     depth -= 1;
                     if depth == 0 {
                         let end = start + idx + 1;
@@ -206,20 +216,26 @@ impl OpenAILlmProvider {
     }
 
     async fn make_request(&self, messages: Vec<OpenAIMessage>) -> Result<String, RuntimeError> {
-        let api_key = self.config.api_key.as_ref()
-            .ok_or_else(|| RuntimeError::Generic("API key required for OpenAI provider".to_string()))?;
-        
-        let base_url = self.config.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
+        let api_key = self.config.api_key.as_ref().ok_or_else(|| {
+            RuntimeError::Generic("API key required for OpenAI provider".to_string())
+        })?;
+
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1");
         let url = format!("{}/chat/completions", base_url);
-        
+
         let request_body = OpenAIRequest {
             model: self.config.model.clone(),
             messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
         };
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
@@ -227,24 +243,32 @@ impl OpenAILlmProvider {
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(RuntimeError::Generic(format!("API request failed: {}", error_text)));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(RuntimeError::Generic(format!(
+                "API request failed: {}",
+                error_text
+            )));
         }
-        
-        let response_body: OpenAIResponse = response.json().await
+
+        let response_body: OpenAIResponse = response
+            .json()
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse response: {}", e)))?;
-        
+
         Ok(response_body.choices[0].message.content.clone())
     }
-    
+
     fn parse_intent_from_json(&self, json_str: &str) -> Result<StorableIntent, RuntimeError> {
         // Try to extract JSON from the response (it might be wrapped in markdown)
         let json_start = json_str.find('{').unwrap_or(0);
         let json_end = json_str.rfind('}').map(|i| i + 1).unwrap_or(json_str.len());
         let json_content = &json_str[json_start..json_end];
-        
+
         #[derive(Deserialize)]
         struct IntentJson {
             name: Option<String>,
@@ -253,12 +277,15 @@ impl OpenAILlmProvider {
             preferences: Option<HashMap<String, String>>,
             success_criteria: Option<String>,
         }
-        
+
         let intent_json: IntentJson = serde_json::from_str(json_content)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse intent JSON: {}", e)))?;
-        
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         Ok(StorableIntent {
             intent_id: format!("openai_intent_{}", uuid::Uuid::new_v4()),
             name: intent_json.name,
@@ -284,24 +311,24 @@ impl OpenAILlmProvider {
             metadata: HashMap::new(),
         })
     }
-    
+
     fn parse_plan_from_json(&self, json_str: &str, intent_id: &str) -> Result<Plan, RuntimeError> {
         // Try to extract JSON from the response
         let json_start = json_str.find('{').unwrap_or(0);
         let json_end = json_str.rfind('}').map(|i| i + 1).unwrap_or(json_str.len());
         let json_content = &json_str[json_start..json_end];
-        
+
         #[derive(Deserialize)]
         struct PlanJson {
             name: Option<String>,
             steps: Vec<String>,
         }
-        
+
         let plan_json: PlanJson = serde_json::from_str(json_content)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse plan JSON: {}", e)))?;
-        
+
         let rtfs_body = format!("(do\n  {}\n)", plan_json.steps.join("\n  "));
-        
+
         Ok(Plan {
             plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
             name: plan_json.name,
@@ -309,7 +336,10 @@ impl OpenAILlmProvider {
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_body),
             status: crate::ccos::types::PlanStatus::Draft,
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             metadata: HashMap::new(),
             input_schema: None,
             output_schema: None,
@@ -322,11 +352,11 @@ impl OpenAILlmProvider {
 
 #[cfg(test)]
 mod extract_tests {
-        use super::*;
+    use super::*;
 
-        #[test]
-        fn test_extract_do_block_simple() {
-                let text = r#"
+    #[test]
+    fn test_extract_do_block_simple() {
+        let text = r#"
 Some header text
 (do
     (step \"A\" (call :ccos.echo {:message \"hi\"}))
@@ -334,15 +364,15 @@ Some header text
 )
 Trailing
 "#;
-                let do_block = OpenAILlmProvider::extract_do_block(text).expect("should find do block");
-                assert!(do_block.starts_with("(do"));
-                assert!(do_block.contains(":ccos.echo"));
-                assert!(do_block.ends_with(")"));
-        }
+        let do_block = OpenAILlmProvider::extract_do_block(text).expect("should find do block");
+        assert!(do_block.starts_with("(do"));
+        assert!(do_block.contains(":ccos.echo"));
+        assert!(do_block.ends_with(")"));
+    }
 
-        #[test]
-        fn test_extract_plan_block_and_name_and_body() {
-                let text = r#"
+    #[test]
+    fn test_extract_plan_block_and_name_and_body() {
+        let text = r#"
 Intro
 (plan
     :name "Sample Plan"
@@ -355,14 +385,16 @@ Intro
 Footer
 "#;
 
-                let plan_block = OpenAILlmProvider::extract_plan_block(text).expect("should find plan block");
-                assert!(plan_block.starts_with("(plan"));
-                let name = OpenAILlmProvider::extract_quoted_value_after_key(&plan_block, ":name")
-                        .expect("should extract name");
-                assert_eq!(name, "Sample Plan");
-                let do_block = OpenAILlmProvider::extract_do_block(&plan_block).expect("should find nested do block");
-                assert!(do_block.contains(":ccos.math.add 2 3"));
-        }
+        let plan_block =
+            OpenAILlmProvider::extract_plan_block(text).expect("should find plan block");
+        assert!(plan_block.starts_with("(plan"));
+        let name = OpenAILlmProvider::extract_quoted_value_after_key(&plan_block, ":name")
+            .expect("should extract name");
+        assert_eq!(name, "Sample Plan");
+        let do_block =
+            OpenAILlmProvider::extract_do_block(&plan_block).expect("should find nested do block");
+        assert!(do_block.contains(":ccos.math.add 2 3"));
+    }
 
     #[test]
     fn test_extract_plan_block_with_fences_and_prose() {
@@ -382,9 +414,11 @@ Here is your plan. I've ensured it follows the schema:
 Some trailing commentary that should be ignored.
 "#;
 
-        let plan_block = OpenAILlmProvider::extract_plan_block(text).expect("should find plan inside fences");
+        let plan_block =
+            OpenAILlmProvider::extract_plan_block(text).expect("should find plan inside fences");
         assert!(plan_block.starts_with("(plan"));
-        let do_block = OpenAILlmProvider::extract_do_block(&plan_block).expect("nested do should be found");
+        let do_block =
+            OpenAILlmProvider::extract_do_block(&plan_block).expect("nested do should be found");
         assert!(do_block.contains(":ccos.echo"));
     }
 
@@ -401,7 +435,8 @@ Model: Here's the body you requested:
 ```
 "#;
 
-        let do_block = OpenAILlmProvider::extract_do_block(text).expect("should find do inside fences");
+        let do_block =
+            OpenAILlmProvider::extract_do_block(text).expect("should find do inside fences");
         assert!(do_block.starts_with("(do"));
         assert!(parser::parse(&do_block).is_ok());
     }
@@ -505,10 +540,14 @@ Only respond with valid JSON."#;
                 content: prompt.to_string(),
             },
         ];
-        
+
         let response = self.make_request(messages).await?;
-        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS").map(|v| v == "1").unwrap_or(false)
-            || std::env::var("CCOS_DEBUG").map(|v| v == "1").unwrap_or(false);
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
         if show_prompts {
             println!(
                 "\n=== LLM Raw Response (Plan Generation) ===\n{}\n=== END RESPONSE ===\n",
@@ -517,17 +556,19 @@ Only respond with valid JSON."#;
         }
         self.parse_intent_from_json(&response)
     }
-    
+
     async fn generate_plan(
         &self,
         intent: &StorableIntent,
         _context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError> {
-    // Choose prompt mode: full-plan or reduced (do ...) body only
-    let full_plan_mode = std::env::var("RTFS_FULL_PLAN").map(|v| v == "1").unwrap_or(false);
+        // Choose prompt mode: full-plan or reduced (do ...) body only
+        let full_plan_mode = std::env::var("RTFS_FULL_PLAN")
+            .map(|v| v == "1")
+            .unwrap_or(false);
 
-    // Reduced RTFS grammar prompt (default): require direct (do ...) body with (step ...) and (call :cap ...)
-    let reduced_system_message = r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
+        // Reduced RTFS grammar prompt (default): require direct (do ...) body with (step ...) and (call :cap ...)
+        let reduced_system_message = r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
 
 Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences.
 
@@ -554,10 +595,10 @@ Constraints:
 - Keep it multi-step if helpful. Ensure the s-expression parses.
 "#;
 
-    // Full plan prompt (opt-in): emit a (plan ...) wrapper without sensitive fields.
-    // The orchestrator will ignore/overwrite: plan_id, intent_ids, status, policies, capabilities_required, timestamps.
-    // Required: :body with a (do ...) form. Optional: :name (string), :language rtfs20, :annotations simple map.
-    let full_plan_system_message = r#"You translate an RTFS intent into a concrete RTFS plan using a constrained schema.
+        // Full plan prompt (opt-in): emit a (plan ...) wrapper without sensitive fields.
+        // The orchestrator will ignore/overwrite: plan_id, intent_ids, status, policies, capabilities_required, timestamps.
+        // Required: :body with a (do ...) form. Optional: :name (string), :language rtfs20, :annotations simple map.
+        let full_plan_system_message = r#"You translate an RTFS intent into a concrete RTFS plan using a constrained schema.
 
 Output format: ONLY a single well-formed RTFS s-expression starting with (plan ...). No prose, no JSON, no fences.
 
@@ -600,8 +641,12 @@ Return exactly one (plan ...) with these constraints.
 
         // Optional: display prompts during live runtime when enabled
         // Enable by setting RTFS_SHOW_PROMPTS=1 or CCOS_DEBUG=1
-        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS").map(|v| v == "1").unwrap_or(false)
-            || std::env::var("CCOS_DEBUG").map(|v| v == "1").unwrap_or(false);
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
         if show_prompts {
             let system_msg = if full_plan_mode {
                 full_plan_system_message
@@ -615,17 +660,21 @@ Return exactly one (plan ...) with these constraints.
             );
         }
 
-    let messages = vec![
+        let messages = vec![
             OpenAIMessage {
                 role: "system".to_string(),
-        content: if full_plan_mode { full_plan_system_message.to_string() } else { reduced_system_message.to_string() },
+                content: if full_plan_mode {
+                    full_plan_system_message.to_string()
+                } else {
+                    reduced_system_message.to_string()
+                },
             },
             OpenAIMessage {
                 role: "user".to_string(),
                 content: user_message,
             },
         ];
-        
+
         let response = self.make_request(messages).await?;
         if show_prompts {
             println!(
@@ -642,7 +691,9 @@ Return exactly one (plan ...) with these constraints.
                 {
                     if parser::parse(&do_block).is_ok() {
                         let mut plan_name: Option<String> = None;
-                        if let Some(name) = Self::extract_quoted_value_after_key(&plan_block, ":name") {
+                        if let Some(name) =
+                            Self::extract_quoted_value_after_key(&plan_block, ":name")
+                        {
                             plan_name = Some(name);
                         }
                         return Ok(Plan {
@@ -652,7 +703,10 @@ Return exactly one (plan ...) with these constraints.
                             language: PlanLanguage::Rtfs20,
                             body: PlanBody::Rtfs(do_block),
                             status: crate::ccos::types::PlanStatus::Draft,
-                            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
                             metadata: HashMap::new(),
                             input_schema: None,
                             output_schema: None,
@@ -676,7 +730,10 @@ Return exactly one (plan ...) with these constraints.
                     language: PlanLanguage::Rtfs20,
                     body: PlanBody::Rtfs(do_block),
                     status: crate::ccos::types::PlanStatus::Draft,
-                    created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     metadata: HashMap::new(),
                     input_schema: None,
                     output_schema: None,
@@ -690,11 +747,8 @@ Return exactly one (plan ...) with these constraints.
         // Fallback: previous JSON-wrapped steps contract
         self.parse_plan_from_json(&response, &intent.intent_id)
     }
-    
-    async fn validate_plan(
-        &self,
-        plan_content: &str,
-    ) -> Result<ValidationResult, RuntimeError> {
+
+    async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError> {
         let system_message = r#"You are an AI assistant that validates RTFS plans.
 
 Analyze the plan and respond with JSON:
@@ -726,14 +780,14 @@ Only respond with valid JSON."#;
                 content: user_message,
             },
         ];
-        
+
         let response = self.make_request(messages).await?;
-        
+
         // Parse validation result
         let json_start = response.find('{').unwrap_or(0);
         let json_end = response.rfind('}').map(|i| i + 1).unwrap_or(response.len());
         let json_content = &response[json_start..json_end];
-        
+
         #[derive(Deserialize)]
         struct ValidationJson {
             is_valid: bool,
@@ -742,10 +796,11 @@ Only respond with valid JSON."#;
             suggestions: Vec<String>,
             errors: Vec<String>,
         }
-        
-        let validation: ValidationJson = serde_json::from_str(json_content)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse validation JSON: {}", e)))?;
-        
+
+        let validation: ValidationJson = serde_json::from_str(json_content).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse validation JSON: {}", e))
+        })?;
+
         Ok(ValidationResult {
             is_valid: validation.is_valid,
             confidence: validation.confidence,
@@ -754,21 +809,16 @@ Only respond with valid JSON."#;
             errors: validation.errors,
         })
     }
-    
-    async fn generate_text(
-        &self,
-        prompt: &str,
-    ) -> Result<String, RuntimeError> {
-        let messages = vec![
-            OpenAIMessage {
-                role: "user".to_string(),
-                content: prompt.to_string(),
-            },
-        ];
-        
+
+    async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError> {
+        let messages = vec![OpenAIMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        }];
+
         self.make_request(messages).await
     }
-    
+
     fn get_info(&self) -> LlmProviderInfo {
         LlmProviderInfo {
             name: "OpenAI LLM Provider".to_string(),
@@ -817,28 +867,36 @@ pub struct AnthropicLlmProvider {
 impl AnthropicLlmProvider {
     pub fn new(config: LlmProviderConfig) -> Result<Self, RuntimeError> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(config.timeout_seconds.unwrap_or(30)))
+            .timeout(std::time::Duration::from_secs(
+                config.timeout_seconds.unwrap_or(30),
+            ))
             .build()
             .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         Ok(Self { config, client })
     }
-    
+
     async fn make_request(&self, messages: Vec<AnthropicMessage>) -> Result<String, RuntimeError> {
-        let api_key = self.config.api_key.as_ref()
-            .ok_or_else(|| RuntimeError::Generic("API key required for Anthropic provider".to_string()))?;
-        
-        let base_url = self.config.base_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+        let api_key = self.config.api_key.as_ref().ok_or_else(|| {
+            RuntimeError::Generic("API key required for Anthropic provider".to_string())
+        })?;
+
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .unwrap_or("https://api.anthropic.com/v1");
         let url = format!("{}/messages", base_url);
-        
+
         let request_body = AnthropicRequest {
             model: self.config.model.clone(),
             messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
         };
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&url)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
@@ -847,24 +905,32 @@ impl AnthropicLlmProvider {
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(RuntimeError::Generic(format!("API request failed: {}", error_text)));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(RuntimeError::Generic(format!(
+                "API request failed: {}",
+                error_text
+            )));
         }
-        
-        let response_body: AnthropicResponse = response.json().await
+
+        let response_body: AnthropicResponse = response
+            .json()
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse response: {}", e)))?;
-        
+
         Ok(response_body.content[0].text.clone())
     }
-    
+
     fn parse_intent_from_json(&self, json_str: &str) -> Result<StorableIntent, RuntimeError> {
         // Try to extract JSON from the response (it might be wrapped in markdown)
         let json_start = json_str.find('{').unwrap_or(0);
         let json_end = json_str.rfind('}').map(|i| i + 1).unwrap_or(json_str.len());
         let json_content = &json_str[json_start..json_end];
-        
+
         #[derive(Deserialize)]
         struct IntentJson {
             name: Option<String>,
@@ -873,12 +939,15 @@ impl AnthropicLlmProvider {
             preferences: Option<HashMap<String, String>>,
             success_criteria: Option<String>,
         }
-        
+
         let intent_json: IntentJson = serde_json::from_str(json_content)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse intent JSON: {}", e)))?;
-        
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         Ok(StorableIntent {
             intent_id: format!("anthropic_intent_{}", uuid::Uuid::new_v4()),
             name: intent_json.name,
@@ -904,24 +973,24 @@ impl AnthropicLlmProvider {
             metadata: HashMap::new(),
         })
     }
-    
+
     fn parse_plan_from_json(&self, json_str: &str, intent_id: &str) -> Result<Plan, RuntimeError> {
         // Try to extract JSON from the response
         let json_start = json_str.find('{').unwrap_or(0);
         let json_end = json_str.rfind('}').map(|i| i + 1).unwrap_or(json_str.len());
         let json_content = &json_str[json_start..json_end];
-        
+
         #[derive(Deserialize)]
         struct PlanJson {
             name: Option<String>,
             steps: Vec<String>,
         }
-        
+
         let plan_json: PlanJson = serde_json::from_str(json_content)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse plan JSON: {}", e)))?;
-        
+
         let rtfs_body = format!("(do\n  {}\n)", plan_json.steps.join("\n  "));
-        
+
         Ok(Plan {
             plan_id: format!("anthropic_plan_{}", uuid::Uuid::new_v4()),
             name: plan_json.name,
@@ -929,7 +998,10 @@ impl AnthropicLlmProvider {
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_body),
             status: crate::ccos::types::PlanStatus::Draft,
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             metadata: HashMap::new(),
             input_schema: None,
             output_schema: None,
@@ -971,7 +1043,8 @@ Examples:
 Only respond with valid JSON."#;
 
         let user_message = if let Some(ctx) = context {
-            let context_str = ctx.iter()
+            let context_str = ctx
+                .iter()
                 .map(|(k, v)| format!("{}: {}", k, v))
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -980,20 +1053,18 @@ Only respond with valid JSON."#;
             prompt.to_string()
         };
 
-        let messages = vec![
-            AnthropicMessage {
-                role: "user".to_string(),
-                content: format!("{}\n\n{}", system_message, user_message),
-            },
-        ];
+        let messages = vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: format!("{}\n\n{}", system_message, user_message),
+        }];
 
         let response = self.make_request(messages).await?;
         let mut intent = self.parse_intent_from_json(&response)?;
         intent.original_request = prompt.to_string();
-        
+
         Ok(intent)
     }
-    
+
     async fn generate_plan(
         &self,
         intent: &StorableIntent,
@@ -1023,21 +1094,16 @@ Only respond with valid JSON."#;
             intent.success_criteria.as_deref().unwrap_or("none")
         );
 
-        let messages = vec![
-            AnthropicMessage {
-                role: "user".to_string(),
-                content: format!("{}\n\n{}", system_message, user_message),
-            },
-        ];
+        let messages = vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: format!("{}\n\n{}", system_message, user_message),
+        }];
 
         let response = self.make_request(messages).await?;
         self.parse_plan_from_json(&response, &intent.intent_id)
     }
-    
-    async fn validate_plan(
-        &self,
-        plan_content: &str,
-    ) -> Result<ValidationResult, RuntimeError> {
+
+    async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError> {
         let system_message = r#"You are an AI assistant that validates executable plans.
 
 Analyze the provided plan and return a JSON response with the following structure:
@@ -1053,38 +1119,31 @@ Only respond with valid JSON."#;
 
         let user_message = format!("Plan to validate:\n{}", plan_content);
 
-        let messages = vec![
-            AnthropicMessage {
-                role: "user".to_string(),
-                content: format!("{}\n\n{}", system_message, user_message),
-            },
-        ];
+        let messages = vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: format!("{}\n\n{}", system_message, user_message),
+        }];
 
         let response = self.make_request(messages).await?;
-        
+
         // Try to extract JSON from the response
         let json_start = response.find('{').unwrap_or(0);
         let json_end = response.rfind('}').map(|i| i + 1).unwrap_or(response.len());
         let json_content = &response[json_start..json_end];
-        
+
         serde_json::from_str(json_content)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse validation JSON: {}", e)))
     }
-    
-    async fn generate_text(
-        &self,
-        prompt: &str,
-    ) -> Result<String, RuntimeError> {
-        let messages = vec![
-            AnthropicMessage {
-                role: "user".to_string(),
-                content: prompt.to_string(),
-            },
-        ];
-        
+
+    async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError> {
+        let messages = vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        }];
+
         self.make_request(messages).await
     }
-    
+
     fn get_info(&self) -> LlmProviderInfo {
         LlmProviderInfo {
             name: "Anthropic Claude".to_string(),
@@ -1133,12 +1192,15 @@ impl StubLlmProvider {
     pub fn new(config: LlmProviderConfig) -> Self {
         Self { config }
     }
-    
+
     /// Generate a deterministic storable intent based on natural language
     fn generate_stub_intent(&self, nl: &str) -> StorableIntent {
         let lower_nl = nl.to_lowercase();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         if lower_nl.contains("sentiment") || lower_nl.contains("analyze") {
             StorableIntent {
                 intent_id: format!("stub_sentiment_{}", uuid::Uuid::new_v4()),
@@ -1152,7 +1214,12 @@ impl StubLlmProvider {
                 parent_intent: None,
                 child_intents: vec![],
                 triggered_by: TriggerSource::HumanRequest,
-                generation_context: GenerationContext { arbiter_version: "stub-1.0".to_string(), generation_timestamp: now, input_context: HashMap::new(), reasoning_trace: None },
+                generation_context: GenerationContext {
+                    arbiter_version: "stub-1.0".to_string(),
+                    generation_timestamp: now,
+                    input_context: HashMap::new(),
+                    reasoning_trace: None,
+                },
                 status: IntentStatus::Active,
                 priority: 0,
                 created_at: now,
@@ -1172,7 +1239,12 @@ impl StubLlmProvider {
                 parent_intent: None,
                 child_intents: vec![],
                 triggered_by: TriggerSource::HumanRequest,
-                generation_context: GenerationContext { arbiter_version: "stub-1.0".to_string(), generation_timestamp: now, input_context: HashMap::new(), reasoning_trace: None },
+                generation_context: GenerationContext {
+                    arbiter_version: "stub-1.0".to_string(),
+                    generation_timestamp: now,
+                    input_context: HashMap::new(),
+                    reasoning_trace: None,
+                },
                 status: IntentStatus::Active,
                 priority: 0,
                 created_at: now,
@@ -1193,7 +1265,12 @@ impl StubLlmProvider {
                 parent_intent: None,
                 child_intents: vec![],
                 triggered_by: TriggerSource::HumanRequest,
-                generation_context: GenerationContext { arbiter_version: "stub-1.0".to_string(), generation_timestamp: now, input_context: HashMap::new(), reasoning_trace: None },
+                generation_context: GenerationContext {
+                    arbiter_version: "stub-1.0".to_string(),
+                    generation_timestamp: now,
+                    input_context: HashMap::new(),
+                    reasoning_trace: None,
+                },
                 status: IntentStatus::Active,
                 priority: 0,
                 created_at: now,
@@ -1202,7 +1279,7 @@ impl StubLlmProvider {
             }
         }
     }
-    
+
     /// Generate a deterministic plan based on intent
     fn generate_stub_plan(&self, intent: &StorableIntent) -> Plan {
         let plan_body = match intent.name.as_deref() {
@@ -1234,12 +1311,18 @@ impl StubLlmProvider {
 "#
             }
         };
-        
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         Plan {
             plan_id: format!("stub_plan_{}", uuid::Uuid::new_v4()),
-            name: Some(format!("stub_plan_for_{}", intent.name.as_deref().unwrap_or("general"))),
+            name: Some(format!(
+                "stub_plan_for_{}",
+                intent.name.as_deref().unwrap_or("general")
+            )),
             intent_ids: vec![intent.intent_id.clone()],
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(plan_body.trim().to_string()),
@@ -1267,7 +1350,7 @@ impl LlmProvider for StubLlmProvider {
         let intent = self.generate_stub_intent(prompt);
         Ok(intent)
     }
-    
+
     async fn generate_plan(
         &self,
         intent: &StorableIntent,
@@ -1276,11 +1359,8 @@ impl LlmProvider for StubLlmProvider {
         let plan = self.generate_stub_plan(intent);
         Ok(plan)
     }
-    
-    async fn validate_plan(
-        &self,
-        _plan_content: &str,
-    ) -> Result<ValidationResult, RuntimeError> {
+
+    async fn validate_plan(&self, _plan_content: &str) -> Result<ValidationResult, RuntimeError> {
         // Stub validation - always returns valid
         Ok(ValidationResult {
             is_valid: true,
@@ -1290,26 +1370,25 @@ impl LlmProvider for StubLlmProvider {
             errors: vec![],
         })
     }
-    
-    async fn generate_text(
-        &self,
-        prompt: &str,
-    ) -> Result<String, RuntimeError> {
+
+    async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError> {
         // Check if this is a delegation analysis prompt
         let lower_prompt = prompt.to_lowercase();
-    // Shortcut: detect arbiter graph-generation marker and return RTFS (do ...) intent graph
-    if lower_prompt.contains("generate_intent_graph") || lower_prompt.contains("intent graph") {
-        return Ok(r#"(do
+        // Shortcut: detect arbiter graph-generation marker and return RTFS (do ...) intent graph
+        if lower_prompt.contains("generate_intent_graph") || lower_prompt.contains("intent graph") {
+            return Ok(r#"(do
   {:type "intent" :name "root" :goal "Say hi and add numbers"}
   {:type "intent" :name "greet" :goal "Greet the user"}
   {:type "intent" :name "compute" :goal "Add two numbers"}
   (edge :IsSubgoalOf "greet" "root")
   (edge :IsSubgoalOf "compute" "root")
   (edge :DependsOn "compute" "greet")
-)"#.to_string());
-    }
-        
-        if lower_prompt.contains("delegation analysis") || lower_prompt.contains("should_delegate") {
+)"#
+            .to_string());
+        }
+
+        if lower_prompt.contains("delegation analysis") || lower_prompt.contains("should_delegate")
+        {
             // This is a delegation analysis request - return JSON
             if lower_prompt.contains("sentiment") || lower_prompt.contains("analyze") {
                 Ok(r#"{
@@ -1339,7 +1418,8 @@ impl LlmProvider for StubLlmProvider {
   "reasoning": "Task can be handled directly without specialized agent delegation",
   "required_capabilities": ["general_processing"],
   "delegation_confidence": 0.75
-}"#.to_string())
+}"#
+                .to_string())
             }
         } else {
             // Regular intent generation - returns RTFS intent
@@ -1354,8 +1434,12 @@ impl LlmProvider for StubLlmProvider {
     :speed :medium
     :detail :comprehensive
   }
-  :success-criteria (and (sentiment-analyzed? data) (> confidence 0.85)))"#.to_string())
-            } else if lower_prompt.contains("optimize") || lower_prompt.contains("improve") || lower_prompt.contains("performance") {
+  :success-criteria (and (sentiment-analyzed? data) (> confidence 0.85)))"#
+                    .to_string())
+            } else if lower_prompt.contains("optimize")
+                || lower_prompt.contains("improve")
+                || lower_prompt.contains("performance")
+            {
                 Ok(r#"(intent "optimize_system_performance"
   :goal "Optimize system performance and efficiency"
   :constraints {
@@ -1366,7 +1450,8 @@ impl LlmProvider for StubLlmProvider {
     :speed :high
     :method :automated
   }
-  :success-criteria (and (> performance 0.2) (< latency 100)))"#.to_string())
+  :success-criteria (and (> performance 0.2) (< latency 100)))"#
+                    .to_string())
             } else if lower_prompt.contains("backup") || lower_prompt.contains("database") {
                 Ok(r#"(intent "create_database_backup"
   :goal "Create a comprehensive backup of the database"
@@ -1378,8 +1463,12 @@ impl LlmProvider for StubLlmProvider {
     :compression :high
     :encryption :enabled
   }
-  :success-criteria (and (backup-created? db) (backup-verified? db)))"#.to_string())
-            } else if lower_prompt.contains("machine learning") || lower_prompt.contains("ml") || lower_prompt.contains("pipeline") {
+  :success-criteria (and (backup-created? db) (backup-verified? db)))"#
+                    .to_string())
+            } else if lower_prompt.contains("machine learning")
+                || lower_prompt.contains("ml")
+                || lower_prompt.contains("pipeline")
+            {
                 Ok(r#"(intent "create_ml_pipeline"
   :goal "Create a machine learning pipeline for data processing"
   :constraints {
@@ -1390,8 +1479,11 @@ impl LlmProvider for StubLlmProvider {
     :framework :tensorflow
     :deployment :cloud
   }
-  :success-criteria (and (pipeline-deployed? ml) (> accuracy 0.9)))"#.to_string())
-            } else if lower_prompt.contains("microservices") || lower_prompt.contains("architecture") {
+  :success-criteria (and (pipeline-deployed? ml) (> accuracy 0.9)))"#
+                    .to_string())
+            } else if lower_prompt.contains("microservices")
+                || lower_prompt.contains("architecture")
+            {
                 Ok(r#"(intent "design_microservices_architecture"
   :goal "Design a scalable microservices architecture"
   :constraints {
@@ -1402,9 +1494,10 @@ impl LlmProvider for StubLlmProvider {
     :technology :kubernetes
     :communication :rest-api
   }
-  :success-criteria (and (architecture-designed? ms) (deployment-ready? ms)))"#.to_string())
-        } else if lower_prompt.contains("real-time") || lower_prompt.contains("streaming") {
-            Ok(r#"(intent "implement_realtime_processing"
+  :success-criteria (and (architecture-designed? ms) (deployment-ready? ms)))"#
+                    .to_string())
+            } else if lower_prompt.contains("real-time") || lower_prompt.contains("streaming") {
+                Ok(r#"(intent "implement_realtime_processing"
   :goal "Implement real-time data processing with streaming analytics"
   :constraints {
     :latency (< processing-time 100)
@@ -1414,10 +1507,11 @@ impl LlmProvider for StubLlmProvider {
     :technology :apache-kafka
     :processing :streaming
   }
-  :success-criteria (and (streaming-active? rt) (< latency 100)))"#.to_string())
-        } else {
-            // Default fallback
-            Ok(r#"(intent "generic_task"
+  :success-criteria (and (streaming-active? rt) (< latency 100)))"#
+                    .to_string())
+            } else {
+                // Default fallback
+                Ok(r#"(intent "generic_task"
   :goal "Complete the requested task efficiently"
   :constraints {
     :quality :high
@@ -1427,11 +1521,12 @@ impl LlmProvider for StubLlmProvider {
     :method :automated
     :priority :normal
   }
-  :success-criteria (and (task-completed? task) (quality-verified? task)))"#.to_string())
-        }
+  :success-criteria (and (task-completed? task) (quality-verified? task)))"#
+                    .to_string())
+            }
         }
     }
-    
+
     fn get_info(&self) -> LlmProviderInfo {
         LlmProviderInfo {
             name: "Stub LLM Provider".to_string(),
@@ -1451,11 +1546,11 @@ pub struct LlmProviderFactory;
 
 impl LlmProviderFactory {
     /// Create an LLM provider based on configuration
-    pub async fn create_provider(config: LlmProviderConfig) -> Result<Box<dyn LlmProvider>, RuntimeError> {
+    pub async fn create_provider(
+        config: LlmProviderConfig,
+    ) -> Result<Box<dyn LlmProvider>, RuntimeError> {
         match config.provider_type {
-            LlmProviderType::Stub => {
-                Ok(Box::new(StubLlmProvider::new(config)))
-            }
+            LlmProviderType::Stub => Ok(Box::new(StubLlmProvider::new(config))),
             LlmProviderType::OpenAI => {
                 let provider = OpenAILlmProvider::new(config)?;
                 Ok(Box::new(provider))
@@ -1466,7 +1561,9 @@ impl LlmProviderFactory {
             }
             LlmProviderType::Local => {
                 // TODO: Implement Local provider
-                Err(RuntimeError::Generic("Local provider not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "Local provider not yet implemented".to_string(),
+                ))
             }
         }
     }
@@ -1475,7 +1572,7 @@ impl LlmProviderFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_stub_provider_intent_generation() {
         let config = LlmProviderConfig {
@@ -1487,15 +1584,18 @@ mod tests {
             temperature: None,
             timeout_seconds: None,
         };
-        
+
         let provider = StubLlmProvider::new(config);
-        let intent = provider.generate_intent("analyze sentiment", None).await.unwrap();
-        
+        let intent = provider
+            .generate_intent("analyze sentiment", None)
+            .await
+            .unwrap();
+
         // The stub provider responds based on prompt content
         assert_eq!(intent.name, Some("analyze_user_sentiment".to_string()));
         assert!(intent.goal.contains("Analyze user sentiment"));
     }
-    
+
     #[tokio::test]
     async fn test_stub_provider_plan_generation() {
         let config = LlmProviderConfig {
@@ -1507,16 +1607,22 @@ mod tests {
             temperature: None,
             timeout_seconds: None,
         };
-        
+
         let provider = StubLlmProvider::new(config);
-        let intent = provider.generate_intent("optimize performance", None).await.unwrap();
+        let intent = provider
+            .generate_intent("optimize performance", None)
+            .await
+            .unwrap();
         let plan = provider.generate_plan(&intent, None).await.unwrap();
-        
+
         // The stub provider responds based on intent content
-        assert_eq!(plan.name, Some("stub_plan_for_optimize_system_performance".to_string()));
+        assert_eq!(
+            plan.name,
+            Some("stub_plan_for_optimize_system_performance".to_string())
+        );
         assert!(matches!(plan.body, PlanBody::Rtfs(_)));
     }
-    
+
     #[tokio::test]
     async fn test_stub_provider_validation() {
         let config = LlmProviderConfig {
@@ -1528,24 +1634,24 @@ mod tests {
             temperature: None,
             timeout_seconds: None,
         };
-        
+
         let provider = StubLlmProvider::new(config);
         let intent = provider.generate_intent("test", None).await.unwrap();
         let plan = provider.generate_plan(&intent, None).await.unwrap();
-        
+
         // Extract plan content for validation
         let plan_content = match &plan.body {
             PlanBody::Rtfs(content) => content.as_str(),
             PlanBody::Wasm(_) => "(wasm plan)",
         };
-        
+
         let validation = provider.validate_plan(plan_content).await.unwrap();
-        
+
         assert!(validation.is_valid);
         assert!(validation.confidence > 0.9);
         assert!(!validation.reasoning.is_empty());
     }
-    
+
     #[tokio::test]
     async fn test_anthropic_provider_creation() {
         let config = LlmProviderConfig {
@@ -1557,11 +1663,11 @@ mod tests {
             temperature: Some(0.7),
             timeout_seconds: Some(30),
         };
-        
+
         // Test that provider can be created (even without valid API key)
         let provider = AnthropicLlmProvider::new(config);
         assert!(provider.is_ok());
-        
+
         let provider = provider.unwrap();
         let info = provider.get_info();
         assert_eq!(info.name, "Anthropic Claude");
@@ -1570,7 +1676,7 @@ mod tests {
         assert!(info.capabilities.contains(&"plan_generation".to_string()));
         assert!(info.capabilities.contains(&"plan_validation".to_string()));
     }
-    
+
     #[tokio::test]
     async fn test_anthropic_provider_factory() {
         let config = LlmProviderConfig {
@@ -1582,11 +1688,11 @@ mod tests {
             temperature: Some(0.7),
             timeout_seconds: Some(30),
         };
-        
+
         // Test that factory can create Anthropic provider
         let provider = LlmProviderFactory::create_provider(config).await;
         assert!(provider.is_ok());
-        
+
         let provider = provider.unwrap();
         let info = provider.get_info();
         assert_eq!(info.name, "Anthropic Claude");

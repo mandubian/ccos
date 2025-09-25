@@ -14,11 +14,15 @@ mod ch_working_memory_integration;
 mod execution_context_tests;
 mod firecracker_enhanced_tests;
 mod http_capability_tests;
-mod l4_cache_ir_integration;
-mod test_helpers; // Re-exports from shared
 mod intent_graph_dependency_tests;
 mod intent_lifecycle_audit_tests;
 mod l4_cache_integration;
+mod l4_cache_ir_integration;
+mod mcp_streaming_mock_tests; // MCP streaming prototype tests
+mod mcp_streaming_phase3_tests; // MCP streaming Phase 3 real processor invocation tests
+mod mcp_streaming_phase4_tests; // MCP streaming Phase 4 persistence + resume tests
+mod mcp_streaming_phase5_tests; // MCP streaming Phase 5 backpressure & flow control tests
+mod mcp_streaming_phase6_live_tests; // MCP streaming Phase 6 live Cloudflare SSE test
 mod microvm_central_auth_tests;
 mod microvm_performance_tests;
 mod microvm_policy_enforcement_tests;
@@ -28,11 +32,8 @@ mod orchestrator_checkpoint_tests;
 mod orchestrator_intent_status_tests;
 mod rtfs_bridge_tests;
 mod runtime_type_integration_tests;
+mod test_helpers; // Re-exports from shared
 mod test_http_capabilities;
 mod test_microvm_http_plan;
 mod test_weather_mcp_integration;
-mod mcp_streaming_mock_tests; // MCP streaming prototype tests
-mod mcp_streaming_phase3_tests; // MCP streaming Phase 3 real processor invocation tests
-mod mcp_streaming_phase5_tests; // MCP streaming Phase 5 backpressure & flow control tests
-mod mcp_streaming_phase4_tests; // MCP streaming Phase 4 persistence + resume tests
 mod working_memory_integration;

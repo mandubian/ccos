@@ -4,27 +4,27 @@ use tokio::sync::RwLock;
 
 use bincode;
 use rtfs_compiler::{
+    ast::Literal,
     ccos::{
         caching::l4_content_addressable::L4CacheClient,
+        capabilities::registry::CapabilityRegistry,
+        capability_marketplace::CapabilityMarketplace,
+        causal_chain::CausalChain,
         delegation::{DelegationEngine, StaticDelegationEngine},
         host::RuntimeHost,
-        capability_marketplace::CapabilityMarketplace,
-        capabilities::registry::CapabilityRegistry,
-        causal_chain::CausalChain,
     },
-    runtime::security::RuntimeContext,
-    ir::{core::IrNode, converter::IrConverter},
-    parser::parse_expression,
-    runtime::{
-        ir_runtime::IrRuntime,
-        environment::IrEnvironment,
-        module_runtime::ModuleRegistry,
-        Value,
-        values::{Function, BuiltinFunction, Arity},
-        error::RuntimeResult,
-    },
-    ast::Literal,
     ir::core::IrType,
+    ir::{converter::IrConverter, core::IrNode},
+    parser::parse_expression,
+    runtime::security::RuntimeContext,
+    runtime::{
+        environment::IrEnvironment,
+        error::RuntimeResult,
+        ir_runtime::IrRuntime,
+        module_runtime::ModuleRegistry,
+        values::{Arity, BuiltinFunction, Function},
+        Value,
+    },
 };
 
 #[test]
@@ -35,9 +35,7 @@ fn test_ir_cached_execution() {
 
     let module_registry = ModuleRegistry::new();
     let mut converter = IrConverter::with_module_registry(&module_registry);
-    let ir_lambda = converter
-        .convert_expression(ast_fn)
-        .expect("convert to IR");
+    let ir_lambda = converter.convert_expression(ast_fn).expect("convert to IR");
 
     // Serialize IR and store in cache
     let bytes = bincode::serialize(&ir_lambda).expect("serialize");
@@ -72,7 +70,7 @@ fn test_ir_cached_execution() {
     // Execute through IR runtime
     let de_inner = StaticDelegationEngine::new(Default::default());
     let de: Arc<dyn DelegationEngine> = Arc::new(de_inner);
-    
+
     // Create host and security context
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
@@ -83,7 +81,7 @@ fn test_ir_cached_execution() {
         capability_marketplace,
         security_context.clone(),
     ));
-    
+
     let mut ir_runtime = IrRuntime::new(host, security_context);
     let mut env = IrEnvironment::with_stdlib(&module_registry).expect("env");
 
@@ -113,9 +111,9 @@ fn test_ir_cached_execution() {
     match result {
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::Complete(value) => {
             assert_eq!(value, Value::Integer(9));
-        },
+        }
         rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
             panic!("Unexpected host call in pure test");
         }
     }
-} 
+}

@@ -1,7 +1,7 @@
 //! MicroVM Factory for Provider Management
 
-use std::collections::HashMap;
 use crate::runtime::microvm::providers::MicroVMProvider;
+use std::collections::HashMap;
 
 /// Factory for creating and managing MicroVM providers
 pub struct MicroVMFactory {
@@ -13,35 +13,41 @@ impl MicroVMFactory {
         let mut factory = Self {
             providers: HashMap::new(),
         };
-        
+
         // Register default providers
         factory.register_default_providers();
-        
+
         factory
     }
 
     fn register_default_providers(&mut self) {
         // Register mock provider (always available)
-        self.register_provider("mock", Box::new(crate::runtime::microvm::providers::mock::MockMicroVMProvider::new()));
-        
+        self.register_provider(
+            "mock",
+            Box::new(crate::runtime::microvm::providers::mock::MockMicroVMProvider::new()),
+        );
+
         // Register process provider (if available)
-        let process_provider = crate::runtime::microvm::providers::process::ProcessMicroVMProvider::new();
+        let process_provider =
+            crate::runtime::microvm::providers::process::ProcessMicroVMProvider::new();
         if process_provider.is_available() {
             self.register_provider("process", Box::new(process_provider));
         }
-        
+
         // Register firecracker provider (if available)
-        let firecracker_provider = crate::runtime::microvm::providers::firecracker::FirecrackerMicroVMProvider::new();
+        let firecracker_provider =
+            crate::runtime::microvm::providers::firecracker::FirecrackerMicroVMProvider::new();
         if firecracker_provider.is_available() {
             self.register_provider("firecracker", Box::new(firecracker_provider));
         }
-        
+
         // Register gvisor provider (if available)
-        let gvisor_provider = crate::runtime::microvm::providers::gvisor::GvisorMicroVMProvider::default();
+        let gvisor_provider =
+            crate::runtime::microvm::providers::gvisor::GvisorMicroVMProvider::default();
         if gvisor_provider.is_available() {
             self.register_provider("gvisor", Box::new(gvisor_provider));
         }
-        
+
         // Register WASM provider (if available)
         let wasm_provider = crate::runtime::microvm::providers::wasm::WasmMicroVMProvider::new();
         if wasm_provider.is_available() {
@@ -83,9 +89,10 @@ impl MicroVMFactory {
         if let Some(provider) = self.get_provider_mut(name) {
             provider.initialize()
         } else {
-            Err(crate::runtime::error::RuntimeError::Generic(
-                format!("Provider '{}' not found", name)
-            ))
+            Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "Provider '{}' not found",
+                name
+            )))
         }
     }
 
@@ -94,9 +101,10 @@ impl MicroVMFactory {
         if let Some(provider) = self.get_provider_mut(name) {
             provider.cleanup()
         } else {
-            Err(crate::runtime::error::RuntimeError::Generic(
-                format!("Provider '{}' not found", name)
-            ))
+            Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "Provider '{}' not found",
+                name
+            )))
         }
     }
 

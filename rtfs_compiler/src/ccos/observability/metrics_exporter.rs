@@ -32,9 +32,13 @@ pub fn render_prometheus_text(chain: &CausalChain) -> String {
 
     out.push_str("# HELP ccos_capability_calls_total Total calls per capability id\n");
     out.push_str("# TYPE ccos_capability_calls_total counter\n");
-    out.push_str("# HELP ccos_capability_avg_duration_ms Average duration per capability in milliseconds\n");
+    out.push_str(
+        "# HELP ccos_capability_avg_duration_ms Average duration per capability in milliseconds\n",
+    );
     out.push_str("# TYPE ccos_capability_avg_duration_ms gauge\n");
-    out.push_str("# HELP ccos_capability_duration_ms Duration histogram per capability in milliseconds\n");
+    out.push_str(
+        "# HELP ccos_capability_duration_ms Duration histogram per capability in milliseconds\n",
+    );
     out.push_str("# TYPE ccos_capability_duration_ms histogram\n");
 
     // We don't have an iterator; derive from all actions for portability
@@ -46,7 +50,8 @@ pub fn render_prometheus_text(chain: &CausalChain) -> String {
         }
     }
     // Prepare per-capability duration histograms from actions
-    let mut cap_durations: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+    let mut cap_durations: std::collections::HashMap<String, Vec<u64>> =
+        std::collections::HashMap::new();
     for a in chain.get_all_actions() {
         if a.action_type == crate::ccos::types::ActionType::CapabilityCall {
             if let (Some(fn_name), Some(d)) = (&a.function_name, a.duration_ms) {
@@ -101,9 +106,13 @@ pub fn render_prometheus_text(chain: &CausalChain) -> String {
 
     out.push_str("# HELP ccos_function_calls_total Total calls per function name\n");
     out.push_str("# TYPE ccos_function_calls_total counter\n");
-    out.push_str("# HELP ccos_function_avg_duration_ms Average duration per function in milliseconds\n");
+    out.push_str(
+        "# HELP ccos_function_avg_duration_ms Average duration per function in milliseconds\n",
+    );
     out.push_str("# TYPE ccos_function_avg_duration_ms gauge\n");
-    out.push_str("# HELP ccos_function_duration_ms Duration histogram per function in milliseconds\n");
+    out.push_str(
+        "# HELP ccos_function_duration_ms Duration histogram per function in milliseconds\n",
+    );
     out.push_str("# TYPE ccos_function_duration_ms histogram\n");
 
     // As above, iterate names from actions then fetch metrics
@@ -114,7 +123,8 @@ pub fn render_prometheus_text(chain: &CausalChain) -> String {
         }
     }
     // Prepare per-function duration histograms from actions
-    let mut fn_durations: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+    let mut fn_durations: std::collections::HashMap<String, Vec<u64>> =
+        std::collections::HashMap::new();
     for a in chain.get_all_actions() {
         if let (Some(fn_name), Some(d)) = (&a.function_name, a.duration_ms) {
             fn_durations.entry(fn_name.clone()).or_default().push(d);
@@ -164,13 +174,18 @@ pub fn render_prometheus_text(chain: &CausalChain) -> String {
         }
     }
 
-    if !out.ends_with('\n') { out.push('\n'); }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
     out
 }
 
 /// Start a tiny, blocking HTTP server serving `/metrics` with the text.
 /// Returns a join handle; stop by dropping the listener thread (tests should run it briefly).
-pub fn start_metrics_server(chain: Arc<Mutex<CausalChain>>, addr: &str) -> std::io::Result<thread::JoinHandle<()>> {
+pub fn start_metrics_server(
+    chain: Arc<Mutex<CausalChain>>,
+    addr: &str,
+) -> std::io::Result<thread::JoinHandle<()>> {
     let listener = TcpListener::bind(addr)?;
     let handle = thread::spawn(move || {
         // Handle a single request then exit (test-friendly)
@@ -188,7 +203,11 @@ fn handle_client(stream: &mut TcpStream, chain: &Arc<Mutex<CausalChain>>) -> std
     let req = String::from_utf8_lossy(&buf);
     let is_metrics = req.starts_with("GET /metrics ");
     let (status, body) = if is_metrics {
-        let text = if let Ok(guard) = chain.lock() { render_prometheus_text(&*guard) } else { String::new() };
+        let text = if let Ok(guard) = chain.lock() {
+            render_prometheus_text(&*guard)
+        } else {
+            String::new()
+        };
         ("200 OK", text)
     } else {
         ("404 Not Found", String::from("not found"))
@@ -205,30 +224,34 @@ fn handle_client(stream: &mut TcpStream, chain: &Arc<Mutex<CausalChain>>) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use crate::ccos::host::RuntimeHost;
     use crate::ccos::capability_marketplace::CapabilityMarketplace;
+    use crate::ccos::host::RuntimeHost;
     use crate::runtime::security::RuntimeContext;
-    
-    
+    use std::time::Duration;
 
     #[test]
     fn test_render_and_server_smoke() {
         // Build a tiny environment: chain + host + minimal marketplace
         let chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
-    let registry = Arc::new(tokio::sync::RwLock::new(crate::ccos::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(tokio::sync::RwLock::new(
+            crate::ccos::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let host = RuntimeHost::new(chain.clone(), marketplace, RuntimeContext::full());
         // Execute a capability that likely doesn't exist; ignore error but ensure chain has at least one action via delegation event
-        let _ = host.record_delegation_event_for_test("intent-x", "approved", std::collections::HashMap::new());
+        let _ = host.record_delegation_event_for_test(
+            "intent-x",
+            "approved",
+            std::collections::HashMap::new(),
+        );
         // Render text
         let text = {
             let c = chain.lock().unwrap();
             render_prometheus_text(&*c)
         };
-    assert!(text.contains("ccos_total_cost"));
-    // With at least one event recorded, histogram HELP lines should be present
-    assert!(text.contains("ccos_function_duration_ms"));
+        assert!(text.contains("ccos_total_cost"));
+        // With at least one event recorded, histogram HELP lines should be present
+        assert!(text.contains("ccos_function_duration_ms"));
 
         // Start server on ephemeral port
         let addr = "127.0.0.1:0";
@@ -240,7 +263,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         // Fetch metrics
         let mut stream = std::net::TcpStream::connect(local_addr).unwrap();
-        stream.write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        stream
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
         let mut resp = String::new();
         stream.read_to_string(&mut resp).unwrap();
         assert!(resp.contains("200 OK"));

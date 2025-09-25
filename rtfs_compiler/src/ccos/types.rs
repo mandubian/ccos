@@ -11,8 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 // Forward declarations for types used in this module - these should be replaced with real imports
+pub use super::causal_chain::CausalChain;
 pub use super::intent_graph::IntentGraph;
-pub use super::causal_chain::CausalChain;  
 pub use crate::ccos::capability_marketplace::CapabilityMarketplace;
 
 // Use the real CCOS type from the main module
@@ -88,11 +88,11 @@ pub enum EdgeType {
 /// What caused an Intent to be created
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TriggerSource {
-    HumanRequest,        // Direct human input
-    PlanExecution,       // Created during plan execution  
-    SystemEvent,         // System-triggered (monitoring, alerts)
-    IntentCompletion,    // Triggered by another intent completing
-    ArbiterInference,    // Arbiter discovered need for this intent
+    HumanRequest,     // Direct human input
+    PlanExecution,    // Created during plan execution
+    SystemEvent,      // System-triggered (monitoring, alerts)
+    IntentCompletion, // Triggered by another intent completing
+    ArbiterInference, // Arbiter discovered need for this intent
 }
 
 /// Complete context for reproducing intent generation
@@ -131,19 +131,19 @@ pub struct Plan {
     pub status: PlanStatus,
     pub created_at: u64,
     pub metadata: HashMap<String, Value>,
-    
+
     // New first-class Plan attributes
-    pub input_schema: Option<Value>,      // Schema for plan inputs
-    pub output_schema: Option<Value>,     // Schema for plan outputs
-    pub policies: HashMap<String, Value>, // Execution policies (max-cost, retry, etc.)
-    pub capabilities_required: Vec<String>, // Capabilities this plan depends on
+    pub input_schema: Option<Value>,         // Schema for plan inputs
+    pub output_schema: Option<Value>,        // Schema for plan outputs
+    pub policies: HashMap<String, Value>,    // Execution policies (max-cost, retry, etc.)
+    pub capabilities_required: Vec<String>,  // Capabilities this plan depends on
     pub annotations: HashMap<String, Value>, // Provenance and metadata (prompt-id, version, etc.)
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanBody {
-    Rtfs(String),     // RTFS source code
-    Wasm(Vec<u8>),    // compiled WASM bytecode
+    Rtfs(String),  // RTFS source code
+    Wasm(Vec<u8>), // compiled WASM bytecode
 }
 
 // --- Causal Chain (SEP-003) ---
@@ -174,20 +174,20 @@ pub enum ActionType {
     PlanAborted,
     PlanPaused,
     PlanResumed,
-    
+
     // Step Lifecycle
     PlanStepStarted,
     PlanStepCompleted,
     PlanStepFailed,
     PlanStepRetrying,
-    
+
     // Execution
     CapabilityCall,
     /// Result of a capability call; appended after execution with the outcome.
     CapabilityResult,
     InternalStep,
     StepProfileDerived,
-    
+
     // Intent Lifecycle (new)
     IntentCreated,
     IntentStatusChanged,
@@ -195,7 +195,7 @@ pub enum ActionType {
     IntentRelationshipModified,
     IntentArchived,
     IntentReactivated,
-    
+
     // Capability Lifecycle (new)
     CapabilityRegistered,
     CapabilityRemoved,
@@ -218,27 +218,27 @@ pub struct StorableIntent {
     pub intent_id: IntentId,
     pub name: Option<String>,
     pub original_request: String,
-    pub rtfs_intent_source: String,                  // Canonical RTFS intent form
+    pub rtfs_intent_source: String, // Canonical RTFS intent form
     pub goal: String,
-    
+
     // RTFS source code as strings (serializable)
-    pub constraints: HashMap<String, String>,        // RTFS source expressions
-    pub preferences: HashMap<String, String>,        // RTFS source expressions
-    pub success_criteria: Option<String>,            // RTFS source expression
-    
+    pub constraints: HashMap<String, String>, // RTFS source expressions
+    pub preferences: HashMap<String, String>, // RTFS source expressions
+    pub success_criteria: Option<String>,     // RTFS source expression
+
     // Graph relationships
     pub parent_intent: Option<IntentId>,
     pub child_intents: Vec<IntentId>,
     pub triggered_by: TriggerSource,
-    
+
     // Generation context for audit/replay
     pub generation_context: GenerationContext,
-    
+
     pub status: IntentStatus,
     pub priority: u32,
     pub created_at: u64,
     pub updated_at: u64,
-    pub metadata: HashMap<String, String>,           // Simple string metadata
+    pub metadata: HashMap<String, String>, // Simple string metadata
 }
 
 /// Runtime version of Intent that can be executed in CCOS context
@@ -248,22 +248,22 @@ pub struct RuntimeIntent {
     pub intent_id: IntentId,
     pub name: Option<String>,
     pub original_request: String,
-    pub rtfs_intent_source: String,                  // Canonical RTFS intent form
+    pub rtfs_intent_source: String, // Canonical RTFS intent form
     pub goal: String,
-    
+
     // Parsed RTFS expressions (runtime values)
     pub constraints: HashMap<String, Value>,
     pub preferences: HashMap<String, Value>,
     pub success_criteria: Option<Value>,
-    
+
     // Graph relationships
     pub parent_intent: Option<IntentId>,
     pub child_intents: Vec<IntentId>,
     pub triggered_by: TriggerSource,
-    
+
     // Generation context for audit/replay
     pub generation_context: GenerationContext,
-    
+
     pub status: IntentStatus,
     pub priority: u32,
     pub created_at: u64,
@@ -283,7 +283,10 @@ pub struct CCOSContext<'a> {
 
 impl Intent {
     pub fn new(goal: String) -> Self {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         Self {
             intent_id: format!("intent-{}", Uuid::new_v4()),
             name: None,
@@ -307,17 +310,23 @@ impl Intent {
     /// Convert a StorableIntent to a runtime Intent
     pub fn from_storable(storable: StorableIntent) -> Result<Self, RuntimeError> {
         // Convert string metadata to Value metadata
-        let metadata = storable.metadata.into_iter()
+        let metadata = storable
+            .metadata
+            .into_iter()
             .map(|(k, v)| (k, Value::String(v)))
             .collect();
 
         // For now, convert string constraints/preferences to Value::String
         // In a full implementation, these would be parsed as RTFS expressions
-        let constraints = storable.constraints.into_iter()
+        let constraints = storable
+            .constraints
+            .into_iter()
             .map(|(k, v)| (k, Value::String(v)))
             .collect();
 
-        let preferences = storable.preferences.into_iter()
+        let preferences = storable
+            .preferences
+            .into_iter()
             .map(|(k, v)| (k, Value::String(v)))
             .collect();
 
@@ -348,7 +357,10 @@ impl Plan {
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_code),
             status: PlanStatus::Draft,
-            created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             metadata: HashMap::new(),
             // New fields with defaults
             input_schema: None,
@@ -359,14 +371,19 @@ impl Plan {
         }
     }
 
-    pub fn new_named(name: String, language: PlanLanguage, body: PlanBody, intent_ids: Vec<IntentId>) -> Self {
+    pub fn new_named(
+        name: String,
+        language: PlanLanguage,
+        body: PlanBody,
+        intent_ids: Vec<IntentId>,
+    ) -> Self {
         let mut plan = Self::new_rtfs(String::new(), intent_ids);
         plan.name = Some(name);
         plan.language = language;
         plan.body = body;
         plan
     }
-    
+
     /// Create a new Plan with full first-class attributes
     pub fn new_with_schemas(
         name: Option<String>,
@@ -385,7 +402,10 @@ impl Plan {
             language: PlanLanguage::Rtfs20,
             body,
             status: PlanStatus::Draft,
-            created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             metadata: HashMap::new(),
             input_schema,
             output_schema,
@@ -409,7 +429,10 @@ impl Action {
             result: None,
             cost: None,
             duration_ms: None,
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
             metadata: HashMap::new(),
         }
     }
@@ -434,7 +457,12 @@ impl Action {
         self
     }
 
-    pub fn new_capability(plan_id: PlanId, intent_id: IntentId, name: &str, args: &[Value]) -> Self {
+    pub fn new_capability(
+        plan_id: PlanId,
+        intent_id: IntentId,
+        name: &str,
+        args: &[Value],
+    ) -> Self {
         Self::new(ActionType::CapabilityCall, plan_id, intent_id)
             .with_name(name)
             .with_arguments(args)
@@ -449,7 +477,10 @@ impl Action {
         self.result = Some(ExecutionResult {
             success: false,
             value: Value::Nil,
-            metadata: HashMap::from([("error".to_string(), Value::String(error_message.to_string()))]),
+            metadata: HashMap::from([(
+                "error".to_string(),
+                Value::String(error_message.to_string()),
+            )]),
         });
         self
     }
@@ -458,7 +489,10 @@ impl Action {
 impl ExecutionResult {
     pub fn with_error(mut self, error_message: &str) -> Self {
         self.success = false;
-        self.metadata.insert("error".to_string(), Value::String(error_message.to_string()));
+        self.metadata.insert(
+            "error".to_string(),
+            Value::String(error_message.to_string()),
+        );
         self
     }
 }
@@ -470,7 +504,7 @@ impl StorableIntent {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         Self {
             intent_id: Uuid::new_v4().to_string(),
             name: None,
@@ -496,34 +530,34 @@ impl StorableIntent {
             metadata: HashMap::new(),
         }
     }
-    
+
     /// Convert to RuntimeIntent by parsing RTFS expressions
     pub fn to_runtime_intent(&self, ccos: &CCOS) -> Result<RuntimeIntent, RuntimeError> {
         let mut rtfs_runtime = ccos.rtfs_runtime.lock().unwrap();
-        
+
         let mut constraints = HashMap::new();
         for (key, source) in &self.constraints {
             let parsed = rtfs_runtime.parse_expression(source)?;
             constraints.insert(key.clone(), parsed);
         }
-        
+
         let mut preferences = HashMap::new();
         for (key, source) in &self.preferences {
             let parsed = rtfs_runtime.parse_expression(source)?;
             preferences.insert(key.clone(), parsed);
         }
-        
+
         let success_criteria = if let Some(source) = &self.success_criteria {
             Some(rtfs_runtime.parse_expression(source)?)
         } else {
             None
         };
-        
+
         let mut metadata = HashMap::new();
         for (key, value) in &self.metadata {
             metadata.insert(key.clone(), Value::String(value.clone()));
         }
-        
+
         Ok(RuntimeIntent {
             intent_id: self.intent_id.clone(),
             name: self.name.clone(),
@@ -546,30 +580,29 @@ impl StorableIntent {
     }
 }
 
-
 impl RuntimeIntent {
     /// Convert to StorableIntent by converting runtime values back to RTFS source
     pub fn to_storable_intent(&self, ccos: &CCOS) -> Result<StorableIntent, RuntimeError> {
         let rtfs_runtime = ccos.rtfs_runtime.lock().unwrap();
-        
+
         let mut constraints = HashMap::new();
         for (key, value) in &self.constraints {
             let source = rtfs_runtime.value_to_source(value)?;
             constraints.insert(key.clone(), source);
         }
-        
+
         let mut preferences = HashMap::new();
         for (key, value) in &self.preferences {
             let source = rtfs_runtime.value_to_source(value)?;
             preferences.insert(key.clone(), source);
         }
-        
+
         let success_criteria = if let Some(value) = &self.success_criteria {
             Some(rtfs_runtime.value_to_source(value)?)
         } else {
             None
         };
-        
+
         let mut metadata = HashMap::new();
         for (key, value) in &self.metadata {
             if let Value::String(s) = value {
@@ -579,7 +612,7 @@ impl RuntimeIntent {
                 metadata.insert(key.clone(), source);
             }
         }
-        
+
         Ok(StorableIntent {
             intent_id: self.intent_id.clone(),
             name: self.name.clone(),
@@ -600,7 +633,7 @@ impl RuntimeIntent {
             metadata,
         })
     }
-    
+
     /// Evaluate success criteria in CCOS context
     pub fn evaluate_success_criteria(&self, context: &CCOSContext) -> Result<Value, RuntimeError> {
         if let Some(criteria) = &self.success_criteria {
@@ -610,24 +643,38 @@ impl RuntimeIntent {
             Ok(Value::Boolean(true)) // Default to success if no criteria
         }
     }
-    
+
     /// Evaluate a constraint by name
-    pub fn evaluate_constraint(&self, name: &str, context: &CCOSContext) -> Result<Value, RuntimeError> {
+    pub fn evaluate_constraint(
+        &self,
+        name: &str,
+        context: &CCOSContext,
+    ) -> Result<Value, RuntimeError> {
         if let Some(constraint) = self.constraints.get(name) {
             let mut rtfs_runtime = context.ccos.rtfs_runtime.lock().unwrap();
             rtfs_runtime.evaluate_with_ccos(constraint, context.ccos)
         } else {
-            Err(RuntimeError::Generic(format!("Constraint '{}' not found", name)))
+            Err(RuntimeError::Generic(format!(
+                "Constraint '{}' not found",
+                name
+            )))
         }
     }
-    
+
     /// Evaluate a preference by name
-    pub fn evaluate_preference(&self, name: &str, context: &CCOSContext) -> Result<Value, RuntimeError> {
+    pub fn evaluate_preference(
+        &self,
+        name: &str,
+        context: &CCOSContext,
+    ) -> Result<Value, RuntimeError> {
         if let Some(preference) = self.preferences.get(name) {
             let mut rtfs_runtime = context.ccos.rtfs_runtime.lock().unwrap();
             rtfs_runtime.evaluate_with_ccos(preference, context.ccos)
         } else {
-            Err(RuntimeError::Generic(format!("Preference '{}' not found", name)))
+            Err(RuntimeError::Generic(format!(
+                "Preference '{}' not found",
+                name
+            )))
         }
     }
 }
@@ -645,27 +692,29 @@ impl CCOSContext<'_> {
             current_plan,
         }
     }
-    
+
     /// Get current intent if available
     pub fn current_intent(&self) -> Option<&RuntimeIntent> {
         self.current_intent
     }
-    
+
     /// Get current plan if available
     pub fn current_plan(&self) -> Option<&Plan> {
         self.current_plan
     }
-    
+
     /// Access CCOS components
     pub fn intent_graph(&self) -> std::sync::MutexGuard<super::intent_graph::IntentGraph> {
         self.ccos.intent_graph.lock().unwrap()
     }
-    
+
     pub fn causal_chain(&self) -> std::sync::MutexGuard<super::causal_chain::CausalChain> {
         self.ccos.causal_chain.lock().unwrap()
     }
-    
-    pub fn capability_marketplace(&self) -> &std::sync::Arc<crate::ccos::capability_marketplace::CapabilityMarketplace> {
+
+    pub fn capability_marketplace(
+        &self,
+    ) -> &std::sync::Arc<crate::ccos::capability_marketplace::CapabilityMarketplace> {
         &self.ccos.capability_marketplace
     }
 }
@@ -679,8 +728,12 @@ mod tests {
     #[test]
     fn test_intent_creation() {
         let mut intent = Intent::new("Test goal".to_string());
-        intent.constraints.insert("max_cost".to_string(), Value::Float(100.0));
-        intent.preferences.insert("priority".to_string(), Value::String("speed".to_string()));
+        intent
+            .constraints
+            .insert("max_cost".to_string(), Value::Float(100.0));
+        intent
+            .preferences
+            .insert("priority".to_string(), Value::String("speed".to_string()));
 
         assert_eq!(intent.goal, "Test goal");
         assert_eq!(
@@ -704,7 +757,11 @@ mod tests {
 
     #[test]
     fn test_action_creation() {
-        let action = Action::new(ActionType::CapabilityCall, "plan-1".to_string(), "intent-1".to_string());
+        let action = Action::new(
+            ActionType::CapabilityCall,
+            "plan-1".to_string(),
+            "intent-1".to_string(),
+        );
 
         assert_eq!(action.plan_id, "plan-1");
         assert_eq!(action.intent_id, "intent-1");
@@ -712,17 +769,15 @@ mod tests {
 
     #[test]
     fn test_capability_creation() {
-        use crate::runtime::values::Arity;
-    use std::sync::Arc;
         use crate::runtime::error::RuntimeResult;
+        use crate::runtime::values::Arity;
         use crate::runtime::values::Value;
+        use std::sync::Arc;
 
         let capability = Capability::new(
             "image-processing/sharpen".to_string(),
             Arity::Fixed(2),
-            Arc::new(|_args: Vec<Value>| -> RuntimeResult<Value> {
-                Ok(Value::Nil)
-            })
+            Arc::new(|_args: Vec<Value>| -> RuntimeResult<Value> { Ok(Value::Nil) }),
         );
 
         assert_eq!(capability.id, "image-processing/sharpen");

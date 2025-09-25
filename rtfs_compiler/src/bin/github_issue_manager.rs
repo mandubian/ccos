@@ -5,11 +5,12 @@ use std::env;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get GitHub token from environment
-    let github_token = env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN environment variable required");
-    
+    let github_token =
+        env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN environment variable required");
+
     let client = Client::new();
     let base_url = "https://api.github.com";
-    
+
     // Close Issue #2
     println!("Closing Issue #2...");
     let close_response = client
@@ -150,12 +151,12 @@ This library will be a critical component for enabling RTFS programs to fully le
         let html_url = issue["html_url"].as_str().unwrap_or("");
         println!("✅ New issue created successfully!");
         println!("   Issue #{}: {}", issue_number, html_url);
-        
+
         // Now let's rename the local file to match the new issue number
         println!("Renaming local issue file...");
         let old_path = "ISSUE_3_CCOS_RTFS_LIBRARY.md";
         let new_path = format!("ISSUE_{}_CCOS_RTFS_LIBRARY.md", issue_number);
-        
+
         if std::path::Path::new(old_path).exists() {
             std::fs::rename(old_path, &new_path)?;
             println!("✅ Renamed {} to {}", old_path, new_path);
@@ -169,4 +170,4 @@ This library will be a critical component for enabling RTFS programs to fully le
 
     println!("🎉 GitHub issue management completed!");
     Ok(())
-} 
+}

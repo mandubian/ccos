@@ -1,7 +1,7 @@
 // Agent Simple* types moved under ccos::agent::types
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SimpleAgentCard {

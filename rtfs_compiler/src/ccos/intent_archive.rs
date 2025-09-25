@@ -2,9 +2,9 @@
 //!
 //! Implements robust, efficient archival and retrieval using the unified CCOS storage abstraction.
 
-use crate::runtime::error::RuntimeError;
-use super::types::{Intent, IntentId};
 use super::storage::{Archivable, ContentAddressableArchive, InMemoryArchive};
+use super::types::{Intent, IntentId};
+use crate::runtime::error::RuntimeError;
 use std::sync::Arc;
 
 /// Implementation of Archivable for Intent
@@ -77,8 +77,8 @@ pub fn create_in_memory_intent_archive() -> InMemoryIntentArchive {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{Intent, IntentStatus};
+    use super::*;
     use std::collections::HashMap;
 
     #[test]
@@ -96,13 +96,13 @@ mod tests {
             updated_at: 123456789,
             metadata: HashMap::new(),
         };
-        
-    // Test basic fields are present and correct
-    assert_eq!(intent.intent_id, "intent-123");
-    assert_eq!(intent.goal, "Complete testing");
-    assert_eq!(intent.status, IntentStatus::Active);
-    assert_eq!(intent.created_at, 123456789);
-        
+
+        // Test basic fields are present and correct
+        assert_eq!(intent.intent_id, "intent-123");
+        assert_eq!(intent.goal, "Complete testing");
+        assert_eq!(intent.status, IntentStatus::Active);
+        assert_eq!(intent.created_at, 123456789);
+
         // Hash should be consistent
         let hash1 = intent.content_hash();
         let hash2 = intent.content_hash();
@@ -125,33 +125,33 @@ mod tests {
             updated_at: 123456789,
             metadata: HashMap::new(),
         };
-        
-    let hash = archive.archive_intent(intent.clone()).unwrap();
 
-    // Test retrieval by hash
-    let retrieved = archive.retrieve(&hash).unwrap();
-    assert!(retrieved.is_some());
-    let retrieved = retrieved.unwrap();
-    assert_eq!(retrieved.intent_id, "intent-123");
+        let hash = archive.archive_intent(intent.clone()).unwrap();
 
-    // Test retrieval by intent_id
-    let by_id = archive.get_by_intent_id(&"intent-123".to_string()).unwrap();
-    assert_eq!(by_id.intent_id, "intent-123");
-        
+        // Test retrieval by hash
+        let retrieved = archive.retrieve(&hash).unwrap();
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.intent_id, "intent-123");
+
+        // Test retrieval by intent_id
+        let by_id = archive.get_by_intent_id(&"intent-123".to_string()).unwrap();
+        assert_eq!(by_id.intent_id, "intent-123");
+
         // Test retrieval by goal
         let by_goal = archive.get_by_goal("Complete testing");
         assert_eq!(by_goal.len(), 1);
         assert_eq!(by_goal[0].intent_id, "intent-123");
-        
+
         // Test retrieval by status
         let by_status = archive.get_by_status(&IntentStatus::Active);
         assert_eq!(by_status.len(), 1);
         assert_eq!(by_status[0].intent_id, "intent-123");
-        
+
         // Test stats
-    let stats = archive.stats();
-    assert_eq!(stats.total_entities, 1);
-        
+        let stats = archive.stats();
+        assert_eq!(stats.total_entities, 1);
+
         // Test integrity
         archive.verify_integrity().unwrap();
     }

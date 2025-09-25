@@ -16,27 +16,25 @@ use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
-use rtfs_compiler::ccos::types::{Plan, ActionType};
-use rtfs_compiler::ccos::intent_graph::IntentGraph;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
+use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::plan_archive::PlanArchive;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::types::{ActionType, Plan};
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 
-use rtfs_compiler::ccos::arbiter::plan_generation::{
-    PlanGenerationProvider,
-    StubPlanGenerationProvider,
-    LlmRtfsPlanGenerationProvider,
-};
+use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ccos::arbiter::llm_provider::{LlmProviderConfig, LlmProviderType};
+use rtfs_compiler::ccos::arbiter::plan_generation::{
+    LlmRtfsPlanGenerationProvider, PlanGenerationProvider, StubPlanGenerationProvider,
+};
 use rtfs_compiler::ccos::arbiter::{
-    arbiter_factory::ArbiterFactory,
     arbiter_config::{ArbiterConfig, ArbiterEngineType, LlmConfig},
+    arbiter_factory::ArbiterFactory,
 };
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ast::MapKey;
 
 // Compact pretty-printer to render Value maps with friendly keys (e.g., {:message "hi"})
 fn render_value_compact(v: &Value) -> String {
@@ -87,8 +85,8 @@ fn render_value_compact(v: &Value) -> String {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "llm_rtfs_plan_demo")] 
-#[command(about = "Generate and execute RTFS plans via reduced-grammar LLM prompt")] 
+#[command(name = "llm_rtfs_plan_demo")]
+#[command(about = "Generate and execute RTFS plans via reduced-grammar LLM prompt")]
 struct Args {
     /// Natural language goal
     #[arg(long)]
@@ -149,7 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // --- Generate Intent via Arbiter (LLM or Stub) ---
-    let use_stub = args.stub || std::env::var("OPENROUTER_API_KEY").is_err() && std::env::var("OPENAI_API_KEY").is_err();
+    let use_stub = args.stub
+        || std::env::var("OPENROUTER_API_KEY").is_err() && std::env::var("OPENAI_API_KEY").is_err();
 
     let arbiter_config = if use_stub {
         ArbiterConfig {
@@ -165,14 +164,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prompts: None,
             }),
             delegation_config: None,
-            capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
-            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(),
+            capability_config:
+                rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
+            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(
+            ),
             template_config: None,
         }
     } else {
         let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
-            (Some(key), Some("https://openrouter.ai/api/v1".to_string()), model)
+            let model = std::env::var("LLM_MODEL")
+                .unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
+            (
+                Some(key),
+                Some("https://openrouter.ai/api/v1".to_string()),
+                model,
+            )
         } else {
             let key = std::env::var("OPENAI_API_KEY").ok();
             let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
@@ -182,7 +188,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ArbiterConfig {
             engine_type: ArbiterEngineType::Llm,
             llm_config: Some(LlmConfig {
-                provider_type: rtfs_compiler::ccos::arbiter::arbiter_config::LlmProviderType::OpenAI,
+                provider_type:
+                    rtfs_compiler::ccos::arbiter::arbiter_config::LlmProviderType::OpenAI,
                 model,
                 api_key,
                 base_url,
@@ -192,8 +199,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prompts: None,
             }),
             delegation_config: None,
-            capability_config: rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
-            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(),
+            capability_config:
+                rtfs_compiler::ccos::arbiter::arbiter_config::CapabilityConfig::default(),
+            security_config: rtfs_compiler::ccos::arbiter::arbiter_config::SecurityConfig::default(
+            ),
             template_config: None,
         }
     };
@@ -223,12 +232,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.verbose {
             println!("ℹ️ Advisory capability whitelist (demo): :ccos.echo, :ccos.math.add");
         }
-    let provider = StubPlanGenerationProvider;
-        provider.generate_plan(&intent, Arc::clone(&marketplace)).await?
+        let provider = StubPlanGenerationProvider;
+        provider
+            .generate_plan(&intent, Arc::clone(&marketplace))
+            .await?
     } else {
         let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
-            (Some(key), Some("https://openrouter.ai/api/v1".to_string()), model)
+            let model = std::env::var("LLM_MODEL")
+                .unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
+            (
+                Some(key),
+                Some("https://openrouter.ai/api/v1".to_string()),
+                model,
+            )
         } else {
             // OpenAI native
             let key = std::env::var("OPENAI_API_KEY").ok();
@@ -246,11 +262,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             timeout_seconds: Some(45),
         };
         let provider = LlmRtfsPlanGenerationProvider::new(config);
-        let result = provider.generate_plan(&intent, Arc::clone(&marketplace)).await?;
+        let result = provider
+            .generate_plan(&intent, Arc::clone(&marketplace))
+            .await?;
         if args.verbose {
             println!("ℹ️ Advisory capability whitelist (demo): :ccos.echo, :ccos.math.add");
         }
-        if let Some(diag) = &result.diagnostics { println!("🩺 Diagnostics: {}", diag); }
+        if let Some(diag) = &result.diagnostics {
+            println!("🩺 Diagnostics: {}", diag);
+        }
         result
     };
 
@@ -276,11 +296,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Log intent lifecycle: created and transition to Executing (ledger indexes by plan, so we log after plan exists)
     if let Ok(mut chain) = causal_chain.lock() {
         let _ = chain.log_intent_created(&plan_id, &intent.intent_id, &intent.goal, None);
-        let _ = chain.log_intent_status_change(&plan_id, &intent.intent_id, "Active", "Executing", "demo:start", None);
+        let _ = chain.log_intent_status_change(
+            &plan_id,
+            &intent.intent_id,
+            "Active",
+            "Executing",
+            "demo:start",
+            None,
+        );
     }
     if args.verbose {
         println!("\n🧠 Intent lifecycle:");
-        println!("  • Created intent {} (goal: \"{}\")", intent.intent_id, intent.goal);
+        println!(
+            "  • Created intent {} (goal: \"{}\")",
+            intent.intent_id, intent.goal
+        );
         println!("  • Status: Active → Executing");
     }
     println!("🚀 Executing plan {}", plan_id);
@@ -293,7 +323,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 render_value_compact(&exec.value)
             );
             if let Ok(mut chain) = causal_chain.lock() {
-                let _ = chain.log_intent_status_change(&plan_id, &intent.intent_id, "Executing", "Completed", "demo:completed", None);
+                let _ = chain.log_intent_status_change(
+                    &plan_id,
+                    &intent.intent_id,
+                    "Executing",
+                    "Completed",
+                    "demo:completed",
+                    None,
+                );
             }
             if args.verbose {
                 println!("  • Status: Executing → Completed");
@@ -302,7 +339,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => {
             println!("❌ Execution failed: {}", e);
             if let Ok(mut chain) = causal_chain.lock() {
-                let _ = chain.log_intent_status_change(&plan_id, &intent.intent_id, "Executing", "Failed", &format!("demo:error: {}", e), None);
+                let _ = chain.log_intent_status_change(
+                    &plan_id,
+                    &intent.intent_id,
+                    "Executing",
+                    "Failed",
+                    &format!("demo:error: {}", e),
+                    None,
+                );
             }
             if args.verbose {
                 println!("  • Status: Executing → Failed");
@@ -314,16 +358,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Note: Capability calls are logged twice: once at call time (no result yet), then again with the result.
     // We display only entries that include a result to avoid duplicate "<no result>" lines.
     if let Ok(chain) = causal_chain.lock() {
-    let actions = chain.get_actions_for_plan(&plan_id);
-    let mut idx = 1;
-    let mut printed_header = false;
-    let mut seen_ids = std::collections::HashSet::new();
+        let actions = chain.get_actions_for_plan(&plan_id);
+        let mut idx = 1;
+        let mut printed_header = false;
+        let mut seen_ids = std::collections::HashSet::new();
         for a in actions {
             if a.action_type == ActionType::CapabilityResult {
                 // Only show actions that have a recorded result
-        if let Some(exec) = &a.result {
-            // Deduplicate by action_id in case both pre and post entries exist
-            if !seen_ids.insert(a.action_id.clone()) { continue; }
+                if let Some(exec) = &a.result {
+                    // Deduplicate by action_id in case both pre and post entries exist
+                    if !seen_ids.insert(a.action_id.clone()) {
+                        continue;
+                    }
                     if !printed_header {
                         println!("\n🔎 Step outputs (CapabilityCall actions):");
                         printed_header = true;
@@ -334,8 +380,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .get_parent(&a.action_id)
                         .and_then(|parent| parent.arguments.as_ref())
                         .map(|args| {
-                            if args.is_empty() { "".to_string() } else {
-                                let rendered: Vec<String> = args.iter().map(|v| render_value_compact(v)).collect();
+                            if args.is_empty() {
+                                "".to_string()
+                            } else {
+                                let rendered: Vec<String> =
+                                    args.iter().map(|v| render_value_compact(v)).collect();
                                 format!("({})", rendered.join(", "))
                             }
                         })

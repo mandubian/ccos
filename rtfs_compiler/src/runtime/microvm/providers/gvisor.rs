@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::microvm::core::{ExecutionContext, ExecutionResult, ExecutionMetadata, Program};
+use crate::runtime::microvm::core::{
+    ExecutionContext, ExecutionMetadata, ExecutionResult, Program,
+};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::Value;
 
@@ -97,7 +99,7 @@ impl GvisorMicroVMProvider {
     /// Create a new gVisor container
     fn create_container(&mut self, container_id: &str) -> RuntimeResult<GvisorContainer> {
         let socket_path = PathBuf::from(format!("/tmp/gvisor-{}.sock", container_id));
-        
+
         // Create container configuration
         let container_config = GvisorConfig {
             image: self.config.image.clone(),
@@ -120,8 +122,7 @@ impl GvisorMicroVMProvider {
 
         // Add resource limits
         if let Some(memory_limit) = container_config.resource_limits.memory_limit_mb {
-            cmd.arg("--memory-limit")
-                .arg(&format!("{}m", memory_limit));
+            cmd.arg("--memory-limit").arg(&format!("{}m", memory_limit));
         }
 
         if let Some(cpu_limit) = container_config.resource_limits.cpu_limit_percent {
@@ -138,10 +139,12 @@ impl GvisorMicroVMProvider {
 
         // Add mount points
         for mount in &container_config.mounts {
-            let mount_spec = format!("{}:{}:{}", 
-                mount.source.display(), 
+            let mount_spec = format!(
+                "{}:{}:{}",
+                mount.source.display(),
                 mount.target.display(),
-                mount.options.join(","));
+                mount.options.join(",")
+            );
             cmd.arg("--mount").arg(&mount_spec);
         }
 
@@ -150,12 +153,16 @@ impl GvisorMicroVMProvider {
             cmd.arg("--env").arg(&format!("{}={}", key, value));
         }
 
-        let output = cmd.output()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create gVisor container: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create gVisor container: {}", e))
+        })?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(RuntimeError::Generic(format!("Failed to create gVisor container: {}", error_msg)));
+            return Err(RuntimeError::Generic(format!(
+                "Failed to create gVisor container: {}",
+                error_msg
+            )));
         }
 
         Ok(GvisorContainer {
@@ -170,15 +177,18 @@ impl GvisorMicroVMProvider {
     /// Start a gVisor container
     fn start_container(&mut self, container: &mut GvisorContainer) -> RuntimeResult<()> {
         let mut cmd = Command::new("runsc");
-        cmd.arg("start")
-            .arg(&container.id);
+        cmd.arg("start").arg(&container.id);
 
-        let output = cmd.output()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to start gVisor container: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to start gVisor container: {}", e))
+        })?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(RuntimeError::Generic(format!("Failed to start gVisor container: {}", error_msg)));
+            return Err(RuntimeError::Generic(format!(
+                "Failed to start gVisor container: {}",
+                error_msg
+            )));
         }
 
         container.status = ContainerStatus::Running;
@@ -186,18 +196,24 @@ impl GvisorMicroVMProvider {
     }
 
     /// Execute a command in a gVisor container
-    fn execute_in_container(&self, container_id: &str, command: &[String]) -> RuntimeResult<String> {
+    fn execute_in_container(
+        &self,
+        container_id: &str,
+        command: &[String],
+    ) -> RuntimeResult<String> {
         let mut cmd = Command::new("runsc");
-        cmd.arg("exec")
-            .arg(container_id)
-            .args(command);
+        cmd.arg("exec").arg(container_id).args(command);
 
-        let output = cmd.output()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to execute in gVisor container: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to execute in gVisor container: {}", e))
+        })?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(RuntimeError::Generic(format!("Failed to execute in gVisor container: {}", error_msg)));
+            return Err(RuntimeError::Generic(format!(
+                "Failed to execute in gVisor container: {}",
+                error_msg
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -207,16 +223,18 @@ impl GvisorMicroVMProvider {
     /// Stop a gVisor container
     fn stop_container(&mut self, container_id: &str) -> RuntimeResult<()> {
         let mut cmd = Command::new("runsc");
-        cmd.arg("kill")
-            .arg(container_id)
-            .arg("SIGTERM");
+        cmd.arg("kill").arg(container_id).arg("SIGTERM");
 
-        let output = cmd.output()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to stop gVisor container: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to stop gVisor container: {}", e))
+        })?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(RuntimeError::Generic(format!("Failed to stop gVisor container: {}", error_msg)));
+            return Err(RuntimeError::Generic(format!(
+                "Failed to stop gVisor container: {}",
+                error_msg
+            )));
         }
 
         if let Some(container) = self.containers.get_mut(container_id) {
@@ -229,15 +247,18 @@ impl GvisorMicroVMProvider {
     /// Delete a gVisor container
     fn delete_container(&mut self, container_id: &str) -> RuntimeResult<()> {
         let mut cmd = Command::new("runsc");
-        cmd.arg("delete")
-            .arg(container_id);
+        cmd.arg("delete").arg(container_id);
 
-        let output = cmd.output()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to delete gVisor container: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to delete gVisor container: {}", e))
+        })?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(RuntimeError::Generic(format!("Failed to delete gVisor container: {}", error_msg)));
+            return Err(RuntimeError::Generic(format!(
+                "Failed to delete gVisor container: {}",
+                error_msg
+            )));
         }
 
         self.containers.remove(container_id);
@@ -267,7 +288,7 @@ fi
         let write_cmd = vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("echo '{}' > {}", rtfs_source, runtime_path)
+            format!("echo '{}' > {}", rtfs_source, runtime_path),
         ];
 
         self.execute_in_container(container_id, &write_cmd)?;
@@ -280,16 +301,22 @@ fi
     }
 
     /// Execute RTFS program in a gVisor container
-    fn execute_rtfs_in_container(&self, container_id: &str, program: &Program) -> RuntimeResult<Value> {
+    fn execute_rtfs_in_container(
+        &self,
+        container_id: &str,
+        program: &Program,
+    ) -> RuntimeResult<Value> {
         let runtime_path = format!("/tmp/rtfs-runtime-{}.sh", container_id);
-        
+
         match program {
             Program::RtfsSource(source) => {
                 // For now, we'll simulate RTFS evaluation
                 // In a real implementation, we'd compile and execute the RTFS code
                 let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();
-                let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
-                let result = rtfs_runtime.evaluate(source)
+                let rtfs_runtime =
+                    crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
+                let result = rtfs_runtime
+                    .evaluate(source)
                     .map_err(|e| RuntimeError::Generic(format!("RTFS evaluation failed: {}", e)))?;
                 Ok(result)
             }
@@ -302,8 +329,10 @@ fi
             _ => {
                 // For other program types, delegate to the main RTFS runtime
                 let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();
-                let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
-                let result = rtfs_runtime.evaluate("(println \"Program executed in gVisor container\")")
+                let rtfs_runtime =
+                    crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
+                let result = rtfs_runtime
+                    .evaluate("(println \"Program executed in gVisor container\")")
                     .map_err(|e| RuntimeError::Generic(format!("RTFS evaluation failed: {}", e)))?;
                 Ok(result)
             }
@@ -322,16 +351,16 @@ fi
         // Create a new container
         let container_id = format!("rtfs-{}", Uuid::new_v4().simple());
         let mut container = self.create_container(&container_id)?;
-        
+
         // Start the container
         self.start_container(&mut container)?;
-        
+
         // Deploy RTFS runtime
         self.deploy_rtfs_runtime(&container_id)?;
-        
+
         // Store the container
         self.containers.insert(container_id.clone(), container);
-        
+
         Ok(container_id)
     }
 }
@@ -355,12 +384,16 @@ impl MicroVMProvider for GvisorMicroVMProvider {
 
         // Check if gVisor is available
         if !self.is_available() {
-            return Err(RuntimeError::Generic("gVisor (runsc) is not available on this system".to_string()));
+            return Err(RuntimeError::Generic(
+                "gVisor (runsc) is not available on this system".to_string(),
+            ));
         }
 
         // Check if provider is initialized
         if !self.initialized {
-            return Err(RuntimeError::Generic("gVisor provider not initialized".to_string()));
+            return Err(RuntimeError::Generic(
+                "gVisor provider not initialized".to_string(),
+            ));
         }
 
         // Execute the program
@@ -371,15 +404,20 @@ impl MicroVMProvider for GvisorMicroVMProvider {
                 match program {
                     Program::RtfsSource(source) => {
                         let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();
-                        let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(module_registry.into());
-                        rtfs_runtime.evaluate(source)
-                            .map_err(|e| RuntimeError::Generic(format!("RTFS evaluation failed: {}", e)))?
+                        let rtfs_runtime = crate::runtime::Runtime::new_with_tree_walking_strategy(
+                            module_registry.into(),
+                        );
+                        rtfs_runtime.evaluate(source).map_err(|e| {
+                            RuntimeError::Generic(format!("RTFS evaluation failed: {}", e))
+                        })?
                     }
                     _ => Value::String("Program executed in gVisor container".to_string()),
                 }
             }
             None => {
-                return Err(RuntimeError::Generic("No program specified for execution".to_string()));
+                return Err(RuntimeError::Generic(
+                    "No program specified for execution".to_string(),
+                ));
             }
         };
 
@@ -388,7 +426,7 @@ impl MicroVMProvider for GvisorMicroVMProvider {
         // Create execution metadata
         let metadata = ExecutionMetadata {
             duration,
-            memory_used_mb: 512, // Default memory limit
+            memory_used_mb: 512,                // Default memory limit
             cpu_time: Duration::from_millis(1), // Simulated CPU time
             network_requests: vec![],
             file_operations: vec![],
@@ -403,7 +441,7 @@ impl MicroVMProvider for GvisorMicroVMProvider {
     fn cleanup(&mut self) -> RuntimeResult<()> {
         // Stop and delete all containers
         let container_ids: Vec<String> = self.containers.keys().cloned().collect();
-        
+
         for container_id in container_ids {
             let _ = self.stop_container(&container_id);
             let _ = self.delete_container(&container_id);

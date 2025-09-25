@@ -1,7 +1,6 @@
 use crate::ast::{
-    ImportDefinition, ModuleDefinition,
-    ModuleLevelDefinition, Symbol, TopLevel,
-    ResourceDefinition, Property, Expression as AstExpression,
+    Expression as AstExpression, ImportDefinition, ModuleDefinition, ModuleLevelDefinition,
+    Property, ResourceDefinition, Symbol, TopLevel,
 };
 use crate::parser::common::{build_symbol, next_significant};
 use crate::parser::errors::{invalid_input_error, pair_to_source_span, PestParseError};
@@ -33,7 +32,6 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         | Rule::log_step_expr
         | Rule::discover_agents_expr
         | Rule::resource_ref
-
         | Rule::identifier
         | Rule::namespaced_identifier => {
             // Build the expression first. If it's a (resource ...) top-level form,
@@ -71,27 +69,37 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
                         let mut properties: Vec<Property> = Vec::new();
                         for arg in arguments.iter().skip(1) {
                             // Expect a FunctionCall (property :key value)
-                            if let AstExpression::FunctionCall { callee: prop_callee, arguments: prop_args } = arg {
+                            if let AstExpression::FunctionCall {
+                                callee: prop_callee,
+                                arguments: prop_args,
+                            } = arg
+                            {
                                 if let AstExpression::Symbol(prop_sym) = &**prop_callee {
                                     if prop_sym.0 == "property" {
                                         if prop_args.len() < 2 {
-                                            return Err(super::errors::PestParseError::InvalidInput {
-                                                message: "property requires a key and a value".to_string(),
-                                                span: Some(super::errors::pair_to_source_span(&pair)),
-                                            });
+                                            return Err(
+                                                super::errors::PestParseError::InvalidInput {
+                                                    message: "property requires a key and a value"
+                                                        .to_string(),
+                                                    span: Some(super::errors::pair_to_source_span(
+                                                        &pair,
+                                                    )),
+                                                },
+                                            );
                                         }
                                         // key should be a Literal::Keyword
                                         match &prop_args[0] {
-                                            AstExpression::Literal(lit) => {
-                                                match lit {
-                                                    crate::ast::Literal::Keyword(k) => {
-                                                        let value_expr = prop_args[1].clone();
-                                                        properties.push(Property { key: k.clone(), value: value_expr });
-                                                        continue;
-                                                    }
-                                                    _ => {}
+                                            AstExpression::Literal(lit) => match lit {
+                                                crate::ast::Literal::Keyword(k) => {
+                                                    let value_expr = prop_args[1].clone();
+                                                    properties.push(Property {
+                                                        key: k.clone(),
+                                                        value: value_expr,
+                                                    });
+                                                    continue;
                                                 }
-                                            }
+                                                _ => {}
+                                            },
                                             _ => {}
                                         }
                                         return Err(super::errors::PestParseError::InvalidInput {
@@ -104,7 +112,10 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
                             // Non-property args are ignored for now (could be errors)
                         }
 
-                        let res_def = ResourceDefinition { name: Symbol(base_name), properties };
+                        let res_def = ResourceDefinition {
+                            name: Symbol(base_name),
+                            properties,
+                        };
                         return Ok(TopLevel::Resource(res_def));
                     }
                 }

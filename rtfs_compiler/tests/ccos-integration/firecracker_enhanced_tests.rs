@@ -1,5 +1,5 @@
 //! Enhanced Firecracker Provider Tests
-//! 
+//!
 //! This module tests the enhanced Firecracker provider with:
 //! - Real VM lifecycle management
 //! - Resource monitoring and limits
@@ -7,14 +7,14 @@
 //! - Performance optimization
 //! - Network isolation
 
+use rtfs_compiler::runtime::error::RuntimeResult;
 use rtfs_compiler::runtime::microvm::providers::firecracker::{
-    FirecrackerMicroVMProvider, FirecrackerConfig, SecurityFeatures, ResourceLimits, 
-    PerformanceTuning, AttestationConfig
+    AttestationConfig, FirecrackerConfig, FirecrackerMicroVMProvider, PerformanceTuning,
+    ResourceLimits, SecurityFeatures,
 };
 use rtfs_compiler::runtime::microvm::providers::MicroVMProvider;
-use rtfs_compiler::runtime::error::RuntimeResult;
-use std::time::Duration;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[test]
 fn test_enhanced_firecracker_configuration() -> RuntimeResult<()> {
@@ -23,12 +23,15 @@ fn test_enhanced_firecracker_configuration() -> RuntimeResult<()> {
     // Test 1: Default configuration with security features
     println!("1. Testing default configuration with security features:");
     let config = FirecrackerConfig::default();
-    
+
     assert_eq!(config.vcpu_count, 1);
     assert_eq!(config.memory_size_mb, 512);
     assert_eq!(config.security_features.seccomp_enabled, true);
     assert_eq!(config.security_features.jailer_enabled, true);
-    assert_eq!(config.resource_limits.max_cpu_time, Duration::from_secs(300));
+    assert_eq!(
+        config.resource_limits.max_cpu_time,
+        Duration::from_secs(300)
+    );
     assert_eq!(config.resource_limits.max_memory_mb, 1024);
     println!("  ✅ Default configuration with security features");
 
@@ -44,19 +47,25 @@ fn test_enhanced_firecracker_configuration() -> RuntimeResult<()> {
     custom_config.attestation_config.enabled = true;
     custom_config.attestation_config.expected_kernel_hash = Some("sha256:abc123".to_string());
     custom_config.attestation_config.expected_rootfs_hash = Some("sha256:def456".to_string());
-    
+
     assert_eq!(custom_config.vcpu_count, 2);
     assert_eq!(custom_config.memory_size_mb, 1024);
     assert_eq!(custom_config.security_features.seccomp_enabled, true);
-    assert_eq!(custom_config.resource_limits.max_cpu_time, Duration::from_secs(600));
+    assert_eq!(
+        custom_config.resource_limits.max_cpu_time,
+        Duration::from_secs(600)
+    );
     assert_eq!(custom_config.attestation_config.enabled, true);
-    assert_eq!(custom_config.attestation_config.expected_kernel_hash, Some("sha256:abc123".to_string()));
+    assert_eq!(
+        custom_config.attestation_config.expected_kernel_hash,
+        Some("sha256:abc123".to_string())
+    );
     println!("  ✅ Custom configuration with enhanced features");
 
     // Test 3: Security features configuration
     println!("\n3. Testing security features configuration:");
     let security_features = SecurityFeatures::default();
-    
+
     assert_eq!(security_features.seccomp_enabled, true);
     assert_eq!(security_features.jailer_enabled, true);
     assert_eq!(security_features.jailer_uid, Some(1000));
@@ -68,7 +77,7 @@ fn test_enhanced_firecracker_configuration() -> RuntimeResult<()> {
     // Test 4: Resource limits configuration
     println!("\n4. Testing resource limits configuration:");
     let resource_limits = ResourceLimits::default();
-    
+
     assert_eq!(resource_limits.max_cpu_time, Duration::from_secs(300));
     assert_eq!(resource_limits.max_memory_mb, 1024);
     assert_eq!(resource_limits.max_disk_io_mb, 100);
@@ -80,7 +89,7 @@ fn test_enhanced_firecracker_configuration() -> RuntimeResult<()> {
     // Test 5: Performance tuning configuration
     println!("\n5. Testing performance tuning configuration:");
     let performance_tuning = PerformanceTuning::default();
-    
+
     assert_eq!(performance_tuning.cpu_pinning, false);
     assert_eq!(performance_tuning.memory_hugepages, false);
     assert_eq!(performance_tuning.io_scheduler, "none");
@@ -91,7 +100,7 @@ fn test_enhanced_firecracker_configuration() -> RuntimeResult<()> {
     // Test 6: Attestation configuration
     println!("\n6. Testing attestation configuration:");
     let attestation_config = AttestationConfig::default();
-    
+
     assert_eq!(attestation_config.enabled, false);
     assert_eq!(attestation_config.tpm_enabled, false);
     assert_eq!(attestation_config.measured_boot, false);
@@ -109,7 +118,7 @@ fn test_enhanced_firecracker_provider_lifecycle() -> RuntimeResult<()> {
     // Test 1: Provider creation with enhanced features
     println!("1. Testing provider creation with enhanced features:");
     let provider = FirecrackerMicroVMProvider::new();
-    
+
     assert_eq!(provider.name(), "firecracker");
     println!("  ✅ Provider creation with enhanced features");
 
@@ -117,13 +126,13 @@ fn test_enhanced_firecracker_provider_lifecycle() -> RuntimeResult<()> {
     println!("\n2. Testing provider initialization (mock):");
     // Note: We can't test real initialization without Firecracker installed
     // But we can test the configuration validation logic
-    
+
     let provider = FirecrackerMicroVMProvider::new();
-    
+
     // Test availability check (will likely fail without Firecracker)
     let is_available = provider.is_available();
     println!("  📋 Firecracker available: {}", is_available);
-    
+
     // Test configuration schema
     let schema = provider.get_config_schema();
     assert!(schema.is_object());
@@ -132,7 +141,7 @@ fn test_enhanced_firecracker_provider_lifecycle() -> RuntimeResult<()> {
     // Test 3: Enhanced configuration validation
     println!("\n3. Testing enhanced configuration validation:");
     let config = FirecrackerConfig::default();
-    
+
     // Test security features validation
     assert_eq!(config.security_features.seccomp_enabled, true);
     assert_eq!(config.security_features.jailer_enabled, true);
@@ -141,7 +150,10 @@ fn test_enhanced_firecracker_provider_lifecycle() -> RuntimeResult<()> {
     println!("  ✅ Security features validation");
 
     // Test resource limits validation
-    assert_eq!(config.resource_limits.max_cpu_time, Duration::from_secs(300));
+    assert_eq!(
+        config.resource_limits.max_cpu_time,
+        Duration::from_secs(300)
+    );
     assert_eq!(config.resource_limits.max_memory_mb, 1024);
     println!("  ✅ Resource limits validation");
 
@@ -164,7 +176,7 @@ fn test_enhanced_firecracker_security_features() -> RuntimeResult<()> {
     // Test 1: Security features configuration
     println!("1. Testing security features configuration:");
     let security_features = SecurityFeatures::default();
-    
+
     assert_eq!(security_features.seccomp_enabled, true);
     assert_eq!(security_features.jailer_enabled, true);
     assert_eq!(security_features.jailer_uid, Some(1000));
@@ -175,19 +187,28 @@ fn test_enhanced_firecracker_security_features() -> RuntimeResult<()> {
 
     // Test 2: Jailer configuration
     println!("\n2. Testing jailer configuration:");
-    assert_eq!(security_features.jailer_chroot_base, Some(PathBuf::from("/opt/firecracker/jail")));
-    assert_eq!(security_features.jailer_netns, Some("firecracker".to_string()));
-    assert_eq!(security_features.seccomp_filter_path, Some(PathBuf::from("/opt/firecracker/seccomp.bpf")));
+    assert_eq!(
+        security_features.jailer_chroot_base,
+        Some(PathBuf::from("/opt/firecracker/jail"))
+    );
+    assert_eq!(
+        security_features.jailer_netns,
+        Some("firecracker".to_string())
+    );
+    assert_eq!(
+        security_features.seccomp_filter_path,
+        Some(PathBuf::from("/opt/firecracker/seccomp.bpf"))
+    );
     println!("  ✅ Jailer configuration");
 
     // Test 3: Security context simulation
     println!("\n3. Testing security context simulation:");
     // In a real implementation, we would test actual security context
     // For now, we'll test the structure and defaults
-    
+
     let provider = FirecrackerMicroVMProvider::new();
     let config = FirecrackerConfig::default();
-    
+
     assert_eq!(config.security_features.seccomp_enabled, true);
     assert_eq!(config.security_features.jailer_enabled, true);
     println!("  ✅ Security context simulation");
@@ -200,10 +221,16 @@ fn test_enhanced_firecracker_security_features() -> RuntimeResult<()> {
     attestation_config.expected_rootfs_hash = Some("sha256:def456".to_string());
     attestation_config.tpm_enabled = true;
     attestation_config.measured_boot = true;
-    
+
     assert_eq!(attestation_config.enabled, true);
-    assert_eq!(attestation_config.expected_kernel_hash, Some("sha256:abc123".to_string()));
-    assert_eq!(attestation_config.expected_rootfs_hash, Some("sha256:def456".to_string()));
+    assert_eq!(
+        attestation_config.expected_kernel_hash,
+        Some("sha256:abc123".to_string())
+    );
+    assert_eq!(
+        attestation_config.expected_rootfs_hash,
+        Some("sha256:def456".to_string())
+    );
     assert_eq!(attestation_config.tpm_enabled, true);
     assert_eq!(attestation_config.measured_boot, true);
     println!("  ✅ Attestation configuration");
@@ -220,7 +247,7 @@ fn test_enhanced_firecracker_resource_monitoring() -> RuntimeResult<()> {
     // Test 1: Resource limits configuration
     println!("1. Testing resource limits configuration:");
     let resource_limits = ResourceLimits::default();
-    
+
     assert_eq!(resource_limits.max_cpu_time, Duration::from_secs(300));
     assert_eq!(resource_limits.max_memory_mb, 1024);
     assert_eq!(resource_limits.max_disk_io_mb, 100);
@@ -232,7 +259,7 @@ fn test_enhanced_firecracker_resource_monitoring() -> RuntimeResult<()> {
     // Test 2: Resource usage tracking structure
     println!("\n2. Testing resource usage tracking structure:");
     let provider = FirecrackerMicroVMProvider::new();
-    
+
     // Test monitoring stats structure
     let stats_result = provider.get_monitoring_stats();
     if let Ok(stats) = stats_result {
@@ -246,7 +273,7 @@ fn test_enhanced_firecracker_resource_monitoring() -> RuntimeResult<()> {
     // Test 3: Performance tuning configuration
     println!("\n3. Testing performance tuning configuration:");
     let performance_tuning = PerformanceTuning::default();
-    
+
     assert_eq!(performance_tuning.cpu_pinning, false);
     assert_eq!(performance_tuning.memory_hugepages, false);
     assert_eq!(performance_tuning.io_scheduler, "none");
@@ -257,9 +284,12 @@ fn test_enhanced_firecracker_resource_monitoring() -> RuntimeResult<()> {
     // Test 4: Resource monitoring simulation
     println!("\n4. Testing resource monitoring simulation:");
     let config = FirecrackerConfig::default();
-    
+
     // Test resource limits validation
-    assert_eq!(config.resource_limits.max_cpu_time, Duration::from_secs(300));
+    assert_eq!(
+        config.resource_limits.max_cpu_time,
+        Duration::from_secs(300)
+    );
     assert_eq!(config.resource_limits.max_memory_mb, 1024);
     assert_eq!(config.resource_limits.max_disk_io_mb, 100);
     assert_eq!(config.resource_limits.max_network_io_mb, 50);
@@ -277,7 +307,7 @@ fn test_enhanced_firecracker_performance_optimization() -> RuntimeResult<()> {
     // Test 1: Performance tuning configuration
     println!("1. Testing performance tuning configuration:");
     let mut performance_tuning = PerformanceTuning::default();
-    
+
     assert_eq!(performance_tuning.cpu_pinning, false);
     assert_eq!(performance_tuning.memory_hugepages, false);
     assert_eq!(performance_tuning.io_scheduler, "none");
@@ -290,7 +320,7 @@ fn test_enhanced_firecracker_performance_optimization() -> RuntimeResult<()> {
     performance_tuning.cpu_pinning = true;
     performance_tuning.memory_hugepages = true;
     performance_tuning.io_scheduler = "deadline".to_string();
-    
+
     assert_eq!(performance_tuning.cpu_pinning, true);
     assert_eq!(performance_tuning.memory_hugepages, true);
     assert_eq!(performance_tuning.io_scheduler, "deadline");
@@ -299,13 +329,16 @@ fn test_enhanced_firecracker_performance_optimization() -> RuntimeResult<()> {
     // Test 3: Performance metrics structure
     println!("\n3. Testing performance metrics structure:");
     let provider = FirecrackerMicroVMProvider::new();
-    
+
     // Test monitoring stats for performance metrics
     let stats_result = provider.get_monitoring_stats();
     if let Ok(stats) = stats_result {
         assert_eq!(stats.performance_stats.total_operations, 0);
         assert_eq!(stats.performance_stats.average_startup_time, Duration::ZERO);
-        assert_eq!(stats.performance_stats.average_execution_latency, Duration::ZERO);
+        assert_eq!(
+            stats.performance_stats.average_execution_latency,
+            Duration::ZERO
+        );
         println!("  ✅ Performance metrics structure");
     } else {
         println!("  ⚠️  Performance metrics not available (expected without real VMs)");
@@ -315,7 +348,7 @@ fn test_enhanced_firecracker_performance_optimization() -> RuntimeResult<()> {
     println!("\n4. Testing configuration schema for performance features:");
     let schema = provider.get_config_schema();
     assert!(schema.is_object());
-    
+
     // Check that schema includes performance-related fields
     let schema_str = schema.to_string();
     assert!(schema_str.contains("security_features"));
@@ -335,39 +368,42 @@ fn test_enhanced_firecracker_integration() -> RuntimeResult<()> {
     // Test 1: Complete provider setup
     println!("1. Testing complete provider setup:");
     let provider = FirecrackerMicroVMProvider::new();
-    
+
     assert_eq!(provider.name(), "firecracker");
     println!("  ✅ Complete provider setup");
 
     // Test 2: Configuration integration
     println!("\n2. Testing configuration integration:");
     let config = FirecrackerConfig::default();
-    
+
     // Test all configuration components are present
     assert_eq!(config.vcpu_count, 1);
     assert_eq!(config.memory_size_mb, 512);
     assert_eq!(config.security_features.seccomp_enabled, true);
     assert_eq!(config.security_features.jailer_enabled, true);
-    assert_eq!(config.resource_limits.max_cpu_time, Duration::from_secs(300));
+    assert_eq!(
+        config.resource_limits.max_cpu_time,
+        Duration::from_secs(300)
+    );
     assert_eq!(config.resource_limits.max_memory_mb, 1024);
     assert_eq!(config.attestation_config.enabled, false);
     println!("  ✅ Configuration integration");
 
     // Test 3: Enhanced features integration
     println!("\n3. Testing enhanced features integration:");
-    
+
     // Test security features integration
     assert_eq!(config.security_features.enable_balloon, true);
     assert_eq!(config.security_features.enable_entropy, true);
     assert_eq!(config.security_features.jailer_uid, Some(1000));
     assert_eq!(config.security_features.jailer_gid, Some(1000));
-    
+
     // Test resource limits integration
     assert_eq!(config.resource_limits.max_disk_io_mb, 100);
     assert_eq!(config.resource_limits.max_network_io_mb, 50);
     assert_eq!(config.resource_limits.max_processes, 100);
     assert_eq!(config.resource_limits.max_open_files, 1000);
-    
+
     // Test performance tuning integration
     assert_eq!(config.performance_tuning.network_optimization, true);
     assert_eq!(config.performance_tuning.cache_prefetch, true);
@@ -391,7 +427,7 @@ fn test_enhanced_firecracker_integration() -> RuntimeResult<()> {
     println!("\n5. Testing schema integration:");
     let schema = provider.get_config_schema();
     let schema_str = schema.to_string();
-    
+
     // Check that all enhanced features are represented in schema
     assert!(schema_str.contains("security_features"));
     assert!(schema_str.contains("resource_limits"));

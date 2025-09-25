@@ -11,15 +11,17 @@ pub mod settings;
 #[cfg(test)]
 pub mod tests;
 
-pub use config::{MicroVMConfig, NetworkPolicy, FileSystemPolicy};
-pub use core::{Program, ExecutionContext, ExecutionResult, ExecutionMetadata, NetworkRequest, FileOperation};
+pub use config::{FileSystemPolicy, MicroVMConfig, NetworkPolicy};
+pub use core::{
+    ExecutionContext, ExecutionMetadata, ExecutionResult, FileOperation, NetworkRequest, Program,
+};
 pub use factory::MicroVMFactory;
 pub use providers::MicroVMProvider;
-pub use settings::{MicroVMSettings, EnvironmentMicroVMConfig};
+pub use settings::{EnvironmentMicroVMConfig, MicroVMSettings};
 
 // Re-export provider implementations
-pub use providers::mock::MockMicroVMProvider;
-pub use providers::process::ProcessMicroVMProvider;
 pub use providers::firecracker::FirecrackerMicroVMProvider;
 pub use providers::gvisor::GvisorMicroVMProvider;
+pub use providers::mock::MockMicroVMProvider;
+pub use providers::process::ProcessMicroVMProvider;
 pub use providers::wasm::WasmMicroVMProvider;

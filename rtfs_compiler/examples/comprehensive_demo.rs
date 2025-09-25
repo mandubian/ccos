@@ -14,24 +14,24 @@
 //!   cargo run --example comprehensive_demo -- --mcp-server http://localhost:3000 --goal "Get weather for Paris"
 
 use clap::Parser;
+use serde_json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use serde_json;
 
 // Re-export for shared modules
 pub mod shared;
 
 // Core CCOS + RTFS imports
-use rtfs_compiler::ccos::types::{Intent, Plan, StorableIntent};
-use rtfs_compiler::ccos::delegation::ModelRegistry;
+use rtfs_compiler::ast::TopLevel;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
-use rtfs_compiler::utils::{format_rtfs_value_pretty};
+use rtfs_compiler::ccos::delegation::ModelRegistry;
+use rtfs_compiler::ccos::types::{Intent, Plan, StorableIntent};
 use rtfs_compiler::parser;
+use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ast::TopLevel;
+use rtfs_compiler::utils::format_rtfs_value_pretty;
 
 // CCOS subsystems we wire directly for the demo
 use rtfs_compiler::ccos::causal_chain::CausalChain;
@@ -85,8 +85,7 @@ impl DemoContext {
 
         // 1. Set up AI model registry
         let model_registry = ModelRegistry::new();
-        let api_key = std::env::var("OPENROUTER_API_KEY")
-            .unwrap_or_else(|_| "".to_string());
+        let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| "".to_string());
 
         // Always try to set up the AI model, even if API key is empty
         let model = CustomOpenRouterModel::new(
@@ -114,7 +113,8 @@ impl DemoContext {
         // Bootstrap marketplace and register std capabilities
         capability_marketplace.bootstrap().await?;
         let capability_marketplace = Arc::new(capability_marketplace);
-        rtfs_compiler::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
+        rtfs_compiler::runtime::stdlib::register_default_capabilities(&capability_marketplace)
+            .await?;
         let plan_archive = Arc::new(PlanArchive::new());
 
         // Orchestrator that will execute plans and update graph/chain
@@ -145,14 +145,18 @@ impl DemoContext {
         st.original_request = intent.original_request.clone();
         // Keep RTFS-specific fields empty for now; constraints/preferences could be round-tripped later
         st.status = rtfs_compiler::ccos::types::IntentStatus::Active;
-        let mut graph = self.intent_graph.lock()
+        let mut graph = self
+            .intent_graph
+            .lock()
             .map_err(|_| "Failed to lock IntentGraph for store")?;
         graph.store_intent(st)?;
         Ok(())
     }
 
     /// Step 1: Discover available MCP capabilities
-    async fn discover_capabilities(&self) -> Result<Vec<DiscoveredCapability>, Box<dyn std::error::Error>> {
+    async fn discover_capabilities(
+        &self,
+    ) -> Result<Vec<DiscoveredCapability>, Box<dyn std::error::Error>> {
         println!("\n🔍 Step 1: Discovering Available Capabilities");
         println!("=============================================");
 
@@ -162,7 +166,11 @@ impl DemoContext {
 
         println!("✅ Discovered {} capabilities:", capabilities.len());
         for cap in &capabilities {
-            println!("  • {} - {}", cap.name, cap.description.as_deref().unwrap_or("No description"));
+            println!(
+                "  • {} - {}",
+                cap.name,
+                cap.description.as_deref().unwrap_or("No description")
+            );
         }
 
         Ok(capabilities)
@@ -210,26 +218,40 @@ impl DemoContext {
     }
 
     /// Step 2: Generate RTFS intent from natural language
-    async fn generate_intent(&self, user_request: &str) -> Result<Intent, Box<dyn std::error::Error>> {
+    async fn generate_intent(
+        &self,
+        user_request: &str,
+    ) -> Result<Intent, Box<dyn std::error::Error>> {
         println!("\n🧠 Step 2: Generating RTFS Intent");
         println!("================================");
 
         // Try AI generation first
         match self.generate_ai_intent(user_request).await {
             Ok(intent) => {
-                println!("🤖 AI-generated intent: {}", intent.name.as_deref().unwrap_or("unnamed"));
+                println!(
+                    "🤖 AI-generated intent: {}",
+                    intent.name.as_deref().unwrap_or("unnamed")
+                );
                 Ok(intent)
             }
             Err(e) => {
-                println!("⚠️  AI generation failed: {}. Falling back to demo intent.", e);
+                println!(
+                    "⚠️  AI generation failed: {}. Falling back to demo intent.",
+                    e
+                );
                 self.generate_demo_intent(user_request)
             }
         }
     }
 
-    async fn generate_ai_intent(&self, user_request: &str) -> Result<Intent, Box<dyn std::error::Error>> {
+    async fn generate_ai_intent(
+        &self,
+        user_request: &str,
+    ) -> Result<Intent, Box<dyn std::error::Error>> {
         // Get the AI model from the registry
-        let model = self.model_registry.get("openrouter-hunyuan-a13b-instruct")
+        let model = self
+            .model_registry
+            .get("openrouter-hunyuan-a13b-instruct")
             .ok_or("AI model not found")?;
 
         // Build the prompt for intent generation
@@ -277,11 +299,16 @@ impl DemoContext {
         Ok(intent)
     }
 
-    fn generate_demo_intent(&self, user_request: &str) -> Result<Intent, Box<dyn std::error::Error>> {
+    fn generate_demo_intent(
+        &self,
+        user_request: &str,
+    ) -> Result<Intent, Box<dyn std::error::Error>> {
         // Create a demo intent based on the user request
         let intent_name = if user_request.to_lowercase().contains("weather") {
             "analyze_weather_request"
-        } else if user_request.to_lowercase().contains("calculate") || user_request.to_lowercase().contains("math") {
+        } else if user_request.to_lowercase().contains("calculate")
+            || user_request.to_lowercase().contains("math")
+        {
             "perform_calculation"
         } else if user_request.to_lowercase().contains("search") {
             "web_search_request"
@@ -289,8 +316,7 @@ impl DemoContext {
             "general_request"
         };
 
-        let mut intent = Intent::new(user_request.to_string())
-            .with_name(intent_name.to_string());
+        let mut intent = Intent::new(user_request.to_string()).with_name(intent_name.to_string());
 
         // Add some demo constraints based on the request
         let mut constraints = HashMap::new();
@@ -329,7 +355,10 @@ Focus on being specific and actionable."#,
         )
     }
 
-    fn extract_and_parse_intent(&self, ai_response: &str) -> Result<Intent, Box<dyn std::error::Error>> {
+    fn extract_and_parse_intent(
+        &self,
+        ai_response: &str,
+    ) -> Result<Intent, Box<dyn std::error::Error>> {
         // First try to parse as JSON (most common AI response format)
         if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(ai_response.trim()) {
             return self.json_to_intent(&json_value);
@@ -352,8 +381,12 @@ Focus on being specific and actionable."#,
         Err("Could not extract valid intent from AI response".into())
     }
 
-    fn json_to_intent(&self, json: &serde_json::Value) -> Result<Intent, Box<dyn std::error::Error>> {
-        let goal = json.get("goal")
+    fn json_to_intent(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<Intent, Box<dyn std::error::Error>> {
+        let goal = json
+            .get("goal")
             .and_then(|v| v.as_str())
             .unwrap_or("Generated goal")
             .to_string();
@@ -389,7 +422,8 @@ Focus on being specific and actionable."#,
         // Set a default name based on the goal
         let intent_name = if goal.to_lowercase().contains("weather") {
             "weather_request"
-        } else if goal.to_lowercase().contains("calculate") || goal.to_lowercase().contains("math") {
+        } else if goal.to_lowercase().contains("calculate") || goal.to_lowercase().contains("math")
+        {
             "calculation_request"
         } else if goal.to_lowercase().contains("search") {
             "search_request"
@@ -402,7 +436,10 @@ Focus on being specific and actionable."#,
         Ok(intent)
     }
 
-    fn expression_to_intent(&self, expr: &rtfs_compiler::ast::Expression) -> Result<Intent, Box<dyn std::error::Error>> {
+    fn expression_to_intent(
+        &self,
+        expr: &rtfs_compiler::ast::Expression,
+    ) -> Result<Intent, Box<dyn std::error::Error>> {
         // Simplified intent extraction - in a real implementation this would be more robust
         use rtfs_compiler::ast::{Expression as E, Literal};
 
@@ -420,7 +457,11 @@ Focus on being specific and actionable."#,
                     // Parse additional arguments as properties
                     for chunk in arguments[1..].chunks(2) {
                         if chunk.len() == 2 {
-                            if let (E::Literal(Literal::Keyword(key)), E::Literal(Literal::String(value))) = (&chunk[0], &chunk[1]) {
+                            if let (
+                                E::Literal(Literal::Keyword(key)),
+                                E::Literal(Literal::String(value)),
+                            ) = (&chunk[0], &chunk[1])
+                            {
                                 match key.0.as_str() {
                                     "goal" => intent.goal = value.clone(),
                                     "original-request" => intent.original_request = value.clone(),
@@ -456,7 +497,11 @@ Focus on being specific and actionable."#,
     }
 
     /// Step 3: Generate RTFS plan from intent + capabilities
-    async fn generate_plan(&self, intent: &Intent, capabilities: &[DiscoveredCapability]) -> Result<Plan, Box<dyn std::error::Error>> {
+    async fn generate_plan(
+        &self,
+        intent: &Intent,
+        capabilities: &[DiscoveredCapability],
+    ) -> Result<Plan, Box<dyn std::error::Error>> {
         println!("\n📋 Step 3: Generating RTFS Plan");
         println!("==============================");
 
@@ -472,10 +517,7 @@ Focus on being specific and actionable."#,
             intent.goal.replace('"', "\\\"")
         );
 
-        let plan = Plan::new_rtfs(
-            rtfs_code.clone(),
-            vec![intent.intent_id.clone()],
-        );
+        let plan = Plan::new_rtfs(rtfs_code.clone(), vec![intent.intent_id.clone()]);
 
         // Log the generated plan details
         println!("\n📋 Generated Plan Details:");
@@ -491,7 +533,11 @@ Focus on being specific and actionable."#,
         Ok(plan)
     }
 
-    fn select_capability_for_intent(&self, intent: &Intent, capabilities: &[DiscoveredCapability]) -> Option<DiscoveredCapability> {
+    fn select_capability_for_intent(
+        &self,
+        intent: &Intent,
+        capabilities: &[DiscoveredCapability],
+    ) -> Option<DiscoveredCapability> {
         let goal_lower = intent.goal.to_lowercase();
         let request_lower = intent.original_request.to_lowercase();
 
@@ -499,10 +545,14 @@ Focus on being specific and actionable."#,
             let name_lower = cap.name.to_lowercase();
             let desc_lower = cap.description.as_deref().unwrap_or("").to_lowercase();
 
-            if (goal_lower.contains(&name_lower) || request_lower.contains(&name_lower)) ||
-               (desc_lower.contains("weather") && (goal_lower.contains("weather") || request_lower.contains("weather"))) ||
-               (desc_lower.contains("calculate") && (goal_lower.contains("calculate") || request_lower.contains("math"))) ||
-               (desc_lower.contains("search") && (goal_lower.contains("search") || request_lower.contains("find"))) {
+            if (goal_lower.contains(&name_lower) || request_lower.contains(&name_lower))
+                || (desc_lower.contains("weather")
+                    && (goal_lower.contains("weather") || request_lower.contains("weather")))
+                || (desc_lower.contains("calculate")
+                    && (goal_lower.contains("calculate") || request_lower.contains("math")))
+                || (desc_lower.contains("search")
+                    && (goal_lower.contains("search") || request_lower.contains("find")))
+            {
                 return Some(cap.clone());
             }
         }
@@ -515,16 +565,18 @@ Focus on being specific and actionable."#,
         println!("\n⚡ Step 4: Executing RTFS Plan");
         println!("============================");
 
-        println!("🚀 Executing plan: {}", plan.name.as_deref().unwrap_or("unnamed"));
+        println!(
+            "🚀 Executing plan: {}",
+            plan.name.as_deref().unwrap_or("unnamed")
+        );
         println!("📋 Executing RTFS plan through Orchestrator...");
 
         // Security context: allow built-in demo capabilities
         let context = RuntimeContext {
             security_level: rtfs_compiler::runtime::security::SecurityLevel::Controlled,
-            allowed_capabilities: vec![
-                "ccos.echo".to_string(),
-                "ccos.math.add".to_string(),
-            ].into_iter().collect(),
+            allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]
+                .into_iter()
+                .collect(),
             ..RuntimeContext::pure()
         };
 
@@ -551,9 +603,15 @@ Focus on being specific and actionable."#,
         println!("===========================");
 
         println!("🎯 Original Request: {}", intent.original_request);
-        println!("🧠 Generated Intent: {}", intent.name.as_deref().unwrap_or("unnamed"));
+        println!(
+            "🧠 Generated Intent: {}",
+            intent.name.as_deref().unwrap_or("unnamed")
+        );
         println!("📝 Intent Goal: {}", intent.goal);
-        println!("📋 Executed Plan: {}", plan.name.as_deref().unwrap_or("unnamed"));
+        println!(
+            "📋 Executed Plan: {}",
+            plan.name.as_deref().unwrap_or("unnamed")
+        );
         println!("⚡ Plan Language: RTFS");
 
         println!("\n📊 Final Result:");
@@ -564,7 +622,11 @@ Focus on being specific and actionable."#,
             let recent = chain.get_all_actions();
             println!("\n🧾 Audit Trail (last {} actions):", recent.len().min(5));
             for action in recent.iter().rev().take(5).rev() {
-                println!("  - {:?} {}", action.action_type, action.function_name.as_deref().unwrap_or(""));
+                println!(
+                    "  - {:?} {}",
+                    action.action_type,
+                    action.function_name.as_deref().unwrap_or("")
+                );
             }
         }
 
@@ -619,9 +681,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         io::stdin().read_line(&mut input)?;
         input.trim().to_string()
     } else {
-        args.goal.unwrap_or_else(|| {
-            "Get the weather for Paris and calculate 2 + 3".to_string()
-        })
+        args.goal
+            .unwrap_or_else(|| "Get the weather for Paris and calculate 2 + 3".to_string())
     };
 
     println!("🎯 User Request: \"{}\"", user_request);

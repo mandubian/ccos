@@ -1,7 +1,7 @@
+use super::super::types::{Action, ActionId, CapabilityId, IntentId, PlanId};
 use crate::runtime::error::RuntimeError;
-use std::collections::HashMap;
 use crate::runtime::values::Value;
-use super::super::types::{Action, ActionId, IntentId, PlanId, CapabilityId};
+use std::collections::HashMap;
 
 /// Provenance tracking
 #[derive(Debug)]
@@ -16,7 +16,11 @@ impl ProvenanceTracker {
         }
     }
 
-    pub fn track_action(&mut self, action: &Action, _intent: &super::super::types::Intent) -> Result<(), RuntimeError> {
+    pub fn track_action(
+        &mut self,
+        action: &Action,
+        _intent: &super::super::types::Intent,
+    ) -> Result<(), RuntimeError> {
         let provenance = ActionProvenance {
             action_id: action.action_id.clone(),
             intent_id: action.intent_id.clone(),

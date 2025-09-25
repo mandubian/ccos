@@ -1,36 +1,44 @@
-use super::types::*;
-use super::executors::{ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, A2AExecutor};
+use super::executors::{A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor};
 use super::resource_monitor::ResourceMonitor;
+use super::types::*;
 // Temporarily disabled to fix resource monitoring tests
 // use super::network_discovery::{NetworkDiscoveryProvider, NetworkDiscoveryBuilder};
 // use super::mcp_discovery::{MCPDiscoveryProvider, MCPDiscoveryBuilder, MCPServerConfig};
 // use super::a2a_discovery::{A2ADiscoveryProvider, A2ADiscoveryBuilder, A2AAgentConfig};
-use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::values::Value;
 use crate::ast::{MapKey, TypeExpr};
-use crate::runtime::type_validator::{TypeValidator, TypeCheckingConfig, VerificationContext};
-use crate::runtime::streaming::{StreamType, StreamingProvider};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::security::RuntimeContext;
+use crate::runtime::streaming::{StreamType, StreamingProvider};
+use crate::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
+use crate::runtime::values::Value;
+use chrono::Utc;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::Utc;
 
 impl CapabilityMarketplace {
-    pub fn new(capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>) -> Self {
+    pub fn new(
+        capability_registry: Arc<
+            RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>,
+        >,
+    ) -> Self {
         Self::with_causal_chain(capability_registry, None)
     }
 
     pub fn with_causal_chain(
-    capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
-        causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>
+        capability_registry: Arc<
+            RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>,
+        >,
+        causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
     ) -> Self {
         Self::with_causal_chain_and_debug_callback(capability_registry, causal_chain, None)
     }
 
     pub fn with_causal_chain_and_debug_callback(
-        capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
+        capability_registry: Arc<
+            RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>,
+        >,
         causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
         debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> Self {
@@ -46,10 +54,22 @@ impl CapabilityMarketplace {
             resource_monitor: None,
             debug_callback,
         };
-        marketplace.executor_registry.insert(TypeId::of::<MCPCapability>(), ExecutorVariant::MCP(MCPExecutor));
-        marketplace.executor_registry.insert(TypeId::of::<A2ACapability>(), ExecutorVariant::A2A(A2AExecutor));
-        marketplace.executor_registry.insert(TypeId::of::<LocalCapability>(), ExecutorVariant::Local(LocalExecutor));
-        marketplace.executor_registry.insert(TypeId::of::<HttpCapability>(), ExecutorVariant::Http(HttpExecutor));
+        marketplace.executor_registry.insert(
+            TypeId::of::<MCPCapability>(),
+            ExecutorVariant::MCP(MCPExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<A2ACapability>(),
+            ExecutorVariant::A2A(A2AExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<LocalCapability>(),
+            ExecutorVariant::Local(LocalExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<HttpCapability>(),
+            ExecutorVariant::Http(HttpExecutor),
+        );
         marketplace
     }
 
@@ -63,7 +83,9 @@ impl CapabilityMarketplace {
 
     /// Create marketplace with resource monitoring enabled
     pub fn with_resource_monitoring(
-    capability_registry: Arc<RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>>,
+        capability_registry: Arc<
+            RwLock<crate::runtime::capabilities::registry::CapabilityRegistry>,
+        >,
         causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
         monitoring_config: ResourceMonitoringConfig,
     ) -> Self {
@@ -129,7 +151,7 @@ impl CapabilityMarketplace {
         if pattern == "*" {
             return true;
         }
-        
+
         if pattern.contains('*') {
             // Simple glob matching - convert * to .* for regex
             let regex_pattern = pattern.replace('*', ".*");
@@ -137,7 +159,7 @@ impl CapabilityMarketplace {
                 return regex.is_match(capability_id);
             }
         }
-        
+
         capability_id == pattern
     }
 
@@ -147,10 +169,10 @@ impl CapabilityMarketplace {
     pub async fn bootstrap(&self) -> RuntimeResult<()> {
         // Register default capabilities first
         crate::runtime::stdlib::register_default_capabilities(self).await?;
-        
+
         // Load built-in capabilities from the capability registry
         let registry = self.capability_registry.read().await;
-        
+
         // Get all registered capabilities from the registry
         for capability_id in registry.list_capabilities() {
             let capability_id = capability_id.to_string();
@@ -163,7 +185,7 @@ impl CapabilityMarketplace {
                 custody_chain: vec!["registry_bootstrap".to_string()],
                 registered_at: Utc::now(),
             };
-            
+
             let manifest = CapabilityManifest {
                 id: capability_id.clone(),
                 name: capability_id.clone(),
@@ -185,11 +207,11 @@ impl CapabilityMarketplace {
                 permissions: vec![],
                 metadata: HashMap::new(),
             };
-            
+
             let mut caps = self.capabilities.write().await;
             caps.insert(capability_id.clone(), manifest);
         }
-        
+
         // Run discovery agents to find additional capabilities
         for agent in &self.discovery_agents {
             match agent.discover().await {
@@ -205,7 +227,7 @@ impl CapabilityMarketplace {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -263,7 +285,7 @@ impl CapabilityMarketplace {
     /// Discover capabilities from all configured network sources
     pub async fn discover_from_network(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
         let mut all_capabilities = Vec::new();
-        
+
         for agent in &self.discovery_agents {
             if agent.name() == "NetworkDiscovery" {
                 match agent.discover().await {
@@ -278,14 +300,14 @@ impl CapabilityMarketplace {
                 }
             }
         }
-        
+
         Ok(all_capabilities)
     }
 
     /// Perform health checks on all network discovery providers
     pub async fn check_network_health(&self) -> RuntimeResult<HashMap<String, bool>> {
         let mut health_status = HashMap::new();
-        
+
         for agent in &self.discovery_agents {
             if agent.name() == "NetworkDiscovery" {
                 // Try to downcast to NetworkDiscoveryProvider for health check
@@ -303,7 +325,7 @@ impl CapabilityMarketplace {
                 }
             }
         }
-        
+
         Ok(health_status)
     }
     */
@@ -320,7 +342,9 @@ impl CapabilityMarketplace {
         capabilities.contains_key(id)
     }
 
-    fn compute_content_hash(&self, content: &str) -> String { super::discovery::compute_content_hash(content) }
+    fn compute_content_hash(&self, content: &str) -> String {
+        super::discovery::compute_content_hash(content)
+    }
 
     pub async fn register_streaming_capability(
         &self,
@@ -361,7 +385,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     /// Register a local capability with audit logging
@@ -401,7 +427,8 @@ impl CapabilityMarketplace {
         }
 
         // Emit audit event to Causal Chain
-        self.emit_capability_audit_event("capability_registered", &id, None).await?;
+        self.emit_capability_audit_event("capability_registered", &id, None)
+            .await?;
 
         Ok(())
     }
@@ -415,7 +442,8 @@ impl CapabilityMarketplace {
 
         if was_present {
             // Emit audit event to Causal Chain
-            self.emit_capability_audit_event("capability_removed", id, None).await?;
+            self.emit_capability_audit_event("capability_removed", id, None)
+                .await?;
         }
 
         Ok(())
@@ -432,7 +460,7 @@ impl CapabilityMarketplace {
         event_data.insert("event_type".to_string(), event_type.to_string());
         event_data.insert("capability_id".to_string(), capability_id.to_string());
         event_data.insert("timestamp".to_string(), Utc::now().to_rfc3339());
-        
+
         if let Some(additional) = additional_data {
             event_data.extend(additional);
         }
@@ -444,21 +472,23 @@ impl CapabilityMarketplace {
         } else {
             eprintln!("{}", audit_message);
         }
-        
+
         // Record in Causal Chain if available
         if let Some(causal_chain) = &self.causal_chain {
             let action_type = match event_type {
                 "capability_registered" => crate::ccos::types::ActionType::CapabilityRegistered,
                 "capability_removed" => crate::ccos::types::ActionType::CapabilityRemoved,
                 "capability_updated" => crate::ccos::types::ActionType::CapabilityUpdated,
-                "capability_discovery_completed" => crate::ccos::types::ActionType::CapabilityDiscoveryCompleted,
+                "capability_discovery_completed" => {
+                    crate::ccos::types::ActionType::CapabilityDiscoveryCompleted
+                }
                 _ => crate::ccos::types::ActionType::CapabilityCall, // fallback
             };
-            
+
             let action = crate::ccos::types::Action {
                 action_id: uuid::Uuid::new_v4().to_string(),
                 intent_id: "capability_marketplace".to_string(), // Use placeholder for capability events
-                plan_id: "capability_marketplace".to_string(),   // Use placeholder for capability events
+                plan_id: "capability_marketplace".to_string(), // Use placeholder for capability events
                 action_type,
                 parent_action_id: None,
                 function_name: Some(capability_id.to_string()),
@@ -472,18 +502,27 @@ impl CapabilityMarketplace {
                     .as_secs(),
                 metadata: {
                     let mut meta = HashMap::new();
-                    meta.insert("capability_id".to_string(), crate::runtime::values::Value::String(capability_id.to_string()));
-                    meta.insert("event_type".to_string(), crate::runtime::values::Value::String(event_type.to_string()));
+                    meta.insert(
+                        "capability_id".to_string(),
+                        crate::runtime::values::Value::String(capability_id.to_string()),
+                    );
+                    meta.insert(
+                        "event_type".to_string(),
+                        crate::runtime::values::Value::String(event_type.to_string()),
+                    );
                     for (k, v) in event_data {
                         meta.insert(k, crate::runtime::values::Value::String(v));
                     }
                     meta
                 },
             };
-            
+
             if let Ok(mut chain) = causal_chain.lock() {
                 if let Err(e) = chain.append(&action) {
-                    eprintln!("Failed to record capability audit event in Causal Chain: {:?}", e);
+                    eprintln!(
+                        "Failed to record capability audit event in Causal Chain: {:?}",
+                        e
+                    );
                 }
             } else {
                 eprintln!("Failed to acquire lock on Causal Chain");
@@ -538,7 +577,8 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("http:{}", base_url),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}", id, name, description, base_url)),
+            content_hash: self
+                .compute_content_hash(&format!("{}{}{}{}", id, name, description, base_url)),
             custody_chain: vec!["http_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -546,7 +586,11 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::Http(HttpCapability { base_url, auth_token, timeout_ms: 5000 }),
+            provider: ProviderType::Http(HttpCapability {
+                base_url,
+                auth_token,
+                timeout_ms: 5000,
+            }),
             version: "1.0.0".to_string(),
             input_schema: None,
             output_schema: None,
@@ -555,7 +599,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_http_capability_with_schema(
@@ -571,7 +617,8 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("http:{}", base_url),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}", id, name, description, base_url)),
+            content_hash: self
+                .compute_content_hash(&format!("{}{}{}{}", id, name, description, base_url)),
             custody_chain: vec!["http_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -579,7 +626,11 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::Http(HttpCapability { base_url, auth_token, timeout_ms: 5000 }),
+            provider: ProviderType::Http(HttpCapability {
+                base_url,
+                auth_token,
+                timeout_ms: 5000,
+            }),
             version: "1.0.0".to_string(),
             input_schema,
             output_schema,
@@ -588,7 +639,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_mcp_capability(
@@ -603,7 +656,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("mcp:{}/{}", server_url, tool_name),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}{}", id, name, description, server_url, tool_name, timeout_ms)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}{}",
+                id, name, description, server_url, tool_name, timeout_ms
+            )),
             custody_chain: vec!["mcp_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -611,7 +667,11 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::MCP(MCPCapability { server_url, tool_name, timeout_ms }),
+            provider: ProviderType::MCP(MCPCapability {
+                server_url,
+                tool_name,
+                timeout_ms,
+            }),
             version: "1.0.0".to_string(),
             input_schema: None,
             output_schema: None,
@@ -620,7 +680,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_mcp_capability_with_schema(
@@ -637,7 +699,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("mcp:{}/{}", server_url, tool_name),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}{}", id, name, description, server_url, tool_name, timeout_ms)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}{}",
+                id, name, description, server_url, tool_name, timeout_ms
+            )),
             custody_chain: vec!["mcp_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -645,7 +710,11 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::MCP(MCPCapability { server_url, tool_name, timeout_ms }),
+            provider: ProviderType::MCP(MCPCapability {
+                server_url,
+                tool_name,
+                timeout_ms,
+            }),
             version: "1.0.0".to_string(),
             input_schema,
             output_schema,
@@ -654,7 +723,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_a2a_capability(
@@ -670,7 +741,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("a2a:{}@{}", agent_id, endpoint),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}{}{}", id, name, description, agent_id, endpoint, protocol, timeout_ms)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}{}{}",
+                id, name, description, agent_id, endpoint, protocol, timeout_ms
+            )),
             custody_chain: vec!["a2a_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -678,7 +752,12 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::A2A(A2ACapability { agent_id, endpoint, protocol, timeout_ms }),
+            provider: ProviderType::A2A(A2ACapability {
+                agent_id,
+                endpoint,
+                protocol,
+                timeout_ms,
+            }),
             version: "1.0.0".to_string(),
             input_schema: None,
             output_schema: None,
@@ -687,7 +766,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_a2a_capability_with_schema(
@@ -705,7 +786,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("a2a:{}@{}", agent_id, endpoint),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}{}{}", id, name, description, agent_id, endpoint, protocol, timeout_ms)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}{}{}",
+                id, name, description, agent_id, endpoint, protocol, timeout_ms
+            )),
             custody_chain: vec!["a2a_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -713,7 +797,12 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::A2A(A2ACapability { agent_id, endpoint, protocol, timeout_ms }),
+            provider: ProviderType::A2A(A2ACapability {
+                agent_id,
+                endpoint,
+                protocol,
+                timeout_ms,
+            }),
             version: "1.0.0".to_string(),
             input_schema,
             output_schema,
@@ -722,7 +811,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_plugin_capability(
@@ -736,7 +827,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("plugin:{}#{}", plugin_path, function_name),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}", id, name, description, plugin_path, function_name)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}",
+                id, name, description, plugin_path, function_name
+            )),
             custody_chain: vec!["plugin_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -744,7 +838,10 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::Plugin(PluginCapability { plugin_path, function_name }),
+            provider: ProviderType::Plugin(PluginCapability {
+                plugin_path,
+                function_name,
+            }),
             version: "1.0.0".to_string(),
             input_schema: None,
             output_schema: None,
@@ -753,7 +850,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_plugin_capability_with_schema(
@@ -769,7 +868,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("plugin:{}#{}", plugin_path, function_name),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}", id, name, description, plugin_path, function_name)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}",
+                id, name, description, plugin_path, function_name
+            )),
             custody_chain: vec!["plugin_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -777,7 +879,10 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::Plugin(PluginCapability { plugin_path, function_name }),
+            provider: ProviderType::Plugin(PluginCapability {
+                plugin_path,
+                function_name,
+            }),
             version: "1.0.0".to_string(),
             input_schema,
             output_schema,
@@ -786,7 +891,9 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
     pub async fn register_remote_rtfs_capability(
@@ -801,7 +908,10 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: format!("remote-rtfs:{}", endpoint),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!("{}{}{}{}{}", id, name, description, endpoint, timeout_ms)),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}{}",
+                id, name, description, endpoint, timeout_ms
+            )),
             custody_chain: vec!["remote_rtfs_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -809,7 +919,11 @@ impl CapabilityMarketplace {
             id: id.clone(),
             name,
             description,
-            provider: ProviderType::RemoteRTFS(RemoteRTFSCapability { endpoint, timeout_ms, auth_token }),
+            provider: ProviderType::RemoteRTFS(RemoteRTFSCapability {
+                endpoint,
+                timeout_ms,
+                auth_token,
+            }),
             version: "1.0.0".to_string(),
             input_schema: None,
             output_schema: None,
@@ -818,42 +932,87 @@ impl CapabilityMarketplace {
             permissions: vec![],
             metadata: HashMap::new(),
         };
-        let mut caps = self.capabilities.write().await; caps.insert(id, capability); Ok(())
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
     }
 
-    pub async fn start_stream_with_config(&self, capability_id: &str, params: &Value, config: &crate::runtime::streaming::StreamConfig) -> RuntimeResult<crate::runtime::streaming::StreamHandle> {
-        let capability = self.get_capability(capability_id).await
-            .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))?;
+    pub async fn start_stream_with_config(
+        &self,
+        capability_id: &str,
+        params: &Value,
+        config: &crate::runtime::streaming::StreamConfig,
+    ) -> RuntimeResult<crate::runtime::streaming::StreamHandle> {
+        let capability = self.get_capability(capability_id).await.ok_or_else(|| {
+            RuntimeError::Generic(format!("Capability '{}' not found", capability_id))
+        })?;
         if let ProviderType::Stream(stream_impl) = &capability.provider {
-            if config.callbacks.is_some() { stream_impl.provider.start_stream_with_config(params, config).await }
-            else { let handle = stream_impl.provider.start_stream(params)?; Ok(handle) }
-        } else { Err(RuntimeError::Generic(format!("Capability '{}' is not a stream capability", capability_id))) }
+            if config.callbacks.is_some() {
+                stream_impl
+                    .provider
+                    .start_stream_with_config(params, config)
+                    .await
+            } else {
+                let handle = stream_impl.provider.start_stream(params)?;
+                Ok(handle)
+            }
+        } else {
+            Err(RuntimeError::Generic(format!(
+                "Capability '{}' is not a stream capability",
+                capability_id
+            )))
+        }
     }
 
-    pub async fn start_bidirectional_stream_with_config(&self, capability_id: &str, params: &Value, config: &crate::runtime::streaming::StreamConfig) -> RuntimeResult<crate::runtime::streaming::StreamHandle> {
-        let capability = self.get_capability(capability_id).await
-            .ok_or_else(|| RuntimeError::Generic(format!("Capability '{}' not found", capability_id)))?;
+    pub async fn start_bidirectional_stream_with_config(
+        &self,
+        capability_id: &str,
+        params: &Value,
+        config: &crate::runtime::streaming::StreamConfig,
+    ) -> RuntimeResult<crate::runtime::streaming::StreamHandle> {
+        let capability = self.get_capability(capability_id).await.ok_or_else(|| {
+            RuntimeError::Generic(format!("Capability '{}' not found", capability_id))
+        })?;
         if let ProviderType::Stream(stream_impl) = &capability.provider {
-            if !matches!(stream_impl.stream_type, StreamType::Bidirectional) { return Err(RuntimeError::Generic(format!("Capability '{}' is not bidirectional", capability_id))); }
-            if config.callbacks.is_some() { stream_impl.provider.start_bidirectional_stream_with_config(params, config).await }
-            else { let handle = stream_impl.provider.start_bidirectional_stream(params)?; Ok(handle) }
-        } else { Err(RuntimeError::Generic(format!("Capability '{}' is not a stream capability", capability_id))) }
+            if !matches!(stream_impl.stream_type, StreamType::Bidirectional) {
+                return Err(RuntimeError::Generic(format!(
+                    "Capability '{}' is not bidirectional",
+                    capability_id
+                )));
+            }
+            if config.callbacks.is_some() {
+                stream_impl
+                    .provider
+                    .start_bidirectional_stream_with_config(params, config)
+                    .await
+            } else {
+                let handle = stream_impl.provider.start_bidirectional_stream(params)?;
+                Ok(handle)
+            }
+        } else {
+            Err(RuntimeError::Generic(format!(
+                "Capability '{}' is not a stream capability",
+                capability_id
+            )))
+        }
     }
 
     pub async fn get_capability(&self, id: &str) -> Option<CapabilityManifest> {
-        let capabilities = self.capabilities.read().await; capabilities.get(id).cloned()
+        let capabilities = self.capabilities.read().await;
+        capabilities.get(id).cloned()
     }
 
     pub async fn list_capabilities(&self) -> Vec<CapabilityManifest> {
-        let capabilities = self.capabilities.read().await; capabilities.values().cloned().collect()
+        let capabilities = self.capabilities.read().await;
+        capabilities.values().cloned().collect()
     }
 
     /// Execute a capability with enhanced metadata support
     pub async fn execute_capability_enhanced(
-        &self, 
-        id: &str, 
+        &self,
+        id: &str,
         inputs: &Value,
-        _metadata: Option<&crate::runtime::execution_outcome::CallMetadata>
+        _metadata: Option<&crate::runtime::execution_outcome::CallMetadata>,
     ) -> RuntimeResult<Value> {
         // For now, delegate to the existing method
         // TODO: Use metadata for enhanced execution context
@@ -865,40 +1024,44 @@ impl CapabilityMarketplace {
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
         // Validate capability access according to isolation policy
         self.validate_capability_access(id)?;
-        
+
         // Check resource constraints before execution
         if let Some(resource_monitor) = &self.resource_monitor {
             if let Some(constraints) = &self.isolation_policy.resource_constraints {
                 let violations = resource_monitor.check_violations(id, constraints).await?;
-                
+
                 // Check for hard violations that should prevent execution
-                let hard_violations: Vec<_> = violations.iter()
+                let hard_violations: Vec<_> = violations
+                    .iter()
                     .filter(|v| v.is_hard_violation())
                     .collect();
-                
+
                 if !hard_violations.is_empty() {
-                    let violation_details: Vec<String> = hard_violations
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect();
+                    let violation_details: Vec<String> =
+                        hard_violations.iter().map(|v| v.to_string()).collect();
                     return Err(RuntimeError::Generic(format!(
                         "Resource constraints violated for capability '{}': {}",
                         id,
                         violation_details.join(", ")
                     )));
                 }
-                
+
                 // Log soft violations but continue execution
-                let soft_violations: Vec<_> = violations.iter()
+                let soft_violations: Vec<_> = violations
+                    .iter()
                     .filter(|v| !v.is_hard_violation())
                     .collect();
-                
+
                 for violation in soft_violations {
-                    eprintln!("Soft resource violation for capability '{}': {}", id, violation.to_string());
+                    eprintln!(
+                        "Soft resource violation for capability '{}': {}",
+                        id,
+                        violation.to_string()
+                    );
                 }
             }
         }
-        
+
         // Fetch manifest or fall back to registry execution
         let manifest_opt = { self.capabilities.read().await.get(id).cloned() };
         let manifest = if let Some(m) = manifest_opt {
@@ -927,9 +1090,8 @@ impl CapabilityMarketplace {
         }
 
         // Execute via executor registry or provider fallback
-        let exec_result = if let Some(executor) = self
-            .executor_registry
-            .get(&match &manifest.provider {
+        let exec_result = if let Some(executor) =
+            self.executor_registry.get(&match &manifest.provider {
                 ProviderType::Local(_) => std::any::TypeId::of::<LocalCapability>(),
                 ProviderType::Http(_) => std::any::TypeId::of::<HttpCapability>(),
                 ProviderType::MCP(_) => std::any::TypeId::of::<MCPCapability>(),
@@ -937,18 +1099,27 @@ impl CapabilityMarketplace {
                 ProviderType::Plugin(_) => std::any::TypeId::of::<PluginCapability>(),
                 ProviderType::RemoteRTFS(_) => std::any::TypeId::of::<RemoteRTFSCapability>(),
                 ProviderType::Stream(_) => std::any::TypeId::of::<StreamCapabilityImpl>(),
-            })
-        {
+            }) {
             executor.execute(&manifest.provider, inputs).await
         } else {
             match &manifest.provider {
                 ProviderType::Local(local) => (local.handler)(inputs),
                 ProviderType::Http(http) => self.execute_http_capability(http, inputs).await,
-                ProviderType::MCP(_mcp) => Err(RuntimeError::Generic("MCP not configured".to_string())),
-                ProviderType::A2A(_a2a) => Err(RuntimeError::Generic("A2A not configured".to_string())),
-                ProviderType::Plugin(_p) => Err(RuntimeError::Generic("Plugin not configured".to_string())),
-                ProviderType::RemoteRTFS(_r) => Err(RuntimeError::Generic("Remote RTFS not configured".to_string())),
-                ProviderType::Stream(stream_impl) => self.execute_stream_capability(stream_impl, inputs).await,
+                ProviderType::MCP(_mcp) => {
+                    Err(RuntimeError::Generic("MCP not configured".to_string()))
+                }
+                ProviderType::A2A(_a2a) => {
+                    Err(RuntimeError::Generic("A2A not configured".to_string()))
+                }
+                ProviderType::Plugin(_p) => {
+                    Err(RuntimeError::Generic("Plugin not configured".to_string()))
+                }
+                ProviderType::RemoteRTFS(_r) => Err(RuntimeError::Generic(
+                    "Remote RTFS not configured".to_string(),
+                )),
+                ProviderType::Stream(stream_impl) => {
+                    self.execute_stream_capability(stream_impl, inputs).await
+                }
             }
         }?;
 
@@ -970,41 +1141,110 @@ impl CapabilityMarketplace {
         Ok(exec_result)
     }
 
-    async fn execute_stream_capability(&self, stream_impl: &StreamCapabilityImpl, inputs: &Value) -> RuntimeResult<Value> {
-        let handle = stream_impl.provider.start_stream(inputs)?; Ok(Value::String(format!("Stream started with ID: {}", handle.stream_id)))
+    async fn execute_stream_capability(
+        &self,
+        stream_impl: &StreamCapabilityImpl,
+        inputs: &Value,
+    ) -> RuntimeResult<Value> {
+        let handle = stream_impl.provider.start_stream(inputs)?;
+        Ok(Value::String(format!(
+            "Stream started with ID: {}",
+            handle.stream_id
+        )))
     }
 
-    async fn execute_http_capability(&self, http: &HttpCapability, inputs: &Value) -> RuntimeResult<Value> {
-        let args = match inputs { Value::List(list) => list.clone(), Value::Vector(vec) => vec.clone(), v => vec![v.clone()] };
-        let url = args.get(0).and_then(|v| v.as_string()).unwrap_or(&http.base_url);
+    async fn execute_http_capability(
+        &self,
+        http: &HttpCapability,
+        inputs: &Value,
+    ) -> RuntimeResult<Value> {
+        let args = match inputs {
+            Value::List(list) => list.clone(),
+            Value::Vector(vec) => vec.clone(),
+            v => vec![v.clone()],
+        };
+        let url = args
+            .get(0)
+            .and_then(|v| v.as_string())
+            .unwrap_or(&http.base_url);
         let method = args.get(1).and_then(|v| v.as_string()).unwrap_or("GET");
         let default_headers = std::collections::HashMap::new();
-        let headers = args.get(2).and_then(|v| match v { Value::Map(m) => Some(m), _ => None }).unwrap_or(&default_headers);
-        let body = args.get(3).and_then(|v| v.as_string()).unwrap_or("").to_string();
+        let headers = args
+            .get(2)
+            .and_then(|v| match v {
+                Value::Map(m) => Some(m),
+                _ => None,
+            })
+            .unwrap_or(&default_headers);
+        let body = args
+            .get(3)
+            .and_then(|v| v.as_string())
+            .unwrap_or("")
+            .to_string();
         let client = reqwest::Client::new();
-        let method_enum = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+        let method_enum =
+            reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
         let mut req = client.request(method_enum, url);
-        if let Some(token) = &http.auth_token { req = req.bearer_auth(token); }
-        for (k,v) in headers.iter() { if let MapKey::String(ref key) = k { if let Value::String(ref val) = v { req = req.header(key, val); } } }
-        if !body.is_empty() { req = req.body(body); }
-        let response = req.timeout(std::time::Duration::from_millis(http.timeout_ms)).send().await
+        if let Some(token) = &http.auth_token {
+            req = req.bearer_auth(token);
+        }
+        for (k, v) in headers.iter() {
+            if let MapKey::String(ref key) = k {
+                if let Value::String(ref val) = v {
+                    req = req.header(key, val);
+                }
+            }
+        }
+        if !body.is_empty() {
+            req = req.body(body);
+        }
+        let response = req
+            .timeout(std::time::Duration::from_millis(http.timeout_ms))
+            .send()
+            .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
-        let status = response.status().as_u16() as i64; let response_headers = response.headers().clone(); let resp_body = response.text().await.unwrap_or_default();
+        let status = response.status().as_u16() as i64;
+        let response_headers = response.headers().clone();
+        let resp_body = response.text().await.unwrap_or_default();
         let mut response_map = std::collections::HashMap::new();
         response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
         response_map.insert(MapKey::String("body".to_string()), Value::String(resp_body));
         let mut headers_map = std::collections::HashMap::new();
-        for (key, value) in response_headers.iter() { headers_map.insert(MapKey::String(key.to_string()), Value::String(value.to_str().unwrap_or("").to_string())); }
-        response_map.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
+        for (key, value) in response_headers.iter() {
+            headers_map.insert(
+                MapKey::String(key.to_string()),
+                Value::String(value.to_str().unwrap_or("").to_string()),
+            );
+        }
+        response_map.insert(
+            MapKey::String("headers".to_string()),
+            Value::Map(headers_map),
+        );
         Ok(Value::Map(response_map))
     }
 
-    pub async fn execute_with_validation(&self, capability_id: &str, params: &HashMap<String, Value>) -> Result<Value, RuntimeError> {
-        let config = TypeCheckingConfig::default(); self.execute_with_validation_config(capability_id, params, &config).await
+    pub async fn execute_with_validation(
+        &self,
+        capability_id: &str,
+        params: &HashMap<String, Value>,
+    ) -> Result<Value, RuntimeError> {
+        let config = TypeCheckingConfig::default();
+        self.execute_with_validation_config(capability_id, params, &config)
+            .await
     }
 
-    pub async fn execute_with_validation_config(&self, capability_id: &str, params: &HashMap<String, Value>, config: &TypeCheckingConfig) -> Result<Value, RuntimeError> {
-        let capability = { let capabilities = self.capabilities.read().await; capabilities.get(capability_id).cloned().ok_or_else(|| RuntimeError::Generic(format!("Capability not found: {}", capability_id)))? };
+    pub async fn execute_with_validation_config(
+        &self,
+        capability_id: &str,
+        params: &HashMap<String, Value>,
+        config: &TypeCheckingConfig,
+    ) -> Result<Value, RuntimeError> {
+        let capability = {
+            let capabilities = self.capabilities.read().await;
+            capabilities.get(capability_id).cloned().ok_or_else(|| {
+                RuntimeError::Generic(format!("Capability not found: {}", capability_id))
+            })?
+        };
         let boundary_context = VerificationContext::capability_boundary(capability_id);
         // Special-case: if the input schema is a primitive (or any non-map) type AND the caller provided exactly
         // one parameter (commonly named "input"), we treat the inner value directly instead of a map wrapper.
@@ -1015,36 +1255,85 @@ impl CapabilityMarketplace {
             // Currently only Map { .. } represents structured map inputs. Any other variant is treated as primitive/single value.
             let is_non_map_schema = !matches!(input_schema, TypeExpr::Map { .. });
             if is_single && is_non_map_schema {
-                if let Some((_k, v)) = params.iter().next() { // ignore key name, just use the value
+                if let Some((_k, v)) = params.iter().next() {
+                    // ignore key name, just use the value
                     // Validate directly against schema
                     self.type_validator
                         .validate_with_config(v, input_schema, config, &boundary_context)
-                        .map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?;
+                        .map_err(|e| {
+                            RuntimeError::Generic(format!("Input validation failed: {}", e))
+                        })?;
                     direct_primitive_input = Some(v.clone());
                 }
             } else {
                 // Fallback to original map-based validation path
-                self.validate_input_schema_optimized(params, input_schema, config, &boundary_context).await?;
+                self.validate_input_schema_optimized(
+                    params,
+                    input_schema,
+                    config,
+                    &boundary_context,
+                )
+                .await?;
             }
         }
 
-        let inputs_value = if let Some(v) = direct_primitive_input { v } else { self.params_to_value(params)? };
-        let result = self.execute_capability(capability_id, &inputs_value).await?;
-        if let Some(output_schema) = &capability.output_schema { self.validate_output_schema_optimized(&result, output_schema, config, &boundary_context).await?; }
+        let inputs_value = if let Some(v) = direct_primitive_input {
+            v
+        } else {
+            self.params_to_value(params)?
+        };
+        let result = self
+            .execute_capability(capability_id, &inputs_value)
+            .await?;
+        if let Some(output_schema) = &capability.output_schema {
+            self.validate_output_schema_optimized(
+                &result,
+                output_schema,
+                config,
+                &boundary_context,
+            )
+            .await?;
+        }
         Ok(result)
     }
 
-    async fn validate_input_schema_optimized(&self, params: &HashMap<String, Value>, schema_expr: &TypeExpr, config: &TypeCheckingConfig, context: &VerificationContext) -> Result<(), RuntimeError> {
-        let params_value = self.params_to_value(params)?; self.type_validator.validate_with_config(&params_value, schema_expr, config, context).map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?; Ok(())
+    async fn validate_input_schema_optimized(
+        &self,
+        params: &HashMap<String, Value>,
+        schema_expr: &TypeExpr,
+        config: &TypeCheckingConfig,
+        context: &VerificationContext,
+    ) -> Result<(), RuntimeError> {
+        let params_value = self.params_to_value(params)?;
+        self.type_validator
+            .validate_with_config(&params_value, schema_expr, config, context)
+            .map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?;
+        Ok(())
     }
 
-    async fn validate_output_schema_optimized(&self, result: &Value, schema_expr: &TypeExpr, config: &TypeCheckingConfig, context: &VerificationContext) -> Result<(), RuntimeError> {
-        self.type_validator.validate_with_config(result, schema_expr, config, context).map_err(|e| RuntimeError::Generic(format!("Output validation failed: {}", e)))?; Ok(())
+    async fn validate_output_schema_optimized(
+        &self,
+        result: &Value,
+        schema_expr: &TypeExpr,
+        config: &TypeCheckingConfig,
+        context: &VerificationContext,
+    ) -> Result<(), RuntimeError> {
+        self.type_validator
+            .validate_with_config(result, schema_expr, config, context)
+            .map_err(|e| RuntimeError::Generic(format!("Output validation failed: {}", e)))?;
+        Ok(())
     }
 
     fn params_to_value(&self, params: &HashMap<String, Value>) -> Result<Value, RuntimeError> {
         let mut map = HashMap::new();
-        for (key, value) in params { let map_key = if key.starts_with(':') { MapKey::Keyword(crate::ast::Keyword(key[1..].to_string())) } else { MapKey::String(key.clone()) }; map.insert(map_key, value.clone()); }
+        for (key, value) in params {
+            let map_key = if key.starts_with(':') {
+                MapKey::Keyword(crate::ast::Keyword(key[1..].to_string()))
+            } else {
+                MapKey::String(key.clone())
+            };
+            map.insert(map_key, value.clone());
+        }
         Ok(Value::Map(map))
     }
 
@@ -1052,17 +1341,28 @@ impl CapabilityMarketplace {
         match json {
             serde_json::Value::String(s) => Ok(Value::String(s.clone())),
             serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() { Ok(Value::Integer(i)) }
-                else if let Some(f) = n.as_f64() { Ok(Value::Float(f)) }
-                else { Err(RuntimeError::Generic("Invalid number format".to_string())) }
+                if let Some(i) = n.as_i64() {
+                    Ok(Value::Integer(i))
+                } else if let Some(f) = n.as_f64() {
+                    Ok(Value::Float(f))
+                } else {
+                    Err(RuntimeError::Generic("Invalid number format".to_string()))
+                }
             }
             serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
             serde_json::Value::Array(arr) => {
-                let values: Result<Vec<Value>, RuntimeError> = arr.iter().map(Self::json_to_rtfs_value).collect();
+                let values: Result<Vec<Value>, RuntimeError> =
+                    arr.iter().map(Self::json_to_rtfs_value).collect();
                 Ok(Value::Vector(values?))
             }
             serde_json::Value::Object(obj) => {
-                let mut map = HashMap::new(); for (key, value) in obj { let rtfs_key = MapKey::String(key.clone()); let rtfs_value = Self::json_to_rtfs_value(value)?; map.insert(rtfs_key, rtfs_value); } Ok(Value::Map(map))
+                let mut map = HashMap::new();
+                for (key, value) in obj {
+                    let rtfs_key = MapKey::String(key.clone());
+                    let rtfs_value = Self::json_to_rtfs_value(value)?;
+                    map.insert(rtfs_key, rtfs_value);
+                }
+                Ok(Value::Map(map))
             }
             serde_json::Value::Null => Ok(Value::Nil),
         }
@@ -1071,11 +1371,18 @@ impl CapabilityMarketplace {
     /// Return a sanitized snapshot of registered capabilities for observability purposes.
     /// This intentionally omits any sensitive data (auth tokens, plugin internal paths, handlers).
     /// The shape is a vec of minimal JSON objects built manually to avoid leaking internal structs.
-    pub async fn public_capabilities_snapshot(&self, limit: Option<usize>) -> Vec<serde_json::Value> {
+    pub async fn public_capabilities_snapshot(
+        &self,
+        limit: Option<usize>,
+    ) -> Vec<serde_json::Value> {
         let caps_guard = self.capabilities.read().await;
         let mut out: Vec<serde_json::Value> = Vec::with_capacity(caps_guard.len());
         for (id, manifest) in caps_guard.iter() {
-            if let Some(lim) = limit { if out.len() >= lim { break; } }
+            if let Some(lim) = limit {
+                if out.len() >= lim {
+                    break;
+                }
+            }
             // Derive provider type label
             let provider_type = match &manifest.provider {
                 ProviderType::Local(_) => "local",

@@ -1,14 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::ccos::types::{
-    EdgeType, IntentId, IntentStatus, StorableIntent,
-};
+use super::{storage::Edge, IntentGraph};
 use crate::ccos::intent_storage::IntentFilter;
+use crate::ccos::types::{EdgeType, IntentId, IntentStatus, StorableIntent};
 use crate::runtime::RuntimeError;
-use super::{IntentGraph, storage::Edge};
 
 #[derive(Debug)]
 pub struct IntentGraphQueryAPI {
@@ -209,19 +207,24 @@ impl IntentGraphQueryAPI {
     pub fn new(graph: std::sync::Arc<IntentGraph>) -> Self {
         Self { graph_ref: graph }
     }
-    
+
     /// Create a new query API instance from an IntentGraph
     pub fn from_graph(graph: IntentGraph) -> Self {
-        Self { graph_ref: std::sync::Arc::new(graph) }
+        Self {
+            graph_ref: std::sync::Arc::new(graph),
+        }
     }
 
     /// Execute an advanced intent query
     pub fn query_intents(&self, query: IntentQuery) -> Result<IntentQueryResult, RuntimeError> {
         let start_time = Instant::now();
-        
+
         // Start with all intents
         let all_intents = self.graph_ref.rt.block_on(async {
-            self.graph_ref.storage.list_intents(IntentFilter::default()).await
+            self.graph_ref
+                .storage
+                .list_intents(IntentFilter::default())
+                .await
         })?;
 
         let mut filtered_intents = all_intents;
@@ -234,16 +237,16 @@ impl IntentGraphQueryAPI {
         // Apply goal text filter
         if let Some(goal_text) = &query.goal_contains {
             let goal_text_lower = goal_text.to_lowercase();
-            filtered_intents.retain(|intent| 
-                intent.goal.to_lowercase().contains(&goal_text_lower)
-            );
+            filtered_intents.retain(|intent| intent.goal.to_lowercase().contains(&goal_text_lower));
         }
 
         // Apply metadata filter
         if let Some(metadata_filter) = &query.metadata_filter {
             filtered_intents.retain(|intent| {
                 metadata_filter.iter().all(|(key, value)| {
-                    intent.metadata.get(key)
+                    intent
+                        .metadata
+                        .get(key)
                         .map(|v| v.to_string().contains(value))
                         .unwrap_or(false)
                 })
@@ -254,7 +257,7 @@ impl IntentGraphQueryAPI {
         if let Some(created_after) = query.created_after {
             filtered_intents.retain(|intent| intent.created_at >= created_after);
         }
-        
+
         if let Some(created_before) = query.created_before {
             filtered_intents.retain(|intent| intent.created_at <= created_before);
         }
@@ -272,9 +275,9 @@ impl IntentGraphQueryAPI {
             filtered_intents.retain(|intent| {
                 let edges = self.graph_ref.get_edges_for_intent(&intent.intent_id);
                 relationship_types.iter().any(|edge_type| {
-                    edges.iter().any(|edge| 
-                        &edge.edge_type == edge_type && &edge.from == &intent.intent_id
-                    )
+                    edges
+                        .iter()
+                        .any(|edge| &edge.edge_type == edge_type && &edge.from == &intent.intent_id)
                 })
             });
         }
@@ -284,9 +287,9 @@ impl IntentGraphQueryAPI {
             filtered_intents.retain(|intent| {
                 let edges = self.graph_ref.get_edges_for_intent(&intent.intent_id);
                 connected_to.iter().any(|target_id| {
-                    edges.iter().any(|edge| 
-                        &edge.from == target_id || &edge.to == target_id
-                    )
+                    edges
+                        .iter()
+                        .any(|edge| &edge.from == target_id || &edge.to == target_id)
                 })
             });
         }
@@ -297,8 +300,11 @@ impl IntentGraphQueryAPI {
             // In a full implementation, this would use semantic embeddings
             let semantic_lower = semantic_query.to_lowercase();
             filtered_intents.retain(|intent| {
-                intent.goal.to_lowercase().contains(&semantic_lower) ||
-                intent.metadata.values().any(|v| v.to_string().to_lowercase().contains(&semantic_lower))
+                intent.goal.to_lowercase().contains(&semantic_lower)
+                    || intent
+                        .metadata
+                        .values()
+                        .any(|v| v.to_string().to_lowercase().contains(&semantic_lower))
             });
         }
 
@@ -369,9 +375,10 @@ impl IntentGraphQueryAPI {
         let start_time = Instant::now();
 
         // Get all edges
-        let all_edges = self.graph_ref.rt.block_on(async {
-            self.graph_ref.storage.get_edges().await
-        })?;
+        let all_edges = self
+            .graph_ref
+            .rt
+            .block_on(async { self.graph_ref.storage.get_edges().await })?;
 
         let mut filtered_edges = all_edges;
 
@@ -382,15 +389,11 @@ impl IntentGraphQueryAPI {
 
         // Apply weight filters
         if let Some(min_weight) = query.min_weight {
-            filtered_edges.retain(|edge| 
-                edge.weight.map_or(false, |w| w >= min_weight)
-            );
+            filtered_edges.retain(|edge| edge.weight.map_or(false, |w| w >= min_weight));
         }
 
         if let Some(max_weight) = query.max_weight {
-            filtered_edges.retain(|edge| 
-                edge.weight.map_or(true, |w| w <= max_weight)
-            );
+            filtered_edges.retain(|edge| edge.weight.map_or(true, |w| w <= max_weight));
         }
 
         // Apply metadata filter
@@ -398,7 +401,8 @@ impl IntentGraphQueryAPI {
             filtered_edges.retain(|edge| {
                 metadata_filter.iter().all(|(key, value)| {
                     if let Some(metadata) = &edge.metadata {
-                        metadata.get(key)
+                        metadata
+                            .get(key)
                             .map(|v| v.contains(value))
                             .unwrap_or(false)
                     } else {
@@ -420,9 +424,8 @@ impl IntentGraphQueryAPI {
 
         // Apply involves_intent filter
         if let Some(involves_intent) = &query.involves_intent {
-            filtered_edges.retain(|edge| 
-                &edge.from == involves_intent || &edge.to == involves_intent
-            );
+            filtered_edges
+                .retain(|edge| &edge.from == involves_intent || &edge.to == involves_intent);
         }
 
         let total_count = filtered_edges.len();
@@ -452,7 +455,10 @@ impl IntentGraphQueryAPI {
             self.query_intents(filter)?.intents
         } else {
             self.graph_ref.rt.block_on(async {
-                self.graph_ref.storage.list_intents(IntentFilter::default()).await
+                self.graph_ref
+                    .storage
+                    .list_intents(IntentFilter::default())
+                    .await
             })?
         };
 
@@ -460,9 +466,9 @@ impl IntentGraphQueryAPI {
         let edges = if let Some(filter) = edge_filter {
             self.query_edges(filter)?.edges
         } else {
-            self.graph_ref.rt.block_on(async {
-                self.graph_ref.storage.get_edges().await
-            })?
+            self.graph_ref
+                .rt
+                .block_on(async { self.graph_ref.storage.get_edges().await })?
         };
 
         // Convert intents to visualization nodes
@@ -488,7 +494,11 @@ impl IntentGraphQueryAPI {
     }
 
     /// Convert an intent to a visualization node
-    fn intent_to_visualization_node(&self, intent: &StorableIntent, all_edges: &[Edge]) -> VisualizationNode {
+    fn intent_to_visualization_node(
+        &self,
+        intent: &StorableIntent,
+        all_edges: &[Edge],
+    ) -> VisualizationNode {
         // Calculate connection count for size
         let connection_count = all_edges
             .iter()
@@ -500,12 +510,12 @@ impl IntentGraphQueryAPI {
 
         // Determine color based on status
         let color = match intent.status {
-            IntentStatus::Executing => "#FFC107".to_string(),   // Amber for in-flight
-            IntentStatus::Active => "#4CAF50".to_string(),     // Green
-            IntentStatus::Completed => "#2196F3".to_string(),  // Blue
-            IntentStatus::Failed => "#F44336".to_string(),     // Red
-            IntentStatus::Archived => "#9E9E9E".to_string(),   // Gray
-            IntentStatus::Suspended => "#FF9800".to_string(),  // Orange
+            IntentStatus::Executing => "#FFC107".to_string(), // Amber for in-flight
+            IntentStatus::Active => "#4CAF50".to_string(),    // Green
+            IntentStatus::Completed => "#2196F3".to_string(), // Blue
+            IntentStatus::Failed => "#F44336".to_string(),    // Red
+            IntentStatus::Archived => "#9E9E9E".to_string(),  // Gray
+            IntentStatus::Suspended => "#FF9800".to_string(), // Orange
         };
 
         // Generate display label (truncate if too long)
@@ -583,13 +593,17 @@ impl IntentGraphQueryAPI {
         // Status distribution
         let mut status_distribution = HashMap::new();
         for intent in intents {
-            *status_distribution.entry(intent.status.clone()).or_insert(0) += 1;
+            *status_distribution
+                .entry(intent.status.clone())
+                .or_insert(0) += 1;
         }
 
         // Edge type distribution
         let mut edge_type_distribution = HashMap::new();
         for edge in edges {
-            *edge_type_distribution.entry(edge.edge_type.clone()).or_insert(0) += 1;
+            *edge_type_distribution
+                .entry(edge.edge_type.clone())
+                .or_insert(0) += 1;
         }
 
         // Calculate connection counts
@@ -655,7 +669,11 @@ impl IntentGraphQueryAPI {
     }
 
     /// Generate simple clusters based on connectivity
-    fn generate_simple_clusters(&self, intents: &[StorableIntent], edges: &[Edge]) -> Vec<IntentCluster> {
+    fn generate_simple_clusters(
+        &self,
+        intents: &[StorableIntent],
+        edges: &[Edge],
+    ) -> Vec<IntentCluster> {
         // Simple clustering by connected components
         let mut clusters = Vec::new();
         let mut visited = HashSet::new();
@@ -702,9 +720,7 @@ impl IntentGraphQueryAPI {
                 // Generate cluster theme based on common keywords in goals
                 let cluster_goals: Vec<_> = cluster_intents
                     .iter()
-                    .filter_map(|id| {
-                        intents.iter().find(|i| &i.intent_id == id).map(|i| &i.goal)
-                    })
+                    .filter_map(|id| intents.iter().find(|i| &i.intent_id == id).map(|i| &i.goal))
                     .collect();
 
                 let theme = if cluster_goals.is_empty() {
@@ -733,7 +749,11 @@ impl IntentGraphQueryAPI {
     }
 
     /// Quick search for intents by text
-    pub fn quick_search(&self, query: &str, limit: Option<usize>) -> Result<Vec<StorableIntent>, RuntimeError> {
+    pub fn quick_search(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<StorableIntent>, RuntimeError> {
         let intent_query = IntentQuery {
             goal_contains: Some(query.to_string()),
             limit,
@@ -745,7 +765,11 @@ impl IntentGraphQueryAPI {
     }
 
     /// Get related intents for a given intent ID
-    pub fn get_related_intents(&self, intent_id: &IntentId, max_depth: usize) -> Result<Vec<StorableIntent>, RuntimeError> {
+    pub fn get_related_intents(
+        &self,
+        intent_id: &IntentId,
+        max_depth: usize,
+    ) -> Result<Vec<StorableIntent>, RuntimeError> {
         let mut related = HashSet::new();
         let mut to_explore = vec![(intent_id.clone(), 0)];
         let mut explored = HashSet::new();
@@ -759,7 +783,7 @@ impl IntentGraphQueryAPI {
 
             // Get all edges involving this intent
             let edges = self.graph_ref.get_edges_for_intent(&current_id);
-            
+
             for edge in edges {
                 let related_id = if edge.from == current_id {
                     &edge.to

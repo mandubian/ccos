@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::ccos::types::{Intent, Plan};
+use super::llm_provider::{LlmProviderConfig, LlmProviderFactory};
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::ccos::types::{Intent, Plan};
 use crate::runtime::error::RuntimeError;
 use serde_json::Value as JsonValue;
-use super::llm_provider::{LlmProviderFactory, LlmProviderConfig};
 
 /// Result of plan generation, optionally carrying an IR echo for evaluation.
 pub struct PlanGenerationResult {
@@ -34,7 +34,9 @@ fn canonicalize_rtfs_to_ir_json(rtfs: &str) -> JsonValue {
     let mut steps: Vec<JsonValue> = Vec::new();
     for line in rtfs.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("(step ") { continue; }
+        if !trimmed.starts_with("(step ") {
+            continue;
+        }
 
         // Extract name between the first pair of quotes
         let name = trimmed
@@ -53,7 +55,9 @@ fn canonicalize_rtfs_to_ir_json(rtfs: &str) -> JsonValue {
                 tok = tok.trim_matches('"');
             }
             tok.to_string()
-        } else { String::new() };
+        } else {
+            String::new()
+        };
 
         // Naive args extraction for two common shapes used in stubs:
         // 1) map literal: {:message "hi"}
@@ -67,8 +71,8 @@ fn canonicalize_rtfs_to_ir_json(rtfs: &str) -> JsonValue {
                 // Extremely limited map parser for {:k "v"}
                 if after_cap.contains(":message") {
                     if let Some(q1) = after_cap.find('"') {
-                        if let Some(q2) = after_cap[q1+1..].find('"') {
-                            let val = &after_cap[q1+1..q1+1+q2];
+                        if let Some(q2) = after_cap[q1 + 1..].find('"') {
+                            let val = &after_cap[q1 + 1..q1 + 1 + q2];
                             args_json = serde_json::json!({"message": val});
                         }
                     }
@@ -81,9 +85,13 @@ fn canonicalize_rtfs_to_ir_json(rtfs: &str) -> JsonValue {
                 for tok in after_cap.split_whitespace() {
                     // Stop at closing parens
                     let t = tok.trim_end_matches(')').trim_end_matches(')');
-                    if let Ok(n) = t.parse::<i64>() { arr.push(JsonValue::from(n)); }
+                    if let Ok(n) = t.parse::<i64>() {
+                        arr.push(JsonValue::from(n));
+                    }
                 }
-                if !arr.is_empty() { args_json = JsonValue::Array(arr); }
+                if !arr.is_empty() {
+                    args_json = JsonValue::Array(arr);
+                }
             }
         }
 
@@ -109,7 +117,7 @@ impl PlanGenerationProvider for StubPlanGenerationProvider {
         _marketplace: Arc<CapabilityMarketplace>,
     ) -> Result<PlanGenerationResult, RuntimeError> {
         // Minimal RTFS body; governance will still validate.
-      let body = r#"(do
+        let body = r#"(do
   (step "Greet" (call :ccos.echo {:message "hi"}))
   (step "Add" (call :ccos.math.add 2 3)))"#;
         // Create a simple JSON IR mirroring the steps
@@ -138,15 +146,30 @@ impl PlanGenerationProvider for StubPlanGenerationProvider {
         // Canonicalize RTFS to a comparable IR shape and compute a simple equivalence signal
         let canon = canonicalize_rtfs_to_ir_json(body);
         let caps_from = |j: &JsonValue| -> Vec<String> {
-            j.get("steps").and_then(|v| v.as_array()).unwrap_or(&vec![])
+            j.get("steps")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&vec![])
                 .iter()
-                .map(|s| s.get("capability").and_then(|c| c.as_str()).unwrap_or("").to_string())
+                .map(|s| {
+                    s.get("capability")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect()
         };
         let caps_ir = caps_from(&ir);
         let caps_canon = caps_from(&canon);
-        let eq_len = ir.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
-            == canon.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        let eq_len = ir
+            .get("steps")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0)
+            == canon
+                .get("steps")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
         let eq_caps = caps_ir == caps_canon;
         let equivalent = eq_len && eq_caps;
         let diagnostics = Some(format!(
@@ -156,7 +179,11 @@ impl PlanGenerationProvider for StubPlanGenerationProvider {
             caps_ir.join(",")
         ));
 
-        Ok(PlanGenerationResult { plan, ir_json: Some(ir), diagnostics })
+        Ok(PlanGenerationResult {
+            plan,
+            ir_json: Some(ir),
+            diagnostics,
+        })
     }
 }
 
@@ -166,7 +193,9 @@ pub struct LlmRtfsPlanGenerationProvider {
 }
 
 impl LlmRtfsPlanGenerationProvider {
-    pub fn new(config: LlmProviderConfig) -> Self { Self { config } }
+    pub fn new(config: LlmProviderConfig) -> Self {
+        Self { config }
+    }
 }
 
 #[async_trait(?Send)]
@@ -177,8 +206,11 @@ impl PlanGenerationProvider for LlmRtfsPlanGenerationProvider {
         _marketplace: Arc<CapabilityMarketplace>,
     ) -> Result<PlanGenerationResult, RuntimeError> {
         // Build a minimal StorableIntent shim to call the LLM provider API
-        use crate::ccos::types::{StorableIntent, IntentStatus, TriggerSource, GenerationContext};
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        use crate::ccos::types::{GenerationContext, IntentStatus, StorableIntent, TriggerSource};
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let storable = StorableIntent {
             intent_id: intent.intent_id.clone(),
             name: intent.name.clone(),
@@ -217,7 +249,10 @@ impl PlanGenerationProvider for LlmRtfsPlanGenerationProvider {
 
         // Attach basic diagnostics (provider name + model)
         let info = provider.get_info();
-        let mode = if std::env::var("RTFS_FULL_PLAN").map(|v| v == "1").unwrap_or(false) {
+        let mode = if std::env::var("RTFS_FULL_PLAN")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
             "full-plan"
         } else {
             "reduced-grammar-rtfs"
@@ -227,6 +262,10 @@ impl PlanGenerationProvider for LlmRtfsPlanGenerationProvider {
             info.name, info.model, mode
         ));
 
-        Ok(PlanGenerationResult { plan, ir_json: None, diagnostics })
+        Ok(PlanGenerationResult {
+            plan,
+            ir_json: None,
+            diagnostics,
+        })
     }
 }

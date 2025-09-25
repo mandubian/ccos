@@ -1,11 +1,11 @@
+use rtfs_compiler::ast::Literal;
 use rtfs_compiler::ir::core::*;
 use rtfs_compiler::ir::optimizer::EnhancedIrOptimizer;
-use rtfs_compiler::ast::Literal;
 
 #[test]
 fn test_constant_folding_arithmetic() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test: (+ 10 20) should fold to 30
     let add_node = IrNode::Apply {
         id: 1,
@@ -37,22 +37,28 @@ fn test_constant_folding_arithmetic() {
         ir_type: IrType::Int,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(add_node);
-    
+
     // Should be folded to a literal 30
     match optimized {
-        IrNode::Literal { value: Literal::Integer(30), .. } => {
+        IrNode::Literal {
+            value: Literal::Integer(30),
+            ..
+        } => {
             // Success
-        },
-        _ => panic!("Expected constant folded result of 30, got: {:?}", optimized),
+        }
+        _ => panic!(
+            "Expected constant folded result of 30, got: {:?}",
+            optimized
+        ),
     }
 }
 
 #[test]
 fn test_constant_folding_boolean() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test: (> 10 5) should fold to true
     let gt_node = IrNode::Apply {
         id: 1,
@@ -84,22 +90,28 @@ fn test_constant_folding_boolean() {
         ir_type: IrType::Bool,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(gt_node);
-    
+
     // Should be folded to a literal true
     match optimized {
-        IrNode::Literal { value: Literal::Boolean(true), .. } => {
+        IrNode::Literal {
+            value: Literal::Boolean(true),
+            ..
+        } => {
             // Success
-        },
-        _ => panic!("Expected constant folded result of true, got: {:?}", optimized),
+        }
+        _ => panic!(
+            "Expected constant folded result of true, got: {:?}",
+            optimized
+        ),
     }
 }
 
 #[test]
 fn test_dead_code_elimination_unused_let() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test: (let [x 10] 42) - x is never used, should eliminate binding
     let let_node = IrNode::Let {
         id: 1,
@@ -127,22 +139,28 @@ fn test_dead_code_elimination_unused_let() {
         ir_type: IrType::Int,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(let_node);
-    
+
     // Should be simplified to just 42
     match optimized {
-        IrNode::Literal { value: Literal::Integer(42), .. } => {
+        IrNode::Literal {
+            value: Literal::Integer(42),
+            ..
+        } => {
             // Success
-        },
-        _ => panic!("Expected dead code eliminated result of 42, got: {:?}", optimized),
+        }
+        _ => panic!(
+            "Expected dead code eliminated result of 42, got: {:?}",
+            optimized
+        ),
     }
 }
 
 #[test]
 fn test_dead_code_elimination_with_side_effects() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test: (let [x (print "hello")] 42) - x has side effects, should keep binding
     let let_node = IrNode::Let {
         id: 1,
@@ -186,22 +204,25 @@ fn test_dead_code_elimination_with_side_effects() {
         ir_type: IrType::Int,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(let_node);
-    
+
     // Should keep the let binding due to side effects
     match optimized {
         IrNode::Let { .. } => {
             // Success - binding preserved
-        },
-        _ => panic!("Expected let binding to be preserved due to side effects, got: {:?}", optimized),
+        }
+        _ => panic!(
+            "Expected let binding to be preserved due to side effects, got: {:?}",
+            optimized
+        ),
     }
 }
 
 #[test]
 fn test_constant_condition_optimization() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test: (if true 42 99) should optimize to 42
     let if_node = IrNode::If {
         id: 1,
@@ -226,22 +247,28 @@ fn test_constant_condition_optimization() {
         ir_type: IrType::Int,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(if_node);
-    
+
     // Should be optimized to just 42
     match optimized {
-        IrNode::Literal { value: Literal::Integer(42), .. } => {
+        IrNode::Literal {
+            value: Literal::Integer(42),
+            ..
+        } => {
             // Success
-        },
-        _ => panic!("Expected constant condition optimization to 42, got: {:?}", optimized),
+        }
+        _ => panic!(
+            "Expected constant condition optimization to 42, got: {:?}",
+            optimized
+        ),
     }
 }
 
 #[test]
 fn test_do_block_elimination() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test: (do 10 20 30) with no side effects should keep only the last expression
     let do_node = IrNode::Do {
         id: 1,
@@ -268,14 +295,17 @@ fn test_do_block_elimination() {
         ir_type: IrType::Int,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(do_node);
-    
+
     // Should be optimized to just the last expression (30)
     match optimized {
-        IrNode::Literal { value: Literal::Integer(30), .. } => {
+        IrNode::Literal {
+            value: Literal::Integer(30),
+            ..
+        } => {
             // Success
-        },
+        }
         _ => panic!("Expected do block optimization to 30, got: {:?}", optimized),
     }
 }
@@ -283,7 +313,7 @@ fn test_do_block_elimination() {
 #[test]
 fn test_optimization_combinations() {
     let mut optimizer = EnhancedIrOptimizer::new();
-    
+
     // Test complex optimization: (let [x (+ 5 3)] (if (> x 7) (* x 2) 0))
     // Should optimize to: (let [x 8] (if true 16 0)) -> (let [x 8] 16) -> 16
     let complex_node = IrNode::Let {
@@ -403,15 +433,15 @@ fn test_optimization_combinations() {
         ir_type: IrType::Int,
         source_location: None,
     };
-    
+
     let optimized = optimizer.optimize_with_control_flow(complex_node);
-    
+
     // The optimization should be quite substantial, but let's check that it's at least simpler
     // For now, just verify it doesn't crash and produces some result
     match optimized {
         IrNode::Literal { .. } | IrNode::Let { .. } | IrNode::If { .. } => {
             // Any of these are reasonable outcomes depending on optimization depth
-        },
+        }
         _ => panic!("Unexpected optimization result: {:?}", optimized),
     }
 }

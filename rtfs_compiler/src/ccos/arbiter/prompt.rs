@@ -41,23 +41,30 @@ pub struct FilePromptStore {
 
 impl FilePromptStore {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
-        Self { base_dir: base_dir.as_ref().to_path_buf() }
+        Self {
+            base_dir: base_dir.as_ref().to_path_buf(),
+        }
     }
 
     fn read_section(&self, id: &str, version: &str, name: &str) -> Result<String, RuntimeError> {
-        let path = self.base_dir.join(id).join(version).join(format!("{}.md", name));
-        fs::read_to_string(&path).map_err(|e| RuntimeError::Generic(format!(
-            "Failed to read prompt section {} for {}/{}: {}", name, id, version, e
-        )))
+        let path = self
+            .base_dir
+            .join(id)
+            .join(version)
+            .join(format!("{}.md", name));
+        fs::read_to_string(&path).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to read prompt section {} for {}/{}: {}",
+                name, id, version, e
+            ))
+        })
     }
 }
 
 impl PromptStore for FilePromptStore {
     fn get_template(&self, id: &str, version: &str) -> Result<PromptTemplate, RuntimeError> {
         // Default section set
-        let section_names = vec![
-            "grammar", "strategy", "few_shots", "anti_patterns", "task"
-        ];
+        let section_names = vec!["grammar", "strategy", "few_shots", "anti_patterns", "task"];
         let mut sections = Vec::new();
         for name in section_names {
             if let Ok(content) = self.read_section(id, version, name) {
@@ -72,7 +79,11 @@ impl PromptStore for FilePromptStore {
                 self.base_dir.display()
             )));
         }
-        Ok(PromptTemplate { id: id.to_string(), version: version.to_string(), sections })
+        Ok(PromptTemplate {
+            id: id.to_string(),
+            version: version.to_string(),
+            sections,
+        })
     }
 }
 
@@ -81,14 +92,23 @@ pub struct PromptManager<S: PromptStore> {
 }
 
 impl<S: PromptStore> PromptManager<S> {
-    pub fn new(store: S) -> Self { Self { store } }
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
 
-    pub fn render(&self, id: &str, version: &str, vars: &HashMap<String, String>) -> Result<String, RuntimeError> {
+    pub fn render(
+        &self,
+        id: &str,
+        version: &str,
+        vars: &HashMap<String, String>,
+    ) -> Result<String, RuntimeError> {
         let template = self.store.get_template(id, version)?;
         let mut buf = String::new();
         for (_name, content) in template.sections {
             buf.push_str(&content);
-            if !buf.ends_with('\n') { buf.push('\n'); }
+            if !buf.ends_with('\n') {
+                buf.push('\n');
+            }
             buf.push('\n');
         }
         // simple variable substitution: {var}
@@ -100,5 +120,3 @@ impl<S: PromptStore> PromptManager<S> {
         Ok(rendered)
     }
 }
-
-

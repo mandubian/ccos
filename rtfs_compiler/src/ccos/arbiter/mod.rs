@@ -46,42 +46,35 @@
 pub mod arbiter_config;
 pub mod arbiter_engine;
 pub mod arbiter_factory;
-pub mod dummy_arbiter;
 pub mod delegating_arbiter;
-pub mod legacy_arbiter;
-pub mod llm_provider;
-pub mod llm_arbiter;
-pub mod template_arbiter;
+pub mod dummy_arbiter;
 pub mod hybrid_arbiter;
-pub mod prompt;
+pub mod legacy_arbiter;
+pub mod llm_arbiter;
+pub mod llm_provider;
 pub mod plan_generation;
+pub mod prompt;
+pub mod template_arbiter;
 
 // Re-export main types for easy access
 pub use arbiter_config::ArbiterConfig;
 pub use arbiter_engine::ArbiterEngine;
 pub use arbiter_factory::ArbiterFactory;
-pub use dummy_arbiter::DummyArbiter;
 pub use delegating_arbiter::DelegatingArbiter;
-pub use legacy_arbiter::Arbiter;
-pub use llm_provider::{LlmProvider, LlmProviderConfig, StubLlmProvider, LlmProviderFactory};
-pub use llm_arbiter::LlmArbiter;
-pub use template_arbiter::TemplateArbiter;
+pub use dummy_arbiter::DummyArbiter;
 pub use hybrid_arbiter::HybridArbiter;
-pub use prompt::{PromptManager, PromptConfig};
-pub use plan_generation::{PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider};
+pub use legacy_arbiter::Arbiter;
+pub use llm_arbiter::LlmArbiter;
+pub use llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory, StubLlmProvider};
+pub use plan_generation::{
+    PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider,
+};
+pub use prompt::{PromptConfig, PromptManager};
+pub use template_arbiter::TemplateArbiter;
 
 // Re-export configuration types
 pub use arbiter_config::{
-    ArbiterEngineType,
-    LlmConfig,
-    DelegationConfig,
-    CapabilityConfig,
-    SecurityConfig,
+    ArbiterEngineType, CacheConfig, CapabilityConfig, DelegationConfig, FallbackBehavior,
+    IntentPattern, LlmConfig, LlmProviderType, MarketplaceType, PlanTemplate, SecurityConfig,
     TemplateConfig,
-    LlmProviderType,
-    MarketplaceType,
-    CacheConfig,
-    IntentPattern,
-    PlanTemplate,
-    FallbackBehavior,
 };

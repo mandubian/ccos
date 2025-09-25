@@ -1,12 +1,12 @@
 //! Pure RTFS test utilities that don't depend on CCOS components
-//! 
+//!
 //! These utilities use PureHost and are designed for testing RTFS language
 //! features in isolation without CCOS orchestration, capabilities, or external dependencies.
 
 use crate::parser;
 use crate::runtime::{
     evaluator::Evaluator, ir_runtime::IrRuntime, module_runtime::ModuleRegistry,
-    values::Value, pure_host::PureHost, security::RuntimeContext,
+    pure_host::PureHost, security::RuntimeContext, values::Value,
 };
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ pub fn create_pure_evaluator() -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let security_context = RuntimeContext::pure();
     let host = Arc::new(PureHost::new());
-    
+
     Evaluator::new(Arc::new(module_registry), security_context, host)
 }
 
@@ -31,19 +31,18 @@ pub fn create_pure_evaluator() -> Evaluator {
 pub fn create_pure_evaluator_with_context(ctx: RuntimeContext) -> Evaluator {
     let module_registry = ModuleRegistry::new();
     let host = Arc::new(PureHost::new());
-    
+
     Evaluator::new(Arc::new(module_registry), ctx, host)
 }
 
 /// Creates a new AST evaluator with stdlib loaded for pure RTFS testing.
 pub fn create_pure_evaluator_with_stdlib() -> Evaluator {
     let mut module_registry = ModuleRegistry::new();
-    crate::runtime::stdlib::load_stdlib(&mut module_registry)
-        .expect("Failed to load stdlib");
-    
+    crate::runtime::stdlib::load_stdlib(&mut module_registry).expect("Failed to load stdlib");
+
     let security_context = RuntimeContext::pure();
     let host = Arc::new(PureHost::new());
-    
+
     Evaluator::new(Arc::new(module_registry), security_context, host)
 }
 
@@ -52,7 +51,7 @@ pub fn create_pure_ir_runtime() -> IrRuntime {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = Arc::new(PureHost::new());
-    
+
     IrRuntime::new(host, security_context)
 }
 
@@ -60,15 +59,15 @@ pub fn create_pure_ir_runtime() -> IrRuntime {
 pub fn parse_and_evaluate_pure(input: &str) -> crate::runtime::error::RuntimeResult<Value> {
     let parsed = parser::parse(input).expect("Failed to parse");
     let evaluator = create_pure_evaluator();
-    
+
     if let Some(last_item) = parsed.last() {
         match last_item {
-            crate::ast::TopLevel::Expression(expr) => {
-                match evaluator.evaluate(expr)? {
-                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
-                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                        Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
-                    }
+            crate::ast::TopLevel::Expression(expr) => match evaluator.evaluate(expr)? {
+                crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                    Err(crate::runtime::error::RuntimeError::Generic(
+                        "Host call required in pure test".to_string(),
+                    ))
                 }
             },
             _ => Ok(Value::String("object_defined".to_string())),
@@ -79,18 +78,20 @@ pub fn parse_and_evaluate_pure(input: &str) -> crate::runtime::error::RuntimeRes
 }
 
 /// Parses and evaluates RTFS code with stdlib loaded using pure evaluator.
-pub fn parse_and_evaluate_pure_with_stdlib(input: &str) -> crate::runtime::error::RuntimeResult<Value> {
+pub fn parse_and_evaluate_pure_with_stdlib(
+    input: &str,
+) -> crate::runtime::error::RuntimeResult<Value> {
     let parsed = parser::parse(input).expect("Failed to parse");
     let evaluator = create_pure_evaluator_with_stdlib();
-    
+
     if let Some(last_item) = parsed.last() {
         match last_item {
-            crate::ast::TopLevel::Expression(expr) => {
-                match evaluator.evaluate(expr)? {
-                    crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
-                    crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-                        Err(crate::runtime::error::RuntimeError::Generic("Host call required in pure test".to_string()))
-                    }
+            crate::ast::TopLevel::Expression(expr) => match evaluator.evaluate(expr)? {
+                crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) => Ok(value),
+                crate::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                    Err(crate::runtime::error::RuntimeError::Generic(
+                        "Host call required in pure test".to_string(),
+                    ))
                 }
             },
             _ => Ok(Value::String("object_defined".to_string())),
@@ -115,7 +116,10 @@ mod tests {
         // Should be able to create evaluator without CCOS dependencies
         // Pure evaluators still have standard library functions loaded
         let symbols = evaluator.env.symbol_names();
-        assert!(symbols.len() > 0, "Pure evaluator should have standard library functions available");
+        assert!(
+            symbols.len() > 0,
+            "Pure evaluator should have standard library functions available"
+        );
     }
 
     #[test]
@@ -134,7 +138,7 @@ mod tests {
     fn test_pure_evaluator_capability_error() {
         let evaluator = create_pure_evaluator();
         let parsed = parser::parse("(call :test.capability [])").expect("parse");
-        
+
         if let crate::ast::TopLevel::Expression(expr) = &parsed[0] {
             let result = evaluator.evaluate(expr);
             // Should return an error since capabilities are not available in pure mode

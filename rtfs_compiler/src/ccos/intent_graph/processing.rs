@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ccos::types::{
-    EdgeType, IntentId, IntentStatus, StorableIntent, ExecutionResult,
-};
+use super::storage::IntentGraphStorage;
 use super::virtualization::VirtualizationConfig;
 use crate::ccos::intent_storage::IntentFilter;
+use crate::ccos::types::{EdgeType, ExecutionResult, IntentId, IntentStatus, StorableIntent};
 use crate::runtime::RuntimeError;
-use super::storage::IntentGraphStorage;
 
 /// Intent summarization for virtualization
 #[derive(Debug)]
@@ -25,9 +23,7 @@ impl Default for IntentSummarizer {
 
 impl IntentSummarizer {
     pub fn new(max_summary_length: usize) -> Self {
-        Self {
-            max_summary_length,
-        }
+        Self { max_summary_length }
     }
 
     /// Summarize a cluster of intents
@@ -59,23 +55,25 @@ impl IntentSummarizer {
         }
 
         let mut summary_parts = Vec::new();
-        
-        for intent_id in cluster.iter().take(5) { // Limit to 5 intents per cluster
+
+        for intent_id in cluster.iter().take(5) {
+            // Limit to 5 intents per cluster
             if let Ok(Some(intent)) = storage.get_intent(intent_id).await {
-                let intent_summary = format!("- {}: {}", 
+                let intent_summary = format!(
+                    "- {}: {}",
                     intent.name.unwrap_or_else(|| "Unnamed".to_string()),
                     intent.goal.chars().take(100).collect::<String>()
                 );
                 summary_parts.push(intent_summary);
             }
         }
-        
+
         if cluster.len() > 5 {
             summary_parts.push(format!("... and {} more intents", cluster.len() - 5));
         }
-        
+
         let full_summary = summary_parts.join("\n");
-        
+
         // Truncate to max length
         if full_summary.len() > self.max_summary_length {
             Ok(format!("{}...", &full_summary[..self.max_summary_length]))
@@ -113,12 +111,13 @@ impl IntentSummarizer {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let avg_age = intents
             .iter()
             .map(|intent| now.saturating_sub(intent.created_at))
-            .sum::<u64>() as f64 / intents.len() as f64;
-        
+            .sum::<u64>() as f64
+            / intents.len() as f64;
+
         let recency_factor = 1.0 / (1.0 + avg_age / 86400.0 * 0.1); // Age in days
 
         avg_status_relevance * size_factor * recency_factor
@@ -128,14 +127,15 @@ impl IntentSummarizer {
     fn extract_key_goals(&self, intents: &[StorableIntent]) -> Vec<String> {
         // Group similar goals (simple keyword extraction)
         let mut goal_keywords = HashMap::new();
-        
+
         for intent in intents {
-            let words: Vec<&str> = intent.goal
+            let words: Vec<&str> = intent
+                .goal
                 .split_whitespace()
                 .filter(|word| word.len() > 3) // Filter short words
                 .take(5) // Take up to 5 words per goal
                 .collect();
-            
+
             for word in words {
                 let normalized = word.to_lowercase();
                 *goal_keywords.entry(normalized).or_insert(0) += 1;
@@ -145,7 +145,7 @@ impl IntentSummarizer {
         // Get the most common keywords
         let mut sorted_keywords: Vec<_> = goal_keywords.into_iter().collect();
         sorted_keywords.sort_by(|a, b| b.1.cmp(&a.1));
-        
+
         sorted_keywords
             .into_iter()
             .take(3) // Top 3 keywords
@@ -156,7 +156,7 @@ impl IntentSummarizer {
     /// Determine the dominant status in a cluster
     fn determine_dominant_status(&self, intents: &[StorableIntent]) -> IntentStatus {
         let mut status_counts = HashMap::new();
-        
+
         for intent in intents {
             *status_counts.entry(intent.status.clone()).or_insert(0) += 1;
         }
@@ -279,7 +279,9 @@ impl IntentPruningEngine {
         let age_days = (SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() - intent.created_at) / 86400;
+            .as_secs()
+            - intent.created_at)
+            / 86400;
         let recency_score = 1.0 / (1.0 + age_days as f64 * 0.05);
         score += recency_score * 0.5;
 
@@ -339,7 +341,7 @@ impl IntentLifecycleManager {
             status: Some(IntentStatus::Completed),
             ..Default::default()
         };
-        
+
         let completed_intents = storage.list_intents(completed_filter).await?;
 
         for mut intent in completed_intents {
@@ -350,7 +352,8 @@ impl IntentLifecycleManager {
                 IntentStatus::Archived,
                 "Auto-archived completed intent".to_string(),
                 None, // triggering_plan_id - will be enhanced later
-            ).await?;
+            )
+            .await?;
         }
 
         Ok(())
@@ -367,29 +370,30 @@ impl IntentLifecycleManager {
         triggering_plan_id: Option<&str>,
     ) -> Result<(), RuntimeError> {
         let old_status = intent.status.clone();
-        
+
         // Validate the transition
         self.validate_status_transition(&old_status, &new_status)?;
-        
+
         // Update the intent
         intent.status = new_status.clone();
         intent.updated_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Add audit trail to metadata
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Count existing transitions to ensure unique keys
-        let transition_count = intent.metadata
+        let transition_count = intent
+            .metadata
             .keys()
             .filter(|key| key.starts_with("status_transition_"))
             .count();
-        
+
         let audit_entry = format!(
             "{}: {} -> {} (reason: {})",
             timestamp,
@@ -397,13 +401,13 @@ impl IntentLifecycleManager {
             self.status_to_string(&new_status),
             reason
         );
-        
+
         let audit_key = format!("status_transition_{}_{}", timestamp, transition_count);
         intent.metadata.insert(audit_key, audit_entry);
-        
+
         // Store the updated intent
         storage.update_intent(intent).await?;
-        
+
         // Emit status change event for mandatory audit
         // NOTE: We don't yet have a concrete plan_id wired here; pass empty string until orchestration plumbs it.
         event_sink.log_intent_status_change(
@@ -414,7 +418,7 @@ impl IntentLifecycleManager {
             &reason,
             triggering_plan_id,
         )?;
-        
+
         Ok(())
     }
 
@@ -426,15 +430,23 @@ impl IntentLifecycleManager {
         intent_id: &IntentId,
         result: &ExecutionResult,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         let (target_status, reason) = if result.success {
-            (IntentStatus::Completed, "Intent completed successfully".to_string())
+            (
+                IntentStatus::Completed,
+                "Intent completed successfully".to_string(),
+            )
         } else {
-            (IntentStatus::Failed, format!("Intent failed with errors: {:?}", result.value))
+            (
+                IntentStatus::Failed,
+                format!("Intent failed with errors: {:?}", result.value),
+            )
         };
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -442,8 +454,9 @@ impl IntentLifecycleManager {
             target_status,
             reason,
             None, // triggering_plan_id - will be enhanced later
-        ).await?;
-        
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -455,9 +468,11 @@ impl IntentLifecycleManager {
         intent_id: &IntentId,
         error_message: String,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -465,8 +480,9 @@ impl IntentLifecycleManager {
             IntentStatus::Failed,
             format!("Intent failed: {}", error_message),
             None, // triggering_plan_id - will be enhanced later
-        ).await?;
-        
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -478,9 +494,11 @@ impl IntentLifecycleManager {
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -488,8 +506,9 @@ impl IntentLifecycleManager {
             IntentStatus::Suspended,
             format!("Intent suspended: {}", reason),
             None, // triggering_plan_id - will be enhanced later
-        ).await?;
-        
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -501,9 +520,11 @@ impl IntentLifecycleManager {
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -511,8 +532,9 @@ impl IntentLifecycleManager {
             IntentStatus::Active,
             format!("Intent resumed: {}", reason),
             None, // triggering_plan_id - will be enhanced later
-        ).await?;
-        
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -524,9 +546,11 @@ impl IntentLifecycleManager {
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -534,8 +558,9 @@ impl IntentLifecycleManager {
             IntentStatus::Archived,
             format!("Intent archived: {}", reason),
             None, // triggering_plan_id - will be enhanced later
-        ).await?;
-        
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -547,9 +572,11 @@ impl IntentLifecycleManager {
         intent_id: &IntentId,
         reason: String,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -557,8 +584,9 @@ impl IntentLifecycleManager {
             IntentStatus::Active,
             format!("Intent reactivated: {}", reason),
             None, // triggering_plan_id - will be enhanced later
-        ).await?;
-        
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -572,7 +600,7 @@ impl IntentLifecycleManager {
             status: Some(status),
             ..Default::default()
         };
-        
+
         storage.list_intents(filter).await
     }
 
@@ -582,25 +610,37 @@ impl IntentLifecycleManager {
         storage: &IntentGraphStorage,
         intent_id: &IntentId,
     ) -> Result<Vec<String>, RuntimeError> {
-        let intent = storage.get_intent(intent_id).await?
+        let intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         let mut history = Vec::new();
-        
+
         // Extract status transition entries from metadata
         for (key, value) in &intent.metadata {
             if key.starts_with("status_transition_") {
                 history.push(value.clone());
             }
         }
-        
+
         // Sort by timestamp (extracted from key)
         history.sort_by(|a, b| {
-            let timestamp_a = a.split(':').next().unwrap_or("0").parse::<u64>().unwrap_or(0);
-            let timestamp_b = b.split(':').next().unwrap_or("0").parse::<u64>().unwrap_or(0);
+            let timestamp_a = a
+                .split(':')
+                .next()
+                .unwrap_or("0")
+                .parse::<u64>()
+                .unwrap_or(0);
+            let timestamp_b = b
+                .split(':')
+                .next()
+                .unwrap_or("0")
+                .parse::<u64>()
+                .unwrap_or(0);
             timestamp_a.cmp(&timestamp_b)
         });
-        
+
         Ok(history)
     }
 
@@ -620,35 +660,40 @@ impl IntentLifecycleManager {
             (IntentStatus::Executing, IntentStatus::Suspended) => Ok(()),
             (IntentStatus::Executing, IntentStatus::Active) => Ok(()),
             (IntentStatus::Executing, IntentStatus::Archived) => Ok(()),
-            (IntentStatus::Executing, _) => Err(RuntimeError::Generic(
-                format!("Cannot transition from Executing to {:?}", to)
-            )),
+            (IntentStatus::Executing, _) => Err(RuntimeError::Generic(format!(
+                "Cannot transition from Executing to {:?}",
+                to
+            ))),
 
             // Completed can only transition to Archived
             (IntentStatus::Completed, IntentStatus::Archived) => Ok(()),
-            (IntentStatus::Completed, _) => Err(RuntimeError::Generic(
-                format!("Cannot transition from Completed to {:?}", to)
-            )),
+            (IntentStatus::Completed, _) => Err(RuntimeError::Generic(format!(
+                "Cannot transition from Completed to {:?}",
+                to
+            ))),
 
             // Failed can transition to Active (retry) or Archived
             (IntentStatus::Failed, IntentStatus::Active) => Ok(()),
             (IntentStatus::Failed, IntentStatus::Archived) => Ok(()),
-            (IntentStatus::Failed, _) => Err(RuntimeError::Generic(
-                format!("Cannot transition from Failed to {:?}", to)
-            )),
+            (IntentStatus::Failed, _) => Err(RuntimeError::Generic(format!(
+                "Cannot transition from Failed to {:?}",
+                to
+            ))),
 
             // Suspended can transition to Active (resume) or Archived
             (IntentStatus::Suspended, IntentStatus::Active) => Ok(()),
             (IntentStatus::Suspended, IntentStatus::Archived) => Ok(()),
-            (IntentStatus::Suspended, _) => Err(RuntimeError::Generic(
-                format!("Cannot transition from Suspended to {:?}", to)
-            )),
+            (IntentStatus::Suspended, _) => Err(RuntimeError::Generic(format!(
+                "Cannot transition from Suspended to {:?}",
+                to
+            ))),
 
             // Archived can transition to Active (reactivate)
             (IntentStatus::Archived, IntentStatus::Active) => Ok(()),
-            (IntentStatus::Archived, _) => Err(RuntimeError::Generic(
-                format!("Cannot transition from Archived to {:?}", to)
-            )),
+            (IntentStatus::Archived, _) => Err(RuntimeError::Generic(format!(
+                "Cannot transition from Archived to {:?}",
+                to
+            ))),
         }
     }
 
@@ -669,7 +714,8 @@ impl IntentLifecycleManager {
         &self,
         storage: &IntentGraphStorage,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        self.get_intents_by_status(storage, IntentStatus::Active).await
+        self.get_intents_by_status(storage, IntentStatus::Active)
+            .await
     }
 
     /// Get intents that need attention (Failed or Suspended status)
@@ -677,12 +723,16 @@ impl IntentLifecycleManager {
         &self,
         storage: &IntentGraphStorage,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        let failed = self.get_intents_by_status(storage, IntentStatus::Failed).await?;
-        let suspended = self.get_intents_by_status(storage, IntentStatus::Suspended).await?;
-        
+        let failed = self
+            .get_intents_by_status(storage, IntentStatus::Failed)
+            .await?;
+        let suspended = self
+            .get_intents_by_status(storage, IntentStatus::Suspended)
+            .await?;
+
         let mut needing_attention = failed;
         needing_attention.extend(suspended);
-        
+
         Ok(needing_attention)
     }
 
@@ -692,13 +742,15 @@ impl IntentLifecycleManager {
         storage: &IntentGraphStorage,
         days_threshold: u64,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        let completed_intents = self.get_intents_by_status(storage, IntentStatus::Completed).await?;
+        let completed_intents = self
+            .get_intents_by_status(storage, IntentStatus::Completed)
+            .await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let threshold_seconds = days_threshold * 24 * 60 * 60;
-        
+
         let ready_for_archival = completed_intents
             .into_iter()
             .filter(|intent| {
@@ -706,7 +758,7 @@ impl IntentLifecycleManager {
                 time_since_completion >= threshold_seconds
             })
             .collect();
-        
+
         Ok(ready_for_archival)
     }
 
@@ -721,26 +773,36 @@ impl IntentLifecycleManager {
     ) -> Result<Vec<IntentId>, RuntimeError> {
         let mut successful_transitions = Vec::new();
         let mut errors = Vec::new();
-        
+
         for intent_id in intent_ids {
-            match self.transition_intent_by_id(storage, event_sink, intent_id, new_status.clone(), reason.clone()).await {
+            match self
+                .transition_intent_by_id(
+                    storage,
+                    event_sink,
+                    intent_id,
+                    new_status.clone(),
+                    reason.clone(),
+                )
+                .await
+            {
                 Ok(()) => successful_transitions.push(intent_id.clone()),
                 Err(e) => errors.push((intent_id.clone(), e)),
             }
         }
-        
+
         if !errors.is_empty() {
             let error_summary = errors
                 .iter()
                 .map(|(id, e)| format!("{}: {}", id, e))
                 .collect::<Vec<_>>()
                 .join(", ");
-            
-            return Err(RuntimeError::Generic(
-                format!("Some transitions failed: {}", error_summary)
-            ));
+
+            return Err(RuntimeError::Generic(format!(
+                "Some transitions failed: {}",
+                error_summary
+            )));
         }
-        
+
         Ok(successful_transitions)
     }
 
@@ -753,9 +815,11 @@ impl IntentLifecycleManager {
         new_status: IntentStatus,
         reason: String,
     ) -> Result<(), RuntimeError> {
-        let mut intent = storage.get_intent(intent_id).await?
+        let mut intent = storage
+            .get_intent(intent_id)
+            .await?
             .ok_or_else(|| RuntimeError::StorageError(format!("Intent {} not found", intent_id)))?;
-        
+
         self.transition_intent_status(
             storage,
             event_sink,
@@ -763,7 +827,8 @@ impl IntentLifecycleManager {
             new_status,
             reason,
             None, // triggering_plan_id - will be enhanced later
-        ).await
+        )
+        .await
     }
 
     /// Infer edges between intents (existing functionality)
@@ -793,7 +858,11 @@ impl IntentLifecycleManager {
         Ok(())
     }
 
-    fn detect_resource_conflict(&self, intent_a: &StorableIntent, intent_b: &StorableIntent) -> bool {
+    fn detect_resource_conflict(
+        &self,
+        intent_a: &StorableIntent,
+        intent_b: &StorableIntent,
+    ) -> bool {
         // Simple conflict detection based on cost constraints
         let cost_a = intent_a
             .constraints

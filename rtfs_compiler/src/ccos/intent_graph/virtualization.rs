@@ -1,13 +1,13 @@
 //! Virtualization layer for Intent Graph
 
-use super::super::types::{EdgeType, StorableIntent, IntentId, IntentStatus};
+use super::super::types::{EdgeType, IntentId, IntentStatus, StorableIntent};
+use super::processing::{IntentPruningEngine, IntentSummarizer};
+use super::search::{GraphTraversalEngine, SemanticSearchEngine};
 use super::storage::IntentGraphStorage;
-use super::search::{SemanticSearchEngine, GraphTraversalEngine};
-use super::processing::{IntentSummarizer, IntentPruningEngine};
 use crate::runtime::error::RuntimeError;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Serialize, Deserialize};
 
 /// Virtualization layer for context horizon management and large graph optimization
 #[derive(Debug)]
@@ -48,28 +48,37 @@ impl IntentGraphVirtualization {
         config: &VirtualizationConfig,
     ) -> Result<VirtualizedIntentGraph, RuntimeError> {
         let mut virtual_graph = VirtualizedIntentGraph::new();
-        
+
         // Step 1: Collect relevant intents within specified radius
         let relevant_intents = self.graph_traversal.collect_neighborhood(
-            focal_intents, 
-            storage, 
-            config.traversal_depth
+            focal_intents,
+            storage,
+            config.traversal_depth,
         )?;
-        
+
         // Step 2: Apply pruning if needed to respect max_intents limit
         let pruned_intents = if relevant_intents.len() > config.max_intents {
-            self.pruning_engine.prune_intents(&relevant_intents, storage, config)?
+            self.pruning_engine
+                .prune_intents(&relevant_intents, storage, config)?
         } else {
             // Still respect max_intents even if we don't need sophisticated pruning
-            relevant_intents.into_iter().take(config.max_intents).collect()
+            relevant_intents
+                .into_iter()
+                .take(config.max_intents)
+                .collect()
         };
-        
+
         // Step 3: Create summaries for clusters if requested
         if config.enable_summarization {
-            let clusters = self.graph_traversal.identify_clusters(&pruned_intents, storage)?;
+            let clusters = self
+                .graph_traversal
+                .identify_clusters(&pruned_intents, storage)?;
             for cluster in clusters {
                 if cluster.len() > config.summarization_threshold {
-                    let summary_text = self.summarizer.create_cluster_summary(&cluster, storage).await?;
+                    let summary_text = self
+                        .summarizer
+                        .create_cluster_summary(&cluster, storage)
+                        .await?;
                     let summary = IntentSummary {
                         summary_id: format!("cluster_{}", virtual_graph.summaries.len()),
                         description: summary_text,
@@ -78,7 +87,10 @@ impl IntentGraphVirtualization {
                         intent_ids: cluster.clone(),
                         cluster_size: cluster.len(),
                         relevance_score: 0.8, // TODO: compute relevance
-                        created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                        created_at: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
                     };
                     virtual_graph.add_summary(summary);
                 } else {
@@ -98,10 +110,10 @@ impl IntentGraphVirtualization {
                 }
             }
         }
-        
+
         // Step 4: Include edges between included intents/summaries
         virtual_graph.compute_virtual_edges(storage)?;
-        
+
         Ok(virtual_graph)
     }
 
@@ -112,7 +124,8 @@ impl IntentGraphVirtualization {
         storage: &IntentGraphStorage,
         limit: usize,
     ) -> Result<Vec<IntentId>, RuntimeError> {
-        self.semantic_search.search_intents(query, storage, Some(limit))
+        self.semantic_search
+            .search_intents(query, storage, Some(limit))
     }
 
     /// Find similar intents
@@ -122,7 +135,8 @@ impl IntentGraphVirtualization {
         storage: &IntentGraphStorage,
         limit: usize,
     ) -> Result<Vec<IntentId>, RuntimeError> {
-        self.semantic_search.find_similar_intents(target_intent, storage, limit)
+        self.semantic_search
+            .find_similar_intents(target_intent, storage, limit)
     }
 
     /// Load optimized context window with virtualization
@@ -132,7 +146,9 @@ impl IntentGraphVirtualization {
         storage: &IntentGraphStorage,
         config: &VirtualizationConfig,
     ) -> Result<Vec<StorableIntent>, RuntimeError> {
-        let virtual_graph = self.create_virtualized_view(intent_ids, storage, config).await?;
+        let virtual_graph = self
+            .create_virtualized_view(intent_ids, storage, config)
+            .await?;
         Ok(virtual_graph.to_intent_list())
     }
 
@@ -144,11 +160,15 @@ impl IntentGraphVirtualization {
         config: &VirtualizationConfig,
     ) -> Result<VirtualizedSearchResult, RuntimeError> {
         // Perform semantic search
-        let search_results = self.semantic_search.search_intents(query, storage, Some(config.max_search_results))?;
-        
+        let search_results =
+            self.semantic_search
+                .search_intents(query, storage, Some(config.max_search_results))?;
+
         // Create virtualized view around search results
-        let virtual_graph = self.create_virtualized_view(&search_results, storage, config).await?;
-        
+        let virtual_graph = self
+            .create_virtualized_view(&search_results, storage, config)
+            .await?;
+
         Ok(VirtualizedSearchResult {
             query: query.to_string(),
             virtual_graph,
@@ -183,7 +203,7 @@ impl Default for VirtualizationConfig {
     fn default() -> Self {
         let mut status_weights = HashMap::new();
         status_weights.insert(IntentStatus::Active, 1.0);
-    status_weights.insert(IntentStatus::Executing, 1.1);
+        status_weights.insert(IntentStatus::Executing, 1.1);
         status_weights.insert(IntentStatus::Completed, 0.3);
         status_weights.insert(IntentStatus::Failed, 0.5);
         status_weights.insert(IntentStatus::Suspended, 0.2);
@@ -233,16 +253,19 @@ impl VirtualizedIntentGraph {
         self.summaries.push(summary);
     }
 
-    pub fn compute_virtual_edges(&mut self, storage: &IntentGraphStorage) -> Result<(), RuntimeError> {
+    pub fn compute_virtual_edges(
+        &mut self,
+        storage: &IntentGraphStorage,
+    ) -> Result<(), RuntimeError> {
         // Compute edges between virtual entities (intents and summaries)
         self.virtual_edges.clear();
-        
+
         // Add edges between intents
         for i in 0..self.intents.len() {
             for j in (i + 1)..self.intents.len() {
                 let intent_a = &self.intents[i];
                 let intent_b = &self.intents[j];
-                
+
                 // Check if there's an edge in the original graph
                 if storage.has_edge_sync(&intent_a.intent_id, &intent_b.intent_id) {
                     self.virtual_edges.push(VirtualEdge {
@@ -254,7 +277,7 @@ impl VirtualizedIntentGraph {
                 }
             }
         }
-        
+
         // Add edges from intents to summaries
         for intent in &self.intents {
             for summary in &self.summaries {
@@ -268,18 +291,18 @@ impl VirtualizedIntentGraph {
                 }
             }
         }
-        
+
         Ok(())
     }
 
     pub fn to_intent_list(&self) -> Vec<StorableIntent> {
         let mut result = self.intents.clone();
-        
+
         // Convert summaries to synthetic intents for compatibility
         for summary in &self.summaries {
             result.push(summary.to_synthetic_intent());
         }
-        
+
         result
     }
 

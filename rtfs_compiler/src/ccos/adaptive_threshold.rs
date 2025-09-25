@@ -1,6 +1,6 @@
+use crate::config::types::AdaptiveThresholdConfig;
 use std::collections::HashMap;
 use std::env;
-use crate::config::types::AdaptiveThresholdConfig;
 
 /// Adaptive threshold calculator for delegation decisions
 pub struct AdaptiveThresholdCalculator {
@@ -39,7 +39,7 @@ impl AdaptiveThresholdCalculator {
         if let Some(threshold) = env_threshold {
             return threshold.clamp(
                 self.config.min_threshold.unwrap_or(0.3),
-                self.config.max_threshold.unwrap_or(0.9)
+                self.config.max_threshold.unwrap_or(0.9),
             );
         }
 
@@ -51,7 +51,7 @@ impl AdaptiveThresholdCalculator {
 
         let performance = performance.unwrap();
         let min_samples = self.config.min_samples.unwrap_or(5);
-        
+
         // Don't apply adaptive threshold until we have enough samples
         if performance.samples < min_samples as u64 {
             return base_threshold;
@@ -60,17 +60,17 @@ impl AdaptiveThresholdCalculator {
         // Calculate adaptive threshold based on performance
         let success_rate_weight = self.config.success_rate_weight.unwrap_or(0.7);
         let historical_weight = self.config.historical_weight.unwrap_or(0.3);
-        
-        let adaptive_component = (performance.success_rate * success_rate_weight) + 
-                                (performance.decay_weighted_rate * historical_weight);
-        
+
+        let adaptive_component = (performance.success_rate * success_rate_weight)
+            + (performance.decay_weighted_rate * historical_weight);
+
         let base_threshold_weight = 1.0 - (success_rate_weight + historical_weight);
         let adaptive_threshold = (base_threshold * base_threshold_weight) + adaptive_component;
 
         // Apply bounds
         let min_threshold = self.config.min_threshold.unwrap_or(0.3);
         let max_threshold = self.config.max_threshold.unwrap_or(0.9);
-        
+
         adaptive_threshold.clamp(min_threshold, max_threshold)
     }
 
@@ -79,22 +79,25 @@ impl AdaptiveThresholdCalculator {
         let now = std::time::SystemTime::now();
         let decay_factor = self.config.decay_factor.unwrap_or(0.8);
 
-        let performance = self.agent_performance.entry(agent_id.to_string()).or_insert_with(|| {
-            AgentPerformance {
+        let performance = self
+            .agent_performance
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentPerformance {
                 agent_id: agent_id.to_string(),
                 success_rate: 0.0,
                 decay_weighted_rate: 0.0,
                 samples: 0,
                 last_update: now,
-            }
-        });
+            });
 
         // Update basic success rate
         let successes_prior = performance.success_rate * performance.samples as f64;
         let successes_new = successes_prior + if success { 1.0 } else { 0.0 };
         performance.samples += 1;
-        performance.success_rate = if performance.samples == 0 { 0.0 } else { 
-            successes_new / performance.samples as f64 
+        performance.success_rate = if performance.samples == 0 {
+            0.0
+        } else {
+            successes_new / performance.samples as f64
         };
 
         // Update decay-weighted rate
@@ -102,8 +105,8 @@ impl AdaptiveThresholdCalculator {
         if performance.samples == 1 {
             performance.decay_weighted_rate = success_value;
         } else {
-            performance.decay_weighted_rate = (performance.decay_weighted_rate * decay_factor) + 
-                                            (success_value * (1.0 - decay_factor));
+            performance.decay_weighted_rate = (performance.decay_weighted_rate * decay_factor)
+                + (success_value * (1.0 - decay_factor));
         }
 
         performance.last_update = now;
@@ -121,9 +124,13 @@ impl AdaptiveThresholdCalculator {
 
     /// Get environment variable override
     fn get_env_override(&self, key: &str) -> Option<f64> {
-        let prefix = self.config.env_prefix.as_deref().unwrap_or("CCOS_DELEGATION_");
+        let prefix = self
+            .config
+            .env_prefix
+            .as_deref()
+            .unwrap_or("CCOS_DELEGATION_");
         let env_key = format!("{}{}", prefix, key);
-        
+
         env::var(&env_key)
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
@@ -148,10 +155,10 @@ mod tests {
     fn test_adaptive_threshold_disabled() {
         let mut config = AdaptiveThresholdConfig::default();
         config.enabled = Some(false);
-        
+
         let calculator = AdaptiveThresholdCalculator::new(config);
         let threshold = calculator.calculate_threshold("test_agent", 0.65);
-        
+
         assert_eq!(threshold, 0.65);
     }
 
@@ -160,16 +167,16 @@ mod tests {
         let mut config = AdaptiveThresholdConfig::default();
         config.min_threshold = Some(0.4);
         config.max_threshold = Some(0.8);
-        
+
         let mut calculator = AdaptiveThresholdCalculator::new(config);
-        
+
         // Add performance data that would push threshold outside bounds
         for _ in 0..10 {
             calculator.update_performance("test_agent", true); // 100% success
         }
-        
+
         let threshold = calculator.calculate_threshold("test_agent", 0.65);
-        
+
         // Should be clamped to max_threshold
         assert_eq!(threshold, 0.8);
     }
@@ -178,16 +185,16 @@ mod tests {
     fn test_adaptive_threshold_min_samples() {
         let mut config = AdaptiveThresholdConfig::default();
         config.min_samples = Some(5);
-        
+
         let mut calculator = AdaptiveThresholdCalculator::new(config);
-        
+
         // Add only 3 samples (below minimum)
         for _ in 0..3 {
             calculator.update_performance("test_agent", true);
         }
-        
+
         let threshold = calculator.calculate_threshold("test_agent", 0.65);
-        
+
         // Should return base threshold due to insufficient samples
         assert_eq!(threshold, 0.65);
     }
@@ -195,14 +202,14 @@ mod tests {
     #[test]
     fn test_performance_update() {
         let mut calculator = AdaptiveThresholdCalculator::new(AdaptiveThresholdConfig::default());
-        
+
         // Add some performance data
         calculator.update_performance("test_agent", true);
         calculator.update_performance("test_agent", false);
         calculator.update_performance("test_agent", true);
-        
+
         let performance = calculator.get_performance("test_agent").unwrap();
-        
+
         assert_eq!(performance.samples, 3);
         assert_eq!(performance.success_rate, 2.0 / 3.0);
         assert!(performance.decay_weighted_rate > 0.0);
@@ -211,10 +218,10 @@ mod tests {
     #[test]
     fn test_reset_performance() {
         let mut calculator = AdaptiveThresholdCalculator::new(AdaptiveThresholdConfig::default());
-        
+
         calculator.update_performance("test_agent", true);
         assert!(calculator.get_performance("test_agent").is_some());
-        
+
         calculator.reset_performance("test_agent");
         assert!(calculator.get_performance("test_agent").is_none());
     }

@@ -1,14 +1,14 @@
 //! L4 Content-Addressable RTFS: Bytecode-level caching and reuse
-//! 
+//!
 //! This layer caches compiled RTFS bytecode and intermediate representations
 //! for reuse across different execution contexts.
 
+use lazy_static::lazy_static;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use uuid::Uuid;
-use lazy_static::lazy_static;
-use std::sync::{Arc, RwLock};
-use std::collections::HashMap;
-use sha2::{Digest, Sha256};
 
 lazy_static! {
     /// Global in-process L4 cache client (prototype).
@@ -35,7 +35,11 @@ pub struct RtfsModuleMetadata {
 }
 
 impl RtfsModuleMetadata {
-    pub fn new(semantic_embedding: Vec<f32>, interface_hash: String, storage_pointer: String) -> Self {
+    pub fn new(
+        semantic_embedding: Vec<f32>,
+        interface_hash: String,
+        storage_pointer: String,
+    ) -> Self {
         let now = SystemTime::now();
         Self {
             id: Uuid::new_v4(),
@@ -109,7 +113,10 @@ impl L4CacheClient {
 
     /// Retrieve a previously published bytecode blob.
     pub fn get_blob(&self, storage_pointer: &str) -> Option<Vec<u8>> {
-        self.blob_store.read().ok().and_then(|s| s.get(storage_pointer).cloned())
+        self.blob_store
+            .read()
+            .ok()
+            .and_then(|s| s.get(storage_pointer).cloned())
     }
 
     /// Query for an existing module by interface hash and optional semantic embedding.
@@ -169,10 +176,12 @@ pub struct L4ContentAddressableCache {
 
 impl L4ContentAddressableCache {
     pub fn new() -> Self {
-        Self { client: L4CacheClient::new() }
+        Self {
+            client: L4CacheClient::new(),
+        }
     }
 
     pub fn client(&self) -> &L4CacheClient {
         &self.client
     }
-} 
+}

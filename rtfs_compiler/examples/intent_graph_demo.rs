@@ -14,21 +14,25 @@ use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
-use rtfs_compiler::ccos::types::{Plan, PlanBody, PlanLanguage, PlanStatus, IntentStatus, EdgeType, ExecutionResult, IntentId};
-use rtfs_compiler::ccos::intent_graph::IntentGraph;
+use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
+use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::orchestrator::Orchestrator;
 use rtfs_compiler::ccos::plan_archive::PlanArchive;
-use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
+use rtfs_compiler::ccos::types::StorableIntent;
+use rtfs_compiler::ccos::types::{
+    EdgeType, ExecutionResult, IntentId, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus,
+};
 use rtfs_compiler::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ccos::types::StorableIntent;
 
 #[derive(Parser, Debug)]
-#[command(name = "intent_graph_demo")] 
-#[command(about = "Create and execute a dependency-ordered intent graph with MicroVM-aware network capability")] 
+#[command(name = "intent_graph_demo")]
+#[command(
+    about = "Create and execute a dependency-ordered intent graph with MicroVM-aware network capability"
+)]
 struct Args {
     /// Verbose output
     #[arg(long, default_value_t = false)]
@@ -70,7 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     marketplace.bootstrap().await?;
     // Remove the bootstrap manifest for http-fetch to force fallback to the CapabilityRegistry
     // This makes marketplace.execute_capability route to registry.execute_capability_with_microvm()
-    let _ = marketplace.remove_capability("ccos.network.http-fetch").await;
+    let _ = marketplace
+        .remove_capability("ccos.network.http-fetch")
+        .await;
     let marketplace = Arc::new(marketplace);
     let plan_archive = Arc::new(PlanArchive::new());
     let orchestrator = Arc::new(Orchestrator::new(
@@ -111,28 +117,123 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         g.store_intent(analyze.clone())?;
         g.store_intent(announce.clone())?;
         // A is subgoal of B means edge: from=A, to=B
-            g.create_edge(fetch.intent_id.clone(), root.intent_id.clone(), EdgeType::IsSubgoalOf)?;
-            if args.verbose { println!("  [+] edge {} -({:?})-> {}", fetch.intent_id, EdgeType::IsSubgoalOf, root.intent_id); }
-            g.create_edge(analyze.intent_id.clone(), root.intent_id.clone(), EdgeType::IsSubgoalOf)?;
-            if args.verbose { println!("  [+] edge {} -({:?})-> {}", analyze.intent_id, EdgeType::IsSubgoalOf, root.intent_id); }
-            g.create_edge(announce.intent_id.clone(), root.intent_id.clone(), EdgeType::IsSubgoalOf)?;
-            if args.verbose { println!("  [+] edge {} -({:?})-> {}", announce.intent_id, EdgeType::IsSubgoalOf, root.intent_id); }
+        g.create_edge(
+            fetch.intent_id.clone(),
+            root.intent_id.clone(),
+            EdgeType::IsSubgoalOf,
+        )?;
+        if args.verbose {
+            println!(
+                "  [+] edge {} -({:?})-> {}",
+                fetch.intent_id,
+                EdgeType::IsSubgoalOf,
+                root.intent_id
+            );
+        }
+        g.create_edge(
+            analyze.intent_id.clone(),
+            root.intent_id.clone(),
+            EdgeType::IsSubgoalOf,
+        )?;
+        if args.verbose {
+            println!(
+                "  [+] edge {} -({:?})-> {}",
+                analyze.intent_id,
+                EdgeType::IsSubgoalOf,
+                root.intent_id
+            );
+        }
+        g.create_edge(
+            announce.intent_id.clone(),
+            root.intent_id.clone(),
+            EdgeType::IsSubgoalOf,
+        )?;
+        if args.verbose {
+            println!(
+                "  [+] edge {} -({:?})-> {}",
+                announce.intent_id,
+                EdgeType::IsSubgoalOf,
+                root.intent_id
+            );
+        }
         // Dependencies: analyze depends on fetch; announce depends on analyze
-            g.create_edge(analyze.intent_id.clone(), fetch.intent_id.clone(), EdgeType::DependsOn)?;
-            if args.verbose { println!("  [+] edge {} -({:?})-> {}", analyze.intent_id, EdgeType::DependsOn, fetch.intent_id); }
-            g.create_edge(announce.intent_id.clone(), analyze.intent_id.clone(), EdgeType::DependsOn)?;
-            if args.verbose { println!("  [+] edge {} -({:?})-> {}", announce.intent_id, EdgeType::DependsOn, analyze.intent_id); }
+        g.create_edge(
+            analyze.intent_id.clone(),
+            fetch.intent_id.clone(),
+            EdgeType::DependsOn,
+        )?;
+        if args.verbose {
+            println!(
+                "  [+] edge {} -({:?})-> {}",
+                analyze.intent_id,
+                EdgeType::DependsOn,
+                fetch.intent_id
+            );
+        }
+        g.create_edge(
+            announce.intent_id.clone(),
+            analyze.intent_id.clone(),
+            EdgeType::DependsOn,
+        )?;
+        if args.verbose {
+            println!(
+                "  [+] edge {} -({:?})-> {}",
+                announce.intent_id,
+                EdgeType::DependsOn,
+                analyze.intent_id
+            );
+        }
     }
 
     // Audit relationships in Causal Chain (optional for visibility)
     {
         let mut chain = causal_chain.lock().unwrap();
         let pid = "intent-graph-demo".to_string();
-        let _ = chain.log_intent_relationship_created(&pid, &root.intent_id, &fetch.intent_id, &root.intent_id, "IsSubgoalOf", None, None);
-        let _ = chain.log_intent_relationship_created(&pid, &root.intent_id, &analyze.intent_id, &root.intent_id, "IsSubgoalOf", None, None);
-        let _ = chain.log_intent_relationship_created(&pid, &root.intent_id, &announce.intent_id, &root.intent_id, "IsSubgoalOf", None, None);
-        let _ = chain.log_intent_relationship_created(&pid, &root.intent_id, &analyze.intent_id, &fetch.intent_id, "DependsOn", None, None);
-        let _ = chain.log_intent_relationship_created(&pid, &root.intent_id, &announce.intent_id, &analyze.intent_id, "DependsOn", None, None);
+        let _ = chain.log_intent_relationship_created(
+            &pid,
+            &root.intent_id,
+            &fetch.intent_id,
+            &root.intent_id,
+            "IsSubgoalOf",
+            None,
+            None,
+        );
+        let _ = chain.log_intent_relationship_created(
+            &pid,
+            &root.intent_id,
+            &analyze.intent_id,
+            &root.intent_id,
+            "IsSubgoalOf",
+            None,
+            None,
+        );
+        let _ = chain.log_intent_relationship_created(
+            &pid,
+            &root.intent_id,
+            &announce.intent_id,
+            &root.intent_id,
+            "IsSubgoalOf",
+            None,
+            None,
+        );
+        let _ = chain.log_intent_relationship_created(
+            &pid,
+            &root.intent_id,
+            &analyze.intent_id,
+            &fetch.intent_id,
+            "DependsOn",
+            None,
+            None,
+        );
+        let _ = chain.log_intent_relationship_created(
+            &pid,
+            &root.intent_id,
+            &announce.intent_id,
+            &analyze.intent_id,
+            "DependsOn",
+            None,
+            None,
+        );
     }
 
     if args.verbose {
@@ -144,14 +245,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Print raw edges for visibility
         let g = intent_graph.lock().unwrap();
         let mut all_edges = Vec::new();
-        for id in [&root.intent_id, &fetch.intent_id, &analyze.intent_id, &announce.intent_id] {
+        for id in [
+            &root.intent_id,
+            &fetch.intent_id,
+            &analyze.intent_id,
+            &announce.intent_id,
+        ] {
             for e in g.get_edges_for_intent(id) {
                 all_edges.push((e.from.clone(), e.to.clone(), format!("{:?}", e.edge_type)));
             }
         }
         all_edges.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         println!("  ◦ edges:");
-        for (from, to, kind) in all_edges { println!("    - {} -> {} [{}]", from, to, kind); }
+        for (from, to, kind) in all_edges {
+            println!("    - {} -> {} [{}]", from, to, kind);
+        }
 
         // Show a tiny hierarchy overview
         drop(g); // release lock first
@@ -165,7 +273,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: Some("fetch-http".to_string()),
         intent_ids: vec![fetch.intent_id.clone()],
         language: PlanLanguage::Rtfs20,
-        body: PlanBody::Rtfs("(do (step \"Fetch\" (call :ccos.network.http-fetch \"http://localhost:9999/mock\")))".to_string()),
+        body: PlanBody::Rtfs(
+            "(do (step \"Fetch\" (call :ccos.network.http-fetch \"http://localhost:9999/mock\")))"
+                .to_string(),
+        ),
         status: PlanStatus::Draft,
         created_at: chrono::Utc::now().timestamp() as u64,
         metadata: Default::default(),
@@ -180,7 +291,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let analyze_plan = Plan::new_with_schemas(
         Some("analyze".to_string()),
         vec![analyze.intent_id.clone()],
-        PlanBody::Rtfs("(do (step \"Announce-URL\" (call :ccos.echo {:message \"analysis: ok\"})))".to_string()),
+        PlanBody::Rtfs(
+            "(do (step \"Announce-URL\" (call :ccos.echo {:message \"analysis: ok\"})))"
+                .to_string(),
+        ),
         None,
         None,
         Default::default(),
@@ -192,7 +306,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let announce_plan = Plan::new_with_schemas(
         Some("announce".to_string()),
         vec![announce.intent_id.clone()],
-        PlanBody::Rtfs("(do (step \"Announce\" (call :ccos.echo {:message \"Done\"})))".to_string()),
+        PlanBody::Rtfs(
+            "(do (step \"Announce\" (call :ccos.echo {:message \"Done\"})))".to_string(),
+        ),
         None,
         None,
         Default::default(),
@@ -202,18 +318,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Execute respecting dependencies: fetch -> analyze -> announce
     let ctx = RuntimeContext::full();
-    execute_intent_with_plan(&intent_graph, &causal_chain, &orchestrator, &fetch, &fetch_plan, &ctx, args.verbose).await;
+    execute_intent_with_plan(
+        &intent_graph,
+        &causal_chain,
+        &orchestrator,
+        &fetch,
+        &fetch_plan,
+        &ctx,
+        args.verbose,
+    )
+    .await;
 
     // Gate on DependsOn: analyze requires fetch Completed
     if deps_completed(&intent_graph, &analyze.intent_id) {
-        execute_intent_with_plan(&intent_graph, &causal_chain, &orchestrator, &analyze, &analyze_plan, &ctx, args.verbose).await;
+        execute_intent_with_plan(
+            &intent_graph,
+            &causal_chain,
+            &orchestrator,
+            &analyze,
+            &analyze_plan,
+            &ctx,
+            args.verbose,
+        )
+        .await;
     } else {
         println!("⚠️  Skipping analyze; dependencies not completed");
     }
 
     // Gate on DependsOn: announce requires analyze Completed
     if deps_completed(&intent_graph, &announce.intent_id) {
-        execute_intent_with_plan(&intent_graph, &causal_chain, &orchestrator, &announce, &announce_plan, &ctx, args.verbose).await;
+        execute_intent_with_plan(
+            &intent_graph,
+            &causal_chain,
+            &orchestrator,
+            &announce,
+            &announce_plan,
+            &ctx,
+            args.verbose,
+        )
+        .await;
     } else {
         println!("⚠️  Skipping announce; dependencies not completed");
     }
@@ -221,14 +364,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // If all subgoals completed, mark root Completed
     if all_subgoals_completed(&intent_graph, &root.intent_id) {
         let mut g = intent_graph.lock().unwrap();
-        let _ = g.set_intent_status_with_audit(&root.intent_id, IntentStatus::Completed, Some("intent-graph-demo"), None);
+        let _ = g.set_intent_status_with_audit(
+            &root.intent_id,
+            IntentStatus::Completed,
+            Some("intent-graph-demo"),
+            None,
+        );
     }
 
     // Render a quick summary
     println!("\n📊 Summary:");
-    for (label, intent) in [("root", &root), ("fetch", &fetch), ("analyze", &analyze), ("announce", &announce)] {
+    for (label, intent) in [
+        ("root", &root),
+        ("fetch", &fetch),
+        ("analyze", &analyze),
+        ("announce", &announce),
+    ] {
         let g = intent_graph.lock().unwrap();
-        let status = format!("{:?}", g.get_intent(&intent.intent_id).map(|i| i.status).unwrap_or(IntentStatus::Failed));
+        let status = format!(
+            "{:?}",
+            g.get_intent(&intent.intent_id)
+                .map(|i| i.status)
+                .unwrap_or(IntentStatus::Failed)
+        );
         println!("  • {} {} -> status {}", label, intent.intent_id, status);
     }
 
@@ -248,7 +406,9 @@ fn deps_completed(intent_graph: &Arc<Mutex<IntentGraph>>, intent_id: &IntentId) 
         .collect();
     for pid in parents {
         if let Some(p) = g.get_intent(&pid) {
-            if p.status != IntentStatus::Completed { return false; }
+            if p.status != IntentStatus::Completed {
+                return false;
+            }
         } else {
             return false;
         }
@@ -274,11 +434,23 @@ async fn execute_intent_with_plan(
     // Audit: mark Executing
     {
         let mut g = intent_graph.lock().unwrap();
-        let _ = g.set_intent_status_with_audit(&storable_intent.intent_id, IntentStatus::Executing, Some(&plan.plan_id), None);
+        let _ = g.set_intent_status_with_audit(
+            &storable_intent.intent_id,
+            IntentStatus::Executing,
+            Some(&plan.plan_id),
+            None,
+        );
     }
     {
         let mut chain = causal_chain.lock().unwrap();
-        let _ = chain.log_intent_status_change(&plan.plan_id, &storable_intent.intent_id, "Active", "Executing", "demo:start", None);
+        let _ = chain.log_intent_status_change(
+            &plan.plan_id,
+            &storable_intent.intent_id,
+            "Active",
+            "Executing",
+            "demo:start",
+            None,
+        );
     }
 
     // Execute
@@ -287,16 +459,45 @@ async fn execute_intent_with_plan(
     // Update status + audit
     match exec {
         Ok(result) => {
-            if verbose { println!("✅ {} -> {}", storable_intent.intent_id, render_value(&result.value)); }
+            if verbose {
+                println!(
+                    "✅ {} -> {}",
+                    storable_intent.intent_id,
+                    render_value(&result.value)
+                );
+            }
             let mut g = intent_graph.lock().unwrap();
-            let current = g.get_intent(&storable_intent.intent_id).expect("intent present");
-            let _ = g.update_intent_with_audit(current, &ExecutionResult { success: true, value: result.value.clone(), metadata: Default::default() }, Some(&plan.plan_id), None);
+            let current = g
+                .get_intent(&storable_intent.intent_id)
+                .expect("intent present");
+            let _ = g.update_intent_with_audit(
+                current,
+                &ExecutionResult {
+                    success: true,
+                    value: result.value.clone(),
+                    metadata: Default::default(),
+                },
+                Some(&plan.plan_id),
+                None,
+            );
         }
         Err(e) => {
             println!("❌ {} failed: {}", storable_intent.intent_id, e);
             let mut g = intent_graph.lock().unwrap();
-            let current = g.get_intent(&storable_intent.intent_id).expect("intent present");
-            let _ = g.update_intent_with_audit(current, &ExecutionResult { success: false, value: Value::Nil, metadata: Default::default() }.with_error(&e.to_string()), Some(&plan.plan_id), None);
+            let current = g
+                .get_intent(&storable_intent.intent_id)
+                .expect("intent present");
+            let _ = g.update_intent_with_audit(
+                current,
+                &ExecutionResult {
+                    success: false,
+                    value: Value::Nil,
+                    metadata: Default::default(),
+                }
+                .with_error(&e.to_string()),
+                Some(&plan.plan_id),
+                None,
+            );
         }
     }
 }
@@ -308,19 +509,32 @@ fn render_value(v: &Value) -> String {
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
         Value::String(s) => format!("\"{}\"", s),
-        Value::Vector(xs) => format!("[{}]", xs.iter().map(render_value).collect::<Vec<_>>().join(", ")),
-        Value::List(xs) => format!("({})", xs.iter().map(render_value).collect::<Vec<_>>().join(", ")),
+        Value::Vector(xs) => format!(
+            "[{}]",
+            xs.iter().map(render_value).collect::<Vec<_>>().join(", ")
+        ),
+        Value::List(xs) => format!(
+            "({})",
+            xs.iter().map(render_value).collect::<Vec<_>>().join(", ")
+        ),
         Value::Map(m) => {
-            let mut items: Vec<(String, &Value)> = m.iter().map(|(k, v)| {
-                let key_str = match k {
-                    rtfs_compiler::ast::MapKey::Keyword(k) => format!(":{}", k.0),
-                    rtfs_compiler::ast::MapKey::String(s) => format!("\"{}\"", s),
-                    rtfs_compiler::ast::MapKey::Integer(i) => i.to_string()
-                };
-                (key_str, v)
-            }).collect();
+            let mut items: Vec<(String, &Value)> = m
+                .iter()
+                .map(|(k, v)| {
+                    let key_str = match k {
+                        rtfs_compiler::ast::MapKey::Keyword(k) => format!(":{}", k.0),
+                        rtfs_compiler::ast::MapKey::String(s) => format!("\"{}\"", s),
+                        rtfs_compiler::ast::MapKey::Integer(i) => i.to_string(),
+                    };
+                    (key_str, v)
+                })
+                .collect();
             items.sort_by(|a, b| a.0.cmp(&b.0));
-            let body = items.into_iter().map(|(k, v)| format!("{} {}", k, render_value(v))).collect::<Vec<_>>().join(", ");
+            let body = items
+                .into_iter()
+                .map(|(k, v)| format!("{} {}", k, render_value(v)))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("{{{}}}", body)
         }
         Value::Function(_) => "#<fn>".into(),
@@ -378,7 +592,11 @@ fn print_graph_overview(intent_graph: &Arc<Mutex<IntentGraph>>, root_id: &Intent
         if !deps.is_empty() {
             for d in deps {
                 if let Some(pi) = g.get_intent(&d) {
-                    println!("     ↳ depends on {} [{}]", pi.intent_id, format!("{:?}", pi.status));
+                    println!(
+                        "     ↳ depends on {} [{}]",
+                        pi.intent_id,
+                        format!("{:?}", pi.status)
+                    );
                 } else {
                     println!("     ↳ depends on {} [missing]", d);
                 }
