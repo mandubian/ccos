@@ -91,6 +91,7 @@ pub struct CapabilityManifest {
     pub attestation: Option<CapabilityAttestation>,
     pub provenance: Option<CapabilityProvenance>,
     pub permissions: Vec<String>,
+    pub effects: Vec<String>,
     pub metadata: HashMap<String, String>,
 }
 

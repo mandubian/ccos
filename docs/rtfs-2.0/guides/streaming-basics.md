@@ -104,6 +104,22 @@ Planned enhancements (roadmap):
 * Add optional `:config` map parameter to macro before the initial state argument.
 * Real MCP client (WebSocket / HTTP SSE) integration replacing mock loop.
 
+### Observability: Inspecting Active Streams
+
+The host now registers an auxiliary capability, `:mcp.stream.inspect`, that surfaces live metrics about active MCP streams. Call it with an optional map to tailor the response:
+
+```rtfs
+(call :mcp.stream.inspect {:stream-id "mcp-weather.monitor.v1-1234"
+                           :include-state false
+                           :include-queue true})
+```
+
+- Omitting `:stream-id` returns a summary across all streams, including `:total`, a vector of per-stream entries under `:streams`, and provider settings (`:auto-connect`, `:server-url`, `:persistence-enabled`).
+- Per-stream entries include headline details (`:processor`, `:status`, `:queue-capacity`), structured stats (`:processed-chunks`, `:queued-chunks`, `:last-latency-ms`, `:last-event-epoch-ms`), current/initial state snapshots (toggled by the include flags), and queue diagnostics (each queued chunk is annotated with `:waiting-ms`).
+- Transport metadata reports whether the background polling task is active plus the resolved client timeout and retry configuration.
+
+Use this capability when debugging processors, validating backpressure, or wiring dashboards without attaching debuggers to the host runtime.
+
 
 ## Source and Channel-based Consumption
 

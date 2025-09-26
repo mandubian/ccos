@@ -57,6 +57,10 @@ impl StreamingCapability for LocalStreamingProvider {
             stop_tx: tx,
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -158,6 +162,8 @@ impl RtfsStreamingSyntaxExecutor {
             .cloned()
             .unwrap_or_else(|| format!("MCP streaming capability {}", capability_id));
 
+        let effects = Self::derive_effects(&metadata);
+
         self.marketplace
             .register_streaming_capability(
                 capability_id,
@@ -165,6 +171,9 @@ impl RtfsStreamingSyntaxExecutor {
                 description,
                 StreamType::Unidirectional,
                 provider,
+                None,
+                None,
+                effects,
             )
             .await
             .map_err(|e| crate::runtime::error::RuntimeError::Generic(e.to_string()))
@@ -202,6 +211,57 @@ impl RtfsStreamingSyntaxExecutor {
         let mut stop_tx = handle.stop_tx;
         stop_tx.send(()).await.map_err(|e| {
             crate::runtime::error::RuntimeError::Generic(format!("failed to signal stop: {}", e))
+        })
+    }
+}
+
+impl RtfsStreamingSyntaxExecutor {
+    fn derive_effects(metadata: &HashMap<String, String>) -> Vec<String> {
+        let raw = metadata
+            .get("effects")
+            .or_else(|| metadata.get("effect"))
+            .map(|value| value.trim());
+
+        let Some(raw) = raw else {
+            return vec![":network".to_string()];
+        };
+
+        if raw.is_empty() {
+            return vec![":network".to_string()];
+        }
+
+        if let Ok(json_vec) = serde_json::from_str::<Vec<String>>(raw) {
+            let parsed: Vec<String> = json_vec
+                .into_iter()
+                .filter_map(|item| Self::normalize_effect_label(&item))
+                .collect();
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+
+        let parsed: Vec<String> = raw
+            .split(',')
+            .filter_map(Self::normalize_effect_label)
+            .collect();
+        if parsed.is_empty() {
+            vec![":network".to_string()]
+        } else {
+            parsed
+        }
+    }
+
+    fn normalize_effect_label(raw: &str) -> Option<String> {
+        let trimmed = raw
+            .trim()
+            .trim_matches(|c| c == '\"' || c == '\'');
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(if trimmed.starts_with(':') {
+            trimmed.to_string()
+        } else {
+            format!(":{}", trimmed)
         })
     }
 }

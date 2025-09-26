@@ -110,6 +110,12 @@ Phase 6 introduces environment-driven overrides so deployments can point the MCP
 
 The provider resolves configuration in this order: explicit `server_url` argument → `CCOS_MCP_STREAM_ENDPOINT` → `CCOS_MCP_LOCAL_SSE_URL` → `CCOS_MCP_CLOUDFLARE_DOCS_SSE_URL` → baked-in default (`http://127.0.0.1:2025/sse`).
 
+### 4.5 Transport Abstraction & Test Harness
+
+Phase 6 also decouples transport mechanics from the provider via a new `StreamTransport` trait. The default implementation, `SseStreamTransport`, is responsible for wiring Server-Sent Events, handling follow-up payload fetches, and applying exponential backoff (`250ms`, doubling to `5s` max) across `client_config.retry_attempts`. On failures it retries automatically unless a stop signal is received.
+
+Tests and alternate integrations can swap the transport by constructing the provider with `McpStreamingProvider::new_with_transport`. The repo ships a `MockStreamTransport` that exposes an async channel for feeding synthetic chunks; it replaces the earlier ad-hoc direct calls and makes end-to-end transport behaviour (auto-connect, backpressure, directives) observable without network dependencies.
+
 ## 5. Continuation-Based Execution Flow
 
 ### 5.1 Stream Initiation
@@ -192,6 +198,46 @@ For each MCP data chunk:
       {:state (process-and-dequeue state chunk)
        :action :continue
        :output (process-chunk chunk)}
+
+### 6.3 Stream Observability & Inspection
+
+Hosts now expose a lightweight inspection capability so operators (and RTFS code running inside a microVM) can fetch live metrics about active MCP streams. The capability is registered as `:mcp.stream.inspect` and accepts an optional map input:
+
+```rtfs
+(call :mcp.stream.inspect
+  {:stream-id "mcp-weather.monitor.v1-1234"
+   :include-state false
+   :include-initial-state false
+   :include-queue true})
+```
+
+- `:stream-id` (string, optional) — when provided, returns a single stream snapshot; omit to receive an aggregated summary for all active streams.
+- `:include-state` (bool, default `true`) — include the current RTFS processor state.
+- `:include-initial-state` (bool, default `true`) — include the original initial state captured at registration time.
+- `:include-queue` (bool, default `true`) — include a vector of pending queued chunks with their metadata and wait time in milliseconds.
+
+The response is a map containing structured metrics:
+
+```rtfs
+{:stream-id "mcp-weather.monitor.v1-1234"
+ :processor "process-weather-stream"
+ :status {:state :active}
+ :queue-capacity 32
+ :stats {:processed-chunks 42
+   :queued-chunks 0
+   :last-latency-ms 3
+   :last-event-epoch-ms 1725912345678}
+ :transport {:auto-connect true
+       :task-present true
+       :task-active true
+       :timeout-ms 30000
+       :retry-attempts 3
+       :server-url "http://127.0.0.1:2025/sse"}
+ :observed-at-epoch-ms 1725912345680
+ :queue []}
+```
+
+When called without `:stream-id`, the capability returns a summary map with `:total`, `:streams` (vector of per-stream maps), and top-level provider settings (`:auto-connect`, `:server-url`, `:persistence-enabled`).
 
       ;; Resume when queue drained
       (and (= (:status state) :paused)

@@ -10,7 +10,7 @@ use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::host_interface::HostInterface;
-use crate::runtime::security::RuntimeContext;
+use crate::runtime::security::{default_effects_for_capability, RuntimeContext};
 use crate::runtime::values::Value;
 // futures::executor used via fully qualified path below
 use crate::ast::MapKey;
@@ -282,6 +282,27 @@ impl HostInterface for RuntimeHost {
                 capability: name.to_string(),
                 context: format!("{:?}", self.security_context),
             });
+        }
+
+        if self.security_context.allowed_effects.is_some()
+            || !self.security_context.denied_effects.is_empty()
+        {
+            let manifest_effects = futures::executor::block_on(async {
+                self.capability_marketplace
+                    .get_capability(name)
+                    .await
+                    .map(|manifest| manifest.effects)
+            });
+
+            let effects: Vec<String> = match manifest_effects {
+                Some(list) if !list.is_empty() => list,
+                _ => default_effects_for_capability(name)
+                    .iter()
+                    .map(|effect| (*effect).to_string())
+                    .collect(),
+            };
+
+            self.security_context.ensure_effects_allowed(name, &effects)?;
         }
 
         let context = self.get_context()?;

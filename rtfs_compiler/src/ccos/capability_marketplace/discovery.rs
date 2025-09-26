@@ -3,6 +3,7 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use async_trait::async_trait;
 use chrono::Utc;
+use serde_json::Value as JsonValue;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,6 +51,7 @@ impl StaticDiscoveryProvider {
                         registered_at: chrono::Utc::now(),
                     }),
                     permissions: vec![],
+                    effects: vec![],
                     metadata: HashMap::new(),
                 },
             ],
@@ -205,6 +207,17 @@ impl NetworkDiscoveryAgent {
                 ))
             }),
         });
+        let permissions = extract_string_list(cap_json.get("permissions"));
+        let mut effects = extract_string_list(cap_json.get("effects"));
+        if effects.is_empty() {
+            effects = extract_string_list(
+                cap_json
+                    .get("metadata")
+                    .and_then(|meta| meta.get("effects")),
+            );
+        }
+        let metadata = extract_metadata_map(cap_json.get("metadata"));
+
         Ok(CapabilityManifest {
             id: id.clone(),
             name: name.clone(),
@@ -221,8 +234,9 @@ impl NetworkDiscoveryAgent {
                 custody_chain: vec!["network_discovery".to_string()],
                 registered_at: Utc::now(),
             }),
-            permissions: vec![],
-            metadata: HashMap::new(),
+            permissions,
+            effects,
+            metadata,
         })
     }
 }
@@ -392,6 +406,17 @@ async fn parse_capability_manifest_from_json(
         custody_chain: vec!["local_file_discovery".to_string()],
         registered_at: Utc::now(),
     });
+    let permissions = extract_string_list(cap_json.get("permissions"));
+    let mut effects = extract_string_list(cap_json.get("effects"));
+    if effects.is_empty() {
+        effects = extract_string_list(
+            cap_json
+                .get("metadata")
+                .and_then(|meta| meta.get("effects")),
+        );
+    }
+    let metadata = extract_metadata_map(cap_json.get("metadata"));
+
     Ok(CapabilityManifest {
         id,
         name,
@@ -402,9 +427,53 @@ async fn parse_capability_manifest_from_json(
         output_schema: None,
         attestation,
         provenance,
-        permissions: vec![],
-        metadata: HashMap::new(),
+        permissions,
+        effects,
+        metadata,
     })
+}
+
+fn extract_string_list(value: Option<&JsonValue>) -> Vec<String> {
+    match value {
+        Some(JsonValue::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                JsonValue::String(s) => Some(s.trim().to_string()),
+                JsonValue::Number(num) => Some(num.to_string()),
+                JsonValue::Bool(b) => Some(b.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Some(JsonValue::String(s)) => vec![s.trim().to_string()],
+        Some(JsonValue::Bool(b)) => vec![b.to_string()],
+        Some(JsonValue::Number(num)) => vec![num.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn extract_metadata_map(value: Option<&JsonValue>) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+
+    if let Some(JsonValue::Object(obj)) = value {
+        for (key, entry) in obj {
+            if key == "effects" {
+                continue;
+            }
+
+            let string_value = match entry {
+                JsonValue::String(s) => Some(s.trim().to_string()),
+                JsonValue::Bool(b) => Some(b.to_string()),
+                JsonValue::Number(num) => Some(num.to_string()),
+                _ => None,
+            };
+
+            if let Some(v) = string_value {
+                metadata.insert(key.clone(), v);
+            }
+        }
+    }
+
+    metadata
 }
 
 fn parse_capability_attestation(

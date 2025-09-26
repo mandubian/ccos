@@ -2530,6 +2530,7 @@ dependencies = [
  "itertools 0.12.1",
  "jsonschema",
  "lazy_static",
+ "log",
  "num_cpus",
  "ordered-float",
  "pest",

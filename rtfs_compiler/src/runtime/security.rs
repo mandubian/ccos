@@ -58,6 +58,15 @@ impl SecurityAuthorizer {
             });
         }
 
+        if runtime_context.allowed_effects.is_some() || !runtime_context.denied_effects.is_empty()
+        {
+            let inferred_effects: Vec<String> = default_effects_for_capability(capability_id)
+                .iter()
+                .map(|effect| (*effect).to_string())
+                .collect();
+            runtime_context.ensure_effects_allowed(capability_id, &inferred_effects)?;
+        }
+
         // Determine the minimal set of permissions needed for this execution
         let mut required_permissions = vec![capability_id.to_string()];
 
@@ -105,6 +114,16 @@ impl SecurityAuthorizer {
                     capability: cap_id.to_string(),
                     context: format!("Capability '{}' not allowed for program execution", cap_id),
                 });
+            }
+            if runtime_context.allowed_effects.is_some()
+                || !runtime_context.denied_effects.is_empty()
+            {
+                let inferred_effects: Vec<String> =
+                    default_effects_for_capability(cap_id)
+                        .iter()
+                        .map(|effect| (*effect).to_string())
+                        .collect();
+                runtime_context.ensure_effects_allowed(cap_id, &inferred_effects)?;
             }
             required_permissions.push(cap_id.to_string());
         }
@@ -186,6 +205,10 @@ pub struct RuntimeContext {
     pub security_level: SecurityLevel,
     /// Allowed capabilities for this context
     pub allowed_capabilities: HashSet<String>,
+    /// Optional allowlist of effects permitted in this context (None means all effects allowed)
+    pub allowed_effects: Option<HashSet<String>>,
+    /// Deny list of effects that are always disallowed in this context
+    pub denied_effects: HashSet<String>,
     /// Whether to run dangerous operations in microVM
     pub use_microvm: bool,
     /// Maximum execution time (milliseconds)
@@ -218,6 +241,8 @@ impl RuntimeContext {
         Self {
             security_level: SecurityLevel::Pure,
             allowed_capabilities: HashSet::new(),
+            allowed_effects: None,
+            denied_effects: HashSet::new(),
             use_microvm: false,
             max_execution_time: Some(1000),           // 1 second
             max_memory_usage: Some(16 * 1024 * 1024), // 16MB
@@ -239,6 +264,8 @@ impl RuntimeContext {
         Self {
             security_level: SecurityLevel::Controlled,
             allowed_capabilities: allowed_capabilities.into_iter().collect(),
+            allowed_effects: None,
+            denied_effects: HashSet::new(),
             use_microvm: true,
             max_execution_time: Some(5000),           // 5 seconds
             max_memory_usage: Some(64 * 1024 * 1024), // 64MB
@@ -260,6 +287,8 @@ impl RuntimeContext {
         Self {
             security_level: SecurityLevel::Full,
             allowed_capabilities: HashSet::new(), // Empty means all allowed
+            allowed_effects: None,
+            denied_effects: HashSet::new(),
             use_microvm: false,
             max_execution_time: None,
             max_memory_usage: None,
@@ -417,6 +446,152 @@ impl RuntimeContext {
     /// Mutably set a MicroVM configuration override
     pub fn set_microvm_config(&mut self, config: MicroVMConfig) {
         self.microvm_config_override = Some(config);
+    }
+
+    /// Replace the effect allowlist with the provided set. Passing an empty slice removes the allowlist.
+    pub fn with_effect_allowlist(mut self, effects: &[&str]) -> Self {
+        if effects.is_empty() {
+            self.allowed_effects = None;
+        } else {
+            let mut set = HashSet::with_capacity(effects.len());
+            for effect in effects {
+                let normalized = normalize_effect_label(effect);
+                if !normalized.is_empty() {
+                    set.insert(normalized);
+                }
+            }
+            self.allowed_effects = Some(set);
+        }
+        self
+    }
+
+    /// Append a single effect to the allowlist, creating it if necessary.
+    pub fn allow_effect(&mut self, effect: &str) {
+        let normalized = normalize_effect_label(effect);
+        if normalized.is_empty() {
+            return;
+        }
+        match &mut self.allowed_effects {
+            Some(set) => {
+                set.insert(normalized);
+            }
+            None => {
+                let mut set = HashSet::with_capacity(1);
+                set.insert(normalized);
+                self.allowed_effects = Some(set);
+            }
+        }
+    }
+
+    /// Replace the deny list with the provided set of effects.
+    pub fn with_effect_denies(mut self, effects: &[&str]) -> Self {
+        self.denied_effects.clear();
+        for effect in effects {
+            let normalized = normalize_effect_label(effect);
+            if !normalized.is_empty() {
+                self.denied_effects.insert(normalized);
+            }
+        }
+        self
+    }
+
+    /// Append a single effect to the deny list.
+    pub fn deny_effect(&mut self, effect: &str) {
+        let normalized = normalize_effect_label(effect);
+        if !normalized.is_empty() {
+            self.denied_effects.insert(normalized);
+        }
+    }
+
+    /// Ensure the provided effects are permitted in this runtime context.
+    pub fn ensure_effects_allowed(
+        &self,
+        capability_id: &str,
+        effects: &[String],
+    ) -> RuntimeResult<()> {
+        for effect in effects {
+            let normalized = normalize_effect_label(effect);
+            if normalized.is_empty() {
+                continue;
+            }
+            if self.denied_effects.contains(&normalized) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "effect_policy".to_string(),
+                    capability: capability_id.to_string(),
+                    context: format!(
+                        "Effect '{}' denied by runtime context",
+                        normalized
+                    ),
+                });
+            }
+        }
+
+        if let Some(allowlist) = &self.allowed_effects {
+            for effect in effects {
+                let normalized = normalize_effect_label(effect);
+                if normalized.is_empty() {
+                    continue;
+                }
+                if !allowlist.contains(&normalized) {
+                    return Err(RuntimeError::SecurityViolation {
+                        operation: "effect_policy".to_string(),
+                        capability: capability_id.to_string(),
+                        context: format!(
+                            "Effect '{}' not permitted by runtime context allowlist",
+                            normalized
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Normalize effect labels to the canonical `:effect` format.
+fn normalize_effect_label(effect: &str) -> String {
+    let trimmed = effect.trim().trim_matches(|c| c == '\"' || c == '\'');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with(':') {
+        trimmed.to_lowercase()
+    } else {
+        format!(":{}", trimmed.to_lowercase())
+    }
+}
+
+/// Default effect mapping for core CCOS capabilities when manifests do not supply metadata.
+pub fn default_effects_for_capability(capability_id: &str) -> &'static [&'static str] {
+    match capability_id {
+        // File system related capabilities
+        "ccos.io.file-exists"
+        | "ccos.io.open-file"
+        | "ccos.io.read-line"
+        | "ccos.io.write-line"
+        | "ccos.io.close-file" => &[":filesystem"],
+        // Logging and data utilities are treated as compute
+        "ccos.io.log"
+        | "ccos.io.print"
+        | "ccos.io.println"
+        | "ccos.data.parse-json"
+        | "ccos.data.serialize-json"
+        | "ccos.math.add"
+        | "ccos.echo" => &[":compute"],
+        // Network operations
+        "ccos.network.http-fetch" => &[":network"],
+        // System introspection
+        "ccos.system.get-env"
+        | "ccos.system.current-time"
+        | "ccos.system.current-timestamp-ms" => &[":system"],
+        // AI and agent operations
+        "ccos.ai.llm-execute" => &[":ai"],
+        cap if cap.starts_with("ccos.agent.") => &[":agent"],
+        // Streaming capabilities default to streaming effect
+        cap if cap.starts_with("ccos.stream.") => &[":streaming"],
+        // Fallback to compute for unknown capabilities
+        _ => &[":compute"],
     }
 }
 

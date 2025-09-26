@@ -2725,6 +2725,7 @@ dependencies = [
  "jsonschema",
  "lazy_static",
  "llama_cpp",
+ "log",
  "num_cpus",
  "ordered-float",
  "pest",
