@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -48,6 +48,10 @@ pub struct MCPTool {
     pub input_schema: Option<serde_json::Value>,
     #[serde(rename = "outputSchema")]
     pub output_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+    #[serde(default)]
+    pub annotations: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// MCP Server response for tools
@@ -96,6 +100,141 @@ pub struct MCPDiscoveryProvider {
 }
 
 impl MCPDiscoveryProvider {
+    fn derive_tool_effects(&self, tool: &MCPTool) -> Vec<String> {
+        let mut effect_set = HashSet::new();
+        self.collect_effects_from_metadata_map(tool.metadata.as_ref(), &mut effect_set);
+        self.collect_effects_from_metadata_map(tool.annotations.as_ref(), &mut effect_set);
+        Self::finalize_effects(effect_set, ":network")
+    }
+
+    fn derive_resource_effects(&self, resource: &serde_json::Value) -> Vec<String> {
+        let mut effect_set = HashSet::new();
+
+        if let Some(effects_value) = resource.get("effects") {
+            Self::collect_effects_from_json_value(effects_value, &mut effect_set);
+        }
+
+        self.collect_effects_from_object_map(resource.get("metadata").and_then(|v| v.as_object()), &mut effect_set);
+        self.collect_effects_from_object_map(resource.get("annotations").and_then(|v| v.as_object()), &mut effect_set);
+
+        Self::finalize_effects(effect_set, ":network")
+    }
+
+    fn collect_effects_from_metadata_map(
+        &self,
+        map: Option<&HashMap<String, serde_json::Value>>,
+        sink: &mut HashSet<String>,
+    ) {
+        if let Some(map) = map {
+            for key in ["effects", "effect", "ccos_effects"] {
+                if let Some(value) = map.get(key) {
+                    Self::collect_effects_from_json_value(value, sink);
+                }
+            }
+        }
+    }
+
+    fn collect_effects_from_object_map(
+        &self,
+        map: Option<&serde_json::Map<String, serde_json::Value>>,
+        sink: &mut HashSet<String>,
+    ) {
+        if let Some(map) = map {
+            for key in ["effects", "effect", "ccos_effects"] {
+                if let Some(value) = map.get(key) {
+                    Self::collect_effects_from_json_value(value, sink);
+                }
+            }
+        }
+    }
+
+    fn collect_effects_from_json_value(value: &serde_json::Value, sink: &mut HashSet<String>) {
+        match value {
+            serde_json::Value::String(raw) => Self::collect_effects_from_str(raw, sink),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    Self::collect_effects_from_json_value(item, sink);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for candidate in ["id", "label", "name"] {
+                    if let Some(serde_json::Value::String(raw)) = map.get(candidate) {
+                        if let Some(normalized) = Self::normalize_effect_label(raw) {
+                            sink.insert(normalized);
+                        }
+                    }
+                }
+
+                for key in ["effects", "effect", "ccos_effects"] {
+                    if let Some(nested) = map.get(key) {
+                        Self::collect_effects_from_json_value(nested, sink);
+                    }
+                }
+            }
+            _ => {
+                if let Some(raw) = value.as_str() {
+                    Self::collect_effects_from_str(raw, sink);
+                }
+            }
+        }
+    }
+
+    fn collect_effects_from_str(raw: &str, sink: &mut HashSet<String>) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        if let Ok(json_vec) = serde_json::from_str::<Vec<String>>(trimmed) {
+            for item in json_vec {
+                if let Some(normalized) = Self::normalize_effect_label(&item) {
+                    sink.insert(normalized);
+                }
+            }
+            return;
+        }
+
+        for part in trimmed.split(|c: char| c == ',' || c.is_whitespace()) {
+            if let Some(normalized) = Self::normalize_effect_label(part) {
+                sink.insert(normalized);
+            }
+        }
+    }
+
+    fn normalize_effect_label(raw: &str) -> Option<String> {
+        let trimmed = raw.trim().trim_matches(|c| c == '\"' || c == '\'');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        Some(if trimmed.starts_with(':') {
+            trimmed.to_string()
+        } else {
+            format!(":{}", trimmed)
+        })
+    }
+
+    fn finalize_effects(mut effects: HashSet<String>, fallback: &str) -> Vec<String> {
+        if effects.is_empty() {
+            effects.insert(fallback.to_string());
+        }
+        let mut list: Vec<String> = effects.into_iter().collect();
+        list.sort();
+        list
+    }
+
+    fn serialize_effects(effects: &[String]) -> String {
+        serde_json::to_string(effects).unwrap_or_else(|_| effects.join(","))
+    }
+
+    fn parse_effects_from_serialized(serialized: &str) -> Vec<String> {
+        let mut sink = HashSet::new();
+        Self::collect_effects_from_str(serialized, &mut sink);
+        let mut list: Vec<String> = sink.into_iter().collect();
+        list.sort();
+        list
+    }
+
     /// Create a new MCP discovery provider
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
         let mut client_builder =
@@ -249,6 +388,8 @@ impl MCPDiscoveryProvider {
     /// Convert an MCP tool to a capability manifest
     fn convert_tool_to_capability(&self, tool: MCPTool) -> CapabilityManifest {
         let capability_id = format!("mcp.{}.{}", self.config.name, tool.name);
+        let effects = self.derive_tool_effects(&tool);
+        let serialized_effects = Self::serialize_effects(&effects);
 
         CapabilityManifest {
             id: capability_id.clone(),
@@ -275,6 +416,7 @@ impl MCPDiscoveryProvider {
                 },
             ),
             permissions: vec![],
+            effects,
             metadata: {
                 let mut metadata = HashMap::new();
                 metadata.insert("mcp_server".to_string(), self.config.name.clone());
@@ -283,6 +425,17 @@ impl MCPDiscoveryProvider {
                     self.config.protocol_version.clone(),
                 );
                 metadata.insert("capability_type".to_string(), "mcp_tool".to_string());
+                metadata.insert("ccos_effects".to_string(), serialized_effects);
+                if let Some(meta) = &tool.metadata {
+                    if let Ok(json) = serde_json::to_string(meta) {
+                        metadata.insert("mcp_tool_metadata".to_string(), json);
+                    }
+                }
+                if let Some(annotations) = &tool.annotations {
+                    if let Ok(json) = serde_json::to_string(annotations) {
+                        metadata.insert("mcp_tool_annotations".to_string(), json);
+                    }
+                }
                 metadata
             },
         }
@@ -309,6 +462,7 @@ impl MCPDiscoveryProvider {
         tool: &MCPTool,
     ) -> RuntimeResult<RTFSCapabilityDefinition> {
         let capability_id = format!("mcp.{}.{}", self.config.name, tool.name);
+        let effects = self.derive_tool_effects(tool);
 
         // Create RTFS capability definition as Expression
         let capability = Expression::Map(
@@ -377,6 +531,17 @@ impl MCPDiscoveryProvider {
                     ))]),
                 ),
                 (
+                    MapKey::Keyword(Keyword("effects".to_string())),
+                    Expression::Vector(
+                        effects
+                            .iter()
+                            .map(|effect| {
+                                Expression::Literal(Literal::String(effect.clone()))
+                            })
+                            .collect(),
+                    ),
+                ),
+                (
                     MapKey::Keyword(Keyword("metadata".to_string())),
                     Expression::Map(
                         vec![
@@ -401,6 +566,12 @@ impl MCPDiscoveryProvider {
                             (
                                 MapKey::Keyword(Keyword("introspected_at".to_string())),
                                 Expression::Literal(Literal::String(Utc::now().to_rfc3339())),
+                            ),
+                            (
+                                MapKey::Keyword(Keyword("ccos_effects".to_string())),
+                                Expression::Literal(Literal::String(Self::serialize_effects(
+                                    &effects,
+                                ))),
                             ),
                         ]
                         .into_iter()
@@ -1018,6 +1189,8 @@ impl MCPDiscoveryProvider {
         let mut provider_info = None;
         let mut permissions = Vec::new();
         let mut metadata = HashMap::new();
+        let mut effects = Vec::new();
+        let mut serialized_effects: Option<String> = None;
 
         for (key, value) in cap_map {
             match key {
@@ -1055,12 +1228,26 @@ impl MCPDiscoveryProvider {
                         }
                     }
                 }
+                MapKey::Keyword(k) if k.0 == "effects" => {
+                    if let Expression::Vector(effect_vec) = value {
+                        for effect in effect_vec {
+                            if let Expression::Literal(Literal::String(s)) = effect {
+                                if let Some(normalized) = Self::normalize_effect_label(&s) {
+                                    effects.push(normalized);
+                                }
+                            }
+                        }
+                    }
+                }
                 MapKey::Keyword(k) if k.0 == "metadata" => {
                     if let Expression::Map(meta_map) = value {
                         for (meta_key, meta_value) in meta_map {
                             if let (MapKey::Keyword(k), Expression::Literal(Literal::String(v))) =
                                 (meta_key, meta_value)
                             {
+                                if k.0 == "ccos_effects" {
+                                    serialized_effects = Some(v.clone());
+                                }
                                 metadata.insert(k.0.clone(), v.clone());
                             }
                         }
@@ -1099,6 +1286,16 @@ impl MCPDiscoveryProvider {
             .as_ref()
             .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
 
+        if effects.is_empty() {
+            if let Some(serialized) = serialized_effects {
+                effects = Self::parse_effects_from_serialized(&serialized);
+            }
+        }
+
+        if effects.is_empty() {
+            effects = vec![":network".to_string()];
+        }
+
         Ok(CapabilityManifest {
             id,
             name: name.clone(),
@@ -1118,6 +1315,7 @@ impl MCPDiscoveryProvider {
                 },
             ),
             permissions,
+            effects,
             metadata,
         })
     }
@@ -1335,6 +1533,8 @@ impl MCPDiscoveryProvider {
             .ok_or_else(|| RuntimeError::Generic("MCP resource missing name".to_string()))?;
 
         let capability_id = format!("mcp.{}.resource.{}", self.config.name, resource_name);
+        let effects = self.derive_resource_effects(&resource);
+        let serialized_effects = Self::serialize_effects(&effects);
 
         Ok(CapabilityManifest {
             id: capability_id.clone(),
@@ -1363,6 +1563,7 @@ impl MCPDiscoveryProvider {
                 },
             ),
             permissions: vec![],
+            effects,
             metadata: {
                 let mut metadata = HashMap::new();
                 metadata.insert("mcp_server".to_string(), self.config.name.clone());
@@ -1371,6 +1572,17 @@ impl MCPDiscoveryProvider {
                     self.config.protocol_version.clone(),
                 );
                 metadata.insert("capability_type".to_string(), "mcp_resource".to_string());
+                metadata.insert("ccos_effects".to_string(), serialized_effects);
+                if let Some(meta) = resource.get("metadata") {
+                    if let Ok(json) = serde_json::to_string(meta) {
+                        metadata.insert("mcp_resource_metadata".to_string(), json);
+                    }
+                }
+                if let Some(annotations) = resource.get("annotations") {
+                    if let Ok(json) = serde_json::to_string(annotations) {
+                        metadata.insert("mcp_resource_annotations".to_string(), json);
+                    }
+                }
                 metadata
             },
         })
@@ -1544,6 +1756,8 @@ mod tests {
             description: Some("A test MCP tool".to_string()),
             input_schema: None,
             output_schema: None,
+            metadata: None,
+            annotations: None,
         };
 
         let capability = provider.convert_tool_to_capability(tool);
@@ -1554,6 +1768,12 @@ mod tests {
             capability.metadata.get("mcp_server").unwrap(),
             "test_server"
         );
+        assert_eq!(capability.effects, vec![":network"]);
+        assert!(capability
+            .metadata
+            .get("ccos_effects")
+            .map(|s| s.contains(":network"))
+            .unwrap_or(false));
     }
 
     #[test]
@@ -1577,6 +1797,8 @@ mod tests {
             output_schema: Some(
                 serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}}}),
             ),
+            metadata: None,
+            annotations: None,
         };
 
         let rtfs_cap = provider.convert_tool_to_rtfs_format(&tool).unwrap();
@@ -1590,6 +1812,7 @@ mod tests {
                 let mut has_id = false;
                 let mut has_name = false;
                 let mut has_provider = false;
+                let mut has_effects = false;
 
                 for (key, _) in map {
                     match key {
@@ -1597,6 +1820,7 @@ mod tests {
                         MapKey::Keyword(kw) if kw.0 == "id" => has_id = true,
                         MapKey::Keyword(kw) if kw.0 == "name" => has_name = true,
                         MapKey::Keyword(kw) if kw.0 == "provider" => has_provider = true,
+                        MapKey::Keyword(kw) if kw.0 == "effects" => has_effects = true,
                         _ => {}
                     }
                 }
@@ -1605,6 +1829,7 @@ mod tests {
                 assert!(has_id, "RTFS capability missing id field");
                 assert!(has_name, "RTFS capability missing name field");
                 assert!(has_provider, "RTFS capability missing provider field");
+                assert!(has_effects, "RTFS capability missing effects field");
             }
             _ => panic!("RTFS capability should be a map"),
         }
@@ -1635,6 +1860,8 @@ mod tests {
             output_schema: Some(
                 serde_json::json!({"type": "object", "properties": {"result": {"type": "string"}}}),
             ),
+            metadata: None,
+            annotations: None,
         };
 
         // Convert to RTFS
@@ -1650,6 +1877,7 @@ mod tests {
         assert_eq!(manifest.version, "1.0.0");
         assert!(manifest.input_schema.is_some());
         assert!(manifest.output_schema.is_some());
+        assert!(manifest.effects.contains(&":network".to_string()));
     }
 
     #[test]
@@ -1713,12 +1941,16 @@ mod tests {
                 description: Some("First tool".to_string()),
                 input_schema: None,
                 output_schema: None,
+                metadata: None,
+                annotations: None,
             },
             MCPTool {
                 name: "tool2".to_string(),
                 description: Some("Second tool".to_string()),
                 input_schema: None,
                 output_schema: None,
+                metadata: None,
+                annotations: None,
             },
         ];
 

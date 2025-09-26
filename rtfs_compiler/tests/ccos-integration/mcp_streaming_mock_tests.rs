@@ -3,13 +3,14 @@ use rtfs_compiler::{
     ccos::{
         capability_marketplace::CapabilityMarketplace,
         streaming::{
-            mock_loop::run_mock_stream_loop, register_mcp_streaming_capability,
+            mock_loop::{run_mock_stream_loop, MockStreamTransport, MockTransportEvent},
+            register_mcp_streaming_capability,
             rtfs_streaming_syntax::maybe_lower_mcp_stream_macro,
         },
     },
     runtime::{
         streaming::{
-            McpStreamingProvider, StreamStatus, StreamingCapability,
+            McpStreamingProvider, StreamInspectOptions, StreamStatus, StreamingCapability,
             DEFAULT_LOCAL_MCP_SSE_ENDPOINT, ENV_LEGACY_CLOUDFLARE_DOCS_SSE_URL,
             ENV_LOCAL_MCP_SSE_URL, ENV_MCP_STREAM_AUTH_HEADER, ENV_MCP_STREAM_BEARER_TOKEN,
             ENV_MCP_STREAM_ENDPOINT,
@@ -18,7 +19,9 @@ use rtfs_compiler::{
     },
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 
 /// Helper to build a raw (mcp-stream ...) form Expression mirroring the example file.
 fn build_mcp_stream_form() -> Expression {
@@ -254,6 +257,87 @@ async fn test_directive_completion() {
 }
 
 #[tokio::test]
+async fn test_mock_transport_auto_connect_delivery() {
+    // Use empty server_url so auto_connect defaults to true, ensuring transport spins immediately.
+    let mock_transport = Arc::new(MockStreamTransport::new());
+    let provider = McpStreamingProvider::new_with_transport(String::new(), mock_transport.clone());
+
+    // Build params similar to other tests
+    use rtfs_compiler::ast::{Keyword, MapKey};
+    let mut params_map = std::collections::HashMap::new();
+    params_map.insert(
+        MapKey::Keyword(Keyword("endpoint".into())),
+        Value::String("weather.monitor.v1".into()),
+    );
+    params_map.insert(
+        MapKey::Keyword(Keyword("processor".into())),
+        Value::String("process-weather-chunk".into()),
+    );
+    params_map.insert(
+        MapKey::Keyword(Keyword("initial-state".into())),
+        Value::Map(std::collections::HashMap::new()),
+    );
+    let params = Value::Map(params_map);
+
+    let handle = provider.start_stream(&params).expect("start stream");
+    let stream_id = handle.stream_id.clone();
+
+    // Send three events via the mock transport, retrying until the transport registers the stream.
+    for seq in 0..3 {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let mut chunk_map = std::collections::HashMap::new();
+            chunk_map.insert(MapKey::Keyword(Keyword("seq".into())), Value::Integer(seq));
+            chunk_map.insert(
+                MapKey::Keyword(Keyword("payload".into())),
+                Value::String(format!("transport-payload-{}", seq)),
+            );
+            let chunk = Value::Map(chunk_map);
+            let metadata = Value::Map(std::collections::HashMap::new());
+            let event = MockTransportEvent::immediate(chunk, metadata);
+            match mock_transport.send_event(&stream_id, event).await {
+                Ok(_) => break,
+                Err(err)
+                    if attempts < 25
+                        && err
+                            .to_string()
+                            .contains("no mock transport channel for stream") =>
+                {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Err(err) => panic!("unexpected transport error: {}", err),
+            }
+        }
+    }
+
+    // Allow async processing to catch up
+    sleep(Duration::from_millis(100)).await;
+
+    // Verify state updated via mock transport path
+    let state = provider
+        .get_current_state(&stream_id)
+        .expect("state present");
+    if let Value::Map(state_map) = state {
+        use rtfs_compiler::ast::{Keyword, MapKey};
+        let count_key = MapKey::Keyword(Keyword("count".into()));
+        let count_val = state_map.get(&count_key).and_then(|v| match v {
+            Value::Integer(i) => Some(*i),
+            _ => None,
+        });
+        assert_eq!(
+            count_val,
+            Some(3),
+            "Expected :count == 3 after three mock events"
+        );
+    } else {
+        panic!("State not a map");
+    }
+
+    provider.stop_stream(&handle).expect("stop stream");
+}
+
+#[tokio::test]
 async fn test_directive_stop() {
     let provider = McpStreamingProvider::new("http://localhost/mock".into());
     use rtfs_compiler::ast::{Keyword, MapKey};
@@ -413,4 +497,152 @@ async fn test_unknown_directive_sets_error() {
         after_state.to_string(),
         "State should not change after error"
     );
+}
+
+#[tokio::test]
+async fn test_stream_inspection_maps_fields() {
+    use rtfs_compiler::ast::{Keyword, MapKey};
+    let provider = McpStreamingProvider::new("http://localhost/mock".into());
+
+    let mut params_map = std::collections::HashMap::new();
+    params_map.insert(
+        MapKey::Keyword(Keyword("endpoint".into())),
+        Value::String("weather.monitor.v1".into()),
+    );
+    params_map.insert(
+        MapKey::Keyword(Keyword("processor".into())),
+        Value::String("process-weather-chunk".into()),
+    );
+    params_map.insert(
+        MapKey::Keyword(Keyword("initial-state".into())),
+        Value::Map(std::collections::HashMap::new()),
+    );
+
+    let params = Value::Map(params_map);
+    let handle = provider.start_stream(&params).expect("start stream");
+    let stream_id = handle.stream_id.clone();
+
+    // Process a single chunk to produce basic stats
+    let mut chunk_map = std::collections::HashMap::new();
+    chunk_map.insert(
+        MapKey::Keyword(Keyword("payload".into())),
+        Value::String("alpha".into()),
+    );
+    let chunk = Value::Map(chunk_map);
+    let metadata = Value::Map(std::collections::HashMap::new());
+    provider
+        .process_chunk(&stream_id, chunk, metadata)
+        .await
+        .expect("process chunk");
+
+    let inspect_full = provider
+        .inspect_stream(&stream_id, StreamInspectOptions::default())
+        .expect("inspect stream");
+
+    let inspect_map = match inspect_full {
+        Value::Map(m) => m,
+        other => panic!("inspect expected map, got {:?}", other),
+    };
+
+    let stats_value = inspect_map
+        .get(&MapKey::Keyword(Keyword("stats".into())))
+        .expect("stats key present");
+    let transport_value = inspect_map
+        .get(&MapKey::Keyword(Keyword("transport".into())))
+        .expect("transport key present");
+    let current_state_value = inspect_map
+        .get(&MapKey::Keyword(Keyword("current-state".into())))
+        .expect("current-state present");
+    let queue_value = inspect_map
+        .get(&MapKey::Keyword(Keyword("queue".into())))
+        .expect("queue present");
+
+    if let Value::Map(stats_map) = stats_value {
+        let processed = stats_map
+            .get(&MapKey::Keyword(Keyword("processed-chunks".into())))
+            .expect("processed-chunks present");
+        assert_eq!(processed, &Value::Integer(1));
+
+        let queued = stats_map
+            .get(&MapKey::Keyword(Keyword("queued-chunks".into())))
+            .expect("queued-chunks present");
+        assert_eq!(queued, &Value::Integer(0));
+
+        let last_event = stats_map
+            .get(&MapKey::Keyword(Keyword("last-event-epoch-ms".into())))
+            .expect("last-event present");
+        assert!(matches!(last_event, Value::Integer(_)));
+    } else {
+        panic!("stats not a map");
+    }
+
+    if let Value::Map(transport_map) = transport_value {
+        let task_present = transport_map
+            .get(&MapKey::Keyword(Keyword("task-present".into())))
+            .expect("task-present present");
+        assert_eq!(task_present, &Value::Boolean(false));
+
+        let task_active = transport_map
+            .get(&MapKey::Keyword(Keyword("task-active".into())))
+            .expect("task-active present");
+        assert_eq!(task_active, &Value::Boolean(false));
+    } else {
+        panic!("transport not a map");
+    }
+
+    assert!(matches!(current_state_value, Value::Map(_)));
+    if let Value::Vector(queue_vec) = queue_value {
+        assert!(
+            queue_vec.is_empty(),
+            "queue should be empty after processing"
+        );
+    } else {
+        panic!("queue not a vector");
+    }
+
+    let mut minimal_options = StreamInspectOptions::default();
+    minimal_options.include_queue = false;
+    minimal_options.include_state = false;
+    minimal_options.include_initial_state = false;
+
+    let inspect_minimal = provider
+        .inspect_stream(&stream_id, minimal_options)
+        .expect("inspect minimal");
+    let inspect_min_map = match inspect_minimal {
+        Value::Map(m) => m,
+        other => panic!("inspect minimal expected map, got {:?}", other),
+    };
+
+    assert!(
+        !inspect_min_map.contains_key(&MapKey::Keyword(Keyword("queue".into()))),
+        "queue should be omitted when include_queue is false"
+    );
+    assert!(
+        !inspect_min_map.contains_key(&MapKey::Keyword(Keyword("current-state".into()))),
+        "current-state should be omitted when include_state is false"
+    );
+    assert!(
+        !inspect_min_map.contains_key(&MapKey::Keyword(Keyword("initial-state".into()))),
+        "initial-state should be omitted when include_initial_state is false"
+    );
+
+    let summary_value = provider.inspect_streams(StreamInspectOptions::default());
+    if let Value::Map(summary_map) = summary_value {
+        let total = summary_map
+            .get(&MapKey::Keyword(Keyword("total".into())))
+            .expect("total present");
+        assert_eq!(total, &Value::Integer(1));
+
+        let streams_value = summary_map
+            .get(&MapKey::Keyword(Keyword("streams".into())))
+            .expect("streams present");
+        match streams_value {
+            Value::Vector(entries) => {
+                assert_eq!(entries.len(), 1, "expected single stream summary");
+            }
+            other => panic!("streams entry not a vector: {:?}", other),
+        }
+    } else {
+        panic!("summary not a map");
+    }
 }

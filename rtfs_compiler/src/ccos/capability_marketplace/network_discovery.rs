@@ -1,10 +1,11 @@
-use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::capability_marketplace::types::{CapabilityManifest, CapabilityDiscovery, HttpCapability, LocalCapability, CapabilityProvenance, ProviderType};
-use crate::runtime::values::Value;
-use std::sync::Arc;
 use async_trait::async_trait;
+use crate::runtime::capability_marketplace::types::{CapabilityDiscovery, CapabilityManifest, CapabilityProvenance, HttpCapability, LocalCapability, ProviderType};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::values::Value;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -278,6 +279,13 @@ impl NetworkDiscoveryProvider {
             ))),
         });
         
+        let permissions = extract_string_list(cap_json.get("permissions"));
+        let mut effects = extract_string_list(cap_json.get("effects"));
+        if effects.is_empty() {
+            effects = extract_string_list(cap_json.get("metadata").and_then(|meta| meta.get("effects")));
+        }
+        let metadata = extract_metadata_map(cap_json.get("metadata"));
+
         Ok(CapabilityManifest {
             id: id.clone(),
             name: name.clone(),
@@ -294,8 +302,9 @@ impl NetworkDiscoveryProvider {
                 custody_chain: vec!["network_discovery".to_string()],
                 registered_at: chrono::Utc::now(),
             }),
-            permissions: vec![],
-            metadata: HashMap::new(),
+            permissions,
+            effects,
+            metadata,
         })
     }
 }
@@ -313,6 +322,49 @@ impl CapabilityDiscovery for NetworkDiscoveryProvider {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+fn extract_string_list(value: Option<&JsonValue>) -> Vec<String> {
+    match value {
+        Some(JsonValue::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                JsonValue::String(s) => Some(s.trim().to_string()),
+                JsonValue::Number(num) => Some(num.to_string()),
+                JsonValue::Bool(b) => Some(b.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Some(JsonValue::String(s)) => vec![s.trim().to_string()],
+        Some(JsonValue::Bool(b)) => vec![b.to_string()],
+        Some(JsonValue::Number(num)) => vec![num.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn extract_metadata_map(value: Option<&JsonValue>) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+
+    if let Some(JsonValue::Object(obj)) = value {
+        for (key, entry) in obj {
+            if key == "effects" {
+                continue;
+            }
+
+            let string_value = match entry {
+                JsonValue::String(s) => Some(s.trim().to_string()),
+                JsonValue::Bool(b) => Some(b.to_string()),
+                JsonValue::Number(num) => Some(num.to_string()),
+                _ => None,
+            };
+
+            if let Some(v) = string_value {
+                metadata.insert(key.clone(), v);
+            }
+        }
+    }
+
+    metadata
 }
 
 /// Builder for network discovery configuration
@@ -421,6 +473,7 @@ mod tests {
                 registered_at: chrono::Utc::now(),
             }),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
 
@@ -450,6 +503,7 @@ mod tests {
                 registered_at: chrono::Utc::now(),
             }),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
 

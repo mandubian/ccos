@@ -1,5 +1,6 @@
-use crate::runtime::streaming::{StreamingCapability, StreamHandle, StreamConfig};
+use crate::ast::TypeExpr;
 use crate::runtime::error::RuntimeResult;
+use crate::runtime::streaming::{StreamConfig, StreamHandle, StreamingCapability};
 
 /// Minimal local streaming provider for tests
 pub struct LocalStreamingProvider;
@@ -29,6 +30,10 @@ impl StreamingCapability for LocalStreamingProvider {
     async fn start_bidirectional_stream_with_config(&self, _params: &Value, _config: &StreamConfig) -> RuntimeResult<StreamHandle> {
         let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
         Ok(StreamHandle { stream_id: Uuid::new_v4().to_string(), stop_tx: tx })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 // RTFS 2.0 Streaming Syntax Implementation Examples
@@ -407,8 +412,8 @@ impl RtfsStreamingSyntaxExecutor {
         &mut self,
         capability_id: String,
         stream_type: StreamType,
-        _input_schema: Option<StreamSchema>,
-        _output_schema: Option<StreamSchema>,
+        input_schema: Option<StreamSchema>,
+        output_schema: Option<StreamSchema>,
         _config: StreamConfig,
         provider: Arc<dyn StreamingCapability + Send + Sync>,
         metadata: HashMap<String, String>,
@@ -419,14 +424,105 @@ impl RtfsStreamingSyntaxExecutor {
             .unwrap_or(&format!("RTFS streaming capability for {}", capability_id))
             .clone();
 
+        let parsed_input_schema = input_schema
+            .as_ref()
+            .map(Self::parse_stream_schema)
+            .transpose()?;
+        let parsed_output_schema = output_schema
+            .as_ref()
+            .map(Self::parse_stream_schema)
+            .transpose()?;
+
+        let effects = Self::derive_effects(&metadata, &stream_type);
+
         self.marketplace.register_streaming_capability(
             capability_id.clone(),
             name,
             description,
             stream_type,
             provider,
+            parsed_input_schema,
+            parsed_output_schema,
+            effects,
         ).await.map_err(|e| StreamingError::MarketplaceError(e.to_string()))?;
         Ok(ExecutionResult::Success(format!("Registered streaming capability: {}", capability_id)))
+    }
+
+    fn parse_stream_schema(schema: &StreamSchema) -> Result<TypeExpr, StreamingError> {
+        let raw = schema.element_type.trim();
+        if raw.is_empty() {
+            return Err(StreamingError::InvalidExpression(
+                "stream schema element_type cannot be empty".to_string(),
+            ));
+        }
+
+        let type_source = if raw.starts_with(':') || raw.starts_with('[') || raw.contains(' ') {
+            raw.to_string()
+        } else {
+            format!(":{}", raw)
+        };
+
+        TypeExpr::from_str(&type_source).map_err(|e| {
+            StreamingError::InvalidExpression(format!(
+                "Invalid stream schema type '{}': {}",
+                schema.element_type, e
+            ))
+        })
+    }
+
+    fn derive_effects(metadata: &HashMap<String, String>, stream_type: &StreamType) -> Vec<String> {
+        let fallback = match stream_type {
+            StreamType::Unidirectional | StreamType::Bidirectional | StreamType::Duplex => {
+                vec![":network".to_string()]
+            }
+        };
+
+        let raw = metadata
+            .get("effects")
+            .or_else(|| metadata.get("effect"))
+            .map(|value| value.trim());
+
+        let Some(raw) = raw else {
+            return fallback;
+        };
+
+        if raw.is_empty() {
+            return fallback;
+        }
+
+        if let Ok(json_vec) = serde_json::from_str::<Vec<String>>(raw) {
+            let parsed: Vec<String> = json_vec
+                .into_iter()
+                .filter_map(|item| Self::normalize_effect_label(&item))
+                .collect();
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+
+        let parsed: Vec<String> = raw
+            .split(',')
+            .filter_map(Self::normalize_effect_label)
+            .collect();
+        if parsed.is_empty() {
+            fallback
+        } else {
+            parsed
+        }
+    }
+
+    fn normalize_effect_label(raw: &str) -> Option<String> {
+        let trimmed = raw
+            .trim()
+            .trim_matches(|c| c == '\"' || c == '\'');
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(if trimmed.starts_with(':') {
+            trimmed.to_string()
+        } else {
+            format!(":{}", trimmed)
+        })
     }
 
     /// Create a stream source
@@ -500,6 +596,9 @@ impl RtfsStreamingSyntaxExecutor {
             description,
             StreamType::Unidirectional,
             _transform_provider,
+            None,
+            None,
+            vec![":compute".to_string()],
         ).await.map_err(|e| StreamingError::Other(e.to_string()))?;
         let params = Value::Map(HashMap::new());
         let _transform_handle = self.marketplace.start_stream_with_config(

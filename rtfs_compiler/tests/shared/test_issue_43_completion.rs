@@ -56,6 +56,7 @@ mod issue_43_tests {
                 wildcard: None,
             }),
             permissions: vec!["read".to_string(), "write".to_string()],
+            effects: vec![":compute".to_string()],
             metadata: HashMap::from([
                 ("security_level".to_string(), "high".to_string()),
                 ("permissions".to_string(), "read,write".to_string()),

@@ -8,12 +8,12 @@ use super::types::*;
 use crate::ast::{MapKey, TypeExpr};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::security::RuntimeContext;
-use crate::runtime::streaming::{StreamType, StreamingProvider};
+use crate::runtime::streaming::{McpStreamingProvider, StreamType, StreamingProvider};
 use crate::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use crate::runtime::values::Value;
 use chrono::Utc;
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -205,6 +205,7 @@ impl CapabilityMarketplace {
                 attestation: None,
                 provenance: Some(provenance),
                 permissions: vec![],
+                effects: vec![],
                 metadata: HashMap::new(),
             };
 
@@ -353,7 +354,28 @@ impl CapabilityMarketplace {
         description: String,
         stream_type: StreamType,
         provider: StreamingProvider,
+        input_schema: Option<TypeExpr>,
+        output_schema: Option<TypeExpr>,
+        effects: Vec<String>,
     ) -> Result<(), RuntimeError> {
+        let mut effect_set: HashSet<String> = HashSet::with_capacity(effects.len() + 1);
+        effect_set.insert(":streaming".to_string());
+        for effect in effects {
+            let trimmed = effect.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            effect_set.insert(trimmed.to_string());
+        }
+        let mut normalized_effects: Vec<String> = effect_set.into_iter().collect();
+        normalized_effects.sort();
+
+        let stream_type_label = match &stream_type {
+            StreamType::Unidirectional => "unidirectional",
+            StreamType::Bidirectional => "bidirectional",
+            StreamType::Duplex => "duplex",
+        };
+
         let provenance = CapabilityProvenance {
             source: "streaming".to_string(),
             version: Some("1.0.0".to_string()),
@@ -364,26 +386,29 @@ impl CapabilityMarketplace {
         let stream_impl = StreamCapabilityImpl {
             provider,
             stream_type,
-            input_schema: None,
-            output_schema: None,
+            input_schema: input_schema.clone(),
+            output_schema: output_schema.clone(),
             supports_progress: true,
             supports_cancellation: true,
             bidirectional_config: None,
             duplex_config: None,
             stream_config: None,
         };
+        let mut metadata = HashMap::new();
+        metadata.insert("stream_type".to_string(), stream_type_label.to_string());
         let capability = CapabilityManifest {
             id: id.clone(),
             name,
             description,
             provider: ProviderType::Stream(stream_impl),
             version: "1.0.0".to_string(),
-            input_schema: None,
-            output_schema: None,
+            input_schema,
+            output_schema,
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
-            metadata: HashMap::new(),
+            effects: normalized_effects,
+            metadata,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -417,6 +442,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
 
@@ -559,6 +585,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -597,6 +624,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -637,6 +665,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -678,6 +707,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -721,6 +751,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -764,6 +795,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -809,6 +841,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -848,6 +881,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -889,6 +923,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -930,6 +965,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
+            effects: vec![],
             metadata: HashMap::new(),
         };
         let mut caps = self.capabilities.write().await;
@@ -1147,6 +1183,13 @@ impl CapabilityMarketplace {
         inputs: &Value,
     ) -> RuntimeResult<Value> {
         let handle = stream_impl.provider.start_stream(inputs)?;
+        if let Some(schema_aware) = stream_impl
+            .provider
+            .as_any()
+            .downcast_ref::<McpStreamingProvider>()
+        {
+            schema_aware.set_processor_schema(&handle.stream_id, stream_impl.output_schema.clone());
+        }
         Ok(Value::String(format!(
             "Stream started with ID: {}",
             handle.stream_id

@@ -234,6 +234,7 @@ impl A2ADiscoveryProvider {
                 registered_at: chrono::Utc::now(),
             }),
             permissions: vec![],
+            effects: vec![],
             metadata: {
                 let mut metadata = HashMap::new();
                 metadata.insert("a2a_agent".to_string(), self.config.name.clone());

@@ -150,6 +150,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     description: t.description.clone(),
                     input_schema: None,
                     output_schema: None,
+                    metadata: None,
+                    annotations: None,
                 },
             )
             .collect();
@@ -191,6 +193,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     description: t.description.clone(),
                     input_schema: None,
                     output_schema: None,
+                    metadata: None,
+                    annotations: None,
                 },
             )
             .collect();

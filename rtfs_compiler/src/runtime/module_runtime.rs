@@ -1215,6 +1215,8 @@ mod tests {
             max_execution_time: Some(30000), // 30 seconds in milliseconds
             max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
             allowed_capabilities: std::collections::HashSet::new(),
+            allowed_effects: None,
+            denied_effects: std::collections::HashSet::new(),
             use_microvm: false,
             log_capability_calls: false,
             allow_inherit_isolation: true,
@@ -1272,6 +1274,8 @@ mod tests {
             max_execution_time: Some(30000), // 30 seconds in milliseconds
             max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
             allowed_capabilities: std::collections::HashSet::new(),
+            allowed_effects: None,
+            denied_effects: std::collections::HashSet::new(),
             use_microvm: false,
             log_capability_calls: false,
             allow_inherit_isolation: true,
@@ -1325,6 +1329,8 @@ mod tests {
             max_execution_time: Some(30000), // 30 seconds in milliseconds
             max_memory_usage: Some(100 * 1024 * 1024), // 100 MB in bytes
             allowed_capabilities: std::collections::HashSet::new(),
+            allowed_effects: None,
+            denied_effects: std::collections::HashSet::new(),
             use_microvm: false,
             log_capability_calls: false,
             allow_inherit_isolation: true,

@@ -75,6 +75,10 @@ impl StreamingCapability for SimpleStreamCapability {
             stop_tx: _stop_tx,
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[tokio::main]
@@ -95,6 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Real-time bidirectional chat capability".to_string(),
             StreamType::Bidirectional,
             simple_provider,
+            None,
+            None,
+            vec![":network".to_string()],
         )
         .await?;
 
