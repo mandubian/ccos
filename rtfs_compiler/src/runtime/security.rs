@@ -58,8 +58,7 @@ impl SecurityAuthorizer {
             });
         }
 
-        if runtime_context.allowed_effects.is_some() || !runtime_context.denied_effects.is_empty()
-        {
+        if runtime_context.allowed_effects.is_some() || !runtime_context.denied_effects.is_empty() {
             let inferred_effects: Vec<String> = default_effects_for_capability(capability_id)
                 .iter()
                 .map(|effect| (*effect).to_string())
@@ -118,11 +117,10 @@ impl SecurityAuthorizer {
             if runtime_context.allowed_effects.is_some()
                 || !runtime_context.denied_effects.is_empty()
             {
-                let inferred_effects: Vec<String> =
-                    default_effects_for_capability(cap_id)
-                        .iter()
-                        .map(|effect| (*effect).to_string())
-                        .collect();
+                let inferred_effects: Vec<String> = default_effects_for_capability(cap_id)
+                    .iter()
+                    .map(|effect| (*effect).to_string())
+                    .collect();
                 runtime_context.ensure_effects_allowed(cap_id, &inferred_effects)?;
             }
             required_permissions.push(cap_id.to_string());
@@ -518,10 +516,7 @@ impl RuntimeContext {
                 return Err(RuntimeError::SecurityViolation {
                     operation: "effect_policy".to_string(),
                     capability: capability_id.to_string(),
-                    context: format!(
-                        "Effect '{}' denied by runtime context",
-                        normalized
-                    ),
+                    context: format!("Effect '{}' denied by runtime context", normalized),
                 });
             }
         }
@@ -582,9 +577,9 @@ pub fn default_effects_for_capability(capability_id: &str) -> &'static [&'static
         // Network operations
         "ccos.network.http-fetch" => &[":network"],
         // System introspection
-        "ccos.system.get-env"
-        | "ccos.system.current-time"
-        | "ccos.system.current-timestamp-ms" => &[":system"],
+        "ccos.system.get-env" | "ccos.system.current-time" | "ccos.system.current-timestamp-ms" => {
+            &[":system"]
+        }
         // AI and agent operations
         "ccos.ai.llm-execute" => &[":ai"],
         cap if cap.starts_with("ccos.agent.") => &[":agent"],

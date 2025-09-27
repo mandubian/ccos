@@ -38,6 +38,15 @@ impl CapabilityRegistry {
 
         registry
     }
+
+    /// Register an additional capability with the registry.
+    ///
+    /// This is primarily intended for dynamic capabilities discovered at runtime (e.g. MCP).
+    /// The caller is responsible for ensuring the capability's implementation enforces any
+    /// required security policies.
+    pub fn register_custom_capability(&mut self, capability: Capability) {
+        self.capabilities.insert(capability.id.clone(), capability);
+    }
     /// Register a capability provider (e.g., MCP, plugin, etc)
     pub fn register_provider(&mut self, provider_id: &str, provider: Box<dyn CapabilityProvider>) {
         self.providers.insert(provider_id.to_string(), provider);
