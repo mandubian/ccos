@@ -302,7 +302,8 @@ impl HostInterface for RuntimeHost {
                     .collect(),
             };
 
-            self.security_context.ensure_effects_allowed(name, &effects)?;
+            self.security_context
+                .ensure_effects_allowed(name, &effects)?;
         }
 
         let context = self.get_context()?;

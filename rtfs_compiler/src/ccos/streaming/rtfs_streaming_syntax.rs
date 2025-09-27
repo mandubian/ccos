@@ -252,9 +252,7 @@ impl RtfsStreamingSyntaxExecutor {
     }
 
     fn normalize_effect_label(raw: &str) -> Option<String> {
-        let trimmed = raw
-            .trim()
-            .trim_matches(|c| c == '\"' || c == '\'');
+        let trimmed = raw.trim().trim_matches(|c| c == '\"' || c == '\'');
         if trimmed.is_empty() {
             return None;
         }

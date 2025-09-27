@@ -114,8 +114,14 @@ impl MCPDiscoveryProvider {
             Self::collect_effects_from_json_value(effects_value, &mut effect_set);
         }
 
-        self.collect_effects_from_object_map(resource.get("metadata").and_then(|v| v.as_object()), &mut effect_set);
-        self.collect_effects_from_object_map(resource.get("annotations").and_then(|v| v.as_object()), &mut effect_set);
+        self.collect_effects_from_object_map(
+            resource.get("metadata").and_then(|v| v.as_object()),
+            &mut effect_set,
+        );
+        self.collect_effects_from_object_map(
+            resource.get("annotations").and_then(|v| v.as_object()),
+            &mut effect_set,
+        );
 
         Self::finalize_effects(effect_set, ":network")
     }
@@ -535,9 +541,7 @@ impl MCPDiscoveryProvider {
                     Expression::Vector(
                         effects
                             .iter()
-                            .map(|effect| {
-                                Expression::Literal(Literal::String(effect.clone()))
-                            })
+                            .map(|effect| Expression::Literal(Literal::String(effect.clone())))
                             .collect(),
                     ),
                 ),

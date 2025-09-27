@@ -35,7 +35,11 @@ fn capability_denied_when_effect_blocked() {
     let result = HostInterface::execute_capability(&host, "ccos.io.log", &args);
 
     match result {
-        Err(crate::runtime::error::RuntimeError::SecurityViolation { operation, capability, context }) => {
+        Err(crate::runtime::error::RuntimeError::SecurityViolation {
+            operation,
+            capability,
+            context,
+        }) => {
             assert_eq!(operation, "effect_policy");
             assert_eq!(capability, "ccos.io.log");
             assert!(context.contains(":compute"));
@@ -60,4 +64,3 @@ fn capability_executes_when_effect_allowed() {
         other => panic!("unexpected capability result: {:?}", other),
     }
 }
-
