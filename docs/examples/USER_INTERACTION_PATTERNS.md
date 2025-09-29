@@ -174,11 +174,38 @@ The capability is documented in LLM prompts (`llm_provider.rs`):
 Interactive examples require:
 - TTY (terminal) environment
 - User present to respond to prompts
-- Enable delegation for LLM-generated plans:
-  ```bash
-  export CCOS_ENABLE_DELEGATION=1
-  export OPENAI_API_KEY=your_key
-  ```
+- Enable delegation for LLM-generated plans
+
+**Environment-based configuration:**
+```bash
+export CCOS_ENABLE_DELEGATION=1
+export OPENAI_API_KEY=your_key
+export CCOS_DELEGATING_MODEL=gpt-4o-mini
+cargo run --example user_interaction_basic
+```
+
+**CLI-based configuration:**
+```bash
+cargo run --example user_interaction_basic -- \
+  --enable-delegation \
+  --llm-provider openai \
+  --llm-model gpt-4o-mini \
+  --llm-api-key $OPENAI_API_KEY
+```
+
+**Debug mode (shows LLM prompts):**
+```bash
+cargo run --example user_interaction_basic -- --debug
+```
+
+**Offline mode (stub arbiter, no LLM):**
+```bash
+cargo run --example user_interaction_basic
+# Or explicitly:
+cargo run --example user_interaction_basic -- \
+  --llm-provider stub \
+  --llm-model deterministic-stub-model
+```
 
 ## Future Enhancements
 
