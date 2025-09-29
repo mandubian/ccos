@@ -244,29 +244,56 @@ This ensures the LLM knows to:
 
 ### Conditional Logic with User Input
 
-**Pattern 3** uses RTFS's `if` expression to create branching logic:
+**Pattern 3** uses RTFS's conditional expressions to create branching logic.
+
+#### For Binary Choices (Yes/No): Use `if`
 
 ```rtfs
 (if <condition> <then-expr> <else-expr>)
 ```
 
-**Example with user input:**
+**Example:**
 ```rtfs
-(step "Branch Example" 
-  (let [choice (call :ccos.user.ask "Pick a color (red/blue):")]
-    (if (= choice "red")
-      (call :ccos.echo {:message "Red is bold and energetic!"})
-      (call :ccos.echo {:message "Blue is calm and peaceful!"}))))
+(step "Pizza Check" 
+  (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
+    (if (= likes "yes")
+      (call :ccos.echo {:message "Great! Pizza is delicious!"})
+      (call :ccos.echo {:message "Maybe try it sometime!"}))))
 ```
 
-**Multiple conditions** can be handled with nested `if`:
+#### For Multiple Choices: Use `match` ⭐
+
+For 3+ options, `match` is **much cleaner** than nested `if`:
+
 ```rtfs
-(if (= lang "rust")
-  (call :ccos.echo {:message "println!(\"Hello\")"})
-  (if (= lang "python")
-    (call :ccos.echo {:message "print('Hello')"})
-    (call :ccos.echo {:message "Unknown language"})))
+(match <value> 
+  <pattern1> <result1>
+  <pattern2> <result2>
+  ...
+  _ <default>)  ; _ is wildcard/catch-all
 ```
+
+**Example:**
+```rtfs
+(step "Language Hello World" 
+  (let [lang (call :ccos.user.ask "Choose: rust, python, or javascript")]
+    (match lang
+      "rust" (call :ccos.echo {:message "println!(\"Hello\")"})
+      "python" (call :ccos.echo {:message "print('Hello')"})
+      "javascript" (call :ccos.echo {:message "console.log('Hello')"})
+      _ (call :ccos.echo {:message "Unknown language"}))))
+```
+
+**Why `match` is better for multiple choices:**
+- ✅ **Cleaner syntax** - no nesting
+- ✅ **More readable** - patterns align vertically
+- ✅ **Familiar pattern** - LLMs know this from Rust, Scala, OCaml, etc.
+- ✅ **Catch-all with `_`** - handles unexpected input gracefully
+
+**When to use each:**
+- **`if`**: Binary decisions (yes/no, true/false)
+- **`match`**: 3+ options (language selection, menu choices, etc.)
+- **Nested `if`**: Complex boolean logic (conditions involving AND/OR)
 
 **Why this matters:**
 - User responses determine execution path
