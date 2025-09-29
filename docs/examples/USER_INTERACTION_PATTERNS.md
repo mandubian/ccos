@@ -216,6 +216,16 @@ cargo run --example user_interaction_basic -- \
   --model-auto-completion-budget 0.003
 ```
 
+**See what's happening behind the scenes:**
+```bash
+cargo run --example user_interaction_basic -- --verbose
+# Shows: Intent analysis → LLM delegation → Plan compilation → Execution
+# Great for understanding the CCOS workflow!
+
+cargo run --example user_interaction_basic -- --enable-delegation --verbose
+# Full visibility into LLM-based plan generation
+```
+
 **Debug mode (shows LLM prompts):**
 ```bash
 cargo run --example user_interaction_basic -- --debug

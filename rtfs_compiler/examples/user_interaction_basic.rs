@@ -6,6 +6,8 @@
 //! Run:
 //!   cargo run --example user_interaction_basic
 //!   cargo run --example user_interaction_basic -- --debug
+//!   cargo run --example user_interaction_basic -- --verbose  # Show CCOS process steps
+//!   cargo run --example user_interaction_basic -- --enable-delegation --verbose  # Full LLM visibility
 //!
 //! Configuration (same as live_interactive_assistant):
 //!   
@@ -28,6 +30,7 @@
 //!     --model-auto-completion-budget 0.003
 
 use clap::Parser;
+use crossterm::style::Stylize;
 use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::config::validation::validate_config;
@@ -38,6 +41,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
 use toml;
 
 #[derive(Parser, Debug)]
@@ -77,6 +82,105 @@ struct Args {
     /// Auto-pick best model within completion cost budget (USD per 1K tokens)
     #[arg(long)]
     model_auto_completion_budget: Option<f64>,
+
+    /// Show detailed process steps
+    #[arg(long, default_value_t = false)]
+    verbose: bool,
+}
+
+/// Display a spinner while waiting for LLM response
+async fn show_progress(message: &str, enabled: bool) {
+    if !enabled {
+        return;
+    }
+    
+    let spinner_chars = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    print!("\r{} {} ", "🤖".cyan(), message.blue());
+    use std::io::{self, Write};
+    io::stdout().flush().ok();
+    
+    for ch in &spinner_chars {
+        print!("\r{} {} {} ", "🤖".cyan(), message.blue(), ch.yellow());
+        io::stdout().flush().ok();
+        sleep(Duration::from_millis(80)).await;
+    }
+}
+
+/// Process a request with progress indicators
+async fn process_with_progress(
+    ccos: &Arc<CCOS>,
+    request: &str,
+    ctx: &RuntimeContext,
+    delegation_enabled: bool,
+    verbose: bool,
+) -> Result<rtfs_compiler::ccos::types::ExecutionResult, Box<dyn std::error::Error>> {
+    if delegation_enabled && verbose {
+        println!("\n{}", "┌─ CCOS Processing ─────────────────────────────┐".cyan());
+        let request_msg = format!("📝 Request: {}", request);
+        println!("{} {}", "│".cyan(), request_msg.white());
+        println!("{}", "├───────────────────────────────────────────────┤".cyan());
+        println!("{} {}", "│".cyan(), "🔍 Analyzing intent...".blue());
+        
+        let start = Instant::now();
+        
+        // Show spinner in background (non-blocking simulation)
+        let spinner_task = tokio::spawn(async move {
+            for _ in 0..3 {
+                show_progress("Building intent graph", true).await;
+            }
+        });
+        
+        // Small delay to show spinner
+        sleep(Duration::from_millis(100)).await;
+        
+        println!("{} {}", "│".cyan(), "🧠 Delegating to LLM for plan generation...".yellow());
+        println!("{} {}", "│".cyan(), "⚙️  Compiling plan to WASM...".dark_grey());
+        println!("{}", "├───────────────────────────────────────────────┤".cyan());
+        
+        let result = ccos.process_request(request, ctx).await;
+        
+        let elapsed = start.elapsed();
+        
+        match &result {
+            Ok(res) => {
+                let msg = format!("✅ Execution complete ({:.2}s)", elapsed.as_secs_f64());
+                println!("{} {}", "│".cyan(), msg.green());
+                if res.success {
+                    let result_msg = format!("📤 Result: {}", res.value);
+                    println!("{} {}", "│".cyan(), result_msg.white());
+                } else {
+                    let partial_msg = format!("⚠️  Partial success: {}", res.value);
+                    println!("{} {}", "│".cyan(), partial_msg.yellow());
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("❌ Error: {}", e);
+                println!("{} {}", "│".cyan(), error_msg.red());
+            }
+        }
+        
+        println!("{}", "└───────────────────────────────────────────────┘".cyan());
+        
+        // Clean up spinner task
+        spinner_task.abort();
+        
+        result.map_err(|e| e.into())
+    } else if delegation_enabled {
+        // Simple progress without verbose
+        print!("🤖 Processing");
+        use std::io::{self, Write};
+        io::stdout().flush().ok();
+        
+        let result = ccos.process_request(request, ctx).await;
+        
+        print!("\r");
+        io::stdout().flush().ok();
+        
+        result.map_err(|e| e.into())
+    } else {
+        // No delegation, just process
+        ccos.process_request(request, ctx).await.map_err(|e| e.into())
+    }
 }
 
 #[tokio::main]
@@ -243,15 +347,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !delegation_enabled {
         println!("💡 Tip: This example works best with delegation enabled");
     }
-    let result1 = ccos
-        .process_request("ask the user for their name and greet them personally", &ctx)
-        .await;
+    
+    let result1 = process_with_progress(
+        &ccos,
+        "ask the user for their name and greet them personally",
+        &ctx,
+        delegation_enabled,
+        args.verbose,
+    )
+    .await;
 
     match result1 {
         Ok(res) => {
-            println!("\n✅ Example 1 Result:");
-            println!("   Success: {}", res.success);
-            println!("   Value: {}\n", res.value);
+            if !args.verbose {
+                println!("\n✅ Example 1 Result:");
+                println!("   Success: {}", res.success);
+                println!("   Value: {}\n", res.value);
+            }
         }
         Err(e) => {
             eprintln!("\n❌ Example 1 Error: {}", e);
@@ -267,18 +379,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 2: Ask for favorite color
     println!("📝 Example 2: Favorite Color");
     println!("---------------------------");
-    let result2 = ccos
-        .process_request(
-            "ask the user what their favorite color is and tell them it's a great choice",
-            &ctx,
-        )
-        .await;
+    
+    let result2 = process_with_progress(
+        &ccos,
+        "ask the user what their favorite color is and tell them it's a great choice",
+        &ctx,
+        delegation_enabled,
+        args.verbose,
+    )
+    .await;
 
     match result2 {
         Ok(res) => {
-            println!("\n✅ Example 2 Result:");
-            println!("   Success: {}", res.success);
-            println!("   Value: {}\n", res.value);
+            if !args.verbose {
+                println!("\n✅ Example 2 Result:");
+                println!("   Success: {}", res.success);
+                println!("   Value: {}\n", res.value);
+            }
         }
         Err(e) => {
             eprintln!("\n❌ Example 2 Error: {}\n", e);
@@ -288,18 +405,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 3: Multiple questions
     println!("📝 Example 3: Mini Survey");
     println!("------------------------");
-    let result3 = ccos
-        .process_request(
-            "conduct a mini survey: ask the user for their name, their age, and their hobby, then summarize the answers",
-            &ctx,
-        )
-        .await;
+    
+    let result3 = process_with_progress(
+        &ccos,
+        "conduct a mini survey: ask the user for their name, their age, and their hobby, then summarize the answers",
+        &ctx,
+        delegation_enabled,
+        args.verbose,
+    )
+    .await;
 
     match result3 {
         Ok(res) => {
-            println!("\n✅ Example 3 Result:");
-            println!("   Success: {}", res.success);
-            println!("   Value: {}\n", res.value);
+            if !args.verbose {
+                println!("\n✅ Example 3 Result:");
+                println!("   Success: {}", res.success);
+                println!("   Value: {}\n", res.value);
+            }
         }
         Err(e) => {
             eprintln!("\n❌ Example 3 Error: {}\n", e);
