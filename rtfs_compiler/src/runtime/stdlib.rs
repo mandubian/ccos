@@ -3103,10 +3103,13 @@ pub async fn register_default_capabilities(
                                     None
                                 };
                                 
-                                // Prompt user on stderr (stdout might be captured)
+                                // Prompt user on stdout with clear formatting
                                 use std::io::{self, Write};
-                                eprint!("{}", prompt);
-                                io::stderr().flush().ok();
+                                print!("\n❓ {}", prompt);
+                                if !prompt.ends_with(' ') && !prompt.ends_with('\n') {
+                                    print!(" ");
+                                }
+                                io::stdout().flush().ok();
                                 
                                 // Read from stdin
                                 let mut response = String::new();
@@ -3161,8 +3164,11 @@ pub async fn register_default_capabilities(
                         };
                         
                         use std::io::{self, Write};
-                        eprint!("{}", prompt);
-                        io::stderr().flush().ok();
+                        print!("\n❓ {}", prompt);
+                        if !prompt.ends_with(' ') && !prompt.ends_with('\n') {
+                            print!(" ");
+                        }
+                        io::stdout().flush().ok();
                         
                         let mut response = String::new();
                         match io::stdin().read_line(&mut response) {

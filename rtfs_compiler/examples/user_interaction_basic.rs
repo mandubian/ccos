@@ -207,7 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("================================\n");
 
     // Show delegation status
-    if std::env::var("CCOS_ENABLE_DELEGATION").ok().as_deref() == Some("1") {
+    let delegation_enabled = std::env::var("CCOS_ENABLE_DELEGATION").ok().as_deref() == Some("1");
+    if delegation_enabled {
         let model = std::env::var("CCOS_DELEGATING_MODEL")
             .unwrap_or_else(|_| "(default)".into());
         let provider = std::env::var("CCOS_LLM_PROVIDER_HINT")
@@ -217,7 +218,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   Model: {}\n", model);
     } else {
         println!("⚠️  Delegation: disabled (using stub arbiter)");
-        println!("   To enable: export CCOS_ENABLE_DELEGATION=1 and set API key\n");
+        println!("   Note: Stub arbiter generates simple predetermined plans");
+        println!("   For dynamic conversational plans with user input, enable delegation:");
+        println!("     export CCOS_ENABLE_DELEGATION=1");
+        println!("     export OPENAI_API_KEY=your_key");
+        println!("   Or use CLI: --enable-delegation --llm-provider openai --llm-api-key $KEY\n");
     }
 
     // Initialize CCOS
@@ -235,6 +240,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 1: Simple greeting with user's name
     println!("📝 Example 1: Simple Greeting");
     println!("----------------------------");
+    if !delegation_enabled {
+        println!("💡 Tip: This example works best with delegation enabled");
+    }
     let result1 = ccos
         .process_request("ask the user for their name and greet them personally", &ctx)
         .await;
@@ -246,7 +254,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   Value: {}\n", res.value);
         }
         Err(e) => {
-            eprintln!("\n❌ Example 1 Error: {}\n", e);
+            eprintln!("\n❌ Example 1 Error: {}", e);
+            if !delegation_enabled {
+                eprintln!("   💡 This error may be due to stub arbiter limitations.");
+                eprintln!("   Try enabling delegation for better plan generation.\n");
+            } else {
+                eprintln!();
+            }
         }
     }
 
