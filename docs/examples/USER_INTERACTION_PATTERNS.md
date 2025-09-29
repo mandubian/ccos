@@ -163,7 +163,29 @@ The `ccos.user.ask` capability is registered in `stdlib.rs`:
 - Flushes output to ensure prompts appear immediately
 - Reads from stdin
 - Supports optional default values
-- Returns trimmed string response
+- **Returns trimmed string response** that can be captured with `let` bindings
+
+### Capturing and Reusing Return Values
+
+The LLM is instructed with examples showing how to capture the user's response and use it in subsequent operations:
+
+```rtfs
+;; Simple call
+(call :ccos.user.ask "What is your name?")
+
+;; With default value
+(call :ccos.user.ask "What is your name?" "Guest")
+
+;; Capture and reuse - the return value is a string
+(step "Greet User" 
+  (let [name (call :ccos.user.ask "What is your name?")]
+    (call :ccos.echo {:message (str "Hello, " name "!")})))
+```
+
+This ensures the LLM knows to:
+1. Capture the return value with `let` bindings
+2. Use RTFS's `str` function to concatenate strings
+3. Pass the personalized message to subsequent capability calls
 
 ### Security Considerations
 
