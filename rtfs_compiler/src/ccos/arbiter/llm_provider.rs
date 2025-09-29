@@ -601,10 +601,17 @@ Capability signatures for this demo (STRICT):
           (let [name (call :ccos.user.ask "What is your name?")]
             (call :ccos.echo {:message (str "Hello, " name "!")})))
       
+      Multiple prompts with summary (CORRECT - sequential bindings in one step):
+        (step "Survey" 
+          (let [name (call :ccos.user.ask "What is your name?")
+                age (call :ccos.user.ask "How old are you?")
+                hobby (call :ccos.user.ask "What is your hobby?")]
+            (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
+      
       WRONG - let has no body:
         (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; ERROR: missing body!
       
-      WRONG - name out of scope:
+      WRONG - variables out of scope across steps:
         (step "Get Name" (let [name (call :ccos.user.ask "Name?")] name))
         (step "Use Name" (call :ccos.echo {:message name}))  ; ERROR: name not in scope!
 
@@ -657,10 +664,17 @@ Additional STRICT signature rules:
           (let [name (call :ccos.user.ask "What is your name?")]
             (call :ccos.echo {:message (str "Hello, " name "!")})))
       
+      Multiple prompts with summary (CORRECT - sequential bindings in one step):
+        (step "Survey" 
+          (let [name (call :ccos.user.ask "What is your name?")
+                age (call :ccos.user.ask "How old are you?")
+                hobby (call :ccos.user.ask "What is your hobby?")]
+            (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
+      
       WRONG - let has no body:
         (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; Missing body expression!
       
-      WRONG - variable out of scope:
+      WRONG - variables out of scope across steps:
         (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
         (step "Use" (call :ccos.echo {:message n}))  ; n not in scope here!
 
