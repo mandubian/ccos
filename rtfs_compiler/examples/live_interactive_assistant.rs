@@ -377,6 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "ccos.echo".to_string(),
             "ccos.math.add".to_string(),
             "ccos.network.http-fetch".to_string(), // may be filtered if registry not mocked
+            "ccos.user.ask".to_string(), // interactive user input
         ]
         .into_iter()
         .collect(),

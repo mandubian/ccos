@@ -3061,6 +3061,136 @@ pub async fn register_default_capabilities(
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
 
+    // Register ccos.user.ask capability (interactive user input)
+    marketplace
+        .register_local_capability(
+            "ccos.user.ask".to_string(),
+            "User Ask Capability".to_string(),
+            "Prompts the user for input and returns their response".to_string(),
+            Arc::new(|input| {
+                match input {
+                    // Map with :args containing [prompt_string]
+                    Value::Map(map) => {
+                        let args_val = map
+                            .get(&MapKey::Keyword(Keyword("args".to_string())))
+                            .cloned()
+                            .unwrap_or(Value::List(vec![]));
+                        match args_val {
+                            Value::List(args) => {
+                                if args.is_empty() {
+                                    return Err(RuntimeError::ArityMismatch {
+                                        function: "ccos.user.ask".to_string(),
+                                        expected: "1 or 2".to_string(),
+                                        actual: 0,
+                                    });
+                                }
+                                
+                                let prompt = match &args[0] {
+                                    Value::String(s) => s.clone(),
+                                    other => {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "string".to_string(),
+                                            actual: other.type_name().to_string(),
+                                            operation: "ccos.user.ask prompt".to_string(),
+                                        })
+                                    }
+                                };
+                                
+                                // Optional default value if user just hits enter
+                                let default_val = if args.len() >= 2 {
+                                    Some(args[1].clone())
+                                } else {
+                                    None
+                                };
+                                
+                                // Prompt user on stderr (stdout might be captured)
+                                use std::io::{self, Write};
+                                eprint!("{}", prompt);
+                                io::stderr().flush().ok();
+                                
+                                // Read from stdin
+                                let mut response = String::new();
+                                match io::stdin().read_line(&mut response) {
+                                    Ok(_) => {
+                                        let trimmed = response.trim();
+                                        if trimmed.is_empty() {
+                                            // Return default if provided, otherwise empty string
+                                            Ok(default_val.unwrap_or(Value::String(String::new())))
+                                        } else {
+                                            Ok(Value::String(trimmed.to_string()))
+                                        }
+                                    }
+                                    Err(e) => Err(RuntimeError::Generic(format!(
+                                        "IO error reading user input: {}",
+                                        e
+                                    ))),
+                                }
+                            }
+                            other => Err(RuntimeError::TypeError {
+                                expected: "list".to_string(),
+                                actual: other.type_name().to_string(),
+                                operation: "ccos.user.ask".to_string(),
+                            }),
+                        }
+                    }
+                    // Backward compatibility: plain list
+                    Value::List(args) => {
+                        if args.is_empty() {
+                            return Err(RuntimeError::ArityMismatch {
+                                function: "ccos.user.ask".to_string(),
+                                expected: "1 or 2".to_string(),
+                                actual: 0,
+                            });
+                        }
+                        
+                        let prompt = match &args[0] {
+                            Value::String(s) => s.clone(),
+                            other => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "string".to_string(),
+                                    actual: other.type_name().to_string(),
+                                    operation: "ccos.user.ask prompt".to_string(),
+                                })
+                            }
+                        };
+                        
+                        let default_val = if args.len() >= 2 {
+                            Some(args[1].clone())
+                        } else {
+                            None
+                        };
+                        
+                        use std::io::{self, Write};
+                        eprint!("{}", prompt);
+                        io::stderr().flush().ok();
+                        
+                        let mut response = String::new();
+                        match io::stdin().read_line(&mut response) {
+                            Ok(_) => {
+                                let trimmed = response.trim();
+                                if trimmed.is_empty() {
+                                    Ok(default_val.unwrap_or(Value::String(String::new())))
+                                } else {
+                                    Ok(Value::String(trimmed.to_string()))
+                                }
+                            }
+                            Err(e) => Err(RuntimeError::Generic(format!(
+                                "IO error reading user input: {}",
+                                e
+                            ))),
+                        }
+                    }
+                    other => Err(RuntimeError::TypeError {
+                        expected: "map or list".to_string(),
+                        actual: other.type_name().to_string(),
+                        operation: "ccos.user.ask".to_string(),
+                    }),
+                }
+            }),
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.user.ask: {:?}", e)))?;
+
     Ok(())
 }
 

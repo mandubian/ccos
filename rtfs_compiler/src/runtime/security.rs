@@ -574,6 +574,8 @@ pub fn default_effects_for_capability(capability_id: &str) -> &'static [&'static
         | "ccos.data.serialize-json"
         | "ccos.math.add"
         | "ccos.echo" => &[":compute"],
+        // User interaction (stdin/stdout)
+        "ccos.user.ask" => &[":io", ":user-interaction"],
         // Network operations
         "ccos.network.http-fetch" => &[":network"],
         // System introspection

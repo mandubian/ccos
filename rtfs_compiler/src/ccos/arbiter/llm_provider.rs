@@ -587,11 +587,14 @@ Capability signatures for this demo (STRICT):
     Example: (call :ccos.echo {:message "hello"})
 - :ccos.math.add must be called with exactly two positional number arguments. Do NOT use map arguments for this capability.
     Example: (call :ccos.math.add 2 3)
+- :ccos.user.ask prompts the user for input. Takes 1-2 string arguments: prompt, optional default
+    Example: (call :ccos.user.ask "What is your name?" "Guest")
+    Returns: string value with user's response
 
 Constraints:
 - Use ONLY the forms above. Do NOT return JSON or markdown. Do NOT include (plan ...) wrapper.
-- Available capabilities for this demo (whitelist): :ccos.echo, :ccos.math.add. You MUST use only capability ids from this list.
-- If you need to print/log, use :ccos.echo. If you need to add numbers, use :ccos.math.add.
+- Available capabilities for this demo (whitelist): :ccos.echo, :ccos.math.add, :ccos.user.ask. You MUST use only capability ids from this list.
+- If you need to print/log, use :ccos.echo. If you need to add numbers, use :ccos.math.add. If you need user input, use :ccos.user.ask.
 - Keep it multi-step if helpful. Ensure the s-expression parses.
 "#;
 
@@ -618,11 +621,14 @@ Arguments allowed: strings ("..."), numbers (1 2 3), simple maps with keyword ke
 Capability whitelist for this demo: use ONLY these capability ids in :body
 - :ccos.echo  ; for printing/logging messages
 - :ccos.math.add  ; for adding numbers
+- :ccos.user.ask  ; for prompting user for input
 Do NOT invent or use other capability ids.
 
 Additional STRICT signature rules:
 - :ccos.echo must be called with a single map {:message "..."}
 - :ccos.math.add must be called with exactly two positional numbers, e.g., (call :ccos.math.add 2 3). Map arguments are NOT allowed for this capability.
+- :ccos.user.ask must be called with 1-2 string arguments: prompt, optional default. Returns user's string response.
+    Example: (call :ccos.user.ask "What is your name?" "Guest")
 
 Return exactly one (plan ...) with these constraints.
 "#;
