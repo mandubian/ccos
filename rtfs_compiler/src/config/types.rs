@@ -17,23 +17,105 @@ pub struct AgentConfig {
     /// Agent profile type
     pub profile: String,
     /// Orchestrator configuration
+    #[serde(default)]
     pub orchestrator: OrchestratorConfig,
     /// Network configuration
+    #[serde(default)]
     pub network: NetworkConfig,
     /// MicroVM-specific configuration (optional)
+    #[serde(default)]
     pub microvm: Option<MicroVMConfig>,
     /// Capability configuration
+    #[serde(default)]
     pub capabilities: CapabilitiesConfig,
     /// Governance configuration
+    #[serde(default)]
     pub governance: GovernanceConfig,
     /// Causal Chain configuration
+    #[serde(default)]
     pub causal_chain: CausalChainConfig,
     /// Marketplace configuration
+    #[serde(default)]
     pub marketplace: MarketplaceConfig,
     /// Delegation configuration (optional tuning for agent delegation heuristics)
+    #[serde(default)]
     pub delegation: DelegationConfig,
     /// Feature flags
+    #[serde(default)]
     pub features: Vec<String>,
+    /// Optional catalog of LLM model profiles for interactive selection
+    #[serde(default)]
+    pub llm_profiles: Option<LlmProfilesConfig>,
+}
+
+/// A named LLM model profile that can be selected at runtime
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LlmProfile {
+    /// Human readable / command name (unique)
+    pub name: String,
+    /// Provider identifier (openai, openrouter, claude, stub, local)
+    pub provider: String,
+    /// Concrete model slug for the provider
+    pub model: String,
+    /// Optional base URL override (for proxies / OpenRouter / self-hosted gateways)
+    pub base_url: Option<String>,
+    /// Name of environment variable containing API key (preferred over inline key)
+    pub api_key_env: Option<String>,
+    /// Inline API key (discouraged for committed configs, but allowed for throwaway local files)
+    pub api_key: Option<String>,
+    /// Temperature override
+    pub temperature: Option<f64>,
+    /// Max tokens override
+    pub max_tokens: Option<u32>,
+}
+
+/// Collection of LLM profiles with an optional default
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LlmProfilesConfig {
+    /// Optional default profile name selected on startup
+    pub default: Option<String>,
+    /// Available profiles
+    pub profiles: Vec<LlmProfile>,
+    /// Optional grouped model sets per provider (expanded into synthetic profiles at runtime)
+    pub model_sets: Option<Vec<LlmModelSet>>,
+}
+
+/// A named set of related model specs for a single provider (e.g. tiers: fast, balanced, high_quality)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LlmModelSet {
+    /// Set name (used as namespace prefix when expanding to synthetic profiles)
+    pub name: String,
+    /// Provider identifier (openai, openrouter, claude, gemini, stub, local)
+    pub provider: String,
+    /// Optional base URL override per set
+    pub base_url: Option<String>,
+    /// API key environment variable name
+    pub api_key_env: Option<String>,
+    /// Inline API key (discouraged for committed configs)
+    pub api_key: Option<String>,
+    /// Optional default spec name within this set
+    pub default: Option<String>,
+    /// Model specifications contained in the set
+    pub models: Vec<LlmModelSpec>,
+}
+
+/// Specification metadata for a model option inside a set
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LlmModelSpec {
+    /// Short human readable spec name (e.g. fast, quality, reasoning)
+    pub name: String,
+    /// Concrete provider model slug
+    pub model: String,
+    /// Maximum acceptable prompt cost USD per 1K tokens (if known)
+    pub max_prompt_cost_per_1k: Option<f64>,
+    /// Maximum acceptable completion cost USD per 1K tokens (if known)
+    pub max_completion_cost_per_1k: Option<f64>,
+    /// Soft quality tier label (e.g. basic, standard, premium, reasoning)
+    pub quality: Option<String>,
+    /// Upper bound on output tokens for planning flows (override)
+    pub max_output_tokens: Option<u32>,
+    /// Free-form notes (latency expectations, etc.)
+    pub notes: Option<String>,
 }
 
 /// Orchestrator configuration
@@ -50,7 +132,8 @@ pub struct OrchestratorConfig {
 pub struct IsolationConfig {
     /// Isolation mode (wasm, container, microvm)
     pub mode: String,
-    /// Filesystem configuration
+    /// Filesystem configuration (defaults if omitted in config)
+    #[serde(default)]
     pub fs: FSConfig,
 }
 
@@ -75,8 +158,13 @@ pub struct MountConfig {
 pub struct DLPConfig {
     /// Whether DLP is enabled
     pub enabled: bool,
-    /// DLP policy (strict, moderate, lenient)
+    /// Active DLP policy (lenient|strict)
+    #[serde(default = "default_dlp_policy")]
     pub policy: String,
+}
+
+fn default_dlp_policy() -> String {
+    "lenient".to_string()
 }
 
 /// Network configuration
@@ -232,7 +320,8 @@ pub struct GovernanceConfig {
 }
 
 /// Policy configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+use serde::de::{Deserializer, Error as DeError};
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PolicyConfig {
     /// Risk tier (low, medium, high)
     pub risk_tier: String,
@@ -390,6 +479,7 @@ impl Default for AgentConfig {
             marketplace: MarketplaceConfig::default(),
             delegation: DelegationConfig::default(),
             features: vec![],
+            llm_profiles: None,
         }
     }
 }
@@ -495,6 +585,87 @@ impl Default for GovernanceConfig {
         Self {
             policies: HashMap::new(),
             keys: KeyConfig::default(),
+        }
+    }
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            risk_tier: "low".to_string(),
+            requires_approvals: 0,
+            budgets: BudgetConfig {
+                max_cost_usd: 0.0,
+                token_budget: 0.0,
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PolicyConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Full {
+                risk_tier: String,
+                requires_approvals: u32,
+                budgets: BudgetConfig,
+            },
+            Simple(String),
+        }
+        match Repr::deserialize(deserializer)? {
+            Repr::Full {
+                risk_tier,
+                requires_approvals,
+                budgets,
+            } => Ok(PolicyConfig {
+                risk_tier,
+                requires_approvals,
+                budgets,
+            }),
+            Repr::Simple(s) => {
+                let (risk_tier, requires_approvals, budgets) = match s.as_str() {
+                    "allow" | "lenient" => (
+                        "low".to_string(),
+                        0,
+                        BudgetConfig {
+                            max_cost_usd: 1.0,
+                            token_budget: 10_000.0,
+                        },
+                    ),
+                    "moderate" => (
+                        "medium".to_string(),
+                        1,
+                        BudgetConfig {
+                            max_cost_usd: 5.0,
+                            token_budget: 50_000.0,
+                        },
+                    ),
+                    "strict" | "deny" => (
+                        "high".to_string(),
+                        2,
+                        BudgetConfig {
+                            max_cost_usd: 0.0,
+                            token_budget: 0.0,
+                        },
+                    ),
+                    other => {
+                        return Err(D::Error::custom(format!(
+                            "unknown policy shorthand '{}' (expected allow|moderate|strict)",
+                            other
+                        )))
+                    }
+                };
+                Ok(PolicyConfig {
+                    risk_tier,
+                    requires_approvals,
+                    budgets,
+                })
+            }
         }
     }
 }

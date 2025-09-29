@@ -100,6 +100,8 @@ pub struct CCOS {
     delegating_arbiter: Option<Arc<DelegatingArbiter>>,
     agent_registry: Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>>, // M4
     agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
+    /// Optional debug callback for emitting lifecycle JSON lines (plan generation, execution etc.)
+    debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl CCOS {
@@ -143,7 +145,7 @@ impl CCOS {
         let capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
             Arc::clone(&capability_registry),
             Some(Arc::clone(&causal_chain)),
-            debug_callback,
+            debug_callback.clone(),
         );
 
         // Bootstrap the marketplace with discovered capabilities
@@ -215,9 +217,20 @@ impl CCOS {
         let delegating_arbiter = if enable_delegation {
             // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to OpenAI if OPENAI_API_KEY exists.
             let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                let model = std::env::var("CCOS_DELEGATING_MODEL")
+                // Accept legacy / mistyped env var alias CCOS_DELEGATION_MODEL for ergonomics.
+                let delegating_model = std::env::var("CCOS_DELEGATING_MODEL")
+                    .or_else(|_| std::env::var("CCOS_DELEGATION_MODEL")) // alias support
                     .or_else(|_| std::env::var("LLM_MODEL"))
                     .unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
+                if std::env::var("CCOS_DELEGATING_MODEL").is_err()
+                    && std::env::var("CCOS_DELEGATION_MODEL").is_ok()
+                {
+                    // Warn user they used the alias so they can migrate.
+                    log::warn!(
+                        "Environment variable CCOS_DELEGATION_MODEL detected. Please use CCOS_DELEGATING_MODEL (with 'ING') for consistency."
+                    );
+                }
+                let model = delegating_model;
                 (
                     Some(key),
                     Some("https://openrouter.ai/api/v1".to_string()),
@@ -225,9 +238,18 @@ impl CCOS {
                 )
             } else {
                 let key = std::env::var("OPENAI_API_KEY").ok();
-                let model = std::env::var("CCOS_DELEGATING_MODEL")
+                let delegating_model = std::env::var("CCOS_DELEGATING_MODEL")
+                    .or_else(|_| std::env::var("CCOS_DELEGATION_MODEL")) // alias support
                     .or_else(|_| std::env::var("LLM_MODEL"))
                     .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+                if std::env::var("CCOS_DELEGATING_MODEL").is_err()
+                    && std::env::var("CCOS_DELEGATION_MODEL").is_ok()
+                {
+                    log::warn!(
+                        "Environment variable CCOS_DELEGATION_MODEL detected. Please use CCOS_DELEGATING_MODEL (with 'ING') for consistency."
+                    );
+                }
+                let model = delegating_model;
                 (key, None, model)
             };
 
@@ -284,6 +306,7 @@ impl CCOS {
             delegating_arbiter,
             agent_registry,
             agent_config,
+            debug_callback: debug_callback.clone(),
         })
     }
 
@@ -348,15 +371,40 @@ impl CCOS {
     }
 
     /// The main entry point for processing a user request.
-    /// This method follows the full CCOS architectural flow:
-    /// 1. The Arbiter converts the request into a Plan.
-    /// 2. The Governance Kernel validates the Plan.
-    /// 3. The Orchestrator executes the validated Plan.
+    ///
+    /// Architectural flow:
+    /// 1. Arbiter (or DelegatingArbiter) converts the natural language request into a `Plan` + (optionally) an `Intent` stored in the intent graph.
+    /// 2. Pre‑flight capability validation ensures every referenced `ccos.*` capability is registered (fast fail before governance / orchestration work).
+    /// 3. Governance Kernel validates / scaffolds / sanitizes the plan.
+    /// 4. Orchestrator executes the validated plan, emitting causal chain actions.
+    ///
+    /// Debug instrumentation:
+    /// If this `CCOS` instance was built with `new_with_debug_callback`, the following JSON line events are emitted (one per call to the provided closure):
+    /// - `request_received`            : {"event":"request_received","text":"<original user text>","ts":<unix_seconds>}
+    /// - `plan_generated`              : {"event":"plan_generated","plan_id":"...","intent_id"?:"...","ts":...}
+    /// - `plan_validation_start`       : {"event":"plan_validation_start","plan_id":"...","ts":...}
+    /// - `plan_execution_start`        : {"event":"plan_execution_start","plan_id":"...","ts":...}
+    /// - `plan_execution_completed`    : {"event":"plan_execution_completed","plan_id":"...","success":<bool>,"ts":...}
+    ///
+    /// Notes:
+    /// * `intent_id` key is only present when using the DelegatingArbiter path (an intent object is explicitly materialized before plan creation).
+    /// * Timestamps are coarse (seconds) and intended for ordering, not precise latency measurement.
+    /// * The callback is synchronous & lightweight: heavy processing / I/O should be offloaded by the consumer to avoid blocking the request path.
+    /// * Additional causal chain detail can be retrieved separately via `get_causal_chain()`; this debug stream is intentionally minimal and stable.
+    ///
+    /// Error semantics: first failing stage returns an error and no later events are emitted (e.g. if preflight fails you won't see validation/execution events).
     pub async fn process_request(
         &self,
         natural_language_request: &str,
         security_context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
+        self.emit_debug(|m| {
+            format!(
+                "{{\"event\":\"request_received\",\"text\":{},\"ts\":{}}}",
+                json_escape(natural_language_request),
+                current_ts()
+            )
+        });
         // 1. Arbiter: Generate a plan from the natural language request.
         let proposed_plan = if let Some(da) = &self.delegating_arbiter {
             // Use delegating arbiter to produce a plan via its engine API
@@ -406,21 +454,54 @@ impl CCOS {
                 ig.store_intent(storable_intent)?;
             }
 
-            da.intent_to_plan(&intent).await?
+            let plan = da.intent_to_plan(&intent).await?;
+            self.emit_debug(|_| format!(
+                "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
+                plan.plan_id, intent.intent_id, current_ts()
+            ));
+            plan
         } else {
-            self.arbiter
+            let plan = self
+                .arbiter
                 .process_natural_language(natural_language_request, None)
-                .await?
+                .await?;
+            self.emit_debug(|_| {
+                format!(
+                    "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                    plan.plan_id,
+                    current_ts()
+                )
+            });
+            plan
         };
 
         // 1.5 Preflight capability validation (M3)
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"plan_validation_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                proposed_plan.plan_id,
+                current_ts()
+            )
+        });
         self.preflight_validate_capabilities(&proposed_plan).await?;
 
         // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"plan_execution_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                proposed_plan.plan_id,
+                current_ts()
+            )
+        });
+        let plan_id_for_events = proposed_plan.plan_id.clone();
         let result = self
             .governance_kernel
             .validate_and_execute(proposed_plan, security_context)
             .await?;
+        self.emit_debug(|_| format!(
+            "{{\"event\":\"plan_execution_completed\",\"plan_id\":\"{}\",\"success\":{},\"ts\":{}}}",
+            plan_id_for_events, result.success, current_ts()
+        ));
 
         // Delegation completion feedback (M4 extension)
         if self.delegating_arbiter.is_some() {
@@ -463,6 +544,156 @@ impl CCOS {
         }
 
         Ok(result)
+    }
+
+    /// Like `process_request` but returns both the generated immutable `Plan` and its `ExecutionResult`.
+    /// This is useful for examples, debugging, and tooling that want to inspect the synthesized
+    /// RTFS source (or other plan metadata) before/after execution.
+    ///
+    /// Emits the same debug lifecycle events as `process_request`.
+    pub async fn process_request_with_plan(
+        &self,
+        natural_language_request: &str,
+        security_context: &RuntimeContext,
+    ) -> RuntimeResult<(self::types::Plan, ExecutionResult)> {
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"request_received\",\"text\":{},\"ts\":{}}}",
+                json_escape(natural_language_request),
+                current_ts()
+            )
+        });
+
+        // Plan generation (same logic as in process_request; duplication kept minimal for clarity)
+        let proposed_plan = if let Some(da) = &self.delegating_arbiter {
+            use crate::ccos::arbiter::ArbiterEngine;
+            let intent = da
+                .natural_language_to_intent(natural_language_request, None)
+                .await?;
+            if let Ok(mut ig) = self.intent_graph.lock() {
+                let storable_intent = crate::ccos::types::StorableIntent {
+                    intent_id: intent.intent_id.clone(),
+                    name: intent.name.clone(),
+                    original_request: intent.original_request.clone(),
+                    rtfs_intent_source: "".to_string(),
+                    goal: intent.goal.clone(),
+                    constraints: intent
+                        .constraints
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                    preferences: intent
+                        .preferences
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                    success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                    parent_intent: None,
+                    child_intents: vec![],
+                    triggered_by: crate::ccos::types::TriggerSource::HumanRequest,
+                    generation_context: crate::ccos::types::GenerationContext {
+                        arbiter_version: "delegating-1.0".to_string(),
+                        generation_timestamp: intent.created_at,
+                        input_context: std::collections::HashMap::new(),
+                        reasoning_trace: None,
+                    },
+                    status: intent.status.clone(),
+                    priority: 0,
+                    created_at: intent.created_at,
+                    updated_at: intent.updated_at,
+                    metadata: intent
+                        .metadata
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                };
+                ig.store_intent(storable_intent)?;
+            }
+            let plan = da.intent_to_plan(&intent).await?;
+            self.emit_debug(|_| format!(
+                "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
+                plan.plan_id, intent.intent_id, current_ts()
+            ));
+            plan
+        } else {
+            let plan = self
+                .arbiter
+                .process_natural_language(natural_language_request, None)
+                .await?;
+            self.emit_debug(|_| {
+                format!(
+                    "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                    plan.plan_id,
+                    current_ts()
+                )
+            });
+            plan
+        };
+
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"plan_validation_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                proposed_plan.plan_id,
+                current_ts()
+            )
+        });
+        self.preflight_validate_capabilities(&proposed_plan).await?;
+
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"plan_execution_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                proposed_plan.plan_id,
+                current_ts()
+            )
+        });
+        let plan_clone = proposed_plan.clone();
+        let plan_id_for_events = proposed_plan.plan_id.clone();
+        let result = self
+            .governance_kernel
+            .validate_and_execute(proposed_plan, security_context)
+            .await?;
+        self.emit_debug(|_| format!(
+            "{{\"event\":\"plan_execution_completed\",\"plan_id\":\"{}\",\"success\":{},\"ts\":{}}}",
+            plan_id_for_events, result.success, current_ts()
+        ));
+
+        // (Delegation completion feedback duplicated from process_request; refactor later if needed.)
+        if self.delegating_arbiter.is_some() {
+            use crate::runtime::values::Value;
+            if let Ok(graph) = self.intent_graph.lock() {
+                let recent = graph.find_relevant_intents(natural_language_request);
+                if let Some(stored) = recent.last() {
+                    if stored.metadata.get("delegation.selected_agent").is_some() {
+                        let agent_id = stored
+                            .metadata
+                            .get("delegation.selected_agent")
+                            .cloned()
+                            .unwrap_or_default();
+                        if let Ok(mut chain) = self.causal_chain.lock() {
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert(
+                                "selected_agent".to_string(),
+                                Value::String(agent_id.clone()),
+                            );
+                            meta.insert("success".to_string(), Value::Boolean(result.success));
+                            let _ =
+                                chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        }
+                        if result.success {
+                            if let Ok(mut reg) = self.agent_registry.write() {
+                                reg.record_feedback(&agent_id, true);
+                            }
+                        } else {
+                            if let Ok(mut reg) = self.agent_registry.write() {
+                                reg.record_feedback(&agent_id, false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((plan_clone, result))
     }
 
     // --- Accessors for external analysis ---
@@ -512,6 +743,44 @@ impl CCOS {
         self.governance_kernel
             .validate_and_execute(plan, context)
             .await
+    }
+}
+
+// --- Internal helpers (debug instrumentation) ---
+fn current_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+impl CCOS {
+    fn emit_debug<F>(&self, build: F)
+    where
+        F: FnOnce(()) -> String,
+    {
+        if let Some(cb) = &self.debug_callback {
+            let line = build(());
+            cb(line);
+        }
     }
 }
 
