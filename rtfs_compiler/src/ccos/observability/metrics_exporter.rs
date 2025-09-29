@@ -185,15 +185,16 @@ pub fn render_prometheus_text(chain: &CausalChain) -> String {
 pub fn start_metrics_server(
     chain: Arc<Mutex<CausalChain>>,
     addr: &str,
-) -> std::io::Result<thread::JoinHandle<()>> {
+) -> std::io::Result<(thread::JoinHandle<()>, std::net::SocketAddr)> {
     let listener = TcpListener::bind(addr)?;
+    let local_addr = listener.local_addr()?;
     let handle = thread::spawn(move || {
         // Handle a single request then exit (test-friendly)
         if let Ok((mut stream, _addr)) = listener.accept() {
             let _ = handle_client(&mut stream, &chain);
         }
     });
-    Ok(handle)
+    Ok((handle, local_addr))
 }
 
 fn handle_client(stream: &mut TcpStream, chain: &Arc<Mutex<CausalChain>>) -> std::io::Result<()> {
@@ -253,12 +254,8 @@ mod tests {
         // With at least one event recorded, histogram HELP lines should be present
         assert!(text.contains("ccos_function_duration_ms"));
 
-        // Start server on ephemeral port
-        let addr = "127.0.0.1:0";
-        let listener = std::net::TcpListener::bind(addr).unwrap();
-        let local_addr = listener.local_addr().unwrap();
-        drop(listener); // free so our server can bind
-        let handle = start_metrics_server(chain.clone(), &local_addr.to_string()).unwrap();
+        // Start server on ephemeral port (single bind; function returns actual bound addr)
+        let (handle, local_addr) = start_metrics_server(chain.clone(), "127.0.0.1:0").unwrap();
         // Give it a moment
         std::thread::sleep(Duration::from_millis(50));
         // Fetch metrics

@@ -430,7 +430,8 @@ impl ModelProvider for OpenRouterModel {
         };
 
         let response = block_on(async {
-            self.base
+            let resp = self
+                .base
                 .client
                 .post(&format!("{}/chat/completions", self.base.get_base_url()))
                 .header(
@@ -442,9 +443,34 @@ impl ModelProvider for OpenRouterModel {
                 .header("X-Title", "RTFS Compiler")
                 .json(&request)
                 .send()
-                .await?
-                .json::<OpenAIResponse>()
                 .await
+                .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e))?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body_text = resp
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<failed to read body>".to_string());
+                let lower = body_text.to_lowercase();
+                // Detect common policy / endpoint mismatch 404 from OpenRouter
+                if status.as_u16() == 404 && lower.contains("no endpoints found") {
+                    return Err::<OpenAIResponse, Box<dyn std::error::Error + Send + Sync>>(Box::from(format!(
+                            "OpenRouter 404: No endpoints found matching your data policy for model '{}'. Possible causes:\n  1) Model restricted under current privacy/data retention settings.\n  2) Model name incorrect or deprecated.\n  3) Account lacks provider/model access.\nRemediation steps:\n  - Verify slug on https://openrouter.ai/models\n  - Temporarily relax data/privacy filters to confirm\n  - Try a common model: 'openai/gpt-4o-mini', 'meta-llama/llama-3-8b-instruct', 'mistralai/mistral-7b-instruct'\n  - Confirm OPENROUTER_API_KEY validity.\nRaw body: {}",
+                            self.base.config.model_name, body_text
+                        )));
+                }
+                return Err::<OpenAIResponse, Box<dyn std::error::Error + Send + Sync>>(Box::from(
+                    format!(
+                        "OpenRouter request failed: status={} model={} body={}",
+                        status, self.base.config.model_name, body_text
+                    ),
+                ));
+            }
+
+            resp.json::<OpenAIResponse>()
+                .await
+                .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e))
         })?;
 
         Ok(response.choices[0].message.content.clone())
