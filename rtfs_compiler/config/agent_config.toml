@@ -1,0 +1,104 @@
+version = "1"
+agent_id = "demo-agent"
+profile = "default"
+features = ["delegation"]
+
+[orchestrator.isolation]
+enabled = false
+mode = "none"
+
+[orchestrator.dlp]
+enabled = false
+
+[network]
+enabled = true
+
+[network.egress]
+via = "direct"
+allow_domains = []
+mtls = false
+tls_pins = []
+
+[capabilities.http]
+enabled = false
+
+[capabilities.http.egress]
+allow_domains = []
+mtls = false
+
+[capabilities.fs]
+enabled = false
+
+[capabilities.llm]
+enabled = true
+
+[governance.keys]
+verify = "dummy-verify"
+
+[governance.policies.default]
+risk_tier = "low"
+requires_approvals = 0
+
+  [governance.policies.default.budgets]
+  max_cost_usd = 1.0
+  token_budget = 5000
+
+[causal_chain.storage]
+mode = "in_memory" # or "append_file" | "sqlite" | "vsock_stream"
+buffer_local = false
+
+[causal_chain.anchor]
+enabled = false
+
+[marketplace]
+registry_paths = []
+
+[delegation]
+enabled = true
+
+[llm_profiles]
+default = "openrouter_free:balanced"
+
+[[llm_profiles.profiles]]
+name = "stub/dev"
+provider = "stub"
+model = "stub-mini"
+
+
+# New: grouped model set
+[[llm_profiles.model_sets]]
+name = "openrouter_free"
+provider = "openrouter"
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+default = "balanced"
+
+  [[llm_profiles.model_sets.models]]
+  name = "fast"
+  model = "nvidia/nemotron-nano-9b-v2:free"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "speed"
+  notes = "Good latency / cheaper."
+
+  [[llm_profiles.model_sets.models]]
+  name = "balanced"
+  model = "deepseek/deepseek-chat-v3.1:free"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "balanced"
+
+  [[llm_profiles.model_sets.models]]
+  name = "premium"
+  model = "x-ai/grok-4-fast:free"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "quality"
+  notes = "Higher reasoning depth."
+
+# Existing explicit profiles still work
+[[llm_profiles.profiles]]
+name = "fast"
+provider = "openrouter"
+model = "meta-llama/llama-3-8b-instruct"
+api_key_env = "OPENROUTER_API_KEY"

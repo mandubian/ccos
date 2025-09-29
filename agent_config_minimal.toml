@@ -1,0 +1,59 @@
+# Minimal RTFS Agent Configuration leveraging serde defaults & policy shorthands
+# Only specifies the absolutely essential fields plus an LLM model set demo.
+
+version = "0.1"
+agent_id = "demo.agent"
+profile = "minimal"
+
+# Enable just the LLM capability (others fall back to defaults = disabled)
+[capabilities.llm]
+enabled = true
+
+[governance.policies]
+# Shorthand policies:
+#   allow / lenient  -> low risk, 0 approvals, small default budgets
+#   moderate         -> medium risk, 1 approval, larger budgets
+#   strict / deny    -> high risk, 2 approvals, zero budgets (deny by default)
+# Provide at least one policy; here we keep a permissive default and a strict tier.
+"default" = "allow"
+"dangerous" = "strict"
+
+[governance.keys]
+# Empty verify key acceptable for local/demo; production should supply a real key
+verify = ""
+
+[llm_profiles]
+# After expansion this will generate synthetic profile names: foundation:fast, foundation:balanced, foundation:reasoning
+# We mark fast as the default selection.
+default = "foundation:fast"
+
+[[llm_profiles.model_sets]]
+name = "foundation"
+provider = "openai"  # or "openrouter" / other provider id recognized by runtime
+api_key_env = "OPENAI_API_KEY"  # resolves at runtime; keep secrets out of the file
+
+  [[llm_profiles.model_sets.models]]
+  name = "fast"
+  model = "gpt-4o-mini"
+  quality = "standard"
+  max_prompt_cost_per_1k = 0.03
+  max_completion_cost_per_1k = 0.06
+
+  [[llm_profiles.model_sets.models]]
+  name = "balanced"
+  model = "gpt-4o"
+  quality = "premium"
+  max_prompt_cost_per_1k = 0.06
+  max_completion_cost_per_1k = 0.12
+
+  [[llm_profiles.model_sets.models]]
+  name = "reasoning"
+  model = "o4-mini"
+  quality = "reasoning"
+  max_prompt_cost_per_1k = 0.12
+  max_completion_cost_per_1k = 0.24
+  notes = "Higher reasoning depth; slower and pricier"
+
+# Notes:
+# - All unspecified sections (network, orchestrator, causal_chain, marketplace, delegation...) use defaults.
+# - To add a one-shot CLI run later, extend the example binary with a --prompt flag.

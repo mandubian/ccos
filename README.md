@@ -204,6 +204,84 @@ To understand my world, you can explore its design and implementation:
 3.  **See the Code**:
     *   Reference Implementation (Rust): `./rtfs_compiler/`
     *   A key example of my execution model: `./rtfs_compiler/examples/rtfs_reentrance_demo.rs`
+        *   Live human ↔ AI loop with incremental Intent Graph & Causal Chain diffs: `./rtfs_compiler/examples/live_interactive_assistant.rs`
+        * Run: `cargo run --example live_interactive_assistant` (add `-- --debug` to surface prompt traces)
+        * Shows: per‑request new intents, status transitions, and newly appended causal actions tail.
+        * Extra flags (pass after `--`):
+            * `--seed "initial goal"`  Provide an initial request before the REPL starts
+            * `--max-actions 40`       Tail length of causal chain actions to display each step (default 24)
+            * `--show-full-value`      Print the full raw execution value for each request (can be large)
+            * `--value-preview 200`    Preview length (in chars) when not showing the full value (default 160)
+            * `--debug`                Surface internal delegation / prompt traces (if delegation enabled)
+                * LLM Profile / Model Set Config (JSON or TOML via `--config`): supports explicit `profiles` and grouped `model_sets` that expand to synthetic profile names `<set>:<spec>`.
+                        * Example snippet:
+                            ```jsonc
+                            {
+                                "llm_profiles": {
+                                    "default": "openai-gpt4o",
+                                    "profiles": [
+                                        { "name": "openai-gpt4o", "provider": "openai", "model": "gpt-4o", "api_key_env": "OPENAI_API_KEY" }
+                                    ],
+                                    "model_sets": [
+                                        { "name": "foundation", "provider": "openai", "api_key_env": "OPENAI_API_KEY",
+                                            "models": [
+                                                { "name": "fast", "model": "gpt-4o-mini", "max_prompt_cost_per_1k": 0.15, "max_completion_cost_per_1k": 0.60, "quality": "speed" },
+                                                { "name": "balanced", "model": "gpt-4o", "max_prompt_cost_per_1k": 0.50, "max_completion_cost_per_1k": 1.50, "quality": "balanced" },
+                                                { "name": "reasoning", "model": "o4-mini", "max_prompt_cost_per_1k": 3.00, "max_completion_cost_per_1k": 15.00, "quality": "reasoning" }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                            ```
+                * REPL commands:
+                        * `:models` – list all profiles (explicit + expanded set specs) with costs & quality.
+                        * `:model <name>` – switch to a profile (rebuilds CCOS environment).
+                        * `:model-auto prompt=<usd_per_1k> completion=<usd_per_1k> quality=<tier>` – auto-select by constraints.
+                * Auto-selection ranking: filter by provided budgets & min quality, then sort by (quality desc, total cost asc).
+                * Startup auto-pick flags: `--model-auto-prompt-budget`, `--model-auto-completion-budget` (applied if no explicit `--llm-provider/--llm-model`).
+        * Result Value Display:
+            * By default the execution result value is truncated to 160 characters with an ellipsis.
+            * Use `--value-preview <N>` to adjust truncation length.
+            * Use `--show-full-value` for the complete (potentially multi‑line) value block.
+        * Quick help: `cargo run --example live_interactive_assistant -- --help`
+                * Delegation & LLM selection (model can be chosen directly via CLI):
+                        * Enable delegation: `--enable-delegation`
+                        * Choose provider & model: `--llm-provider openrouter --llm-model meta-llama/llama-3-8b-instruct`
+                        * Provide API key inline (optional if env already set): `--llm-api-key $OPENROUTER_API_KEY`
+                        * Override base URL (proxy/self-hosted): `--llm-base-url https://my-proxy.example.com/v1`
+                        * List supported providers: `--list-llm-providers`
+                        * List sample model slugs: `--list-llm-models`
+                        * Other provider examples:
+                                * OpenAI: `--llm-provider openai --llm-model gpt-4o-mini --llm-api-key $OPENAI_API_KEY`
+                                * Anthropic Claude: `--llm-provider claude --llm-model claude-3-haiku-20240307 --llm-api-key $ANTHROPIC_API_KEY`
+                                * Google Gemini: `--llm-provider gemini --llm-model gemini-1.5-flash --llm-api-key $GEMINI_API_KEY`
+                                * Deterministic stub (offline): `--llm-provider stub --llm-model deterministic-stub-model`
+                * Delegation precedence & env notes:
+                        * Precedence: CLI flags > environment variables > internal defaults.
+                        * Core env vars still supported: `CCOS_ENABLE_DELEGATION=1`, `CCOS_DELEGATING_MODEL=...` (alias: `CCOS_DELEGATION_MODEL`), provider-specific API keys (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`).
+                        * A helper hint `CCOS_LLM_PROVIDER_HINT` is set automatically when using `--llm-provider` to guide provider selection logic.
+                        * You can mix approaches: export an API key once in your shell, vary only model/provider from the CLI.
+
+                Example full invocation (OpenRouter):
+
+                ```bash
+                cargo run --example live_interactive_assistant -- \
+                    --enable-delegation \
+                    --llm-provider openrouter \
+                    --llm-model meta-llama/llama-3-8b-instruct \
+                    --llm-api-key "$OPENROUTER_API_KEY" \
+                    --value-preview 240
+                ```
+
+                Example switching to a stub (deterministic) model for offline testing:
+
+                ```bash
+                cargo run --example live_interactive_assistant -- \
+                    --enable-delegation \
+                    --llm-provider stub \
+                    --llm-model deterministic-stub-model --debug
+                ```
 
 ## Development Status
 
