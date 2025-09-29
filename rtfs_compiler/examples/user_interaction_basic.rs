@@ -7,22 +7,38 @@
 //!   cargo run --example user_interaction_basic
 //!   cargo run --example user_interaction_basic -- --debug
 //!
-//! Delegation / LLM usage (same as live_interactive_assistant):
+//! Configuration (same as live_interactive_assistant):
+//!   
 //!   Env based:
 //!     export CCOS_ENABLE_DELEGATION=1
 //!     export OPENAI_API_KEY=...
 //!     export CCOS_DELEGATING_MODEL=gpt-4o-mini
+//!     cargo run --example user_interaction_basic
 //!
 //!   CLI overrides:
 //!     --enable-delegation
 //!     --llm-provider openai --llm-model gpt-4o-mini
 //!     --llm-provider openrouter --llm-model meta-llama/llama-3-8b-instruct --llm-api-key $OPENROUTER_API_KEY
 //!     --llm-provider stub --llm-model deterministic-stub-model (offline)
+//!
+//!   Config file (with profiles, model_sets, auto-selection):
+//!     --config path/to/agent_config.json
+//!     --config path/to/agent_config.toml
+//!     --model-auto-prompt-budget 0.001
+//!     --model-auto-completion-budget 0.003
 
 use clap::Parser;
 use rtfs_compiler::ccos::CCOS;
+use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
+use rtfs_compiler::config::validation::validate_config;
+use rtfs_compiler::config::{auto_select_model, expand_profiles};
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityLevel};
+use serde_json;
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
+use toml;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -49,6 +65,18 @@ struct Args {
     /// Override base URL (custom/self-hosted proxy)
     #[arg(long)]
     llm_base_url: Option<String>,
+
+    /// Load agent config (JSON or TOML) with optional llm_profiles
+    #[arg(long)]
+    config: Option<String>,
+
+    /// Auto-pick best model within prompt cost budget (USD per 1K tokens)
+    #[arg(long)]
+    model_auto_prompt_budget: Option<f64>,
+
+    /// Auto-pick best model within completion cost budget (USD per 1K tokens)
+    #[arg(long)]
+    model_auto_completion_budget: Option<f64>,
 }
 
 #[tokio::main]
@@ -59,7 +87,100 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("RTFS_SHOW_PROMPTS", "1");
     }
 
-    // Apply CLI overrides via env
+    // Load config file (if provided) and extract LLM profiles
+    let mut loaded_config: Option<AgentConfig> = None;
+    if let Some(cfg_path) = &args.config {
+        match load_agent_config(cfg_path) {
+            Ok(cfg) => {
+                if cfg.llm_profiles.is_some() {
+                    println!(
+                        "[config] loaded {} LLM profiles",
+                        cfg.llm_profiles.as_ref().unwrap().profiles.len()
+                    );
+                }
+                loaded_config = Some(cfg);
+            }
+            Err(e) => {
+                eprintln!("[config] failed to load {}: {}", cfg_path, e);
+            }
+        }
+    }
+
+    // Prepare expanded profile catalog (explicit + model_sets) early for potential auto-selection
+    let (expanded_profiles, profile_meta, expansion_rationale) = if let Some(cfg) = &loaded_config {
+        expand_profiles(cfg)
+    } else {
+        (Vec::new(), HashMap::new(), String::from(""))
+    };
+    if !expansion_rationale.is_empty() {
+        println!("[config] profiles expanded:\n{}", expansion_rationale);
+    }
+
+    if let Some(cfg) = &loaded_config {
+        let report = validate_config(cfg);
+        if !report.messages.is_empty() {
+            println!("[config] validation ({} messages):", report.messages.len());
+            for m in &report.messages {
+                println!(
+                    "  - [{}] {}{}",
+                    match m.level {
+                        rtfs_compiler::config::validation::ValidationLevel::Info => "INFO",
+                        rtfs_compiler::config::validation::ValidationLevel::Warning => "WARN",
+                        rtfs_compiler::config::validation::ValidationLevel::Error => "ERROR",
+                    },
+                    m.message,
+                    m.suggestion
+                        .as_ref()
+                        .map(|s| format!(" (suggestion: {})", s))
+                        .unwrap_or_default()
+                );
+            }
+        }
+    }
+
+    // If no explicit CLI model/provider, attempt auto-pick by budgets; else fallback to configured default profile
+    if args.llm_model.is_none() && args.llm_provider.is_none() {
+        let mut applied = false;
+        if args.model_auto_prompt_budget.is_some() || args.model_auto_completion_budget.is_some() {
+            let (best, rationale) = auto_select_model(
+                &expanded_profiles,
+                &profile_meta,
+                args.model_auto_prompt_budget,
+                args.model_auto_completion_budget,
+                None,
+            );
+            if let Some(best) = best {
+                println!("[model-auto] rationale:\n{}", rationale);
+                apply_profile_env(best);
+                std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+                applied = true;
+            } else {
+                println!("[model-auto] rationale:\n{}", rationale);
+                println!("[model-auto] no model satisfied given budgets");
+            }
+        }
+        if !applied {
+            // fallback to top-level default or first set default
+            if let Some(cfg) = &loaded_config {
+                if let Some(llm_cfg) = &cfg.llm_profiles {
+                    if let Some(default_name) = &llm_cfg.default {
+                        if let Some(p) = expanded_profiles.iter().find(|p| &p.name == default_name) {
+                            apply_profile_env(p);
+                            std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+                        }
+                    } else {
+                        // fallback: use first expanded profile if any
+                        if let Some(p) = expanded_profiles.first() {
+                            apply_profile_env(p);
+                            std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply CLI overrides via env (overrides config)
     if let Some(ref model) = args.llm_model {
         std::env::set_var("CCOS_DELEGATING_MODEL", model);
     }
@@ -173,4 +294,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✨ All examples completed!");
     Ok(())
+}
+
+// Load AgentConfig from JSON or TOML depending on extension
+fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn std::error::Error>> {
+    let raw = fs::read_to_string(path)?;
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext == "toml" || ext == "tml" {
+        Ok(toml::from_str(&raw)?)
+    } else {
+        Ok(serde_json::from_str(&raw)?)
+    }
+}
+
+fn apply_profile_env(p: &LlmProfile) {
+    std::env::set_var("CCOS_DELEGATING_MODEL", &p.model);
+    std::env::set_var("CCOS_LLM_PROVIDER_HINT", &p.provider);
+    if let Some(url) = &p.base_url {
+        std::env::set_var("CCOS_LLM_BASE_URL", url);
+    } else if p.provider == "openrouter" {
+        // OpenRouter requires its public REST base; provide sane default
+        if std::env::var("CCOS_LLM_BASE_URL").is_err() {
+            std::env::set_var("CCOS_LLM_BASE_URL", "https://openrouter.ai/api/v1");
+        }
+    }
+    // Key precedence: inline > referenced env variable > pre-existing provider env
+    if let Some(inline) = &p.api_key {
+        dispatch_key(&p.provider, inline);
+    } else if let Some(env_key) = &p.api_key_env {
+        if let Ok(v) = std::env::var(env_key) {
+            dispatch_key(&p.provider, &v);
+        }
+    }
+    // Provide arbiter-compatible generic provider/model envs when possible
+    match p.provider.as_str() {
+        "openai" => {
+            std::env::set_var("CCOS_LLM_PROVIDER", "openai");
+        }
+        "claude" | "anthropic" => {
+            std::env::set_var("CCOS_LLM_PROVIDER", "anthropic");
+        }
+        "stub" => {
+            std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+        }
+        "local" => {
+            std::env::set_var("CCOS_LLM_PROVIDER", "local");
+        }
+        _ => { /* openrouter & others not yet first-class in Arbiter LlmConfig */ }
+    }
+    std::env::set_var("CCOS_LLM_MODEL", &p.model);
+}
+
+fn dispatch_key(provider: &str, key: &str) {
+    match provider {
+        "openrouter" => std::env::set_var("OPENROUTER_API_KEY", key),
+        "claude" | "anthropic" => std::env::set_var("ANTHROPIC_API_KEY", key),
+        "gemini" => std::env::set_var("GEMINI_API_KEY", key),
+        "stub" => { /* no key needed */ }
+        _ => std::env::set_var("OPENAI_API_KEY", key),
+    }
 }

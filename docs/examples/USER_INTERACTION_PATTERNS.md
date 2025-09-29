@@ -193,6 +193,19 @@ cargo run --example user_interaction_basic -- \
   --llm-api-key $OPENAI_API_KEY
 ```
 
+**Config file (JSON/TOML with profiles and model sets):**
+```bash
+cargo run --example user_interaction_basic -- --config path/to/agent_config.json
+```
+
+**Auto-select model by budget:**
+```bash
+cargo run --example user_interaction_basic -- \
+  --config path/to/agent_config.json \
+  --model-auto-prompt-budget 0.001 \
+  --model-auto-completion-budget 0.003
+```
+
 **Debug mode (shows LLM prompts):**
 ```bash
 cargo run --example user_interaction_basic -- --debug
