@@ -87,36 +87,39 @@ cargo run --example user_interaction_basic
 
 **Intent Graph:** Linear chain of user input intents
 
-## Pattern 3: Dynamic Intent Graph Building
+## Pattern 3: Conditional Branching Based on User Input
 
-**Goal:** Create new intents based on user responses.
+**Goal:** Use conditional logic (if/cond) to create different execution paths based on user choices.
 
 **Example Intent:**
 ```
-"ask the user if they want to plan a trip, and if yes, ask for destination and dates"
+"ask if the user likes pizza, and respond accordingly"
 ```
 
-**Flow:**
-1. Initial intent: "gather travel interest"
-2. User says "yes" → Spawn child intent: "plan trip to [destination]"
-3. Child intent asks for dates → Spawn another child: "book hotels for [dates]"
-
-**Intent Graph Structure:**
-```
-root-intent (gather interest)
-  ├─→ child-intent-1 (plan trip)
-  │     ├─→ child-intent-2 (book hotels)
-  │     └─→ child-intent-3 (book flights)
-  └─→ alternate (user declined)
+**Generated Plan (conceptual):**
+```clojure
+(do
+  (step "Pizza Check" 
+    (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
+      (if (= likes "yes")
+        (call :ccos.echo {:message "Great! Pizza is delicious!"})
+        (call :ccos.echo {:message "Maybe try it sometime!"})))))
 ```
 
 **Key Features:**
-- Branching based on user input
-- Dynamic intent creation
-- Parent-child intent relationships
-- State passed between intents
+- Conditional logic with `if` expressions
+- Different execution paths based on user input
+- Can handle yes/no, multiple choice, or complex decision trees
+- All logic within a single plan (no child intents required)
 
-**Status:** To be implemented in example (TODO)
+**Example Use Cases:**
+1. **Yes/No branches**: Simple binary decisions
+2. **Multiple choice**: Language selection, menu options  
+3. **Nested decisions**: Multi-level decision trees (if programming → if web → javascript, if systems → rust)
+
+**Example:** See `examples/user_interaction_branching.rs`
+
+**Status:** ✅ Implemented
 
 ## Pattern 4: Intent Re-evaluation & Recursion
 
@@ -238,6 +241,38 @@ This ensures the LLM knows to:
 2. Use RTFS's `let` syntax correctly with bindings + body
 3. Use `str` function to concatenate strings
 4. Understand that variables don't cross step boundaries
+
+### Conditional Logic with User Input
+
+**Pattern 3** uses RTFS's `if` expression to create branching logic:
+
+```rtfs
+(if <condition> <then-expr> <else-expr>)
+```
+
+**Example with user input:**
+```rtfs
+(step "Branch Example" 
+  (let [choice (call :ccos.user.ask "Pick a color (red/blue):")]
+    (if (= choice "red")
+      (call :ccos.echo {:message "Red is bold and energetic!"})
+      (call :ccos.echo {:message "Blue is calm and peaceful!"}))))
+```
+
+**Multiple conditions** can be handled with nested `if`:
+```rtfs
+(if (= lang "rust")
+  (call :ccos.echo {:message "println!(\"Hello\")"})
+  (if (= lang "python")
+    (call :ccos.echo {:message "print('Hello')"})
+    (call :ccos.echo {:message "Unknown language"})))
+```
+
+**Why this matters:**
+- User responses determine execution path
+- No need for child intents for simple branching
+- Keeps logic localized and easier to understand
+- LLM can generate these patterns when instructed about user choices
 
 ### Security Considerations
 
