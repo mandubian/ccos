@@ -588,8 +588,12 @@ Capability signatures for this demo (STRICT):
 - :ccos.math.add must be called with exactly two positional number arguments. Do NOT use map arguments for this capability.
     Example: (call :ccos.math.add 2 3)
 - :ccos.user.ask prompts the user for input. Takes 1-2 string arguments: prompt, optional default
-    Example: (call :ccos.user.ask "What is your name?" "Guest")
     Returns: string value with user's response
+    Examples:
+      Simple: (call :ccos.user.ask "What is your name?")
+      With default: (call :ccos.user.ask "What is your name?" "Guest")
+      Capture and reuse: (let [name (call :ccos.user.ask "What is your name?")]
+                           (call :ccos.echo {:message (str "Hello, " name "!")}))
 
 Constraints:
 - Use ONLY the forms above. Do NOT return JSON or markdown. Do NOT include (plan ...) wrapper.
@@ -628,7 +632,13 @@ Additional STRICT signature rules:
 - :ccos.echo must be called with a single map {:message "..."}
 - :ccos.math.add must be called with exactly two positional numbers, e.g., (call :ccos.math.add 2 3). Map arguments are NOT allowed for this capability.
 - :ccos.user.ask must be called with 1-2 string arguments: prompt, optional default. Returns user's string response.
-    Example: (call :ccos.user.ask "What is your name?" "Guest")
+    Examples:
+      Simple: (call :ccos.user.ask "What is your name?")
+      With default: (call :ccos.user.ask "What is your name?" "Guest")
+      Capture and reuse in a step:
+        (step "Greet User" 
+          (let [name (call :ccos.user.ask "What is your name?")]
+            (call :ccos.echo {:message (str "Hello, " name "!")})))
 
 Return exactly one (plan ...) with these constraints.
 "#;
