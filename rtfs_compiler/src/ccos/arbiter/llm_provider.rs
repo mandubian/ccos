@@ -589,11 +589,24 @@ Capability signatures for this demo (STRICT):
     Example: (call :ccos.math.add 2 3)
 - :ccos.user.ask prompts the user for input. Takes 1-2 string arguments: prompt, optional default
     Returns: string value with user's response
+    
+    IMPORTANT: To capture and reuse the response, use (let ...) with BOTH the prompt AND the action that uses it IN THE SAME STEP.
+    Let bindings do NOT cross step boundaries!
+    
     Examples:
-      Simple: (call :ccos.user.ask "What is your name?")
-      With default: (call :ccos.user.ask "What is your name?" "Guest")
-      Capture and reuse: (let [name (call :ccos.user.ask "What is your name?")]
-                           (call :ccos.echo {:message (str "Hello, " name "!")}))
+      Simple (no reuse): (step "Get Name" (call :ccos.user.ask "What is your name?"))
+      
+      Capture and reuse (CORRECT - single step with let):
+        (step "Greet User" 
+          (let [name (call :ccos.user.ask "What is your name?")]
+            (call :ccos.echo {:message (str "Hello, " name "!")})))
+      
+      WRONG - let has no body:
+        (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; ERROR: missing body!
+      
+      WRONG - name out of scope:
+        (step "Get Name" (let [name (call :ccos.user.ask "Name?")] name))
+        (step "Use Name" (call :ccos.echo {:message name}))  ; ERROR: name not in scope!
 
 Constraints:
 - Use ONLY the forms above. Do NOT return JSON or markdown. Do NOT include (plan ...) wrapper.
@@ -632,13 +645,24 @@ Additional STRICT signature rules:
 - :ccos.echo must be called with a single map {:message "..."}
 - :ccos.math.add must be called with exactly two positional numbers, e.g., (call :ccos.math.add 2 3). Map arguments are NOT allowed for this capability.
 - :ccos.user.ask must be called with 1-2 string arguments: prompt, optional default. Returns user's string response.
+    
+    IMPORTANT: To capture and reuse the response, use (let ...) with BOTH the prompt AND the action IN THE SAME STEP.
+    Let bindings do NOT cross step boundaries!
+    
     Examples:
-      Simple: (call :ccos.user.ask "What is your name?")
-      With default: (call :ccos.user.ask "What is your name?" "Guest")
-      Capture and reuse in a step:
+      Simple (no reuse): (step "Get Name" (call :ccos.user.ask "What is your name?"))
+      
+      Capture and reuse (CORRECT - single step):
         (step "Greet User" 
           (let [name (call :ccos.user.ask "What is your name?")]
             (call :ccos.echo {:message (str "Hello, " name "!")})))
+      
+      WRONG - let has no body:
+        (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; Missing body expression!
+      
+      WRONG - variable out of scope:
+        (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
+        (step "Use" (call :ccos.echo {:message n}))  ; n not in scope here!
 
 Return exactly one (plan ...) with these constraints.
 "#;
