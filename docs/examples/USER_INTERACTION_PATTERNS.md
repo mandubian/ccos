@@ -167,25 +167,48 @@ The `ccos.user.ask` capability is registered in `stdlib.rs`:
 
 ### Capturing and Reusing Return Values
 
-The LLM is instructed with examples showing how to capture the user's response and use it in subsequent operations:
+**Critical Scoping Rule:** `let` bindings are **lexically scoped** - they do NOT persist across step boundaries!
+
+The LLM is instructed with examples showing the correct and incorrect ways to capture and reuse user input:
+
+#### ✅ Correct: Single Step with Let
 
 ```rtfs
-;; Simple call
-(call :ccos.user.ask "What is your name?")
-
-;; With default value
-(call :ccos.user.ask "What is your name?" "Guest")
-
-;; Capture and reuse - the return value is a string
+;; CORRECT - Both prompt and usage in ONE step
 (step "Greet User" 
   (let [name (call :ccos.user.ask "What is your name?")]
     (call :ccos.echo {:message (str "Hello, " name "!")})))
 ```
 
+#### ❌ Common Mistakes
+
+```rtfs
+;; WRONG 1 - let has no body expression
+(step "Bad" (let [name (call :ccos.user.ask "Name?")])
+;;                                                    ^ Missing body!
+
+;; WRONG 2 - trying to use variable across steps (out of scope)
+(step "Get Name" (let [name (call :ccos.user.ask "Name?")] name))
+(step "Use Name" (call :ccos.echo {:message name}))  ; ERROR: name not in scope!
+
+;; WRONG 3 - simple call without capturing (can't reuse)
+(step "Ask" (call :ccos.user.ask "What is your name?"))
+(step "Greet" (call :ccos.echo {:message (str "Hello, " ???)}))  ; No name variable!
+```
+
+#### When You Don't Need to Capture
+
+If you don't need to reuse the value, a simple call is fine:
+
+```rtfs
+(step "Get Name" (call :ccos.user.ask "What is your name?"))
+```
+
 This ensures the LLM knows to:
-1. Capture the return value with `let` bindings
-2. Use RTFS's `str` function to concatenate strings
-3. Pass the personalized message to subsequent capability calls
+1. **Keep prompt and usage in ONE step** when capturing values
+2. Use RTFS's `let` syntax correctly with bindings + body
+3. Use `str` function to concatenate strings
+4. Understand that variables don't cross step boundaries
 
 ### Security Considerations
 
