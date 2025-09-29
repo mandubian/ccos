@@ -42,9 +42,17 @@
 //!
 //! Each step will show how intents accumulate and how the causal chain maintains an auditable log.
 
+use atty::Stream;
 use clap::Parser;
+use crossterm::cursor::{Hide, Show};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::style::{Attribute, Color, Stylize};
+use crossterm::terminal::{
+    self, disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use rtfs_compiler::ccos::types::ActionType;
 use rtfs_compiler::ccos::CCOS;
+use rtfs_compiler::config::profile_selection::ProfileMeta;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::config::validation::validate_config;
 use rtfs_compiler::config::{auto_select_model, expand_profiles};
@@ -292,7 +300,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.prompt.is_none() {
-        println!("🧪 Live Interactive CCOS Assistant\n================================\nType natural language goals. Commands: :help, :intents, :chain, :quit\n");
+        let banner = r#"
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                                                                               ║
+║            🧪  CCOS Live Interactive Assistant                                ║
+║                                                                               ║
+║            Runtime-First Scripting with Intent-Driven Orchestration          ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+"#;
+        println!("{}", banner.cyan());
+        println!(
+            "{}",
+            "  💡 Type natural language goals or commands starting with ':'".dark_grey()
+        );
+        println!("{}", "  📖 Use :help for command reference\n".dark_grey());
     }
 
     // Build CCOS with debug callback capturing plan lifecycle events
@@ -503,6 +525,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!(
                             "Use :model <name> or :model-auto prompt=.. completion=.. [quality=..]"
                         );
+                        if !atty::is(Stream::Stdout) {
+                            println!(
+                                "(interactive picker requires a TTY; use :model <name> to switch manually)"
+                            );
+                        } else {
+                            match interactive_profile_select(
+                                &expanded_profiles,
+                                &profile_meta,
+                                active_profile.as_deref(),
+                            ) {
+                                Ok(Some(choice)) => {
+                                    if let Some(profile) = expanded_profiles.get(choice) {
+                                        apply_profile_env(profile, /*announce=*/ false);
+                                        std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+                                        match CCOS::new_with_debug_callback(Some(debug_cb.clone())).await {
+                                            Ok(new_ccos) => {
+                                                ccos = Arc::new(new_ccos);
+                                                active_profile = Some(profile.name.clone());
+                                                println!(
+                                                    "[models] selected '{}' provider={} model={}",
+                                                    profile.name, profile.provider, profile.model
+                                                );
+                                            }
+                                            Err(e) => println!(
+                                                "[models] failed to rebuild CCOS with new profile: {}",
+                                                e
+                                            ),
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    println!("[models] interactive picker cancelled");
+                                }
+                                Err(e) => {
+                                    println!("[models] interactive picker error: {}", e);
+                                }
+                            }
+                        }
                     }
                 }
                 cmd if cmd.starts_with(":model ") => {
@@ -605,6 +665,191 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn interactive_profile_select(
+    profiles: &[LlmProfile],
+    profile_meta: &HashMap<String, ProfileMeta>,
+    active_profile: Option<&str>,
+) -> std::io::Result<Option<usize>> {
+    if profiles.is_empty() {
+        return Ok(None);
+    }
+    if !atty::is(Stream::Stdout) {
+        return Ok(None);
+    }
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    let enter_result = crossterm::execute!(stdout, EnterAlternateScreen, Hide);
+    if let Err(e) = enter_result {
+        disable_raw_mode()?;
+        return Err(e);
+    }
+
+    let result = (|| -> std::io::Result<Option<usize>> {
+        let mut selected = active_profile
+            .and_then(|name| profiles.iter().position(|p| p.name == name))
+            .unwrap_or(0);
+        if selected >= profiles.len() {
+            selected = 0;
+        }
+        draw_profile_picker(
+            &mut stdout,
+            profiles,
+            profile_meta,
+            selected,
+            active_profile,
+        )?;
+        loop {
+            match event::read()? {
+                Event::Key(KeyEvent {
+                    code,
+                    modifiers,
+                    kind,
+                    ..
+                }) => {
+                    if kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    if modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(code, KeyCode::Char('c') | KeyCode::Char('d'))
+                    {
+                        return Ok(None);
+                    }
+                    match code {
+                        KeyCode::Up => {
+                            if selected == 0 {
+                                selected = profiles.len() - 1;
+                            } else {
+                                selected -= 1;
+                            }
+                            draw_profile_picker(
+                                &mut stdout,
+                                profiles,
+                                profile_meta,
+                                selected,
+                                active_profile,
+                            )?;
+                        }
+                        KeyCode::Down => {
+                            selected = (selected + 1) % profiles.len();
+                            draw_profile_picker(
+                                &mut stdout,
+                                profiles,
+                                profile_meta,
+                                selected,
+                                active_profile,
+                            )?;
+                        }
+                        KeyCode::Enter => return Ok(Some(selected)),
+                        KeyCode::Esc => return Ok(None),
+                        _ => {}
+                    }
+                }
+                Event::Resize(_, _) => {
+                    draw_profile_picker(
+                        &mut stdout,
+                        profiles,
+                        profile_meta,
+                        selected,
+                        active_profile,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+    })();
+
+    let leave_result = crossterm::execute!(stdout, Show, LeaveAlternateScreen);
+    let raw_off_result = disable_raw_mode();
+    leave_result?;
+    raw_off_result?;
+    result
+}
+
+fn draw_profile_picker(
+    stdout: &mut std::io::Stdout,
+    profiles: &[LlmProfile],
+    profile_meta: &HashMap<String, ProfileMeta>,
+    selected: usize,
+    active_profile: Option<&str>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    
+    crossterm::execute!(
+        stdout,
+        terminal::Clear(terminal::ClearType::All),
+        crossterm::cursor::MoveTo(0, 0)
+    )?;
+    
+    write!(stdout, "{}\r\n", "🧠 Select an LLM profile".bold())?;
+    write!(
+        stdout,
+        "{}\r\n",
+        "Use ↑/↓ arrows to navigate, Enter to select, Esc to cancel.".dark_grey()
+    )?;
+    write!(stdout, "\r\n")?;
+
+    for (idx, profile) in profiles.iter().enumerate() {
+        let is_selected = idx == selected;
+        let is_active = active_profile == Some(profile.name.as_str());
+        
+        // Build compact detail string
+        let mut detail_parts: Vec<String> = Vec::new();
+        if let Some(meta) = profile_meta.get(&profile.name) {
+            if let Some(cost) = meta.prompt_cost {
+                if cost > 0.0 {
+                    detail_parts.push(format!("p${:.2}", cost));
+                }
+            }
+            if let Some(cost) = meta.completion_cost {
+                if cost > 0.0 {
+                    detail_parts.push(format!("c${:.2}", cost));
+                }
+            }
+            if let Some(q) = &meta.quality {
+                detail_parts.push(format!("q:{}", q));
+            }
+        }
+        
+        let details = if detail_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", detail_parts.join(" "))
+        };
+        
+        let active_mark = if is_active { " ⭐" } else { "" };
+        let cursor = if is_selected { "➤" } else { " " };
+        
+        // Format: cursor name | provider=X model=Y [details] active_mark
+        let line = format!(
+            "{} {} | {}={} {}={}{}{}",
+            cursor,
+            profile.name,
+            "provider".dark_grey(),
+            profile.provider,
+            "model".dark_grey(),
+            profile.model,
+            details.dark_grey(),
+            active_mark
+        );
+        
+        if is_selected {
+            write!(
+                stdout,
+                "{}\r\n",
+                line.with(Color::Cyan).attribute(Attribute::Bold)
+            )?;
+        } else if is_active {
+            write!(stdout, "{}\r\n", line.green())?;
+        } else {
+            write!(stdout, "{}\r\n", line)?;
+        }
+    }
+    
+    stdout.flush()?;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct IntentSnapshot {
     status: String,
@@ -628,7 +873,16 @@ async fn process_and_render(
     show_intents: bool,
     show_chain: bool,
 ) {
-    println!("\n➡️  Request: {}", request);
+    // Enhanced request display
+    let req_border = "━".repeat(80);
+    println!("\n{}", req_border.blue());
+    println!(
+        "{} {}",
+        "➡️  REQUEST:".blue().bold(),
+        request.white().bold()
+    );
+    let req_border2 = "━".repeat(80);
+    println!("{}", req_border2.blue());
     let mut timeline = TimelinePrinter::new(ccos, value_preview);
     let mut channel_open = true;
     let request_future = ccos.process_request_with_plan(request, ctx);
@@ -666,50 +920,23 @@ async fn process_and_render(
 
     match outcome.expect("request future completed") {
         Ok((plan, res)) => {
-            let value_str = format!("{}", res.value);
-            if show_full_value {
-                println!("   Result: success={} value=\n----- VALUE BEGIN -----\n{}\n------ VALUE END ------", res.success, value_str);
-            } else {
-                let preview = truncate(&value_str, value_preview);
-                println!(
-                    "   Result: success={} value={}{}",
-                    res.success,
-                    preview,
-                    if value_str.len() > value_preview {
-                        " (… use --show-full-value for complete output)"
-                    } else {
-                        ""
-                    }
-                );
-            }
-
+            // Display plan with enhanced formatting
             if show_plan {
                 match &plan.body {
                     rtfs_compiler::ccos::types::PlanBody::Rtfs(src) => {
-                        if plan_full {
-                            println!("   Plan[{}] body=\n----- PLAN BEGIN -----\n{}\n------ PLAN END -------", plan.plan_id, src);
-                        } else {
-                            let trunc = truncate(src, plan_preview_len);
-                            println!(
-                                "   Plan[{}] body-preview={}{}",
-                                plan.plan_id,
-                                trunc,
-                                if src.len() > plan_preview_len {
-                                    " (… use --plan-full)"
-                                } else {
-                                    ""
-                                }
-                            );
-                        }
+                        render_plan_box(&plan.plan_id, src, plan_full, plan_preview_len);
                     }
                     rtfs_compiler::ccos::types::PlanBody::Wasm(bytes) => {
-                        println!("   Plan[{}] <WASM {} bytes>", plan.plan_id, bytes.len());
+                        render_wasm_plan_box(&plan.plan_id, bytes.len());
                     }
                 }
             }
+
+            // Display execution result with enhanced formatting
+            render_execution_result(&res, show_full_value, value_preview);
         }
         Err(e) => {
-            println!("   Error: {}", e);
+            render_error_box(&e.to_string());
         }
     }
 
@@ -724,7 +951,10 @@ async fn process_and_render(
         show_chain,
     );
     *last_action_count = new_count;
-    println!("---\n");
+
+    // Enhanced closing divider
+    let divider = "═".repeat(80);
+    println!("\n{}\n", divider.dark_grey());
 }
 
 fn diff_and_render_intents(
@@ -786,21 +1016,55 @@ fn diff_and_render_intents(
 
     if show_output {
         if !new_intents.is_empty() {
-            println!("🆕 New intents:");
+            println!("\n{}", "─".repeat(80).dark_cyan());
+            println!("{}", "🆕 New Intents".bold().cyan());
+            println!("{}", "─".repeat(80).dark_cyan());
         }
         for i in &new_intents {
+            let status_str = format!("{:?}", i.status);
+            let status_colored = match status_str.as_str() {
+                "Pending" => status_str.yellow(),
+                "Active" => status_str.green(),
+                "Completed" => status_str.green().bold(),
+                "Failed" => status_str.red(),
+                _ => status_str.white(),
+            };
             println!(
-                "  • {} [{}] goal=\"{}\"",
-                i.intent_id,
-                format!("{:?}", i.status),
-                truncate(&i.goal, 80)
+                "  {} {} {} {}",
+                "•".cyan(),
+                i.intent_id.as_str().dark_yellow(),
+                format!("[{}]", status_colored),
+                truncate(&i.goal, 60).white()
             );
         }
         if !status_changes.is_empty() {
-            println!("♻️  Status changes:");
+            println!("\n{}", "─".repeat(80).dark_cyan());
+            println!("{}", "♻️  Intent Status Changes".bold().magenta());
+            println!("{}", "─".repeat(80).dark_cyan());
         }
         for ch in status_changes {
-            println!("  • {} {} → {}", ch.id, ch.old, ch.new);
+            let old_colored = match ch.old.as_str() {
+                "Pending" => ch.old.yellow(),
+                "Active" => ch.old.green(),
+                "Completed" => ch.old.green().bold(),
+                "Failed" => ch.old.red(),
+                _ => ch.old.white(),
+            };
+            let new_colored = match ch.new.as_str() {
+                "Pending" => ch.new.yellow(),
+                "Active" => ch.new.green(),
+                "Completed" => ch.new.green().bold(),
+                "Failed" => ch.new.red(),
+                _ => ch.new.white(),
+            };
+            println!(
+                "  {} {} {} {} {}",
+                "•".magenta(),
+                ch.id.dark_yellow(),
+                old_colored,
+                "→".white().bold(),
+                new_colored
+            );
         }
     }
 }
@@ -808,15 +1072,39 @@ fn diff_and_render_intents(
 fn render_full_intents(ccos: &Arc<CCOS>) {
     if let Ok(g) = ccos.get_intent_graph().lock() {
         let all = g.storage.get_all_intents_sync();
-        println!("📚 All Intents ({}):", all.len());
+        let top = format!("╔{}╗", "═".repeat(78));
+        let mid = format!("╠{}╣", "═".repeat(78));
+        let bot = format!("╚{}╝", "═".repeat(78));
+        println!("\n{}", top.cyan());
+        let padding = " ".repeat(78 - 15 - all.len().to_string().len() - 3);
+        let header = format!(
+            "║ {} {} {}║",
+            "📚 All Intents".bold().white(),
+            format!("({})", all.len()).dark_grey(),
+            padding
+        );
+        println!("{}", header);
+        println!("{}", mid.cyan());
+
         for i in all {
+            let status_str = format!("{:?}", i.status);
+            let status_colored = match status_str.as_str() {
+                "Pending" => status_str.yellow(),
+                "Active" => status_str.green(),
+                "Completed" => status_str.green().bold(),
+                "Failed" => status_str.red(),
+                _ => status_str.white(),
+            };
+            let goal_preview = truncate(&i.goal, 50);
             println!(
-                "  - {} {:?} goal=\"{}\"",
-                i.intent_id,
-                i.status,
-                truncate(&i.goal, 100)
+                "{} {} {} {}",
+                "║".cyan(),
+                i.intent_id.dark_yellow(),
+                format!("[{}]", status_colored),
+                goal_preview.white()
             );
         }
+        println!("{}", bot.cyan());
     }
 }
 
@@ -830,32 +1118,56 @@ fn render_recent_actions(
     if let Ok(chain) = ccos.get_causal_chain().lock() {
         let actions = chain.get_all_actions();
         if show_output && actions.len() > from_index {
-            println!("🪵 Causal Chain (+{} new)", actions.len() - from_index);
+            println!("\n{}", "─".repeat(80).dark_cyan());
+            println!(
+                "{} {} {}",
+                "🪵 Causal Chain".bold().cyan(),
+                format!("(+{} new actions)", actions.len() - from_index).dark_grey(),
+                ""
+            );
+            println!("{}", "─".repeat(80).dark_cyan());
         }
         let start = actions.len().saturating_sub(max_actions);
         if show_output {
             for a in &actions[start..] {
+                let action_type_str = format!("{:?}", a.action_type);
+                let action_type_colored = match action_type_str.as_str() {
+                    "PlanStarted" => action_type_str.magenta(),
+                    "PlanCompleted" => action_type_str.green(),
+                    "CapabilityCall" => action_type_str.cyan(),
+                    "CapabilityResult" => action_type_str.blue(),
+                    "IntentCreated" => action_type_str.yellow(),
+                    _ => action_type_str.white(),
+                };
+
                 let value_suffix = if let Some(res) = &a.result {
                     let full = format!("{}", res.value);
                     let truncated = truncate(&full, value_preview);
-                    let note = if full.len() > value_preview {
-                        " (truncated)"
+                    let success_icon = if res.success {
+                        "✓".green()
                     } else {
-                        ""
+                        "✗".red()
                     };
-                    format!(" => success={} value={}{}", res.success, truncated, note)
+                    format!(" {} {}", success_icon, truncated.white())
                 } else {
                     String::new()
                 };
+
+                let fn_display = a.function_name.as_deref().unwrap_or("-");
+                let fn_colored = if fn_display != "-" {
+                    fn_display.yellow()
+                } else {
+                    fn_display.dark_grey()
+                };
+
                 println!(
-                    "  - [{}] {} {:?} fn={} intent={} plan={} parent={}{}",
-                    a.timestamp,
-                    a.action_id,
-                    a.action_type,
-                    a.function_name.as_deref().unwrap_or("-"),
-                    a.intent_id,
-                    a.plan_id,
-                    a.parent_action_id.as_deref().unwrap_or("-"),
+                    "  {} {} {} fn={} intent={} plan={}{}",
+                    "•".dark_cyan(),
+                    a.action_id.as_str().dark_yellow(),
+                    action_type_colored,
+                    fn_colored,
+                    a.intent_id.as_str().dark_grey(),
+                    a.plan_id.as_str().dark_grey(),
                     value_suffix
                 );
             }
@@ -875,7 +1187,320 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn print_help() {
-    println!("Commands:\n  :help              show this help\n  :intents           list all intents\n  :chain             show recent causal actions tail\n  :models            list loaded LLM profiles (explicit + model_sets)\n  :model <name>      switch active LLM profile\n  :model-auto k=v..  auto-select model (prompt=, completion=, quality=)\n  :quit | :q         exit\nFlags:\n  --show-plan                 show truncated plan body each request\n  --plan-full                 show full plan body\n  --plan-preview-len N        length for truncated plan body (default 280)\n  --config <path>             load agent config (JSON/TOML) with llm_profiles catalog\n  --model-auto-prompt-budget  auto-select prompt cost budget (startup)\n  --model-auto-completion-budget auto-select completion cost budget (startup)\nNote: natural language lines are processed to generate intents, plans & executions.");
+    let box_top = "╔═══════════════════════════════════════════════════════════════════════════╗";
+    let box_bot = "╚═══════════════════════════════════════════════════════════════════════════╝";
+    let box_mid = "╠═══════════════════════════════════════════════════════════════════════════╣";
+
+    println!("{}", box_top.cyan());
+    println!(
+        "║ {}                                                             ║",
+        "📖 CCOS Interactive Assistant Help".bold().white()
+    );
+    println!("{}", box_mid.cyan());
+    println!(
+        "║ {}                                                          ║",
+        "Commands:".bold().yellow()
+    );
+    println!(
+        "║   {} {}                                              ║",
+        ":help".green(),
+        "show this help"
+    );
+    println!(
+        "║   {} {}                                       ║",
+        ":intents".green(),
+        "list all intents"
+    );
+    println!(
+        "║   {} {}                           ║",
+        ":chain".green(),
+        "show recent causal actions tail"
+    );
+    println!(
+        "║   {} {} ║",
+        ":models".green(),
+        "list & pick LLM profiles (↑/↓, Enter)"
+    );
+    println!(
+        "║   {} {}                        ║",
+        ":model <name>".green(),
+        "switch active LLM profile"
+    );
+    println!(
+        "║   {} {}  ║",
+        ":model-auto k=v".green(),
+        "auto-select model"
+    );
+    println!(
+        "║   {} {}                                           ║",
+        ":quit | :q".green(),
+        "exit"
+    );
+    println!("║                                                                           ║");
+    println!(
+        "║ {}                                                             ║",
+        "Flags:".bold().yellow()
+    );
+    println!(
+        "║   {} {}                 ║",
+        "--show-plan".blue(),
+        "show plan body each request"
+    );
+    println!(
+        "║   {} {}                 ║",
+        "--plan-full".blue(),
+        "show complete plan body"
+    );
+    println!(
+        "║   {} {}               ║",
+        "--show-intents".blue(),
+        "auto-show intent diffs"
+    );
+    println!(
+        "║   {} {}            ║",
+        "--show-chain".blue(),
+        "auto-show causal chain tail"
+    );
+    println!(
+        "║   {} {}      ║",
+        "--config <path>".blue(),
+        "load agent config (JSON/TOML)"
+    );
+    println!("{}", box_bot.cyan());
+}
+
+/// Render a beautifully formatted plan code box
+fn render_plan_box(plan_id: &str, src: &str, full: bool, preview_len: usize) {
+    let title = format!(" 📋 Plan: {} ", plan_id);
+    let title_len = title.chars().count(); // count actual chars for proper width calculation
+    let width = 80;
+
+    println!();
+    let top = format!("╔{}╗", "═".repeat(width - 2));
+    let mid = format!("╠{}╣", "═".repeat(width - 2));
+    let bot = format!("╚{}╝", "═".repeat(width - 2));
+    println!("{}", top.cyan());
+    let padding = " ".repeat(width.saturating_sub(title_len + 2));
+    let header = format!("║{}{}║", title.bold().white(), padding);
+    println!("{}", header);
+    println!("{}", mid.cyan());
+
+    let display_src = if full {
+        src
+    } else {
+        &src[..src.len().min(preview_len)]
+    };
+    let lines: Vec<&str> = display_src.lines().collect();
+    let max_lines = if full {
+        lines.len()
+    } else {
+        lines.len().min(20)
+    };
+
+    for (idx, line) in lines.iter().take(max_lines).enumerate() {
+        let line_num = format!("{:3} ", idx + 1);
+        let formatted_line = highlight_rtfs_line(line);
+        let display_line = if formatted_line.len() > width - 8 {
+            format!("{}...", &formatted_line[..width - 11])
+        } else {
+            formatted_line.clone()
+        };
+        println!("{}{}{}", "║".cyan(), line_num.dark_grey(), display_line);
+    }
+
+    if !full && src.len() > preview_len {
+        let more_msg = format!(
+            "  {} more characters... (use --plan-full)",
+            src.len() - preview_len
+        );
+        println!("{}{}", "║".cyan(), more_msg.dark_yellow());
+    }
+
+    println!("{}", bot.cyan());
+}
+
+/// Render a WASM plan indicator
+fn render_wasm_plan_box(plan_id: &str, byte_count: usize) {
+    let title = format!(" 📦 WASM Plan: {} ", plan_id);
+    let title_len = title.chars().count();
+    let width = 80;
+
+    println!();
+    let top = format!("╔{}╗", "═".repeat(width - 2));
+    let mid = format!("╠{}╣", "═".repeat(width - 2));
+    let bot = format!("╚{}╝", "═".repeat(width - 2));
+    println!("{}", top.cyan());
+    let padding = " ".repeat(width.saturating_sub(title_len + 2));
+    let header = format!("║{}{}║", title.bold().white(), padding);
+    println!("{}", header);
+    println!("{}", mid.cyan());
+    let content = format!("  Binary module: {} bytes", byte_count);
+    println!("{} {}", "║".cyan(), content.white());
+    println!("{}", bot.cyan());
+}
+
+/// Basic syntax highlighting for RTFS code
+fn highlight_rtfs_line(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let indent_len = line.len() - trimmed.len();
+    let indent = " ".repeat(indent_len);
+
+    // Keywords
+    if trimmed.starts_with("let ") || trimmed.starts_with("const ") {
+        return format!("{}{}", indent, trimmed.magenta().to_string());
+    }
+    if trimmed.starts_with("fn ") || trimmed.starts_with("return ") {
+        return format!("{}{}", indent, trimmed.yellow().to_string());
+    }
+    if trimmed.starts_with("if ") || trimmed.starts_with("else") || trimmed.starts_with("match ") {
+        return format!("{}{}", indent, trimmed.yellow().to_string());
+    }
+    // Comments
+    if trimmed.starts_with("//") || trimmed.starts_with("#") {
+        return format!("{}{}", indent, trimmed.dark_grey().to_string());
+    }
+    // Capability calls (heuristic: contains "::" or "call")
+    if trimmed.contains("::") || trimmed.contains("call(") {
+        return format!("{}{}", indent, trimmed.green().to_string());
+    }
+    // Strings (simple detection)
+    if trimmed.contains('"') {
+        return format!("{}{}", indent, trimmed.blue().to_string());
+    }
+
+    format!("{}{}", indent, trimmed.white().to_string())
+}
+
+/// Render execution result in a beautiful box
+fn render_execution_result(
+    res: &rtfs_compiler::ccos::types::ExecutionResult,
+    show_full: bool,
+    preview_len: usize,
+) {
+    let width = 80;
+    let status_icon = if res.success { "✅" } else { "❌" };
+    let status_text = if res.success { "SUCCESS" } else { "FAILURE" };
+    let status_color = if res.success {
+        Color::Green
+    } else {
+        Color::Red
+    };
+    let title = format!(" {} Execution Result: {} ", status_icon, status_text);
+    let title_len = title.chars().count();
+
+    println!();
+    let top = format!("╔{}╗", "═".repeat(width - 2));
+    let mid = format!("╠{}╣", "═".repeat(width - 2));
+    let bot = format!("╚{}╝", "═".repeat(width - 2));
+    println!("{}", top.with(status_color));
+    let padding = " ".repeat(width.saturating_sub(title_len + 2));
+    let header = format!("║{}{}║", title.bold().with(status_color), padding);
+    println!("{}", header);
+    println!("{}", mid.with(status_color));
+
+    let value_str = format!("{}", res.value);
+
+    // Try to parse as JSON for pretty printing
+    if let Ok(json_val) = serde_json::from_str::<JsonValue>(&value_str) {
+        if let Ok(pretty) = serde_json::to_string_pretty(&json_val) {
+            let lines: Vec<&str> = pretty.lines().collect();
+            let max_lines = if show_full {
+                lines.len()
+            } else {
+                lines.len().min(15)
+            };
+
+            for line in lines.iter().take(max_lines) {
+                let display_line = if line.len() > width - 4 {
+                    format!("{}...", &line[..width - 7])
+                } else {
+                    line.to_string()
+                };
+                println!("{} {}", "║".with(status_color), display_line.white());
+            }
+
+            if !show_full && lines.len() > 15 {
+                let more = format!(
+                    "  ... {} more lines (use --show-full-value)",
+                    lines.len() - 15
+                );
+                println!("{} {}", "║".with(status_color), more.dark_yellow());
+            }
+        } else {
+            render_plain_value(&value_str, show_full, preview_len, width, status_color);
+        }
+    } else {
+        render_plain_value(&value_str, show_full, preview_len, width, status_color);
+    }
+
+    println!("{}", bot.with(status_color));
+}
+
+fn render_plain_value(
+    value_str: &str,
+    show_full: bool,
+    preview_len: usize,
+    width: usize,
+    border_color: Color,
+) {
+    let display_val = if show_full {
+        value_str
+    } else {
+        &value_str[..value_str.len().min(preview_len)]
+    };
+
+    for line in display_val.lines().take(10) {
+        let display_line = if line.len() > width - 4 {
+            format!("{}...", &line[..width - 7])
+        } else {
+            line.to_string()
+        };
+        println!("{} {}", "║".with(border_color), display_line.white());
+    }
+
+    if !show_full && value_str.len() > preview_len {
+        let more = format!(
+            "  ... {} more chars (use --show-full-value)",
+            value_str.len() - preview_len
+        );
+        println!("{} {}", "║".with(border_color), more.dark_yellow());
+    }
+}
+
+/// Render an error box
+fn render_error_box(error: &str) {
+    let width = 80;
+    let title = " ⚠️  Execution Error ";
+
+    println!();
+    println!(
+        "{}",
+        "╔".red().to_string() + &"═".repeat(width - 2).red().to_string() + &"╗".red().to_string()
+    );
+    println!(
+        "{}{}{}",
+        "║".red(),
+        title.bold().red(),
+        " ".repeat(width - title.len() - 2) + "║".red().to_string().as_str()
+    );
+    println!(
+        "{}",
+        "╠".red().to_string() + &"═".repeat(width - 2).red().to_string() + &"╣".red().to_string()
+    );
+
+    for line in error.lines().take(15) {
+        let display_line = if line.len() > width - 4 {
+            format!("{}...", &line[..width - 7])
+        } else {
+            line.to_string()
+        };
+        println!("{} {}", "║".red(), display_line.white());
+    }
+
+    println!(
+        "{}",
+        "╚".red().to_string() + &"═".repeat(width - 2).red().to_string() + &"╝".red().to_string()
+    );
 }
 
 struct TimelinePrinter {
@@ -941,26 +1566,49 @@ impl TimelinePrinter {
                 });
                 let message = match args_preview {
                     Some(ref payload) if !payload.is_empty() => {
-                        format!("🎯 Capability call {} args={}", fn_name, payload)
+                        format!(
+                            "{} {} args={}",
+                            "🎯 Capability call".cyan().bold(),
+                            fn_name.yellow(),
+                            payload.as_str().white()
+                        )
                     }
-                    _ => format!("🎯 Capability call {}", fn_name),
+                    _ => format!(
+                        "{} {}",
+                        "🎯 Capability call".cyan().bold(),
+                        fn_name.yellow()
+                    ),
                 };
                 Some((Some(action.timestamp / 1000), message))
             }
             ActionType::CapabilityResult => {
                 if let Some(result) = &action.result {
                     let value_str = truncate(&format!("{}", result.value), self.value_preview);
+                    let status_icon = if result.success { "✓" } else { "✗" };
+                    let status_color = if result.success {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    };
                     Some((
                         Some(action.timestamp / 1000),
                         format!(
-                            "📦 Capability result success={} value={}",
-                            result.success, value_str
+                            "{} {} value={}",
+                            format!("📦 Result {}", status_icon)
+                                .with(status_color)
+                                .bold(),
+                            if result.success {
+                                "success".green()
+                            } else {
+                                "failure".red()
+                            },
+                            value_str.white()
                         ),
                     ))
                 } else {
                     Some((
                         Some(action.timestamp / 1000),
-                        "📦 Capability result".to_string(),
+                        format!("{}", "📦 Capability result".blue()),
                     ))
                 }
             }
@@ -970,7 +1618,11 @@ impl TimelinePrinter {
 
     fn print_line(&mut self, ts: Option<u64>, message: String) {
         if !self.header_printed {
-            println!("🧭 Execution timeline:");
+            let header =
+                "═══════════════════════════════════════════════════════════════════════════════";
+            println!("\n{}", header.cyan());
+            println!("{}", " 🧭  Execution Timeline".bold().white());
+            println!("{}", header.cyan());
             self.header_printed = true;
         }
         if ts.is_some() && self.base_ts.is_none() {
@@ -979,10 +1631,10 @@ impl TimelinePrinter {
         let prefix = match (self.base_ts, ts) {
             (Some(base), Some(actual)) => {
                 let delta = actual.saturating_sub(base);
-                format!("[+{}s]", delta)
+                format!("[+{:3}s]", delta).dark_cyan().to_string()
             }
-            (_, Some(actual)) => format!("[{}]", actual),
-            _ => "[~]".to_string(),
+            (_, Some(actual)) => format!("[{}s]", actual).dark_cyan().to_string(),
+            _ => "[  ~  ]".dark_grey().to_string(),
         };
         println!("  {} {}", prefix, message);
     }
@@ -995,23 +1647,49 @@ fn parse_timeline_event(raw: &str) -> Option<(Option<u64>, String)> {
     let message = match event {
         "request_received" => {
             let text = value.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            format!("🟢 Request received: {}", text)
+            let truncated = if text.len() > 60 {
+                format!("{}...", &text[..60])
+            } else {
+                text.to_string()
+            };
+            format!(
+                "{} {}",
+                "🟢 Request received:".green().bold(),
+                truncated.white()
+            )
         }
         "plan_generated" => {
             let plan_id = value.get("plan_id").and_then(|v| v.as_str()).unwrap_or("?");
             if let Some(intent_id) = value.get("intent_id").and_then(|v| v.as_str()) {
-                format!("🧠 Plan generated (plan={} intent={})", plan_id, intent_id)
+                format!(
+                    "{} plan={} intent={}",
+                    "🧠 Plan generated".magenta().bold(),
+                    plan_id.yellow(),
+                    intent_id.dark_yellow()
+                )
             } else {
-                format!("🧠 Plan generated (plan={})", plan_id)
+                format!(
+                    "{} plan={}",
+                    "🧠 Plan generated".magenta().bold(),
+                    plan_id.yellow()
+                )
             }
         }
         "plan_validation_start" => {
             let plan_id = value.get("plan_id").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("🛡️ Validation started (plan={})", plan_id)
+            format!(
+                "{} plan={}",
+                "🛡️  Validation started".blue().bold(),
+                plan_id.yellow()
+            )
         }
         "plan_execution_start" => {
             let plan_id = value.get("plan_id").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("⚙️ Execution started (plan={})", plan_id)
+            format!(
+                "{} plan={}",
+                "⚙️  Execution started".cyan().bold(),
+                plan_id.yellow()
+            )
         }
         "plan_execution_completed" => {
             let plan_id = value.get("plan_id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -1020,12 +1698,20 @@ fn parse_timeline_event(raw: &str) -> Option<(Option<u64>, String)> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if success {
-                format!("✅ Execution completed successfully (plan={})", plan_id)
+                format!(
+                    "{} plan={}",
+                    "✅ Execution completed".green().bold(),
+                    plan_id.yellow()
+                )
             } else {
-                format!("❌ Execution completed with errors (plan={})", plan_id)
+                format!(
+                    "{} plan={}",
+                    "❌ Execution failed".red().bold(),
+                    plan_id.yellow()
+                )
             }
         }
-        other => format!("ℹ️ {}", other),
+        other => format!("{} {}", "ℹ️".blue(), other.white()),
     };
     Some((ts, message))
 }
