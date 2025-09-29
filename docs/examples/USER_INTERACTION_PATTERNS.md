@@ -173,12 +173,29 @@ The LLM is instructed with examples showing the correct and incorrect ways to ca
 
 #### ✅ Correct: Single Step with Let
 
+**Simple greeting:**
 ```rtfs
 ;; CORRECT - Both prompt and usage in ONE step
 (step "Greet User" 
   (let [name (call :ccos.user.ask "What is your name?")]
     (call :ccos.echo {:message (str "Hello, " name "!")})))
 ```
+
+**Multiple prompts with summary (sequential bindings):**
+```rtfs
+;; CORRECT - All prompts in ONE step, sequential bindings keep all values in scope
+(step "Survey and Summarize" 
+  (let [name (call :ccos.user.ask "What is your name?")
+        age (call :ccos.user.ask "How old are you?")
+        hobby (call :ccos.user.ask "What is your hobby?")]
+    (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
+```
+
+**Key Insight:** Sequential bindings in a single `let` allow you to:
+- Ask multiple questions sequentially (bindings evaluated in order)
+- Keep ALL previous answers in scope
+- Create a final summary that references all collected data
+- Much cleaner syntax than nested `let` forms!
 
 #### ❌ Common Mistakes
 
@@ -194,6 +211,18 @@ The LLM is instructed with examples showing the correct and incorrect ways to ca
 ;; WRONG 3 - simple call without capturing (can't reuse)
 (step "Ask" (call :ccos.user.ask "What is your name?"))
 (step "Greet" (call :ccos.echo {:message (str "Hello, " ???)}))  ; No name variable!
+
+;; WRONG 4 - survey split across steps (can't summarize!)
+(step "Get Name" (let [name (call :ccos.user.ask "Name?")] 
+                   (call :ccos.echo {:message (str "Got " name)})))
+(step "Get Age" (let [age (call :ccos.user.ask "Age?")] 
+                  (call :ccos.echo {:message (str "Got " age)})))
+(step "Summary" (call :ccos.echo {:message (str name " is " age)}))  
+; ERROR: name and age are out of scope! 
+; Should have used sequential bindings in ONE step:
+;   (let [name (call :ccos.user.ask "Name?")
+;         age (call :ccos.user.ask "Age?")]
+;     (call :ccos.echo {:message (str name " is " age)}))
 ```
 
 #### When You Don't Need to Capture
