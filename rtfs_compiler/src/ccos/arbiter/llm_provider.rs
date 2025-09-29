@@ -576,7 +576,8 @@ Allowed forms (reduced grammar):
 - (do <step> <step> ...)
 - (step "Descriptive Name" (<expr>)) ; name must be a double-quoted string
 - (call :cap.namespace.op <args...>)   ; capability ids MUST be RTFS keywords starting with a colon
-- (if <condition> <then> <else>)  ; conditional execution
+- (if <condition> <then> <else>)  ; conditional execution (use for binary yes/no)
+- (match <value> <pattern1> <result1> <pattern2> <result2> ...)  ; pattern matching (use for multiple choices)
 - (let [var1 expr1 var2 expr2] <body>)  ; local bindings
 - (str <arg1> <arg2> ...)  ; string concatenation
 - (= <arg1> <arg2>)  ; equality comparison
@@ -619,12 +620,21 @@ Capability signatures for this demo (STRICT):
         (step "Get Name" (let [name (call :ccos.user.ask "Name?")] name))
         (step "Use Name" (call :ccos.echo {:message name}))  ; ERROR: name not in scope!
       
-      Conditional branching (CORRECT - if with user input):
+      Conditional branching (CORRECT - if for yes/no):
         (step "Pizza Check" 
           (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
             (if (= likes "yes")
               (call :ccos.echo {:message "Great! Pizza is delicious!"})
               (call :ccos.echo {:message "Maybe try it sometime!"}))))
+      
+      Multiple choice (CORRECT - match for many options):
+        (step "Language Hello World" 
+          (let [lang (call :ccos.user.ask "Choose: rust, python, or javascript")]
+            (match lang
+              "rust" (call :ccos.echo {:message "println!(\"Hello\")"})
+              "python" (call :ccos.echo {:message "print('Hello')"})
+              "javascript" (call :ccos.echo {:message "console.log('Hello')"})
+              _ (call :ccos.echo {:message "Unknown language"}))))
 
 Constraints:
 - Use ONLY the forms above. Do NOT return JSON or markdown. Do NOT include (plan ...) wrapper.
@@ -651,7 +661,8 @@ Forbidden or ignored (kernel-owned): :plan_id :intent_ids :status :policies :cap
 Reduced step/call grammar inside :body:
 - (step "Descriptive Name" (<expr>))
 - (call :cap.namespace.op <args...>)
-- (if <condition> <then> <else>)
+- (if <condition> <then> <else>)  ; for binary yes/no choices
+- (match <value> <pattern1> <result1> <pattern2> <result2> ...)  ; for multiple choices
 - (let [var1 expr1 var2 expr2] <body>)
 - (str <arg1> <arg2> ...)
 - (= <arg1> <arg2>)
@@ -693,12 +704,21 @@ Additional STRICT signature rules:
         (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
         (step "Use" (call :ccos.echo {:message n}))  ; n not in scope here!
       
-      Conditional branching (CORRECT - if with user input):
+      Conditional branching (CORRECT - if for yes/no):
         (step "Pizza Check" 
           (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
             (if (= likes "yes")
               (call :ccos.echo {:message "Great! Pizza is delicious!"})
               (call :ccos.echo {:message "Maybe try it sometime!"}))))
+      
+      Multiple choice (CORRECT - match for many options):
+        (step "Language Hello World" 
+          (let [lang (call :ccos.user.ask "Choose: rust, python, or javascript")]
+            (match lang
+              "rust" (call :ccos.echo {:message "println!(\"Hello\")"})
+              "python" (call :ccos.echo {:message "print('Hello')"})
+              "javascript" (call :ccos.echo {:message "console.log('Hello')"})
+              _ (call :ccos.echo {:message "Unknown language"}))))
 
 Return exactly one (plan ...) with these constraints.
 "#;
