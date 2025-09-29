@@ -46,6 +46,14 @@ The `ccos.user.ask` capability enables CCOS plans to interact with end-users in 
 
 **Example:** See `examples/user_interaction_basic.rs`
 
+**Note:** While the stub arbiter can generate simple plans, **delegation is highly recommended** for conversational user interactions. The stub arbiter uses predetermined patterns that may not properly handle dynamic user input flows. Enable delegation for best results:
+
+```bash
+export CCOS_ENABLE_DELEGATION=1
+export OPENAI_API_KEY=your_key
+cargo run --example user_interaction_basic
+```
+
 ## Pattern 2: Multi-Step Form / Survey
 
 **Goal:** Collect multiple pieces of information sequentially.
@@ -150,7 +158,9 @@ root (understand needs)
 ### Capability Registration
 
 The `ccos.user.ask` capability is registered in `stdlib.rs`:
-- Prompts on stderr (to avoid stdout capture)
+- Prompts on **stdout** with clear ❓ emoji prefix for visibility
+- Auto-adds spacing for better formatting
+- Flushes output to ensure prompts appear immediately
 - Reads from stdin
 - Supports optional default values
 - Returns trimmed string response
