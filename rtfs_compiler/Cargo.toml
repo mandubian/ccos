@@ -149,6 +149,10 @@ path = "examples/context_types_demo.rs"
 name = "mcp_introspection_demo"
 path = "examples/mcp_introspection_demo.rs"
 
+[[example]]
+name = "user_interaction_basic"
+path = "examples/user_interaction_basic.rs"
+
 [build-dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
