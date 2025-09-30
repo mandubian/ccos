@@ -270,6 +270,7 @@ impl CCOS {
                 temperature: Some(0.7),
                 timeout_seconds: Some(30),
                 prompts: None,
+                retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
             };
 
             // Convert agent config delegation to arbiter delegation config

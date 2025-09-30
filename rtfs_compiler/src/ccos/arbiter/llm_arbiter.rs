@@ -244,6 +244,7 @@ impl LlmArbiter {
             max_tokens: llm_config.max_tokens,
             temperature: llm_config.temperature,
             timeout_seconds: llm_config.timeout_seconds,
+            retry_config: llm_config.retry_config.clone(),
         };
 
         let llm_provider = LlmProviderFactory::create_provider(llm_provider_config).await?;
