@@ -33,6 +33,30 @@ pub enum ArbiterEngineType {
     Dummy,
 }
 
+/// Plan generation retry configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    /// Maximum number of retry attempts for plan generation
+    pub max_retries: u32,
+    /// Whether to send error feedback to LLM on retry
+    pub send_error_feedback: bool,
+    /// Whether to simplify the request on final retry attempt
+    pub simplify_on_final_attempt: bool,
+    /// Whether to use stub fallback when all retries fail
+    pub use_stub_fallback: bool,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 2,
+            send_error_feedback: true,
+            simplify_on_final_attempt: true,
+            use_stub_fallback: false,
+        }
+    }
+}
+
 /// LLM provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -53,6 +77,9 @@ pub struct LlmConfig {
     /// Prompt selection and versioning
     #[serde(default)]
     pub prompts: Option<crate::ccos::arbiter::prompt::PromptConfig>,
+    /// Plan generation retry configuration
+    #[serde(default)]
+    pub retry_config: RetryConfig,
 }
 
 // Re-export LlmProviderType from llm_provider module
@@ -69,6 +96,7 @@ impl LlmConfig {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             timeout_seconds: self.timeout_seconds,
+            retry_config: self.retry_config.clone(),
         }
     }
 }
@@ -372,6 +400,22 @@ impl ArbiterConfig {
 
         // LLM configuration
         if let Ok(provider) = std::env::var("CCOS_LLM_PROVIDER") {
+            let retry_config = RetryConfig {
+                max_retries: std::env::var("CCOS_MAX_PLAN_RETRIES")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(2),
+                send_error_feedback: std::env::var("CCOS_PLAN_RETRY_FEEDBACK")
+                    .map(|s| s == "true")
+                    .unwrap_or(true),
+                simplify_on_final_attempt: std::env::var("CCOS_PLAN_SIMPLIFY_FINAL")
+                    .map(|s| s == "true")
+                    .unwrap_or(true),
+                use_stub_fallback: std::env::var("CCOS_PLAN_STUB_FALLBACK")
+                    .map(|s| s == "true")
+                    .unwrap_or(false),
+            };
+
             let llm_config = LlmConfig {
                 provider_type: match provider.as_str() {
                     "openai" => LlmProviderType::OpenAI,
@@ -393,6 +437,7 @@ impl ArbiterConfig {
                     .ok()
                     .and_then(|s| s.parse().ok()),
                 prompts: None,
+                retry_config,
             };
             config.llm_config = Some(llm_config);
         }
@@ -524,6 +569,7 @@ mod tests {
             temperature: Some(0.5),
             timeout_seconds: Some(30),
             prompts: None,
+            retry_config: RetryConfig::default(),
         };
         assert_eq!(valid_config.provider_type, LlmProviderType::Stub);
         assert_eq!(valid_config.model, "test-model");
@@ -538,6 +584,7 @@ mod tests {
             temperature: Some(1.5), // Invalid temperature
             timeout_seconds: Some(30),
             prompts: None,
+            retry_config: RetryConfig::default(),
         };
         assert_eq!(invalid_config.model, "");
     }
@@ -553,6 +600,7 @@ mod tests {
             temperature: Some(0.7),
             timeout_seconds: Some(60),
             prompts: None,
+            retry_config: RetryConfig::default(),
         };
 
         assert_eq!(config.provider_type, LlmProviderType::Stub);

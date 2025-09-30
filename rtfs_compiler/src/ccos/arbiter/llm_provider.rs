@@ -33,6 +33,7 @@ pub struct LlmProviderConfig {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     pub timeout_seconds: Option<u64>,
+    pub retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig,
 }
 
 /// Supported LLM provider types
@@ -60,6 +61,17 @@ pub trait LlmProvider: Send + Sync {
         intent: &StorableIntent,
         context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError>;
+
+    /// Generate a Plan from an Intent with retry logic
+    async fn generate_plan_with_retry(
+        &self,
+        intent: &StorableIntent,
+        context: Option<HashMap<String, String>>,
+    ) -> Result<Plan, RuntimeError> {
+        // Default implementation just calls generate_plan
+        // Individual providers can override this for custom retry logic
+        self.generate_plan(intent, context).await
+    }
 
     /// Validate a generated Plan (using string representation to avoid Send/Sync issues)
     async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError>;
@@ -498,6 +510,322 @@ Model: Here's the body you requested:
         let do_block = OpenAILlmProvider::extract_s_expr_after_key(&plan_block, ":body").unwrap();
         assert!(do_block.contains(":ccos.echo"));
     }
+
+    /// Create the initial plan generation prompt
+    fn create_initial_plan_prompt(
+        &self,
+        intent: &StorableIntent,
+        context: Option<&HashMap<String, String>>,
+    ) -> Vec<OpenAIMessage> {
+        // Choose prompt mode: full-plan or reduced (do ...) body only
+        let full_plan_mode = std::env::var("RTFS_FULL_PLAN")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        // Reduced RTFS grammar prompt (default): require direct (do ...) body with (step ...) and (call :cap ...)
+        let reduced_system_message = r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
+
+Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences.
+
+Allowed forms (reduced grammar):
+- (do <step> <step> ...)
+- (step "Descriptive Name" (<expr>)) ; name must be a double-quoted string
+- (call :cap.namespace.op <args...>)   ; capability ids MUST be RTFS keywords starting with a colon
+- (if <condition> <then> <else>)  ; conditional execution (use for binary yes/no)
+- (match <value> <pattern1> <result1> <pattern2> <result2> ...)  ; pattern matching (use for multiple choices)
+- (let [var1 expr1 var2 expr2] <body>)  ; local bindings
+- (str <arg1> <arg2> ...)  ; string concatenation
+- (= <arg1> <arg2>)  ; equality comparison
+
+Arguments allowed:
+- strings: "..."
+- numbers: 1 2 3
+- simple maps with keyword keys: {:key "value" :a 1 :b 2}
+- lists: [1 2 3] or ["a" "b" "c"]
+
+Available capabilities (use exact names with colons):
+- :ccos.echo - print message to output
+- :ccos.user.ask - prompt user for input, returns their response
+- :ccos.math.add - add numbers
+- :ccos.math.subtract - subtract numbers
+- :ccos.math.multiply - multiply numbers
+- :ccos.math.divide - divide numbers
+
+CRITICAL: let bindings are LOCAL to a single step. You CANNOT use variables across step boundaries.
+
+CORRECT - capture and reuse within single step:
+  (step "Greet User"
+    (let [name (call :ccos.user.ask "What is your name?")]
+      (call :ccos.echo {:message (str "Hello, " name "!")})))
+
+CORRECT - multiple prompts with summary in one step:
+  (step "Survey"
+    (let [name (call :ccos.user.ask "What is your name?")
+          age (call :ccos.user.ask "How old are you?")
+          hobby (call :ccos.user.ask "What is your hobby?")]
+      (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
+
+WRONG - let has no body:
+  (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; Missing body expression!
+
+WRONG - variables out of scope across steps:
+  (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
+  (step "Use" (call :ccos.echo {:message n}))  ; n not in scope here!
+
+Conditional branching (CORRECT - if for yes/no):
+  (step "Pizza Check" 
+    (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
+      (if (= likes "yes")
+        (call :ccos.echo {:message "Great! Pizza is delicious!"})
+        (call :ccos.echo {:message "Maybe try it sometime!"}))))
+
+Multiple choice (CORRECT - match for many options):
+  (step "Language Hello World" 
+    (let [lang (call :ccos.user.ask "Choose: rust, python, or javascript")]
+      (match lang
+        "rust" (call :ccos.echo {:message "println!(\"Hello\")"})
+        "python" (call :ccos.echo {:message "print('Hello')"})
+        "javascript" (call :ccos.echo {:message "console.log('Hello')"})
+        _ (call :ccos.echo {:message "Unknown language"}))))
+
+Return exactly one (plan ...) with these constraints.
+"#;
+
+        let user_message = if full_plan_mode {
+            format!(
+                "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (plan ...) now, following the constraints above:",
+                intent.goal, intent.constraints, intent.preferences
+            )
+        } else {
+            format!(
+                "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
+                intent.goal, intent.constraints, intent.preferences
+            )
+        };
+
+        vec![
+            OpenAIMessage {
+                role: "system".to_string(),
+                content: if full_plan_mode {
+                    // Full plan system message would go here
+                    reduced_system_message.to_string()
+                } else {
+                    reduced_system_message.to_string()
+                },
+            },
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: user_message,
+            },
+        ]
+    }
+
+    /// Create a retry prompt with error feedback
+    fn create_retry_prompt_with_feedback(
+        &self,
+        intent: &StorableIntent,
+        context: Option<&HashMap<String, String>>,
+        last_error: &str,
+        last_plan_text: &str,
+        is_final_attempt: bool,
+    ) -> Vec<OpenAIMessage> {
+        let system_message = if is_final_attempt && self.config.retry_config.simplify_on_final_attempt {
+            r#"You translate an RTFS intent into a concrete RTFS execution body using a SIMPLIFIED grammar.
+
+This is your final attempt. Keep it simple and basic.
+
+Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences.
+
+SIMPLIFIED forms only:
+- (do <step> <step> ...)
+- (step "Name" (call :cap.op <args>))
+- (call :ccos.echo {:message "text"})
+- (call :ccos.user.ask "question")
+
+Available capabilities:
+- :ccos.echo - print message
+- :ccos.user.ask - ask user question
+
+Keep it simple. No complex logic, no let bindings, no conditionals.
+"#
+        } else {
+            r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
+
+The previous attempt failed. Please fix the error and try again.
+
+Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences.
+
+Allowed forms (reduced grammar):
+- (do <step> <step> ...)
+- (step "Descriptive Name" (<expr>)) ; name must be a double-quoted string
+- (call :cap.namespace.op <args...>)   ; capability ids MUST be RTFS keywords starting with a colon
+- (if <condition> <then> <else>)  ; conditional execution (use for binary yes/no)
+- (match <value> <pattern1> <result1> <pattern2> <result2> ...)  ; pattern matching (use for multiple choices)
+- (let [var1 expr1 var2 expr2] <body>)  ; local bindings
+- (str <arg1> <arg2> ...)  ; string concatenation
+- (= <arg1> <arg2>)  ; equality comparison
+
+Arguments allowed:
+- strings: "..."
+- numbers: 1 2 3
+- simple maps with keyword keys: {:key "value" :a 1 :b 2}
+- lists: [1 2 3] or ["a" "b" "c"]
+
+Available capabilities (use exact names with colons):
+- :ccos.echo - print message to output
+- :ccos.user.ask - prompt user for input, returns their response
+- :ccos.math.add - add numbers
+- :ccos.math.subtract - subtract numbers
+- :ccos.math.multiply - multiply numbers
+- :ccos.math.divide - divide numbers
+
+CRITICAL: let bindings are LOCAL to a single step. You CANNOT use variables across step boundaries.
+
+CORRECT - capture and reuse within single step:
+  (step "Greet User"
+    (let [name (call :ccos.user.ask "What is your name?")]
+      (call :ccos.echo {:message (str "Hello, " name "!")})))
+
+CORRECT - multiple prompts with summary in one step:
+  (step "Survey"
+    (let [name (call :ccos.user.ask "What is your name?")
+          age (call :ccos.user.ask "How old are you?")
+          hobby (call :ccos.user.ask "What is your hobby?")]
+      (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
+
+WRONG - let has no body:
+  (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; Missing body expression!
+
+WRONG - variables out of scope across steps:
+  (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
+  (step "Use" (call :ccos.echo {:message n}))  ; n not in scope here!
+
+Return exactly one (plan ...) with these constraints.
+"#
+        };
+
+        let user_message = format!(
+            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nPrevious attempt that failed:\n{}\n\nError: {}\n\nPlease generate a corrected (do ...) body:",
+            intent.goal, intent.constraints, intent.preferences, last_plan_text, last_error
+        );
+
+        vec![
+            OpenAIMessage {
+                role: "system".to_string(),
+                content: system_message.to_string(),
+            },
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: user_message,
+            },
+        ]
+    }
+
+    /// Validate and parse a plan from LLM response
+    fn validate_and_parse_plan(&self, response: &str, intent: &StorableIntent) -> Result<Plan, RuntimeError> {
+        // Choose prompt mode: full-plan or reduced (do ...) body only
+        let full_plan_mode = std::env::var("RTFS_FULL_PLAN")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        // Try full-plan extraction first (if requested), then reduced (do ...) body
+        if full_plan_mode {
+            if let Some(plan_block) = Self::extract_plan_block(response) {
+                // Prefer extracting the (do ...) right after :body; fallback to generic do search
+                if let Some(do_block) = Self::extract_s_expr_after_key(&plan_block, ":body")
+                    .or_else(|| Self::extract_do_block(&plan_block))
+                {
+                    if parser::parse(&do_block).is_ok() {
+                        let mut plan_name: Option<String> = None;
+                        if let Some(name) =
+                            Self::extract_quoted_value_after_key(&plan_block, ":name")
+                        {
+                            plan_name = Some(name);
+                        }
+                        return Ok(Plan {
+                            plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                            name: plan_name,
+                            intent_ids: vec![intent.intent_id.clone()],
+                            language: PlanLanguage::Rtfs20,
+                            body: PlanBody::Rtfs(do_block),
+                            status: crate::ccos::types::PlanStatus::Draft,
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                            metadata: HashMap::new(),
+                            input_schema: None,
+                            output_schema: None,
+                            policies: HashMap::new(),
+                            capabilities_required: vec![],
+                            annotations: HashMap::new(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback: direct RTFS (do ...) body
+        if let Some(do_block) = Self::extract_do_block(response) {
+            // Validate parses; if not, return error
+            if parser::parse(&do_block).is_ok() {
+                return Ok(Plan {
+                    plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                    name: None,
+                    intent_ids: vec![intent.intent_id.clone()],
+                    language: PlanLanguage::Rtfs20,
+                    body: PlanBody::Rtfs(do_block),
+                    status: crate::ccos::types::PlanStatus::Draft,
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    metadata: HashMap::new(),
+                    input_schema: None,
+                    output_schema: None,
+                    policies: HashMap::new(),
+                    capabilities_required: vec![],
+                    annotations: HashMap::new(),
+                });
+            } else {
+                return Err(RuntimeError::Generic(format!("Failed to parse RTFS plan: {}", do_block)));
+            }
+        }
+
+        // Fallback: previous JSON-wrapped steps contract
+        self.parse_plan_from_json(response, &intent.intent_id)
+    }
+
+    /// Generate a simple stub plan as fallback
+    fn generate_stub_plan(&self, intent: &StorableIntent) -> Plan {
+        let stub_body = format!(
+            r#"(do
+    (step "Echo Intent" (call :ccos.echo {{:message "Intent: {}"}}))
+    (step "Ask User" (call :ccos.user.ask "Please provide more details about your request"))
+    (step "Echo Response" (call :ccos.echo {{:message "Thank you for your input"}}))
+)"#,
+            intent.goal
+        );
+
+        Plan {
+            plan_id: format!("stub_plan_{}", uuid::Uuid::new_v4()),
+            name: Some("Stub Plan".to_string()),
+            intent_ids: vec![intent.intent_id.clone()],
+            language: PlanLanguage::Rtfs20,
+            body: PlanBody::Rtfs(stub_body),
+            status: crate::ccos::types::PlanStatus::Draft,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            metadata: HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            policies: HashMap::new(),
+            capabilities_required: vec![],
+            annotations: HashMap::new(),
+        }
+    }
 }
 
 #[async_trait]
@@ -843,6 +1171,64 @@ Return exactly one (plan ...) with these constraints.
         // Fallback: previous JSON-wrapped steps contract
         self.parse_plan_from_json(&response, &intent.intent_id)
     }
+
+    async fn generate_plan_with_retry(
+        &self,
+        intent: &StorableIntent,
+        context: Option<HashMap<String, String>>,
+    ) -> Result<Plan, RuntimeError> {
+        let mut last_error = None;
+        let mut last_plan_text = None;
+        
+        for attempt in 1..=self.config.retry_config.max_retries {
+            let prompt = if attempt == 1 {
+                self.create_initial_plan_prompt(intent, context.as_ref())
+            } else if self.config.retry_config.send_error_feedback {
+                self.create_retry_prompt_with_feedback(
+                    intent,
+                    context.as_ref(),
+                    last_error.as_ref().unwrap(),
+                    last_plan_text.as_ref().unwrap(),
+                    attempt == self.config.retry_config.max_retries
+                )
+            } else {
+                self.create_initial_plan_prompt(intent, context.as_ref())
+            };
+            
+            let response = self.make_request(prompt).await?;
+            
+            match self.validate_and_parse_plan(&response, intent) {
+                Ok(plan) => {
+                    if attempt > 1 {
+                        log::info!("✅ Plan retry succeeded on attempt {}", attempt);
+                    }
+                    return Ok(plan);
+                }
+                Err(e) => {
+                    log::warn!("❌ Attempt {}/{} failed: {}", attempt, self.config.retry_config.max_retries, e);
+                    last_error = Some(e.to_string());
+                    last_plan_text = Some(response.clone());
+                    
+                    if attempt < self.config.retry_config.max_retries {
+                        continue; // Retry
+                    }
+                }
+            }
+        }
+        
+        // All retries exhausted
+        if self.config.retry_config.use_stub_fallback {
+            log::warn!("⚠️  Using stub fallback after {} failed attempts", self.config.retry_config.max_retries);
+            return Ok(self.generate_stub_plan(intent));
+        }
+        
+        Err(RuntimeError::Generic(format!(
+            "Plan generation failed after {} attempts. Last error: {}",
+            self.config.retry_config.max_retries,
+            last_error.unwrap_or_else(|| "Unknown error".to_string())
+        )))
+    }
+
 
     async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError> {
         let system_message = r#"You are an AI assistant that validates RTFS plans.
@@ -1679,6 +2065,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
         };
 
         let provider = StubLlmProvider::new(config);
@@ -1702,6 +2089,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
         };
 
         let provider = StubLlmProvider::new(config);
@@ -1729,6 +2117,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
         };
 
         let provider = StubLlmProvider::new(config);
@@ -1758,6 +2147,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
         };
 
         // Test that provider can be created (even without valid API key)
@@ -1783,6 +2173,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
         };
 
         // Test that factory can create Anthropic provider
