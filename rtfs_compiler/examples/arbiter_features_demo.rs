@@ -233,6 +233,7 @@ async fn demo_hybrid_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         max_tokens: Some(1000),
         temperature: Some(0.7),
         prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+        retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
         timeout_seconds: Some(30),
     };
 
@@ -316,6 +317,7 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         max_tokens: Some(1000),
         temperature: Some(0.7),
         prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+        retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
         timeout_seconds: Some(30),
     };
 
@@ -455,6 +457,7 @@ async fn demo_llm_arbiter() -> Result<(), Box<dyn std::error::Error>> {
         max_tokens: Some(1000),
         temperature: Some(0.7),
         prompts: Some(rtfs_compiler::ccos::arbiter::prompt::PromptConfig::default()),
+        retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
         timeout_seconds: Some(30),
     };
 
