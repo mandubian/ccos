@@ -869,6 +869,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
             prompts: None,
         };
 
