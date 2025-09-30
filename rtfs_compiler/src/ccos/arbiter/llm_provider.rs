@@ -12,6 +12,7 @@ use crate::runtime::error::RuntimeError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // for validating reduced-grammar RTFS plans
+use super::arbiter_config::RetryConfig;
 
 /// Result of plan validation by an LLM provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -515,7 +516,7 @@ Model: Here's the body you requested:
     fn create_initial_plan_prompt(
         &self,
         intent: &StorableIntent,
-        context: Option<&HashMap<String, String>>,
+        _context: Option<&HashMap<String, String>>,
     ) -> Vec<OpenAIMessage> {
         // Choose prompt mode: full-plan or reduced (do ...) body only
         let full_plan_mode = std::env::var("RTFS_FULL_PLAN")
@@ -624,7 +625,7 @@ Return exactly one (plan ...) with these constraints.
     fn create_retry_prompt_with_feedback(
         &self,
         intent: &StorableIntent,
-        context: Option<&HashMap<String, String>>,
+        _context: Option<&HashMap<String, String>>,
         last_error: &str,
         last_plan_text: &str,
         is_final_attempt: bool,
@@ -747,7 +748,7 @@ Return exactly one (plan ...) with these constraints.
                             name: plan_name,
                             intent_ids: vec![intent.intent_id.clone()],
                             language: PlanLanguage::Rtfs20,
-                            body: PlanBody::Rtfs(do_block),
+                            body: PlanBody::Rtfs(do_block.to_string()),
                             status: crate::ccos::types::PlanStatus::Draft,
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -774,7 +775,7 @@ Return exactly one (plan ...) with these constraints.
                     name: None,
                     intent_ids: vec![intent.intent_id.clone()],
                     language: PlanLanguage::Rtfs20,
-                    body: PlanBody::Rtfs(do_block),
+                    body: PlanBody::Rtfs(do_block.to_string()),
                     status: crate::ccos::types::PlanStatus::Draft,
                     created_at: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
