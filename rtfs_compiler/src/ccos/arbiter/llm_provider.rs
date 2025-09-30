@@ -1183,9 +1183,12 @@ Return exactly one (plan ...) with these constraints.
         
         for attempt in 1..=self.config.retry_config.max_retries {
             let prompt = if attempt == 1 {
-                self.create_initial_plan_prompt(intent, context.as_ref())
+                // Cast self to concrete type to access helper methods
+                let concrete_self = self as &OpenAILlmProvider;
+                concrete_self.create_initial_plan_prompt(intent, context.as_ref())
             } else if self.config.retry_config.send_error_feedback {
-                self.create_retry_prompt_with_feedback(
+                let concrete_self = self as &OpenAILlmProvider;
+                concrete_self.create_retry_prompt_with_feedback(
                     intent,
                     context.as_ref(),
                     last_error.as_ref().unwrap(),
@@ -1193,12 +1196,14 @@ Return exactly one (plan ...) with these constraints.
                     attempt == self.config.retry_config.max_retries
                 )
             } else {
-                self.create_initial_plan_prompt(intent, context.as_ref())
+                let concrete_self = self as &OpenAILlmProvider;
+                concrete_self.create_initial_plan_prompt(intent, context.as_ref())
             };
             
             let response = self.make_request(prompt).await?;
             
-            match self.validate_and_parse_plan(&response, intent) {
+            let concrete_self = self as &OpenAILlmProvider;
+            match concrete_self.validate_and_parse_plan(&response, intent) {
                 Ok(plan) => {
                     if attempt > 1 {
                         log::info!("✅ Plan retry succeeded on attempt {}", attempt);
@@ -1220,7 +1225,8 @@ Return exactly one (plan ...) with these constraints.
         // All retries exhausted
         if self.config.retry_config.use_stub_fallback {
             log::warn!("⚠️  Using stub fallback after {} failed attempts", self.config.retry_config.max_retries);
-            return Ok(self.generate_stub_plan(intent));
+            let concrete_self = self as &OpenAILlmProvider;
+            return Ok(concrete_self.generate_stub_plan(intent));
         }
         
         Err(RuntimeError::Generic(format!(
