@@ -22,6 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_tokens: Some(1000),
         temperature: Some(0.7),
         timeout_seconds: Some(30),
+        retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
     };
 
     // Create stub LLM provider

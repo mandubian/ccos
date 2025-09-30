@@ -161,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_tokens: Some(512),
                 temperature: Some(0.2),
                 timeout_seconds: Some(30),
+                retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
                 prompts: None,
             }),
             delegation_config: None,
@@ -196,6 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_tokens: Some(512),
                 temperature: Some(0.2),
                 timeout_seconds: Some(45),
+                retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
                 prompts: None,
             }),
             delegation_config: None,
@@ -260,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: Some(512),
             temperature: Some(0.2),
             timeout_seconds: Some(45),
+            retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
         };
         let provider = LlmRtfsPlanGenerationProvider::new(config);
         let result = provider

@@ -40,6 +40,7 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
         max_tokens: Some(1000),
         temperature: Some(0.7),
         timeout_seconds: Some(30),
+        retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
         prompts: None,
     };
 

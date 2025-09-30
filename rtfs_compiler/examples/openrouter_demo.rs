@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: Some(2000),
             temperature: Some(0.7),
             timeout_seconds: Some(60),
+            retry_config: rtfs_compiler::ccos::arbiter::arbiter_config::RetryConfig::default(),
             prompts: None,
         }),
         delegation_config: None,
