@@ -827,7 +827,7 @@ Return exactly one (plan ...) with these constraints.
     async fn generate_plan_with_retry(
         &self,
         intent: &StorableIntent,
-        context: Option<HashMap<String, String>>,
+        _context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError> {
         let mut last_error = None;
         let mut last_plan_text = None;
