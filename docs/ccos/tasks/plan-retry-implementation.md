@@ -4,7 +4,7 @@
 **Priority:** High (User Experience)  
 **Estimated Effort:** 2-3 days  
 **Dependencies:** None  
-**Related Docs:** `docs/ccos/plan-generation-retry-strategy.md`
+**Related Docs:** `docs/ccos/specs/021-plan-generation-retry.md`
 
 ## Overview
 
