@@ -16,6 +16,7 @@ use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 use crate::ccos::arbiter::plan_generation::{
     LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
 };
+use crate::ccos::arbiter::prompt::{FilePromptStore, PromptConfig, PromptManager};
 use crate::ccos::delegation_keys::{agent, generation};
 use crate::ccos::types::{
     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
@@ -232,6 +233,7 @@ pub struct DelegatingArbiter {
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
     adaptive_threshold_calculator:
         Option<crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator>,
+    prompt_manager: PromptManager<FilePromptStore>,
 }
 
 /// Agent registry for managing available agents
@@ -318,6 +320,10 @@ impl DelegatingArbiter {
                 crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator::new(config.clone())
             });
 
+        // Create prompt manager for file-based prompts
+        let prompt_store = FilePromptStore::new("assets/prompts/arbiter");
+        let prompt_manager = PromptManager::new(prompt_store);
+
         Ok(Self {
             llm_config,
             delegation_config,
@@ -325,34 +331,36 @@ impl DelegatingArbiter {
             agent_registry,
             intent_graph,
             adaptive_threshold_calculator,
+            prompt_manager,
         })
     }
 
     /// Generate intent using LLM
+    /// 
+    /// This method prioritizes RTFS format output from the LLM, but gracefully falls back
+    /// to JSON parsing if the LLM returns JSON instead. The workflow is:
+    /// 1. Request RTFS format via prompt
+    /// 2. Try parsing response as RTFS using the RTFS parser
+    /// 3. If RTFS parsing fails, attempt JSON parsing as fallback
+    /// 4. Mark intents parsed from JSON with "parse_format" metadata for tracking
     async fn generate_intent_with_llm(
         &self,
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
-        // Convert context from Value to String for LlmProvider interface
-        let string_context = context.as_ref().map(|ctx| {
-            ctx.iter()
-                .map(|(k, v)| (k.clone(), v.to_string()))
-                .collect::<HashMap<String, String>>()
-        });
+        // Create prompt requesting RTFS format
+        let prompt = self.create_intent_prompt(natural_language, context.clone());
 
-        let storable_intent = self
-            .llm_provider
-            .generate_intent(natural_language, string_context)
-            .await?;
+        // Get raw text response
+        let response = self.llm_provider.generate_text(&prompt).await?;
 
-        // Log provider and result (best-effort, non-fatal)
+        // Log provider and raw response (best-effort, non-fatal)
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open("logs/arbiter_llm.log")?;
-            let entry = json!({"event":"llm_intent_generation","provider": format!("{:?}", self.llm_config.provider_type), "request": natural_language, "intent_id": storable_intent.intent_id});
+            let entry = json!({"event":"llm_intent_generation","provider": format!("{:?}", self.llm_config.provider_type), "request": natural_language, "response_sample": response.chars().take(200).collect::<String>()});
             writeln!(
                 f,
                 "[{}] {}",
@@ -362,8 +370,18 @@ impl DelegatingArbiter {
             Ok(())
         })();
 
-        // Convert StorableIntent to Intent
-        let mut intent = Intent::from_storable(storable_intent)?;
+        // Try parsing as RTFS first
+        let mut intent = match self.parse_llm_intent_response(&response, natural_language, context.clone()) {
+            Ok(intent) => {
+                println!("✓ Successfully parsed intent from RTFS format");
+                intent
+            }
+            Err(rtfs_err) => {
+                println!("⚠ RTFS parsing failed, attempting JSON fallback: {}", rtfs_err);
+                // Fall back to JSON parsing
+                self.parse_json_intent_response(&response, natural_language)?
+            }
+        };
 
         // Mark how this intent was generated so downstream code/tests can inspect it
         intent.metadata.insert(
@@ -643,55 +661,49 @@ impl DelegatingArbiter {
         Ok(plan)
     }
 
-    /// Create prompt for intent generation
+    /// Create prompt for intent generation using file-based prompt store
     fn create_intent_prompt(
         &self,
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> String {
-        format!(
-            r#"Convert the following natural language request into a structured Intent using RTFS syntax.
-
-Request: {natural_language}
-
-Context: {context:?}
-
-Generate an RTFS Intent matching this format:
-(intent "intent-name"
-  :goal "Clear description of what should be achieved"
-  :constraints {{
-    :constraint-name constraint-expression
-    :another-constraint (> value threshold)
-  }}
-  :preferences {{
-    :preference-name preference-value
-    :another-preference "optional-setting"
-  }}
-  :success-criteria (and (condition1) (condition2)))
-
-Example:
-(intent "deploy-web-service"
-  :goal "Deploy a web service with high availability"
-  :constraints {{
-    :availability (> uptime 0.99)
-    :performance (< response-time 200)
-    :cost (< monthly-cost 1000)
-  }}
-  :preferences {{
-    :region "us-east-1"
-    :scaling :auto
-  }}
-  :success-criteria (and (deployed? service) 
-                        (healthy? service)
-                        (> (uptime service) 0.99)))
-
-Generate the RTFS Intent:"#,
-            natural_language = natural_language,
-            context = context.as_ref().unwrap_or(&HashMap::new())
-        )
+        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
+        
+        let prompt_config = self
+            .llm_config
+            .prompts
+            .clone()
+            .unwrap_or_default();
+        
+        let context_str = format!("{:?}", context.as_ref().unwrap_or(&HashMap::new()));
+        let context_for_fallback = context.clone();
+        
+        let mut vars = HashMap::new();
+        vars.insert("natural_language".to_string(), natural_language.to_string());
+        vars.insert("context".to_string(), context_str);
+        vars.insert(
+            "available_capabilities".to_string(),
+            format!("{:?}", available_capabilities),
+        );
+        
+        self.prompt_manager
+            .render(
+                &prompt_config.intent_prompt_id,
+                &prompt_config.intent_prompt_version,
+                &vars,
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load intent prompt from assets: {}. Using fallback.", e);
+                // Minimal fallback prompt
+                format!(
+                    "Generate an RTFS intent for: {}\nContext: {:?}",
+                    natural_language,
+                    context_for_fallback.unwrap_or_default()
+                )
+            })
     }
 
-    /// Create prompt for delegation analysis
+    /// Create prompt for delegation analysis using file-based prompt store
     fn create_delegation_analysis_prompt(
         &self,
         intent: &Intent,
@@ -709,10 +721,24 @@ Generate the RTFS Intent:"#,
             .collect::<Vec<_>>()
             .join("\n");
 
-        self.create_fallback_delegation_prompt(intent, context, &agent_list)
+        let context_for_fallback = context.clone();
+        
+        let mut vars = HashMap::new();
+        vars.insert("intent".to_string(), format!("{:?}", intent));
+        vars.insert("context".to_string(), format!("{:?}", context.as_ref().unwrap_or(&HashMap::new())));
+        vars.insert("available_agents".to_string(), agent_list);
+
+        let agent_list_for_fallback = vars["available_agents"].clone();
+        
+        self.prompt_manager
+            .render("delegation_analysis", "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load delegation analysis prompt from assets: {}. Using fallback.", e);
+                self.create_fallback_delegation_prompt(intent, context_for_fallback, &agent_list_for_fallback)
+            })
     }
 
-    /// Fallback delegation analysis prompt (used when prompt manager is not available)
+    /// Fallback delegation analysis prompt (used when prompt assets fail to load)
     fn create_fallback_delegation_prompt(
         &self,
         intent: &Intent,
@@ -757,106 +783,72 @@ Available Agents:
         )
     }
 
-    /// Create prompt for delegation plan generation
+    /// Create prompt for delegation plan generation using file-based prompt store
     fn create_delegation_plan_prompt(
         &self,
         intent: &Intent,
         agent: &AgentDefinition,
         context: Option<HashMap<String, Value>>,
     ) -> String {
-        format!(
-            r#"Generate an RTFS plan that delegates this intent to a specialized agent.
+        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.validate".to_string(), 
+                                          "ccos.delegate".to_string(), "ccos.verify".to_string()];
+        
+        let mut vars = HashMap::new();
+        vars.insert("intent".to_string(), format!("{:?}", intent));
+        vars.insert("context".to_string(), format!("{:?}", context.unwrap_or_default()));
+        vars.insert("available_capabilities".to_string(), format!("{:?}", available_capabilities));
+        vars.insert("agent_name".to_string(), agent.name.clone());
+        vars.insert("agent_id".to_string(), agent.agent_id.clone());
+        vars.insert("agent_capabilities".to_string(), format!("{:?}", agent.capabilities));
+        vars.insert("agent_trust_score".to_string(), format!("{:.2}", agent.trust_score));
+        vars.insert("agent_cost".to_string(), format!("{:.2}", agent.cost));
+        vars.insert("delegation_mode".to_string(), "true".to_string());
 
+        self.prompt_manager
+            .render("plan_generation", "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load delegation plan prompt from assets: {}. Using fallback.", e);
+                format!(
+                    r#"Generate an RTFS plan that delegates to agent {} ({}).
 Intent: {:?}
-
-Selected Agent: {} ({})
 Agent Capabilities: {:?}
-Agent Trust Score: {:.2}
-Agent Cost: {:.2}
-
-Context: {:?}
-
-Generate a plan using RTFS syntax with step special forms that:
-1. Validates the delegation decision
-2. Prepares the request for the agent
-3. Delegates to the agent
-4. Handles the response
-5. Validates the result
-
-Available capabilities: :ccos.echo, :ccos.validate, :ccos.delegate, :ccos.verify
-
+Available capabilities: {:?}
 Plan:"#,
-            intent,
-            agent.name,
-            agent.agent_id,
-            agent.capabilities,
-            agent.trust_score,
-            agent.cost,
-            context.unwrap_or_default()
-        )
+                    agent.name, agent.agent_id, intent, agent.capabilities, available_capabilities
+                )
+            })
     }
 
-    /// Create prompt for direct plan generation
+    /// Create prompt for direct plan generation using file-based prompt store
     fn create_direct_plan_prompt(
         &self,
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> String {
-        format!(
-            r#"Generate an RTFS plan to achieve this intent directly.
+        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
+        let context_for_fallback = context.clone();
+        
+        let mut vars = HashMap::new();
+        vars.insert("intent".to_string(), format!("{:?}", intent));
+        vars.insert("context".to_string(), format!("{:?}", context.as_ref().unwrap_or(&HashMap::new())));
+        vars.insert("available_capabilities".to_string(), format!("{:?}", available_capabilities));
+        vars.insert("delegation_mode".to_string(), "false".to_string());
 
-Intent: {:?}
-
+        let available_capabilities_for_fallback = available_capabilities.clone();
+        
+        self.prompt_manager
+            .render("plan_generation", "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load plan generation prompt from assets: {}. Using fallback.", e);
+                format!(
+                    r#"Generate an RTFS plan for: {:?}
 Context: {:?}
-
-Generate a plan using RTFS syntax with step special forms:
-(do
-  (step "Step Name" (call :capability.name args))
-  ...
-)
-
-IMPORTANT: For data sharing between plans in intent graphs:
-- Use (set! :key value) to publish values that other plans can access
-- Use (get :key) to retrieve values published by other plans
-- Values set with set! are automatically shared across the intent graph
-- Use meaningful key names like :result, :sum, :greeting, etc.
-
-Examples:
-; Producer plan - publishes a value
-(do
-  (step "compute-sum" 
-    (set! :sum (+ 2 3))))
-
-; Consumer plan - retrieves the value
-(do
-  (step "display-result"
-    (let [s (get :sum)]
-      (call :ccos.echo (str "The sum is: " s)))))
-
-Rejection Checklist - DO NOT use:
-❌ :step_1.result (deprecated syntax)
-❌ Custom context capabilities (not needed)
-❌ Complex data structures in set! (keep it simple)
-❌ Unregistered capabilities (only use :ccos.echo, :ccos.math.add)
-❌ String keys in set! - use symbols like :key not "key"
-
-Available capabilities: :ccos.echo, :ccos.math.add
-
-IMPORTANT: Use correct RTFS syntax:
-- :ccos.echo - for printing/logging, e.g., (call :ccos.echo "message")
-- :ccos.math.add - for adding numbers, use direct arguments: (call :ccos.math.add 2 3)
-
-Examples of correct usage:
-(call :ccos.echo "Hello world")
-(call :ccos.math.add 2 3)
-(set! :result (call :ccos.math.add 10 20))
-
-CRITICAL: Use proper RTFS syntax. ccos.math.add accepts direct arguments like (call :ccos.math.add 2 3).
-
+Available capabilities: {:?}
+Use (do (step "name" (call :capability args))) syntax.
 Plan:"#,
-            intent,
-            context.unwrap_or_default()
-        )
+                    intent, context_for_fallback.unwrap_or_default(), available_capabilities_for_fallback
+                )
+            })
     }
 
     /// Parse LLM response into intent structure using RTFS parser
@@ -890,6 +882,100 @@ Plan:"#,
                 "Parsed AST did not contain a top-level expression for the intent".to_string(),
             ))
         }
+    }
+
+    /// Parse JSON response as fallback when RTFS parsing fails
+    fn parse_json_intent_response(
+        &self,
+        response: &str,
+        natural_language: &str,
+    ) -> Result<Intent, RuntimeError> {
+        println!("🔄 Attempting to parse response as JSON...");
+        
+        // Extract JSON from response (handles markdown code blocks, etc.)
+        let json_str = self.extract_json_from_response(response);
+        
+        // Parse the JSON
+        let json_value: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse JSON intent: {}. Response: '{}'", e, response.chars().take(200).collect::<String>())))?;
+
+        // Extract intent fields from JSON
+        let goal = json_value["goal"]
+            .as_str()
+            .or_else(|| json_value["Goal"].as_str())
+            .or_else(|| json_value["GOAL"].as_str())
+            .unwrap_or(natural_language)
+            .to_string();
+
+        let name = json_value["name"]
+            .as_str()
+            .or_else(|| json_value["Name"].as_str())
+            .or_else(|| json_value["intent_name"].as_str())
+            .map(|s| s.to_string());
+
+        let mut intent = Intent::new(goal).with_name(
+            name.unwrap_or_else(|| format!("intent_{}", uuid::Uuid::new_v4()))
+        );
+
+        intent.original_request = natural_language.to_string();
+
+        // Extract constraints if present
+        if let Some(constraints_obj) = json_value.get("constraints")
+            .or_else(|| json_value.get("Constraints")) {
+            if let Some(obj) = constraints_obj.as_object() {
+                for (k, v) in obj {
+                    let value = match v {
+                        serde_json::Value::String(s) => Value::String(s.clone()),
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                Value::Integer(i)
+                            } else if let Some(f) = n.as_f64() {
+                                Value::Float(f)
+                            } else {
+                                Value::String(v.to_string())
+                            }
+                        }
+                        serde_json::Value::Bool(b) => Value::Boolean(*b),
+                        _ => Value::String(v.to_string()),
+                    };
+                    intent.constraints.insert(k.clone(), value);
+                }
+            }
+        }
+
+        // Extract preferences if present
+        if let Some(preferences_obj) = json_value.get("preferences")
+            .or_else(|| json_value.get("Preferences")) {
+            if let Some(obj) = preferences_obj.as_object() {
+                for (k, v) in obj {
+                    let value = match v {
+                        serde_json::Value::String(s) => Value::String(s.clone()),
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                Value::Integer(i)
+                            } else if let Some(f) = n.as_f64() {
+                                Value::Float(f)
+                            } else {
+                                Value::String(v.to_string())
+                            }
+                        }
+                        serde_json::Value::Bool(b) => Value::Boolean(*b),
+                        _ => Value::String(v.to_string()),
+                    };
+                    intent.preferences.insert(k.clone(), value);
+                }
+            }
+        }
+
+        // Mark that this was parsed from JSON
+        intent.metadata.insert(
+            "parse_format".to_string(),
+            Value::String("json_fallback".to_string()),
+        );
+
+        println!("✓ Successfully parsed intent from JSON format");
+        
+        Ok(intent)
     }
 
     /// Parse delegation analysis response with robust error handling
@@ -1736,5 +1822,46 @@ mod tests {
             // original_request is non-empty as a fallback verification.
             assert!(intent.name.is_some() || !intent.original_request.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn test_json_fallback_parsing() {
+        let (llm_config, delegation_config) = create_test_config();
+        let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ccos::intent_graph::IntentGraph::new().unwrap(),
+        ));
+
+        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph)
+            .await
+            .unwrap();
+
+        // Test parsing a JSON response
+        let json_response = r#"
+        {
+            "name": "backup-system",
+            "goal": "Create a backup system for user data",
+            "constraints": {
+                "frequency": "daily",
+                "retention": 30
+            },
+            "preferences": {
+                "encryption": true,
+                "compression": "gzip"
+            }
+        }
+        "#;
+
+        let intent = arbiter.parse_json_intent_response(json_response, "Create a backup system").unwrap();
+        
+        assert_eq!(intent.name, Some("backup-system".to_string()));
+        assert_eq!(intent.goal, "Create a backup system for user data");
+        assert!(intent.constraints.contains_key("frequency"));
+        assert!(intent.preferences.contains_key("encryption"));
+        
+        // Check that it was marked as JSON fallback
+        assert_eq!(
+            intent.metadata.get("parse_format").and_then(|v| v.as_string()).as_deref(),
+            Some("json_fallback")
+        );
     }
 }

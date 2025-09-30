@@ -4,6 +4,7 @@
 //! allowing the Arbiter to work with various LLM services while maintaining
 //! a consistent interface.
 
+use crate::ccos::arbiter::prompt::{FilePromptStore, PromptManager};
 use crate::ccos::types::{
     GenerationContext, IntentStatus, Plan, PlanBody, PlanLanguage, StorableIntent, TriggerSource,
 };
@@ -204,6 +205,7 @@ pub struct OpenAILlmProvider {
     config: LlmProviderConfig,
     client: reqwest::Client,
     metrics: RetryMetrics,
+    prompt_manager: PromptManager<FilePromptStore>,
 }
 
 impl OpenAILlmProvider {
@@ -215,10 +217,14 @@ impl OpenAILlmProvider {
             .build()
             .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
 
+        let prompt_store = FilePromptStore::new("assets/prompts/arbiter");
+        let prompt_manager = PromptManager::new(prompt_store);
+
         Ok(Self { 
             config, 
             client,
             metrics: RetryMetrics::new(),
+            prompt_manager,
         })
     }
 
@@ -487,7 +493,16 @@ impl LlmProvider for OpenAILlmProvider {
         prompt: &str,
         _context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError> {
-        let system_message = r#"You are an AI assistant that converts natural language requests into structured intents for a cognitive computing system.
+        // Load prompt from assets with fallback
+        let vars = HashMap::from([
+            ("user_request".to_string(), prompt.to_string()),
+        ]);
+        
+        let system_message = self.prompt_manager
+            .render("intent_generation", "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load intent_generation prompt from assets: {}. Using fallback.", e);
+                r#"You are an AI assistant that converts natural language requests into structured intents for a cognitive computing system.
 
 Generate a JSON response with the following structure:
 {
@@ -508,7 +523,8 @@ Examples:
 - "priority": "high" (not ["high"])
 - "timeout": "30_seconds" (not 30)
 
-Only respond with valid JSON."#;
+Only respond with valid JSON."#.to_string()
+            });
 
         let messages = vec![
             OpenAIMessage {
@@ -547,163 +563,35 @@ Only respond with valid JSON."#;
             .map(|v| v == "1")
             .unwrap_or(false);
 
-        // Reduced RTFS grammar prompt (default): require direct (do ...) body with (step ...) and (call :cap ...)
-        let reduced_system_message = r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
+        // Prepare variables for prompt rendering
+        let vars = HashMap::from([
+            ("goal".to_string(), intent.goal.clone()),
+            ("constraints".to_string(), format!("{:?}", intent.constraints)),
+            ("preferences".to_string(), format!("{:?}", intent.preferences)),
+        ]);
 
-Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences.
+        // Load appropriate prompt based on mode
+        let prompt_id = if full_plan_mode {
+            "plan_generation_full"
+        } else {
+            "plan_generation_reduced"
+        };
 
-Allowed forms (reduced grammar):
-- (do <step> <step> ...)
-- (step "Descriptive Name" (<expr>)) ; name must be a double-quoted string
-- (call :cap.namespace.op <args...>)   ; capability ids MUST be RTFS keywords starting with a colon
-- (if <condition> <then> <else>)  ; conditional execution (use for binary yes/no)
-- (match <value> <pattern1> <result1> <pattern2> <result2> ...)  ; pattern matching (use for multiple choices)
-- (let [var1 expr1 var2 expr2] <body>)  ; local bindings
-- (str <arg1> <arg2> ...)  ; string concatenation
-- (= <arg1> <arg2>)  ; equality comparison
+        let system_message = self.prompt_manager
+            .render(prompt_id, "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load {} prompt from assets: {}. Using fallback.", prompt_id, e);
+                // Fallback to original hard-coded prompts based on mode
+                if full_plan_mode {
+                    r#"You translate an RTFS intent into a concrete RTFS plan using a constrained schema.
+Output format: ONLY a single well-formed RTFS s-expression starting with (plan ...). No prose, no JSON, no fences."#.to_string()
+                } else {
+                    r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
+Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences."#.to_string()
+                }
+            });
 
-Arguments allowed:
-- strings: "..."
-- numbers: 1 2 3
-- simple maps with keyword keys: {:key "value" :a 1 :b 2}
-
-Capability signatures for this demo (STRICT):
-- :ccos.echo must be called with a single map argument containing :message string
-    Example: (call :ccos.echo {:message "hello"})
-- :ccos.math.add must be called with exactly two positional number arguments. Do NOT use map arguments for this capability.
-    Example: (call :ccos.math.add 2 3)
-- :ccos.user.ask prompts the user for input. Takes 1-2 string arguments: prompt, optional default
-    Returns: string value with user's response
-    
-    IMPORTANT: To capture and reuse the response, use (let ...) with BOTH the prompt AND the action that uses it IN THE SAME STEP.
-    Let bindings do NOT cross step boundaries!
-    
-    Examples:
-      Simple (no reuse): (step "Get Name" (call :ccos.user.ask "What is your name?"))
-      
-      Capture and reuse (CORRECT - single step with let):
-        (step "Greet User" 
-          (let [name (call :ccos.user.ask "What is your name?")]
-            (call :ccos.echo {:message (str "Hello, " name "!")})))
-      
-      Multiple prompts with summary (CORRECT - sequential bindings in one step):
-        (step "Survey" 
-          (let [name (call :ccos.user.ask "What is your name?")
-                age (call :ccos.user.ask "How old are you?")
-                hobby (call :ccos.user.ask "What is your hobby?")]
-            (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
-      
-      WRONG - let has no body:
-        (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; ERROR: missing body!
-      
-      WRONG - variables out of scope across steps:
-        (step "Get Name" (let [name (call :ccos.user.ask "Name?")] name))
-        (step "Use Name" (call :ccos.echo {:message name}))  ; ERROR: name not in scope!
-      
-      Conditional branching (CORRECT - if for yes/no):
-        (step "Pizza Check" 
-          (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
-            (if (= likes "yes")
-              (call :ccos.echo {:message "Great! Pizza is delicious!"})
-              (call :ccos.echo {:message "Maybe try it sometime!"}))))
-      
-      Multiple choice (CORRECT - match for many options):
-        (step "Language Hello World" 
-          (let [lang (call :ccos.user.ask "Choose: rust, python, or javascript")]
-            (match lang
-              "rust" (call :ccos.echo {:message "println!(\"Hello\")"})
-              "python" (call :ccos.echo {:message "print('Hello')"})
-              "javascript" (call :ccos.echo {:message "console.log('Hello')"})
-              _ (call :ccos.echo {:message "Unknown language"}))))
-
-Constraints:
-- Use ONLY the forms above. Do NOT return JSON or markdown. Do NOT include (plan ...) wrapper.
-- Available capabilities for this demo (whitelist): :ccos.echo, :ccos.math.add, :ccos.user.ask. You MUST use only capability ids from this list.
-- If you need to print/log, use :ccos.echo. If you need to add numbers, use :ccos.math.add. If you need user input, use :ccos.user.ask.
-- Keep it multi-step if helpful. Ensure the s-expression parses.
-"#;
-
-        // Full plan prompt (opt-in): emit a (plan ...) wrapper without sensitive fields.
-        // The orchestrator will ignore/overwrite: plan_id, intent_ids, status, policies, capabilities_required, timestamps.
-        // Required: :body with a (do ...) form. Optional: :name (string), :language rtfs20, :annotations simple map.
-        let full_plan_system_message = r#"You translate an RTFS intent into a concrete RTFS plan using a constrained schema.
-
-Output format: ONLY a single well-formed RTFS s-expression starting with (plan ...). No prose, no JSON, no fences.
-
-Allowed keys in (plan ...):
-- :name "short descriptive name"            ; optional
-- :language rtfs20                           ; optional (will be set to rtfs20 if missing)
-- :body (do <step> <step> ...)               ; required; use reduced grammar for steps and calls
-- :annotations {:key "value" :k2 "v2"}     ; optional; keyword keys and string values only
-
-Forbidden or ignored (kernel-owned): :plan_id :intent_ids :status :policies :capabilities_required :created_at :metadata :input_schema :output_schema
-
-Reduced step/call grammar inside :body:
-- (step "Descriptive Name" (<expr>))
-- (call :cap.namespace.op <args...>)
-- (if <condition> <then> <else>)  ; for binary yes/no choices
-- (match <value> <pattern1> <result1> <pattern2> <result2> ...)  ; for multiple choices
-- (let [var1 expr1 var2 expr2] <body>)
-- (str <arg1> <arg2> ...)
-- (= <arg1> <arg2>)
-Arguments allowed: strings ("..."), numbers (1 2 3), simple maps with keyword keys ({:key "value"}).
-
-Capability whitelist for this demo: use ONLY these capability ids in :body
-- :ccos.echo  ; for printing/logging messages
-- :ccos.math.add  ; for adding numbers
-- :ccos.user.ask  ; for prompting user for input
-Do NOT invent or use other capability ids.
-
-Additional STRICT signature rules:
-- :ccos.echo must be called with a single map {:message "..."}
-- :ccos.math.add must be called with exactly two positional numbers, e.g., (call :ccos.math.add 2 3). Map arguments are NOT allowed for this capability.
-- :ccos.user.ask must be called with 1-2 string arguments: prompt, optional default. Returns user's string response.
-    
-    IMPORTANT: To capture and reuse the response, use (let ...) with BOTH the prompt AND the action IN THE SAME STEP.
-    Let bindings do NOT cross step boundaries!
-    
-    Examples:
-      Simple (no reuse): (step "Get Name" (call :ccos.user.ask "What is your name?"))
-      
-      Capture and reuse (CORRECT - single step):
-        (step "Greet User" 
-          (let [name (call :ccos.user.ask "What is your name?")]
-            (call :ccos.echo {:message (str "Hello, " name "!")})))
-      
-      Multiple prompts with summary (CORRECT - sequential bindings in one step):
-        (step "Survey" 
-          (let [name (call :ccos.user.ask "What is your name?")
-                age (call :ccos.user.ask "How old are you?")
-                hobby (call :ccos.user.ask "What is your hobby?")]
-            (call :ccos.echo {:message (str "Summary: " name ", age " age ", enjoys " hobby)})))
-      
-      WRONG - let has no body:
-        (step "Bad" (let [name (call :ccos.user.ask "Name?")])  ; Missing body expression!
-      
-      WRONG - variables out of scope across steps:
-        (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
-        (step "Use" (call :ccos.echo {:message n}))  ; n not in scope here!
-      
-      Conditional branching (CORRECT - if for yes/no):
-        (step "Pizza Check" 
-          (let [likes (call :ccos.user.ask "Do you like pizza? (yes/no)")]
-            (if (= likes "yes")
-              (call :ccos.echo {:message "Great! Pizza is delicious!"})
-              (call :ccos.echo {:message "Maybe try it sometime!"}))))
-      
-      Multiple choice (CORRECT - match for many options):
-        (step "Language Hello World" 
-          (let [lang (call :ccos.user.ask "Choose: rust, python, or javascript")]
-            (match lang
-              "rust" (call :ccos.echo {:message "println!(\"Hello\")"})
-              "python" (call :ccos.echo {:message "print('Hello')"})
-              "javascript" (call :ccos.echo {:message "console.log('Hello')"})
-              _ (call :ccos.echo {:message "Unknown language"}))))
-
-Return exactly one (plan ...) with these constraints.
-"#;
-
-        let user_message = if full_plan_mode {
+                let user_message = if full_plan_mode {
             format!(
                 "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (plan ...) now, following the constraints above:",
                 intent.goal, intent.constraints, intent.preferences
@@ -724,14 +612,9 @@ Return exactly one (plan ...) with these constraints.
                 .map(|v| v == "1")
                 .unwrap_or(false);
         if show_prompts {
-            let system_msg = if full_plan_mode {
-                full_plan_system_message
-            } else {
-                reduced_system_message
-            };
             println!(
                 "\n=== LLM Plan Generation Prompt ===\n[system]\n{}\n\n[user]\n{}\n=== END PROMPT ===\n",
-                system_msg,
+                system_message,
                 user_message
             );
         }
@@ -739,11 +622,7 @@ Return exactly one (plan ...) with these constraints.
         let messages = vec![
             OpenAIMessage {
                 role: "system".to_string(),
-                content: if full_plan_mode {
-                    full_plan_system_message.to_string()
-                } else {
-                    reduced_system_message.to_string()
-                },
+                content: system_message,
             },
             OpenAIMessage {
                 role: "user".to_string(),
@@ -1354,6 +1233,7 @@ pub struct AnthropicLlmProvider {
     config: LlmProviderConfig,
     client: reqwest::Client,
     metrics: RetryMetrics,
+    prompt_manager: PromptManager<FilePromptStore>,
 }
 
 impl AnthropicLlmProvider {
@@ -1365,10 +1245,14 @@ impl AnthropicLlmProvider {
             .build()
             .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
 
+        let prompt_store = FilePromptStore::new("assets/prompts/arbiter");
+        let prompt_manager = PromptManager::new(prompt_store);
+
         Ok(Self { 
             config, 
             client,
             metrics: RetryMetrics::new(),
+            prompt_manager,
         })
     }
 
@@ -1520,7 +1404,16 @@ impl LlmProvider for AnthropicLlmProvider {
         prompt: &str,
         context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError> {
-        let system_message = r#"You are an AI assistant that converts natural language requests into structured intents for a cognitive computing system.
+        // Load prompt from assets with fallback
+        let vars = HashMap::from([
+            ("user_request".to_string(), prompt.to_string()),
+        ]);
+        
+        let system_message = self.prompt_manager
+            .render("intent_generation", "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load intent_generation prompt from assets: {}. Using fallback.", e);
+                r#"You are an AI assistant that converts natural language requests into structured intents for a cognitive computing system.
 
 Generate a JSON response with the following structure:
 {
@@ -1541,7 +1434,8 @@ Examples:
 - "priority": "high" (not ["high"])
 - "timeout": "30_seconds" (not 30)
 
-Only respond with valid JSON."#;
+Only respond with valid JSON."#.to_string()
+            });
 
         let user_message = if let Some(ctx) = context {
             let context_str = ctx
