@@ -290,6 +290,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(ref provider) = args.llm_provider {
         std::env::set_var("CCOS_LLM_PROVIDER_HINT", provider);
+        // Provide generic provider env for arbiter routing
+        std::env::set_var("CCOS_LLM_PROVIDER", provider);
+        if provider == "stub" {
+            // Ensure a deterministic stub model name if user omitted --llm-model
+            if args.llm_model.is_none() && std::env::var("CCOS_DELEGATING_MODEL").is_err() {
+                std::env::set_var("CCOS_DELEGATING_MODEL", "deterministic-stub-model");
+            }
+            // Force RTFS intent format to test local pipeline without network
+            std::env::set_var("CCOS_INTENT_FORMAT", "rtfs");
+        }
     }
     if let Some(ref key) = args.llm_api_key {
         let hint = args.llm_provider.as_deref().unwrap_or("openai");

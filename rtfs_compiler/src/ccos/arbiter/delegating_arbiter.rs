@@ -787,29 +787,15 @@ impl DelegatingArbiter {
             }
             rendered
         } else {
-            // RTFS-first mode via PromptManager asset set intent_generation_rtfs/v1
-            // Provide variables for asset rendering
-            let mut rtfs_vars = vars.clone();
-            // Load composed sections similar to JSON mode convention: task + grammar + strategy + few_shots + anti_patterns
-            // We'll attempt to stitch them if present; fallback to inline template if any failure.
-            let sections = ["task", "grammar", "strategy", "few_shots", "anti_patterns"];
-            let mut assembled = String::new();
-            let mut load_failed = false;
-            for section in &sections {
-                let id = format!("intent_generation_rtfs/{}", section);
-                match self.prompt_manager.render(&id, "v1", &rtfs_vars) {
-                    Ok(content) => {
-                        assembled.push_str(&content);
-                        if !assembled.ends_with("\n\n") { assembled.push_str("\n\n"); }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to load RTFS intent prompt section '{}': {}", section, e);
-                        load_failed = true;
-                        break;
-                    }
+            // RTFS-first mode: load entire template (all sections auto-aggregated by PromptManager)
+            let assembled = match self.prompt_manager.render("intent_generation_rtfs", "v1", &vars) {
+                Ok(rendered) => rendered,
+                Err(e) => {
+                    eprintln!("Warning: Failed to load RTFS intent prompt bundle: {}. Falling back to inline template.", e);
+                    String::new()
                 }
-            }
-            if load_failed || assembled.trim().is_empty() {
+            };
+            if assembled.trim().is_empty() {
                 // Fallback inline prompt (previous implementation)
                 let mut prompt = String::new();
                 prompt.push_str("# RTFS Intent Generation\n\n");
@@ -828,8 +814,9 @@ impl DelegatingArbiter {
                 prompt.push_str(&format!("\nAvailable capabilities (for later planning): {:?}\n", available_capabilities));
                 prompt
             } else {
-                // Append user request + capabilities + strict output instruction
                 let mut final_prompt = assembled;
+                // Ensure a blank line separation
+                if !final_prompt.ends_with("\n\n") { final_prompt.push_str("\n"); }
                 final_prompt.push_str("User Request:\n\n");
                 let sanitized = natural_language.replace('"', "'");
                 final_prompt.push_str(&sanitized);
