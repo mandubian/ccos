@@ -16,7 +16,7 @@ use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 use crate::ccos::arbiter::plan_generation::{
     LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
 };
-use crate::ccos::arbiter::prompt::{FilePromptStore, PromptConfig, PromptManager};
+use crate::ccos::arbiter::prompt::{FilePromptStore, PromptManager};
 use crate::ccos::delegation_keys::{agent, generation};
 use crate::ccos::types::{
     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
