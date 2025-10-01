@@ -787,25 +787,56 @@ impl DelegatingArbiter {
             }
             rendered
         } else {
-            // RTFS-first mode
-            // Provide concise RTFS intent grammar and require a single (intent ...) form.
-            let mut prompt = String::new();
-            prompt.push_str("# RTFS Intent Generation\n\n");
-            prompt.push_str("Generate a single RTFS intent s-expression capturing the user request.\n\n");
-            prompt.push_str("## Form\n");
-            prompt.push_str("(intent \"name\" :goal \"...\" [:constraints {:k \"v\" ...}] [:preferences {:k \"v\" ...}] [:success-criteria \"...\"])\n\n");
-            prompt.push_str("Rules:\n- EXACTLY one top-level (intent ...) form (no wrapping (do ...), no JSON)\n- All constraint & preference values must be strings\n- name must be snake_case and descriptive\n- Include :success-criteria when meaningful\n- Only use keys: :goal :constraints :preferences :success-criteria (others ignored)\n\n");
-            prompt.push_str("Examples:\n");
-            prompt.push_str("User: ask the user for their name and greet them\n");
-            prompt.push_str("(intent \"greet_user\" :goal \"Ask user name then greet\" :constraints {:interaction_mode \"single_turn\"} :preferences {:tone \"friendly\"} :success-criteria \"User greeted with their provided name\")\n\n");
-            prompt.push_str("Anti-Patterns (DO NOT OUTPUT):\n- JSON objects\n- Multiple (intent ...) forms\n- Explanations or commentary\n\n");
-            prompt.push_str("User Request:\n\n");
-            let sanitized = natural_language.replace('"', "'");
-            prompt.push_str(&format!("{}\n\n", sanitized));
-            prompt.push_str("Output ONLY the RTFS (intent ...) form:\n");
-            // Add capability list as a hint (not required inside intent, but helps future model grounding)
-            prompt.push_str(&format!("\nAvailable capabilities (for later planning): {:?}\n", available_capabilities));
-            prompt
+            // RTFS-first mode via PromptManager asset set intent_generation_rtfs/v1
+            // Provide variables for asset rendering
+            let mut rtfs_vars = vars.clone();
+            // Load composed sections similar to JSON mode convention: task + grammar + strategy + few_shots + anti_patterns
+            // We'll attempt to stitch them if present; fallback to inline template if any failure.
+            let sections = ["task", "grammar", "strategy", "few_shots", "anti_patterns"];
+            let mut assembled = String::new();
+            let mut load_failed = false;
+            for section in &sections {
+                let id = format!("intent_generation_rtfs/{}", section);
+                match self.prompt_manager.render(&id, "v1", &rtfs_vars) {
+                    Ok(content) => {
+                        assembled.push_str(&content);
+                        if !assembled.ends_with("\n\n") { assembled.push_str("\n\n"); }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load RTFS intent prompt section '{}': {}", section, e);
+                        load_failed = true;
+                        break;
+                    }
+                }
+            }
+            if load_failed || assembled.trim().is_empty() {
+                // Fallback inline prompt (previous implementation)
+                let mut prompt = String::new();
+                prompt.push_str("# RTFS Intent Generation\n\n");
+                prompt.push_str("Generate a single RTFS intent s-expression capturing the user request.\n\n");
+                prompt.push_str("## Form\n");
+                prompt.push_str("(intent \"name\" :goal \"...\" [:constraints {:k \"v\" ...}] [:preferences {:k \"v\" ...}] [:success-criteria \"...\"])\n\n");
+                prompt.push_str("Rules:\n- EXACTLY one top-level (intent ...) form (no wrapping (do ...), no JSON)\n- All constraint & preference values must be strings\n- name must be snake_case and descriptive\n- Include :success-criteria when meaningful\n- Only use keys: :goal :constraints :preferences :success-criteria (others ignored)\n\n");
+                prompt.push_str("Examples:\n");
+                prompt.push_str("User: ask the user for their name and greet them\n");
+                prompt.push_str("(intent \"greet_user\" :goal \"Ask user name then greet\" :constraints {:interaction_mode \"single_turn\"} :preferences {:tone \"friendly\"} :success-criteria \"User greeted with their provided name\")\n\n");
+                prompt.push_str("Anti-Patterns (DO NOT OUTPUT):\n- JSON objects\n- Multiple (intent ...) forms\n- Explanations or commentary\n\n");
+                prompt.push_str("User Request:\n\n");
+                let sanitized = natural_language.replace('"', "'");
+                prompt.push_str(&format!("{}\n\n", sanitized));
+                prompt.push_str("Output ONLY the RTFS (intent ...) form:\n");
+                prompt.push_str(&format!("\nAvailable capabilities (for later planning): {:?}\n", available_capabilities));
+                prompt
+            } else {
+                // Append user request + capabilities + strict output instruction
+                let mut final_prompt = assembled;
+                final_prompt.push_str("User Request:\n\n");
+                let sanitized = natural_language.replace('"', "'");
+                final_prompt.push_str(&sanitized);
+                final_prompt.push_str("\n\nOutput ONLY the single RTFS (intent ...) form (no prose).\n");
+                final_prompt.push_str(&format!("\nAvailable capabilities (for later planning): {:?}\n", available_capabilities));
+                final_prompt
+            }
         }
     }
 
