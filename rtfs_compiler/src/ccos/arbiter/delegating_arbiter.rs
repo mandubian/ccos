@@ -354,7 +354,10 @@ impl DelegatingArbiter {
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> Result<Intent, RuntimeError> {
-        // Create prompt requesting RTFS format
+        // Determine format mode (rtfs primary by default)
+        let format_mode = std::env::var("CCOS_INTENT_FORMAT").ok().unwrap_or_else(|| "rtfs".to_string());
+
+        // Create prompt (mode-specific)
         let prompt = self.create_intent_prompt(natural_language, context.clone());
 
         // Optional: display prompts during live runtime when enabled
@@ -398,24 +401,55 @@ impl DelegatingArbiter {
             Ok(())
         })();
 
-        // Try parsing as RTFS first
-        let mut intent = match self.parse_llm_intent_response(&response, natural_language, context.clone()) {
-            Ok(intent) => {
-                println!("✓ Successfully parsed intent from RTFS format");
-                intent
+        // Parse according to mode (RTFS primary with JSON fallback; JSON-only mode skips RTFS attempt)
+        let mut intent = if format_mode == "json" {
+            // Direct JSON parse path
+            match self.parse_json_intent_response(&response, natural_language) {
+                Ok(intent) => intent,
+                Err(e) => return Err(RuntimeError::Generic(format!("Failed to parse JSON intent (json mode): {}", e)))
             }
-            Err(rtfs_err) => {
-                println!("⚠ RTFS parsing failed, attempting JSON fallback: {}", rtfs_err);
-                // Fall back to JSON parsing
-                self.parse_json_intent_response(&response, natural_language)?
+        } else {
+            // RTFS-first mode
+            match self.parse_llm_intent_response(&response, natural_language, context.clone()) {
+                Ok(intent) => {
+                    println!("✓ Successfully parsed intent from RTFS format");
+                    intent
+                }
+                Err(rtfs_err) => {
+                    println!("⚠ RTFS parsing failed, attempting JSON fallback: {}", rtfs_err);
+                    match self.parse_json_intent_response(&response, natural_language) {
+                        Ok(intent) => {
+                            println!("ℹ Fallback succeeded: parsed JSON intent");
+                            intent
+                        }
+                        Err(json_err) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Both RTFS and JSON parsing failed. RTFS error: {}; JSON error: {}",
+                                rtfs_err, json_err
+                            )));
+                        }
+                    }
+                }
             }
         };
 
-        // Mark how this intent was generated so downstream code/tests can inspect it
+        // Mark generation method and format
         intent.metadata.insert(
             generation::GENERATION_METHOD.to_string(),
             Value::String(generation::methods::DELEGATING_LLM.to_string()),
         );
+        intent.metadata.insert(
+            "intent_format_mode".to_string(),
+            Value::String(format_mode.clone()),
+        );
+        // Derive parse_format if not already set (e.g., RTFS success path)
+        if !intent.metadata.contains_key("parse_format") {
+            let pf = if format_mode == "json" { "json" } else { "rtfs" };
+            intent.metadata.insert(
+                "parse_format".to_string(),
+                Value::String(pf.to_string()),
+            );
+        }
 
         // Analyze delegation need and set delegation metadata
         let delegation_analysis = self
@@ -695,6 +729,9 @@ impl DelegatingArbiter {
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> String {
+        // Decide format mode (rtfs | json). Default: rtfs (primary vessel of CCOS)
+        let format_mode = std::env::var("CCOS_INTENT_FORMAT").ok().unwrap_or_else(|| "rtfs".to_string());
+
         // Keep capability list aligned with reduced RTFS grammar examples
         let available_capabilities = vec![
             "ccos.echo".to_string(),
@@ -720,45 +757,56 @@ impl DelegatingArbiter {
             format!("{:?}", available_capabilities),
         );
         
-        let mut rendered = self
-            .prompt_manager
-            .render(
-                &prompt_config.intent_prompt_id,
-                &prompt_config.intent_prompt_version,
-                &vars,
-            )
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load intent prompt from assets: {}. Using fallback.", e);
-                // Minimal fallback prompt (will be augmented below with the natural language request)
-                format!(
-                    "# Fallback Intent Prompt\n\n(Internal note: asset load failed)\n"
+        if format_mode == "json" {
+            // Legacy JSON mode (kept for compatibility)
+            let mut rendered = self
+                .prompt_manager
+                .render(
+                    &prompt_config.intent_prompt_id,
+                    &prompt_config.intent_prompt_version,
+                    &vars,
                 )
-            });
-
-        // Ensure the natural language request is explicitly present at the end.
-        // Some existing prompt assets don't interpolate a {{natural_language}} placeholder, so
-        // we append a clearly delimited task section containing the user request.
-        let nl_marker = "# Natural Language Request";
-        if !rendered.contains(natural_language) {
-            // Add a concise trailing instruction making the model focus on THIS request only.
-            rendered.push_str("\n\n");
-            rendered.push_str(nl_marker);
-            rendered.push_str("\n\n");
-            rendered.push_str("The following is the exact user request to convert into a structured intent. Use it to populate name, goal, constraints, preferences, success_criteria as per the rules above.\n\n");
-            rendered.push_str("USER_REQUEST: \"");
-            // Escape embedded quotes minimally (JSON spec isn't required here, plain text fine)
-            let sanitized = natural_language.replace('"', "'" );
-            rendered.push_str(&sanitized);
-            rendered.push_str("\"\n\nRespond ONLY with the JSON intent object (no prose).\n");
+                .unwrap_or_else(|e| {
+                    eprintln!("Warning: Failed to load intent prompt from assets: {}. Using fallback.", e);
+                    format!("# Fallback Intent Prompt (JSON mode)\n")
+                });
+            let nl_marker = "# Natural Language Request";
+            if !rendered.contains(natural_language) {
+                rendered.push_str("\n\n");
+                rendered.push_str(nl_marker);
+                rendered.push_str("\n\n");
+                rendered.push_str("The following is the exact user request to convert into a structured intent. Use it to populate name, goal, constraints, preferences, success_criteria as per the rules above.\n\n");
+                rendered.push_str("USER_REQUEST: \"");
+                let sanitized = natural_language.replace('"', "'");
+                rendered.push_str(&sanitized);
+                rendered.push_str("\"\n\nRespond ONLY with the JSON intent object (no prose).\n");
+            }
+            if !rendered.contains("Available capabilities:") {
+                rendered.push_str("\nAvailable capabilities: ");
+                rendered.push_str(&format!("{:?}\n", available_capabilities));
+            }
+            rendered
+        } else {
+            // RTFS-first mode
+            // Provide concise RTFS intent grammar and require a single (intent ...) form.
+            let mut prompt = String::new();
+            prompt.push_str("# RTFS Intent Generation\n\n");
+            prompt.push_str("Generate a single RTFS intent s-expression capturing the user request.\n\n");
+            prompt.push_str("## Form\n");
+            prompt.push_str("(intent \"name\" :goal \"...\" [:constraints {:k \"v\" ...}] [:preferences {:k \"v\" ...}] [:success-criteria \"...\"])\n\n");
+            prompt.push_str("Rules:\n- EXACTLY one top-level (intent ...) form (no wrapping (do ...), no JSON)\n- All constraint & preference values must be strings\n- name must be snake_case and descriptive\n- Include :success-criteria when meaningful\n- Only use keys: :goal :constraints :preferences :success-criteria (others ignored)\n\n");
+            prompt.push_str("Examples:\n");
+            prompt.push_str("User: ask the user for their name and greet them\n");
+            prompt.push_str("(intent \"greet_user\" :goal \"Ask user name then greet\" :constraints {:interaction_mode \"single_turn\"} :preferences {:tone \"friendly\"} :success-criteria \"User greeted with their provided name\")\n\n");
+            prompt.push_str("Anti-Patterns (DO NOT OUTPUT):\n- JSON objects\n- Multiple (intent ...) forms\n- Explanations or commentary\n\n");
+            prompt.push_str("User Request:\n\n");
+            let sanitized = natural_language.replace('"', "'");
+            prompt.push_str(&format!("{}\n\n", sanitized));
+            prompt.push_str("Output ONLY the RTFS (intent ...) form:\n");
+            // Add capability list as a hint (not required inside intent, but helps future model grounding)
+            prompt.push_str(&format!("\nAvailable capabilities (for later planning): {:?}\n", available_capabilities));
+            prompt
         }
-
-        // For debugging clarity, show capability whitelist if not already present
-        if !rendered.contains("Available capabilities:") {
-            rendered.push_str("\nAvailable capabilities: ");
-            rendered.push_str(&format!("{:?}\n", available_capabilities));
-        }
-
-        rendered
     }
 
     /// Create prompt for delegation analysis using file-based prompt store
