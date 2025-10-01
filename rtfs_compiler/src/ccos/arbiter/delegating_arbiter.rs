@@ -321,7 +321,13 @@ impl DelegatingArbiter {
             });
 
         // Create prompt manager for file-based prompts
-        let prompt_store = FilePromptStore::new("assets/prompts/arbiter");
+        // Assets are at workspace root, so try ../assets first, then assets (for when run from workspace root)
+        let prompt_path = if std::path::Path::new("../assets/prompts/arbiter").exists() {
+            "../assets/prompts/arbiter"
+        } else {
+            "assets/prompts/arbiter"
+        };
+        let prompt_store = FilePromptStore::new(prompt_path);
         let prompt_manager = PromptManager::new(prompt_store);
 
         Ok(Self {
