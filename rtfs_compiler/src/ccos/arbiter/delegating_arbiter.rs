@@ -695,7 +695,13 @@ impl DelegatingArbiter {
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> String {
-        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
+        // Keep capability list aligned with reduced RTFS grammar examples
+        let available_capabilities = vec![
+            "ccos.echo".to_string(),
+            "ccos.math.add".to_string(),
+            // user input capability used later in plan generation examples
+            "ccos.user.ask".to_string(),
+        ];
         
         let prompt_config = self
             .llm_config
@@ -714,7 +720,8 @@ impl DelegatingArbiter {
             format!("{:?}", available_capabilities),
         );
         
-        self.prompt_manager
+        let mut rendered = self
+            .prompt_manager
             .render(
                 &prompt_config.intent_prompt_id,
                 &prompt_config.intent_prompt_version,
@@ -722,13 +729,36 @@ impl DelegatingArbiter {
             )
             .unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load intent prompt from assets: {}. Using fallback.", e);
-                // Minimal fallback prompt
+                // Minimal fallback prompt (will be augmented below with the natural language request)
                 format!(
-                    "Generate an RTFS intent for: {}\nContext: {:?}",
-                    natural_language,
-                    context_for_fallback.unwrap_or_default()
+                    "# Fallback Intent Prompt\n\n(Internal note: asset load failed)\n"
                 )
-            })
+            });
+
+        // Ensure the natural language request is explicitly present at the end.
+        // Some existing prompt assets don't interpolate a {{natural_language}} placeholder, so
+        // we append a clearly delimited task section containing the user request.
+        let nl_marker = "# Natural Language Request";
+        if !rendered.contains(natural_language) {
+            // Add a concise trailing instruction making the model focus on THIS request only.
+            rendered.push_str("\n\n");
+            rendered.push_str(nl_marker);
+            rendered.push_str("\n\n");
+            rendered.push_str("The following is the exact user request to convert into a structured intent. Use it to populate name, goal, constraints, preferences, success_criteria as per the rules above.\n\n");
+            rendered.push_str("USER_REQUEST: \"");
+            // Escape embedded quotes minimally (JSON spec isn't required here, plain text fine)
+            let sanitized = natural_language.replace('"', "'" );
+            rendered.push_str(&sanitized);
+            rendered.push_str("\"\n\nRespond ONLY with the JSON intent object (no prose).\n");
+        }
+
+        // For debugging clarity, show capability whitelist if not already present
+        if !rendered.contains("Available capabilities:") {
+            rendered.push_str("\nAvailable capabilities: ");
+            rendered.push_str(&format!("{:?}\n", available_capabilities));
+        }
+
+        rendered
     }
 
     /// Create prompt for delegation analysis using file-based prompt store
