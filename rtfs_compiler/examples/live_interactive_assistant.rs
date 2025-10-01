@@ -281,6 +281,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // We don't have a direct provider env yet; provider type is inferred from base_url + key.
         // For explicit provider guidance we set helper env used only here.
         std::env::set_var("CCOS_LLM_PROVIDER_HINT", provider);
+        // Provide a direct provider env for Arbiter if supported
+        match provider.as_str() {
+            "openai" => { std::env::set_var("CCOS_LLM_PROVIDER", "openai"); },
+            "claude" | "anthropic" => { std::env::set_var("CCOS_LLM_PROVIDER", "anthropic"); },
+            "gemini" => { std::env::set_var("CCOS_LLM_PROVIDER", "gemini"); },
+            "stub" => { std::env::set_var("CCOS_LLM_PROVIDER", "stub"); },
+            _ => { /* openrouter & others may be inferred later */ }
+        }
     }
     if let Some(ref key) = args.llm_api_key {
         // Decide which env to set based on provider hint (fallback openai)
@@ -297,6 +305,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.enable_delegation {
         std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+    }
+
+    // Offline deterministic path: if stub provider selected (explicitly or via hint) ensure sensible defaults
+    let provider_is_stub = args
+        .llm_provider
+        .as_deref()
+        .map(|p| p.eq_ignore_ascii_case("stub"))
+        .unwrap_or(false)
+        || std::env::var("CCOS_LLM_PROVIDER_HINT").map(|v| v == "stub").unwrap_or(false);
+    if provider_is_stub {
+        // Always prefer RTFS intent format for stub to exercise primary code path while offline
+        std::env::set_var("CCOS_INTENT_FORMAT", "rtfs");
+        // Enable delegation so intent generation path executes, unless user explicitly disabled (no explicit disable flag yet)
+        if std::env::var("CCOS_ENABLE_DELEGATION").ok().as_deref() != Some("1") {
+            std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+        }
+        // Default deterministic model if user didn't supply one (env or CLI)
+        let has_model = args.llm_model.is_some()
+            || std::env::var("CCOS_DELEGATING_MODEL").is_ok()
+            || std::env::var("CCOS_DELEGATION_MODEL").is_ok();
+        if !has_model {
+            std::env::set_var("CCOS_DELEGATING_MODEL", "deterministic-stub-model");
+        }
     }
 
     if args.prompt.is_none() {

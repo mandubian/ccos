@@ -318,54 +318,137 @@ impl CCOS {
     ) -> RuntimeResult<()> {
         use self::types::PlanBody;
         if let PlanBody::Rtfs(body) = &plan.body {
-            // Very lightweight tokenizer – split on whitespace & parens
-            let mut caps: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut current = String::new();
-            for ch in body.chars() {
-                if ch.is_whitespace() || ch == '(' || ch == ')' {
-                    if !current.is_empty() {
-                        caps.insert(current.clone());
-                        current.clear();
+            // Parse RTFS to AST and walk it collecting real (call :ccos.* ...) usage.
+            // On parse failure, we do NOT hard fail preflight here; governance / parser stage will surface rich errors later.
+            // Fallback: if parsing fails, skip capability preflight rather than produce false positives.
+            if let Ok(items) = crate::parser::parse(body) {
+                use crate::ast::{Expression, TopLevel, Literal, Keyword, ModuleLevelDefinition};
+                let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                // Recursive walker
+                fn walk_expr(expr: &Expression, acc: &mut std::collections::HashSet<String>) {
+                    match expr {
+                        Expression::List(items) | Expression::Vector(items) => {
+                            for e in items { walk_expr(e, acc); }
+                        }
+                        Expression::Map(map) => {
+                            for v in map.values() { walk_expr(v, acc); }
+                        }
+                        Expression::FunctionCall { callee, arguments } => {
+                            // Recognize (call :ccos.cap ...) by structure: callee symbol or list where first symbol is 'call'
+                            // Simpler: look for callee == Symbol("call") and first argument is a Literal::Keyword with name starting ccos.
+                            match &**callee {
+                                Expression::Symbol(sym) if sym.0 == "call" => {
+                                    if let Some(first) = arguments.first() {
+                                        match first {
+                                            Expression::Literal(Literal::Keyword(Keyword(k))) => {
+                                                if let Some(rest) = k.strip_prefix("ccos.") { // stored without leading colon in Keyword?
+                                                    acc.insert(format!("ccos.{}", rest));
+                                                } else if k.starts_with(":ccos.") { // defensive variant if colon retained
+                                                    let trimmed = k.trim_start_matches(':');
+                                                    if trimmed.starts_with("ccos.") { acc.insert(trimmed.to_string()); }
+                                                }
+                                            }
+                                            Expression::Symbol(sym2) => {
+                                                if sym2.0.starts_with(":ccos.") {
+                                                    let trimmed = sym2.0.trim_start_matches(':');
+                                                    acc.insert(trimmed.to_string());
+                                                } else if sym2.0.starts_with("ccos.") {
+                                                    acc.insert(sym2.0.clone());
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    for arg in arguments { walk_expr(arg, acc); }
+                                }
+                                _ => {
+                                    walk_expr(callee, acc);
+                                    for arg in arguments { walk_expr(arg, acc); }
+                                }
+                            }
+                        }
+                        Expression::If(ifx) => {
+                            walk_expr(&ifx.condition, acc);
+                            walk_expr(&ifx.then_branch, acc);
+                            if let Some(e) = &ifx.else_branch { walk_expr(e, acc); }
+                        }
+                        Expression::Let(letx) => {
+                            for b in &letx.bindings { walk_expr(&b.value, acc); }
+                            for b in &letx.body { walk_expr(b, acc); }
+                        }
+                        Expression::Do(dox) => { for e in &dox.expressions { walk_expr(e, acc); } }
+                        Expression::Fn(fnexpr) => { for e in &fnexpr.body { walk_expr(e, acc); } }
+                        Expression::Def(defexpr) => { walk_expr(&defexpr.value, acc); }
+                        Expression::Defn(defn) => { for e in &defn.body { walk_expr(e, acc); } }
+                        Expression::Defstruct(_) => {}
+                        Expression::DiscoverAgents(d) => {
+                            walk_expr(&d.criteria, acc);
+                            if let Some(opt) = &d.options { walk_expr(opt, acc); }
+                        }
+                        Expression::LogStep(logx) => { for v in &logx.values { walk_expr(v, acc); } }
+                        Expression::TryCatch(tc) => {
+                            for e in &tc.try_body { walk_expr(e, acc); }
+                            for clause in &tc.catch_clauses { for e in &clause.body { walk_expr(e, acc); } }
+                            if let Some(fb) = &tc.finally_body { for e in fb { walk_expr(e, acc); } }
+                        }
+                        Expression::Parallel(px) => { for b in &px.bindings { walk_expr(&b.expression, acc); } }
+                        Expression::WithResource(wx) => { walk_expr(&wx.resource_init, acc); for e in &wx.body { walk_expr(e, acc); } }
+                        Expression::Match(mx) => {
+                            // match expression then each clause pattern guard + body
+                            walk_expr(&mx.expression, acc);
+                            for c in &mx.clauses {
+                                if let Some(g) = &c.guard { walk_expr(g, acc); }
+                                // c.body is Box<Expression>
+                                walk_expr(&c.body, acc);
+                            }
+                        }
+                        Expression::For(fx) => {
+                            // For bindings are expressions in pairs [sym coll ...]; traverse each expression node
+                            for b in &fx.bindings { walk_expr(b, acc); }
+                            walk_expr(&fx.body, acc); // body is Box<Expression>
+                        }
+                        Expression::Deref(inner) => walk_expr(inner, acc),
+                        Expression::Metadata(map) => { for v in map.values() { walk_expr(v, acc); } }
+                        Expression::Literal(_) | Expression::Symbol(_) | Expression::ResourceRef(_) => {}
                     }
-                } else {
-                    current.push(ch);
                 }
-            }
-            if !current.is_empty() {
-                caps.insert(current);
-            }
-            // Extract capability ids from keyword (:ccos.echo) or string ("ccos.echo") tokens that follow a call form
-            // Simplicity: just look for tokens starting with :ccos. or ccos.
-            let mut referenced: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for tok in caps {
-                if let Some(stripped) = tok.strip_prefix(":ccos.") {
-                    referenced.insert(format!("ccos.{}", stripped));
-                    continue;
+
+                for item in items {
+                    match item {
+                        TopLevel::Expression(expr) => walk_expr(&expr, &mut referenced),
+                        TopLevel::Plan(pdef) => { for prop in &pdef.properties { walk_expr(&prop.value, &mut referenced); } },
+                        TopLevel::Intent(idef) => { for prop in &idef.properties { walk_expr(&prop.value, &mut referenced); } },
+                        TopLevel::Action(adef) => { for prop in &adef.properties { walk_expr(&prop.value, &mut referenced); } },
+                        TopLevel::Capability(cdef) => { for prop in &cdef.properties { walk_expr(&prop.value, &mut referenced); } },
+                        TopLevel::Resource(rdef) => { for prop in &rdef.properties { walk_expr(&prop.value, &mut referenced); } },
+                        TopLevel::Module(mdef) => {
+                            for def in &mdef.definitions {
+                                match def {
+                                    ModuleLevelDefinition::Def(d) => walk_expr(&d.value, &mut referenced),
+                                    ModuleLevelDefinition::Defn(dn) => { for e in &dn.body { walk_expr(e, &mut referenced); } },
+                                    ModuleLevelDefinition::Import(_) => {}
+                                }
+                            }
+                        },
+                    }
                 }
-                if tok.starts_with("ccos.") {
-                    referenced.insert(tok.clone());
-                    continue;
+
+                for cap in referenced {
+                    if self
+                        .capability_marketplace
+                        .get_capability(&cap)
+                        .await
+                        .is_none()
+                    {
+                        return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                            "Unknown capability referenced in plan: {}",
+                            cap
+                        )));
+                    }
                 }
-                if tok.starts_with("\"ccos.") {
-                    // string literal token
-                    let trimmed = tok.trim_matches('"');
-                    referenced.insert(trimmed.to_string());
-                }
-            }
-            // Validate each capability exists
-            for cap in referenced {
-                if self
-                    .capability_marketplace
-                    .get_capability(&cap)
-                    .await
-                    .is_none()
-                {
-                    return Err(crate::runtime::error::RuntimeError::Generic(format!(
-                        "Unknown capability referenced in plan: {}",
-                        cap
-                    )));
-                }
+            } else {
+                // Parsing failed; skip capability validation (parser / governance will raise errors later).
             }
         }
         Ok(())
