@@ -357,8 +357,30 @@ impl DelegatingArbiter {
         // Create prompt requesting RTFS format
         let prompt = self.create_intent_prompt(natural_language, context.clone());
 
+        // Optional: display prompts during live runtime when enabled
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        
+        if show_prompts {
+            println!(
+                "\n=== Delegating Arbiter Intent Generation Prompt ===\n{}\n=== END PROMPT ===\n",
+                prompt
+            );
+        }
+
         // Get raw text response
         let response = self.llm_provider.generate_text(&prompt).await?;
+
+        if show_prompts {
+            println!(
+                "\n=== Delegating Arbiter Intent Generation Response ===\n{}\n=== END RESPONSE ===\n",
+                response
+            );
+        }
 
         // Log provider and raw response (best-effort, non-fatal)
         let _ = (|| -> Result<(), std::io::Error> {

@@ -532,6 +532,22 @@ Examples:
 Only respond with valid JSON."#.to_string()
             });
 
+        // Optional: display prompts during live runtime when enabled
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        
+        if show_prompts {
+            println!(
+                "\n=== LLM Intent Generation Prompt ===\n[system]\n{}\n\n[user]\n{}\n=== END PROMPT ===\n",
+                system_message,
+                prompt
+            );
+        }
+
         let messages = vec![
             OpenAIMessage {
                 role: "system".to_string(),
@@ -544,15 +560,10 @@ Only respond with valid JSON."#.to_string()
         ];
 
         let response = self.make_request(messages).await?;
-        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
-            .map(|v| v == "1")
-            .unwrap_or(false)
-            || std::env::var("CCOS_DEBUG")
-                .map(|v| v == "1")
-                .unwrap_or(false);
+        
         if show_prompts {
             println!(
-                "\n=== LLM Raw Response (Plan Generation) ===\n{}\n=== END RESPONSE ===\n",
+                "\n=== LLM Raw Response (Intent Generation) ===\n{}\n=== END RESPONSE ===\n",
                 response
             );
         }
@@ -1461,12 +1472,36 @@ Only respond with valid JSON."#.to_string()
             prompt.to_string()
         };
 
+        // Optional: display prompts during live runtime when enabled
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        
+        if show_prompts {
+            println!(
+                "\n=== LLM Intent Generation Prompt (Anthropic) ===\n[system]\n{}\n\n[user]\n{}\n=== END PROMPT ===\n",
+                system_message,
+                user_message
+            );
+        }
+
         let messages = vec![AnthropicMessage {
             role: "user".to_string(),
             content: format!("{}\n\n{}", system_message, user_message),
         }];
 
         let response = self.make_request(messages).await?;
+        
+        if show_prompts {
+            println!(
+                "\n=== LLM Raw Response (Intent Generation - Anthropic) ===\n{}\n=== END RESPONSE ===\n",
+                response
+            );
+        }
+        
         let mut intent = self.parse_intent_from_json(&response)?;
         intent.original_request = prompt.to_string();
 
@@ -1753,9 +1788,33 @@ impl LlmProvider for StubLlmProvider {
         prompt: &str,
         _context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError> {
+        // Optional: display prompts during live runtime when enabled
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        
+        if show_prompts {
+            println!(
+                "\n=== Stub Intent Generation ===\n[prompt]\n{}\n=== END PROMPT ===\n",
+                prompt
+            );
+        }
+        
         // For stub provider, we'll use a simple pattern matching approach
         // In a real implementation, this would parse the prompt and context
         let intent = self.generate_stub_intent(prompt);
+        
+        if show_prompts {
+            println!(
+                "\n=== Stub Intent Result ===\nIntent ID: {}\nGoal: {}\n=== END RESULT ===\n",
+                intent.intent_id,
+                intent.goal
+            );
+        }
+        
         Ok(intent)
     }
 
@@ -1764,7 +1823,34 @@ impl LlmProvider for StubLlmProvider {
         intent: &StorableIntent,
         _context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError> {
+        // Optional: display prompts during live runtime when enabled
+        let show_prompts = std::env::var("RTFS_SHOW_PROMPTS")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("CCOS_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        
+        if show_prompts {
+            println!(
+                "\n=== Stub Plan Generation ===\n[intent]\nGoal: {}\nConstraints: {:?}\nPreferences: {:?}\n=== END INPUT ===\n",
+                intent.goal,
+                intent.constraints,
+                intent.preferences
+            );
+        }
+        
         let plan = self.generate_stub_plan(intent);
+        
+        if show_prompts {
+            if let PlanBody::Rtfs(ref body) = plan.body {
+                println!(
+                    "\n=== Stub Plan Result ===\n{}\n=== END RESULT ===\n",
+                    body
+                );
+            }
+        }
+        
         Ok(plan)
     }
 
