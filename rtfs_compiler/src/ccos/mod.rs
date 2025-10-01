@@ -415,7 +415,10 @@ impl CCOS {
                 .await?;
 
             // Store the intent in the Intent Graph for later reference
-            if let Ok(mut ig) = self.intent_graph.lock() {
+            {
+                let mut ig = self.intent_graph.lock().map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
+                })?;
                 let storable_intent = crate::ccos::types::StorableIntent {
                     intent_id: intent.intent_id.clone(),
                     name: intent.name.clone(),
