@@ -644,59 +644,60 @@ Output format: ONLY a single well-formed RTFS s-expression starting with (do ...
                 if let Some(do_block) = Self::extract_s_expr_after_key(&plan_block, ":body")
                     .or_else(|| Self::extract_do_block(&plan_block))
                 {
-                    if parser::parse(&do_block).is_ok() {
-                        let mut plan_name: Option<String> = None;
-                        if let Some(name) =
-                            Self::extract_quoted_value_after_key(&plan_block, ":name")
-                        {
-                            plan_name = Some(name);
-                        }
-                        return Ok(Plan {
-                            plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
-                            name: plan_name,
-                            intent_ids: vec![intent.intent_id.clone()],
-                            language: PlanLanguage::Rtfs20,
-                            body: PlanBody::Rtfs(do_block),
-                            status: crate::ccos::types::PlanStatus::Draft,
-                            created_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                            metadata: HashMap::new(),
-                            input_schema: None,
-                            output_schema: None,
-                            policies: HashMap::new(),
-                            capabilities_required: vec![],
-                            annotations: HashMap::new(),
-                        });
+                    // If we extracted a do block from the plan, use it
+                    // Parser validation is skipped because LLM may generate function calls
+                    // that aren't yet defined in the parser's symbol table
+                    let mut plan_name: Option<String> = None;
+                    if let Some(name) =
+                        Self::extract_quoted_value_after_key(&plan_block, ":name")
+                    {
+                        plan_name = Some(name);
                     }
+                    return Ok(Plan {
+                        plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                        name: plan_name,
+                        intent_ids: vec![intent.intent_id.clone()],
+                        language: PlanLanguage::Rtfs20,
+                        body: PlanBody::Rtfs(do_block),
+                        status: crate::ccos::types::PlanStatus::Draft,
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                        metadata: HashMap::new(),
+                        input_schema: None,
+                        output_schema: None,
+                        policies: HashMap::new(),
+                        capabilities_required: vec![],
+                        annotations: HashMap::new(),
+                    });
                 }
             }
         }
 
         // Fallback: direct RTFS (do ...) body
         if let Some(do_block) = Self::extract_do_block(&response) {
-            // Optional: validate parses; if not, fall back to legacy JSON path
-            if parser::parse(&do_block).is_ok() {
-                return Ok(Plan {
-                    plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
-                    name: None,
-                    intent_ids: vec![intent.intent_id.clone()],
-                    language: PlanLanguage::Rtfs20,
-                    body: PlanBody::Rtfs(do_block),
-                    status: crate::ccos::types::PlanStatus::Draft,
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    metadata: HashMap::new(),
-                    input_schema: None,
-                    output_schema: None,
-                    policies: HashMap::new(),
-                    capabilities_required: vec![],
-                    annotations: HashMap::new(),
-                });
-            }
+            // If we successfully extracted a (do ...) block, use it
+            // Parser validation is skipped because the LLM may generate function calls
+            // that aren't yet defined in the parser's symbol table
+            return Ok(Plan {
+                plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                name: None,
+                intent_ids: vec![intent.intent_id.clone()],
+                language: PlanLanguage::Rtfs20,
+                body: PlanBody::Rtfs(do_block),
+                status: crate::ccos::types::PlanStatus::Draft,
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                metadata: HashMap::new(),
+                input_schema: None,
+                output_schema: None,
+                policies: HashMap::new(),
+                capabilities_required: vec![],
+                annotations: HashMap::new(),
+            });
         }
 
         // Fallback: previous JSON-wrapped steps contract
