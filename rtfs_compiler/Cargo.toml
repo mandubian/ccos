@@ -40,10 +40,6 @@ name = "github_issue_manager"
 path = "src/bin/github_issue_manager.rs"
 
 [[bin]]
-name = "arbiter_rtfs_graph_demo_live"
-path = "examples/arbiter_rtfs_graph_demo_live.rs"
-
-[[bin]]
 name = "ccos-viewer"
 path = "src/viewer/main.rs"
 
@@ -101,6 +97,7 @@ rustyline = { version = "13.0", optional = true }
 indexmap = "2.0"
 llama_cpp = { version = "0.3.2", optional = true }
 num_cpus = "1.17.0"
+yansi = "1.0"
 
 # Caching dependencies
 rand = "0.8"
@@ -144,14 +141,6 @@ path = "examples/hierarchical_context_demo.rs"
 [[example]]
 name = "context_types_demo"
 path = "examples/context_types_demo.rs"
-
-[[example]]
-name = "mcp_introspection_demo"
-path = "examples/mcp_introspection_demo.rs"
-
-[[example]]
-name = "user_interaction_basic"
-path = "examples/user_interaction_basic.rs"
 
 [build-dependencies]
 tokio = { version = "1", features = ["full"] }
