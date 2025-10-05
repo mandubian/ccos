@@ -52,15 +52,37 @@ Return ONLY a single well-formed RTFS plan structure:
   (call :ccos.echo {:message (str "Going to " destination " for " duration " days")}))
 ```
 
-## Important: Plan Independence
+## Context Variables from Previous Plans
 
-**Each plan execution is independent** - you cannot reference variables or results from previous plan executions. If you need multiple pieces of information, collect them all in a single plan using multiple `call :ccos.user.ask` operations within the same `let` binding.
+**If context variables are provided**, you can reference them using the syntax `<context_variable_name>`. These represent values returned by previous plan executions.
 
-❌ **WRONG** - trying to reference previous execution results:
+✅ **CORRECT** - using context variables:
 ```lisp
-; This assumes 'duration', 'arrival', 'departure', 'budget' were set in a previous plan
+; If context provides trip/destination, trip/duration, etc.
+(call :ccos.echo {:message (str "Creating itinerary for your " <trip/duration> "-day trip to " <trip/destination> " with " <trip/budget> " budget")})
+```
+
+✅ **CORRECT** - mixing context variables with new data collection:
+```lisp
+(let [activity_preferences (call :ccos.user.ask "What activities interest you?")
+      special_requests (call :ccos.user.ask "Any special requests?")]
+  (call :ccos.echo {:message (str "Planning activities for your " <trip/duration> "-day trip to " <trip/destination>)})
+  {:itinerary/activities activity_preferences
+   :itinerary/requests special_requests
+   :trip/destination <trip/destination>
+   :trip/duration <trip/duration>})
+```
+
+❌ **WRONG** - referencing undefined variables (not in context):
+```lisp
+; This assumes 'duration', 'arrival', 'departure', 'budget' are available
+; but they're not provided in the context
 (call :ccos.echo {:message (str "Planning your " duration "-day cultural trip to Paris from " arrival " to " departure " with " budget " budget")})
 ```
+
+## Plan Independence (when no context provided)
+
+**If no context variables are provided**, each plan execution is independent. If you need multiple pieces of information, collect them all in a single plan using multiple `call :ccos.user.ask` operations within the same `let` binding.
 
 ✅ **CORRECT** - collect all needed data in current plan:
 ```lisp

@@ -585,11 +585,18 @@ Only respond with valid JSON."#.to_string()
             .unwrap_or(false);
 
         // Prepare variables for prompt rendering
-        let vars = HashMap::from([
+        let mut vars = HashMap::from([
             ("goal".to_string(), intent.goal.clone()),
             ("constraints".to_string(), format!("{:?}", intent.constraints)),
             ("preferences".to_string(), format!("{:?}", intent.preferences)),
         ]);
+
+        // Add context variables from previous plan executions
+        if let Some(context) = _context {
+            for (key, value) in context {
+                vars.insert(format!("context_{}", key), value);
+            }
+        }
 
         // Select prompt: consolidated by default, legacy modes if explicitly requested
         let prompt_id = if use_legacy_full {
@@ -624,10 +631,23 @@ CRITICAL: let bindings are LOCAL to a single step. Variables CANNOT cross step b
 Final step should return a structured map with keyword keys for downstream reuse."#.to_string()
             });
 
-        let user_message = format!(
-            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (plan ...) now, following the grammar and constraints:",
+        let mut user_message = format!(
+            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}",
             intent.goal, intent.constraints, intent.preferences
         );
+
+        // Add context information if available
+        if let Some(context) = _context {
+            if !context.is_empty() {
+                user_message.push_str("\n\nAvailable context from previous executions:");
+                for (key, value) in context {
+                    user_message.push_str(&format!("\n- {}: {}", key, value));
+                }
+                user_message.push_str("\n\nYou can reference these context variables in your plan using the syntax: <context_variable_name>");
+            }
+        }
+
+        user_message.push_str("\n\nGenerate the (plan ...) now, following the grammar and constraints:");
 
         // Optional: display prompts during live runtime when enabled
         // Enable by setting RTFS_SHOW_PROMPTS=1 or CCOS_DEBUG=1
