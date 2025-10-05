@@ -1,11 +1,102 @@
-# RTFS Plan Grammar (Subset)
-```
-(do
-    (step "name" (call :ccos.echo {:message "hi"}))
-    (edge :IsSubgoalOf "child" "parent")
+# RTFS Plan Grammar
+
+## Plan Structure
+
+```lisp
+(plan
+  :name "descriptive_name"           ; optional but recommended
+  :language rtfs20                   ; optional (defaults to rtfs20)
+  :body (do <step> <step> ...)       ; required - contains the steps
+  :annotations {:key "value"}        ; optional - metadata
 )
 ```
-Rules:
-- Exactly one top-level `(do ...)`.
-- Use `edge` relations only from allowed list: :IsSubgoalOf :DependsOn :ConflictsWith :Enables :RelatedTo :TriggeredBy :Blocks
-- Keep plan minimal; only necessary steps.
+
+## Allowed Forms (inside :body)
+
+```lisp
+(do <step> <step> ...)                                    ; sequential execution block
+(step "Descriptive Name" (<expr>))                        ; named step (name must be quoted string)
+(call :capability.namespace.op <args...>)                 ; capability invocation (ID must start with :)
+(if <condition> <then> <else>)                            ; conditional (use for yes/no)
+(match <value> <pattern1> <result1> <pattern2> <result2> ...) ; pattern matching (use for multiple choices)
+(let [var1 expr1 var2 expr2 ...] <body>)                 ; local bindings within step
+(str <arg1> <arg2> ...)                                   ; string concatenation
+(= <arg1> <arg2>)                                         ; equality comparison
+```
+
+## Allowed Arguments
+
+- **Strings**: `"..."`
+- **Numbers**: `1`, `2`, `3.14`
+- **Keywords**: `:key`, `:trip/dates`
+- **Maps**: `{:key "value" :a 1 :b 2}`
+- **Lists**: `[1 2 3]`, `["a" "b" "c"]`
+
+## Available Capabilities
+
+- **`:ccos.echo`** - Print message to output
+  - Signature: `(call :ccos.echo {:message "text"})`
+  
+- **`:ccos.user.ask`** - Prompt user for input
+  - Signature: `(call :ccos.user.ask "prompt text")`
+  - Returns: String value with user's response
+  
+- **`:ccos.math.add`** - Add two numbers
+  - Signature: `(call :ccos.math.add num1 num2)`
+  - Returns: Sum of the two numbers
+  
+- **`:ccos.math.subtract`** - Subtract two numbers
+  - Signature: `(call :ccos.math.subtract num1 num2)`
+  
+- **`:ccos.math.multiply`** - Multiply two numbers
+  - Signature: `(call :ccos.math.multiply num1 num2)`
+  
+- **`:ccos.math.divide`** - Divide two numbers
+  - Signature: `(call :ccos.math.divide num1 num2)`
+
+## Critical Rules
+
+### Variable Scoping
+**CRITICAL**: `let` bindings are LOCAL to a single step. Variables CANNOT cross step boundaries.
+
+✅ **CORRECT** - capture and reuse within single step:
+```lisp
+(step "Greet User"
+  (let [name (call :ccos.user.ask "What is your name?")]
+    (call :ccos.echo {:message (str "Hello, " name "!")})))
+```
+
+❌ **WRONG** - variables out of scope across steps:
+```lisp
+(step "Get" (let [n (call :ccos.user.ask "Name?")] n))
+(step "Use" (call :ccos.echo {:message n}))  ; ERROR: n not in scope!
+```
+
+### Structured Results
+The **final step** should return a map capturing key values for downstream reuse:
+
+✅ **CORRECT** - final step returns structured map:
+```lisp
+(step "Collect Trip Details"
+  (let [dates (call :ccos.user.ask "What dates will you travel?")
+        duration (call :ccos.user.ask "How many days?")
+        interests (call :ccos.user.ask "What activities interest you?")]
+    {:trip/dates dates
+     :trip/duration duration
+     :trip/interests interests}))
+```
+
+You may echo a human-readable summary in an earlier step, but the final step MUST evaluate to a structured map.
+
+### Let Binding Body
+❌ **WRONG** - let without body expression:
+```lisp
+(step "Bad" (let [name (call :ccos.user.ask "Name?")]))  ; Missing body!
+```
+
+✅ **CORRECT** - let with body:
+```lisp
+(step "Good" 
+  (let [name (call :ccos.user.ask "Name?")] 
+    (call :ccos.echo {:message name})))
+```
