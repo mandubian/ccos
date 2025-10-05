@@ -479,10 +479,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mut new_question_seen = false;
                                 if let Ok(chain) = ccos.get_causal_chain().lock() {
                                     for action in chain.get_all_actions().iter().rev() {
-                                        if action.plan_id == plan.plan_id && action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
+                                        if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
                                             if let Some(prompt) = extract_question_prompt_from_action(action) {
+                                                if args.verbose {
+                                                    println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
+                                                }
                                                 if asked_questions.insert(prompt) {
                                                     new_question_seen = true;
+                                                    if args.verbose {
+                                                        println!("[stagnation] New question detected: {}", prompt);
+                                                    }
+                                                } else if args.verbose {
+                                                    println!("[stagnation] Question already seen: {}", prompt);
                                                 }
                                             }
                                         }
@@ -536,10 +544,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut new_question_seen = false;
                     if let Ok(chain) = ccos.get_causal_chain().lock() {
                         for action in chain.get_all_actions().iter().rev() {
-                            if action.plan_id == plan.plan_id && action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
+                            if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
                                 if let Some(prompt) = extract_question_prompt_from_action(action) {
+                                    if args.verbose {
+                                        println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
+                                    }
                                     if asked_questions.insert(prompt) {
                                         new_question_seen = true;
+                                        if args.verbose {
+                                            println!("[stagnation] New question detected: {}", prompt);
+                                        }
+                                    } else if args.verbose {
+                                        println!("[stagnation] Question already seen: {}", prompt);
                                     }
                                 }
                             }
@@ -902,8 +918,17 @@ fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Acti
         if args.len() >= 2 {
             if let rtfs_compiler::runtime::values::Value::String(prompt) = &args[1] {
                 return Some(prompt.clone());
+            } else {
+                // Debug: log what we found instead of a string
+                eprintln!("[debug] PlanPaused action args[1] is not a string: {:?}", args[1]);
             }
+        } else {
+            // Debug: log if we don't have enough arguments
+            eprintln!("[debug] PlanPaused action has {} arguments, expected >= 2", args.len());
         }
+    } else {
+        // Debug: log if no arguments at all
+        eprintln!("[debug] PlanPaused action has no arguments");
     }
     None
 }
