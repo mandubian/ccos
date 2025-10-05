@@ -575,8 +575,12 @@ Only respond with valid JSON."#.to_string()
         intent: &StorableIntent,
         _context: Option<HashMap<String, String>>,
     ) -> Result<Plan, RuntimeError> {
-        // Choose prompt mode: full-plan or reduced (do ...) body only
-        let full_plan_mode = std::env::var("RTFS_FULL_PLAN")
+        // Use consolidated plan_generation prompts by default
+        // Legacy modes can be enabled via RTFS_LEGACY_PLAN_FULL or RTFS_LEGACY_PLAN_REDUCED
+        let use_legacy_full = std::env::var("RTFS_LEGACY_PLAN_FULL")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let use_legacy_reduced = std::env::var("RTFS_LEGACY_PLAN_REDUCED")
             .map(|v| v == "1")
             .unwrap_or(false);
 
@@ -587,38 +591,43 @@ Only respond with valid JSON."#.to_string()
             ("preferences".to_string(), format!("{:?}", intent.preferences)),
         ]);
 
-        // Load appropriate prompt based on mode
-        let prompt_id = if full_plan_mode {
+        // Select prompt: consolidated by default, legacy modes if explicitly requested
+        let prompt_id = if use_legacy_full {
             "plan_generation_full"
-        } else {
+        } else if use_legacy_reduced {
             "plan_generation_reduced"
+        } else {
+            "plan_generation"  // Consolidated unified prompts
         };
 
         let system_message = self.prompt_manager
             .render(prompt_id, "v1", &vars)
             .unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load {} prompt from assets: {}. Using fallback.", prompt_id, e);
-                // Fallback to original hard-coded prompts based on mode
-                if full_plan_mode {
-                    r#"You translate an RTFS intent into a concrete RTFS plan using a constrained schema.
-Output format: ONLY a single well-formed RTFS s-expression starting with (plan ...). No prose, no JSON, no fences."#.to_string()
-                } else {
-                    r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
-Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON, no fences."#.to_string()
-                }
+                // Fallback to consolidated prompt format
+                r#"You translate an RTFS intent into a concrete RTFS plan.
+
+Output format: ONLY a single well-formed RTFS s-expression starting with (plan ...). No prose, no JSON, no fences.
+
+Plan structure:
+(plan
+  :name "descriptive_name"
+  :language rtfs20
+  :body (do
+    (step "Step Name" <expr>)
+    ...
+  )
+  :annotations {:key "value"}
+)
+
+CRITICAL: let bindings are LOCAL to a single step. Variables CANNOT cross step boundaries.
+Final step should return a structured map with keyword keys for downstream reuse."#.to_string()
             });
 
-                let user_message = if full_plan_mode {
-            format!(
-                "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (plan ...) now, following the constraints above:",
-                intent.goal, intent.constraints, intent.preferences
-            )
-        } else {
-            format!(
-                "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
-                intent.goal, intent.constraints, intent.preferences
-            )
-        };
+        let user_message = format!(
+            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (plan ...) now, following the grammar and constraints:",
+            intent.goal, intent.constraints, intent.preferences
+        );
 
         // Optional: display prompts during live runtime when enabled
         // Enable by setting RTFS_SHOW_PROMPTS=1 or CCOS_DEBUG=1
@@ -654,8 +663,11 @@ Output format: ONLY a single well-formed RTFS s-expression starting with (do ...
                 response
             );
         }
-        // Preferred: try full-plan extraction first (if requested), then reduced (do ...) body
-        if full_plan_mode {
+        // Extract plan: consolidated format always expects (plan ...) wrapper
+        // Legacy modes may return different formats
+        let expect_plan_wrapper = !use_legacy_reduced;
+        
+        if expect_plan_wrapper {
             if let Some(plan_block) = Self::extract_plan_block(&response) {
                 // Prefer extracting the (do ...) right after :body; fallback to generic do search
                 if let Some(do_block) = Self::extract_s_expr_after_key(&plan_block, ":body")
@@ -730,6 +742,116 @@ Output format: ONLY a single well-formed RTFS s-expression starting with (do ...
         let mut last_plan_text = None;
         
         for attempt in 1..=self.config.retry_config.max_retries {
+            // First: try to render a retry prompt asset into complete OpenAI messages.
+            // If rendering succeeds we will use those messages directly; otherwise fall back to legacy inline prompts below.
+            let vars = HashMap::from([
+                ("goal".to_string(), intent.goal.clone()),
+                ("constraints".to_string(), format!("{:?}", intent.constraints)),
+                ("preferences".to_string(), format!("{:?}", intent.preferences)),
+                ("attempt".to_string(), format!("{}", attempt)),
+                ("max_retries".to_string(), format!("{}", self.config.retry_config.max_retries)),
+                ("variant".to_string(), if self.config.retry_config.send_error_feedback { "feedback".to_string() } else { "simple".to_string() }),
+                ("last_plan_text".to_string(), last_plan_text.clone().unwrap_or_default()),
+                ("last_error".to_string(), last_error.clone().unwrap_or_default()),
+            ]);
+
+            if let Ok(text) = self.prompt_manager.render("plan_generation_retry", "v1", &vars) {
+                // If the prompt asset contains '---' treat left as system and right as user
+                let messages = if let Some(idx) = text.find("---") {
+                    let system = text[..idx].trim().to_string();
+                    let user = text[idx + 3..].trim().to_string();
+                    vec![
+                        OpenAIMessage { role: "system".to_string(), content: system },
+                        OpenAIMessage { role: "user".to_string(), content: user },
+                    ]
+                } else {
+                    let system_msg = text;
+                    let user_message = if attempt == 1 {
+                        format!(
+                            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
+                            intent.goal, intent.constraints, intent.preferences
+                        )
+                    } else if self.config.retry_config.send_error_feedback {
+                        format!(
+                            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nPrevious attempt that failed:\n{}\n\nError: {}\n\nPlease generate a corrected (do ...) body:",
+                            intent.goal, intent.constraints, intent.preferences, last_plan_text.as_ref().unwrap_or(&"".to_string()), last_error.as_ref().unwrap_or(&"".to_string())
+                        )
+                    } else {
+                        format!(
+                            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
+                            intent.goal, intent.constraints, intent.preferences
+                        )
+                    };
+                    vec![
+                        OpenAIMessage { role: "system".to_string(), content: system_msg },
+                        OpenAIMessage { role: "user".to_string(), content: user_message },
+                    ]
+                };
+
+                // Make request with rendered messages
+                let response = self.make_request(messages).await?;
+
+                // Validate and parse the plan just like the legacy path
+                let plan_result = if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response) {
+                    if parser::parse(&do_block).is_ok() {
+                        Ok(Plan {
+                            plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                            name: None,
+                            intent_ids: vec![intent.intent_id.clone()],
+                            language: PlanLanguage::Rtfs20,
+                            body: PlanBody::Rtfs(do_block.to_string()),
+                            status: crate::ccos::types::PlanStatus::Draft,
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                            metadata: HashMap::new(),
+                            input_schema: None,
+                            output_schema: None,
+                            policies: HashMap::new(),
+                            capabilities_required: vec![],
+                            annotations: HashMap::new(),
+                        })
+                    } else {
+                        Err(RuntimeError::Generic(format!("Failed to parse RTFS plan: {}", do_block)))
+                    }
+                } else {
+                    // Fallback to JSON parsing
+                    self.parse_plan_from_json(&response, &intent.intent_id)
+                };
+
+                match plan_result {
+                    Ok(plan) => {
+                        self.metrics.record_success(attempt);
+                        if attempt > 1 {
+                            log::info!("✅ Plan retry succeeded on attempt {}", attempt);
+                        }
+                        return Ok(plan);
+                    }
+                    Err(e) => {
+                        self.metrics.record_failure(attempt);
+                        let error_context = if attempt == 1 {
+                            format!("Initial attempt failed: {}", e)
+                        } else {
+                            format!("Retry attempt {}/{} failed: {}", attempt, self.config.retry_config.max_retries, e)
+                        };
+                        log::warn!("❌ {}", error_context);
+                        let enhanced_error = format!(
+                            "Attempt {}: {} (Response: {})",
+                            attempt,
+                            e,
+                            if response.len() > 200 { format!("{}...", &response[..200]) } else { response.clone() }
+                        );
+                        last_error = Some(enhanced_error);
+                        last_plan_text = Some(response.clone());
+                        if attempt < self.config.retry_config.max_retries {
+                            continue; // retry
+                        }
+                    }
+                }
+            }
+
+            // If we reach here, prompt asset rendering failed; fall back to legacy inline prompt construction
             // Create prompt based on attempt
             let prompt = if attempt == 1 {
                 // Initial prompt
@@ -1068,13 +1190,14 @@ Return exactly one (plan ...) with these constraints.
             log::warn!("⚠️  Using stub fallback after {} failed attempts", self.config.retry_config.max_retries);
             // Record stub fallback as a success (since we're providing a working plan)
             self.metrics.record_success(self.config.retry_config.max_retries + 1);
+            let safe_goal = intent.goal.replace('"', r#"\""#);
             let stub_body = format!(
                 r#"(do
-    (step "Echo Intent" (call :ccos.echo {{:message "Intent: {}"}}))
-    (step "Ask User" (call :ccos.user.ask "Please provide more details about your request"))
-    (step "Echo Response" (call :ccos.echo {{:message "Thank you for your input"}}))
+    (step "Report Fallback" (call :ccos.echo {{:message "Plan retry attempts exhausted; returning safe fallback."}}))
+    (step "Restate Goal" (call :ccos.echo {{:message "Original goal: {}"}}))
+    (step "Next Actions" (call :ccos.echo {{:message "Please refine the intent or consult logs for details."}}))
 )"#,
-                intent.goal
+                safe_goal
             );
             return Ok(Plan {
                 plan_id: format!("stub_plan_{}", uuid::Uuid::new_v4()),
@@ -1746,12 +1869,40 @@ impl StubLlmProvider {
 "#
             }
             _ => {
-                r#"
+                // If the intent mentions planning a trip (e.g., Paris), return a more
+                // detailed multi-step RTFS plan to make examples and demos more useful.
+                let goal_lower = intent.goal.to_lowercase();
+                if goal_lower.contains("trip") || goal_lower.contains("paris") {
+                    r#"
+(do
+    (step "Greet" (call :ccos.echo {:message "Let's plan your trip to Paris."}))
+    (step "Collect Dates and Duration"
+      (let [dates (call :ccos.user.ask "What dates will you travel to Paris?")
+            duration (call :ccos.user.ask "How many days will you stay?")]
+        (call :ccos.echo {:message (str "Dates: " dates ", duration: " duration)})))
+    (step "Collect Preferences"
+      (let [interests (call :ccos.user.ask "What activities are you interested in (museums, food, walks)?")
+            budget (call :ccos.user.ask "Any budget constraints (low/medium/high)?")]
+        (call :ccos.echo {:message (str "Prefs: " interests ", budget: " budget)})))
+    (step "Assemble Itinerary" (call :ccos.echo {:message "Assembling a sample itinerary based on your preferences..."}))
+    (step "Return Structured Summary"
+      (let [dates (call :ccos.user.ask "Confirm travel dates (or type 'same')")
+            duration (call :ccos.user.ask "Confirm duration in days (or type 'same')")
+            interests (call :ccos.user.ask "Confirm interests (or type 'same')")]
+        {:trip/destination "Paris"
+         :trip/dates dates
+         :trip/duration duration
+         :trip/interests interests}))
+)
+"#
+                } else {
+                    r#"
 (do
     (step "Process Request" (call :ccos.echo "processing your request"))
     (step "Complete Task" (call :ccos.echo "stub done"))
 )
 "#
+                }
             }
         };
 
