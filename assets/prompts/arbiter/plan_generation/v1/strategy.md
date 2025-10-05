@@ -23,7 +23,20 @@
 ### 3. Handle Data Flow
 - **Within a step**: Use `let` bindings to capture and reuse values
 - **Across steps**: NOT POSSIBLE - each step is independent
+- **CRITICAL**: All variables used in expressions must be defined in the same `let` binding
 - **For final result**: Last expression in final step becomes the plan's return value
+
+**Common mistake**: Referencing variables that aren't defined in the current `let` binding
+```lisp
+❌ WRONG - undefined variable:
+(let [destination (call :ccos.user.ask "Where?")]
+  (call :ccos.echo {:message (str "Going to " destination " for " duration " days")}))  ; duration not defined!
+
+✅ CORRECT - all variables defined:
+(let [destination (call :ccos.user.ask "Where?")
+      duration (call :ccos.user.ask "How many days?")]
+  (call :ccos.echo {:message (str "Going to " destination " for " duration " days")}))
+```
 
 ### 4. Choose Control Flow
 - **Binary choice**: Use `(if condition then else)`
