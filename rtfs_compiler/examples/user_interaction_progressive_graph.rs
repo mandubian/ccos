@@ -956,18 +956,37 @@ fn extract_pending_questions_and_generate_responses(
 fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Action) -> Option<String> {
     if let Some(args) = &action.arguments {
         if args.len() >= 2 {
-            if let rtfs_compiler::runtime::values::Value::String(prompt) = &args[1] {
-                return Some(prompt.clone());
-            } else {
-                // Debug: log what we found instead of a string
-                eprintln!("[debug] PlanPaused action args[1] is not a string: {:?}", args[1]);
+            match &args[1] {
+                rtfs_compiler::runtime::values::Value::String(prompt) => {
+                    return Some(prompt.clone());
+                }
+                rtfs_compiler::runtime::values::Value::Map(map) => {
+                    // Try common keys used for prompts
+                    if let Some(p) = get_map_string_value(map, "prompt") {
+                        return Some(p);
+                    }
+                    if let Some(p) = get_map_string_value(map, "question") {
+                        return Some(p);
+                    }
+                    if let Some(p) = get_map_string_value(map, "text") {
+                        return Some(p);
+                    }
+
+                    // Fallback: return the first string value found in the map
+                    for (_k, v) in map.iter() {
+                        if let rtfs_compiler::runtime::values::Value::String(s) = v {
+                            return Some(s.clone());
+                        }
+                    }
+                }
+                other => {
+                    eprintln!("[debug] PlanPaused action args[1] unexpected type: {:?}", other);
+                }
             }
         } else {
-            // Debug: log if we don't have enough arguments
             eprintln!("[debug] PlanPaused action has {} arguments, expected >= 2", args.len());
         }
     } else {
-        // Debug: log if no arguments at all
         eprintln!("[debug] PlanPaused action has no arguments");
     }
     None
