@@ -138,11 +138,18 @@
 # Build
 cd rtfs_compiler && cargo build --example user_interaction_progressive_graph
 
-# Run with delegation
+# Run with delegation (uses consolidated prompts by default)
 cd rtfs_compiler && cargo run --example user_interaction_progressive_graph -- --enable-delegation --verbose
 
 # Test specific goal
 cd rtfs_compiler && cargo run --example user_interaction_progressive_graph -- --enable-delegation --verbose --goal "plan a trip to paris"
+
+# Debug: Show prompts sent to LLM
+RTFS_SHOW_PROMPTS=1 cargo run --example user_interaction_progressive_graph -- --enable-delegation --verbose
+
+# Legacy modes (if needed)
+RTFS_LEGACY_PLAN_FULL=1 cargo run --example user_interaction_progressive_graph -- --enable-delegation --verbose
+RTFS_LEGACY_PLAN_REDUCED=1 cargo run --example user_interaction_progressive_graph -- --enable-delegation --verbose
 ```
 
 ## 📚 Full Documentation
@@ -157,9 +164,17 @@ cd rtfs_compiler && cargo run --example user_interaction_progressive_graph -- --
 
 ## 🔄 Prompt Loading
 
-The delegating arbiter loads prompts via:
+The LLM provider loads prompts via:
 ```rust
 self.prompt_manager.render("plan_generation", "v1", &vars)
 ```
 
 This combines all `.md` files in the directory into a single prompt for the LLM.
+
+**Default behavior**: Uses consolidated `plan_generation` prompts (no env vars needed)
+
+**Legacy modes** (explicit opt-in):
+- `RTFS_LEGACY_PLAN_FULL=1` → use `plan_generation_full`
+- `RTFS_LEGACY_PLAN_REDUCED=1` → use `plan_generation_reduced`
+
+See `docs/prompts/LLM_PROVIDER_UPDATE.md` for migration details.
