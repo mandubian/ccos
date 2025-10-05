@@ -484,7 +484,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if args.verbose {
                                                     println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
                                                 }
-                                                if asked_questions.insert(prompt) {
+                                                if asked_questions.insert(prompt.clone()) {
                                                     new_question_seen = true;
                                                     if args.verbose {
                                                         println!("[stagnation] New question detected: {}", prompt);
@@ -549,7 +549,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if args.verbose {
                                         println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
                                     }
-                                    if asked_questions.insert(prompt) {
+                                    if asked_questions.insert(prompt.clone()) {
                                         new_question_seen = true;
                                         if args.verbose {
                                             println!("[stagnation] New question detected: {}", prompt);
