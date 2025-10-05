@@ -9,6 +9,7 @@ use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::execution_outcome::{HostCall, CallMetadata};
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::security::{default_effects_for_capability, RuntimeContext};
 use crate::runtime::values::Value;
@@ -333,6 +334,7 @@ impl HostInterface for RuntimeHost {
         .with_arguments(&args);
 
         let _action_id = self.get_causal_chain()?.append(&action)?;
+
 
         // 3. Execute the capability via the marketplace
         // Bridge async marketplace to sync evaluator using futures::executor::block_on

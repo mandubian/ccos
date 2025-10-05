@@ -487,15 +487,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         println!("[stagnation] Found {} PlanPaused actions in causal chain", plan_paused_count);
                                     }
                                     
-                                    // Debug: show all action types
-                                    eprintln!("[debug] All actions in causal chain:");
-                                    for (i, action) in actions.iter().enumerate() {
-                                        eprintln!("[debug] Action {}: type={:?}, plan_id={}", i, action.action_type, action.plan_id);
-                                    }
-                                    
                                     for action in actions.iter().rev() {
                                         if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
-                                            eprintln!("[debug] Processing PlanPaused action for plan_id: {}", action.plan_id);
                                             if let Some(prompt) = extract_question_prompt_from_action(action) {
                                                 if args.verbose {
                                                     println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
@@ -508,8 +501,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 } else if args.verbose {
                                                     println!("[stagnation] ⚠️  Question already seen: {}", prompt);
                                                 }
-                                            } else {
-                                                eprintln!("[debug] Failed to extract prompt from PlanPaused action");
                                             }
                                         }
                                     }
@@ -581,15 +572,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[stagnation] Found {} PlanPaused actions in causal chain", plan_paused_count);
                         }
                         
-                        // Debug: show all action types
-                        eprintln!("[debug] All actions in causal chain (successful run):");
-                        for (i, action) in actions.iter().enumerate() {
-                            eprintln!("[debug] Action {}: type={:?}, plan_id={}", i, action.action_type, action.plan_id);
-                        }
-                        
                         for action in actions.iter().rev() {
                             if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
-                                eprintln!("[debug] Processing PlanPaused action for plan_id: {}", action.plan_id);
                                 if let Some(prompt) = extract_question_prompt_from_action(action) {
                                     if args.verbose {
                                         println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
@@ -602,8 +586,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else if args.verbose {
                                         println!("[stagnation] ⚠️  Question already seen: {}", prompt);
                                     }
-                                } else {
-                                    eprintln!("[debug] Failed to extract prompt from PlanPaused action");
                                 }
                             }
                         }
@@ -972,61 +954,35 @@ fn extract_pending_questions_and_generate_responses(
 
 /// Extract question prompt from a PlanPaused action
 fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Action) -> Option<String> {
-    eprintln!("[debug] Extracting prompt from PlanPaused action:");
-    eprintln!("[debug] Action arguments: {:?}", action.arguments);
-    
     if let Some(args) = &action.arguments {
-        eprintln!("[debug] Found {} arguments", args.len());
-        for (i, arg) in args.iter().enumerate() {
-            eprintln!("[debug] args[{}]: {:?}", i, arg);
-        }
-        
         if args.len() >= 2 {
             match &args[1] {
                 rtfs_compiler::runtime::values::Value::String(prompt) => {
-                    eprintln!("[debug] Found string prompt: {}", prompt);
                     return Some(prompt.clone());
                 }
                 rtfs_compiler::runtime::values::Value::Map(map) => {
-                    eprintln!("[debug] Found map with {} entries", map.len());
-                    for (k, v) in map.iter() {
-                        eprintln!("[debug] Map key: {:?}, value: {:?}", k, v);
-                    }
-                    
                     // Try common keys used for prompts
                     if let Some(p) = get_map_string_value(map, "prompt") {
-                        eprintln!("[debug] Found prompt key: {}", p);
                         return Some(p);
                     }
                     if let Some(p) = get_map_string_value(map, "question") {
-                        eprintln!("[debug] Found question key: {}", p);
                         return Some(p);
                     }
                     if let Some(p) = get_map_string_value(map, "text") {
-                        eprintln!("[debug] Found text key: {}", p);
                         return Some(p);
                     }
 
                     // Fallback: return the first string value found in the map
-                    for (k, v) in map.iter() {
+                    for (_k, v) in map.iter() {
                         if let rtfs_compiler::runtime::values::Value::String(s) = v {
-                            eprintln!("[debug] Using fallback string from key {:?}: {}", k, s);
                             return Some(s.clone());
                         }
                     }
-                    eprintln!("[debug] No string values found in map");
                 }
-                other => {
-                    eprintln!("[debug] PlanPaused action args[1] unexpected type: {:?}", other);
-                }
+                _ => {}
             }
-        } else {
-            eprintln!("[debug] PlanPaused action has {} arguments, expected >= 2", args.len());
         }
-    } else {
-        eprintln!("[debug] PlanPaused action has no arguments");
     }
-    eprintln!("[debug] No prompt extracted from action");
     None
 }
 
