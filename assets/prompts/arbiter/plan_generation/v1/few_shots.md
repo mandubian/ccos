@@ -161,6 +161,30 @@
 )
 ```
 
+## ✅ Using Context Variables from Previous Plans
+
+**Intent**: Create detailed itinerary (assumes trip details from previous plan)
+
+```lisp
+(plan
+  :name "create_detailed_itinerary"
+  :language rtfs20
+  :body (do
+    (step "Create Itinerary with Context"
+      (let [activity_preferences (call :ccos.user.ask "What specific activities interest you most? (museums/parks/restaurants/shopping)")
+            special_requests (call :ccos.user.ask "Any special requests or dietary restrictions?")]
+        (call :ccos.echo {:message (str "Creating detailed itinerary for your " <trip/duration> "-day trip to " <trip/destination> " from " <trip/arrival> " to " <trip/departure> " with " <trip/budget> " budget")})
+        {:itinerary/activity_preferences activity_preferences
+         :itinerary/special_requests special_requests
+         :trip/destination <trip/destination>
+         :trip/duration <trip/duration>
+         :trip/arrival <trip/arrival>
+         :trip/departure <trip/departure>
+         :trip/budget <trip/budget>})))
+  :annotations {:returns "map" :category "itinerary_planning"}
+)
+```
+
 ## ❌ WRONG - Variables Across Steps
 
 ```lisp

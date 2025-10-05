@@ -31,6 +31,7 @@
 - **Keywords**: `:key`, `:trip/dates`
 - **Maps**: `{:key "value" :a 1 :b 2}`
 - **Lists**: `[1 2 3]`, `["a" "b" "c"]`
+- **Context Variables**: `<context_variable_name>` - Reference values from previous plan executions
 
 ## Available Capabilities
 
