@@ -24,6 +24,7 @@
 use clap::Parser;
 use crossterm::style::Stylize;
 use rtfs_compiler::ccos::CCOS;
+use rtfs_compiler::ccos::arbiter::ArbiterEngine;
 use rtfs_compiler::config::profile_selection::ProfileMeta;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::config::validation::validate_config;
@@ -387,8 +388,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             metadata: HashMap::new(),
                         };
 
-                        // Generate plan with context
-                        match arbiter.intent_to_plan(&storable_intent, Some(accumulated_context.clone())).await {
+                        // Generate plan (context passing not yet exposed in public API)
+                        match arbiter.intent_to_plan(&intent).await {
                             Ok(plan) => {
                                 if args.verbose {
                                     println!("Generated plan with context: {}", plan.plan_id);
