@@ -4,11 +4,11 @@
 //! as context to subsequent plan generations, enabling more modular plans.
 
 use rtfs_compiler::ccos::CCOS;
-use rtfs_compiler::runtime::context::RuntimeContext;
-use rtfs_compiler::runtime::values::Value;
+use rtfs_compiler::ccos::arbiter::ArbiterEngine;
+use rtfs_compiler::runtime::security::RuntimeContext;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use yansi::Paint;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize CCOS with delegation enabled
     let ccos = Arc::new(CCOS::new().await?);
-    let ctx = RuntimeContext::default();
+    let ctx = RuntimeContext::pure();
 
     // Simulate a multi-step planning scenario
     let scenarios = vec![
