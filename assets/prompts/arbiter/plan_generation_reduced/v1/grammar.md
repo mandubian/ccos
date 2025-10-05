@@ -1,6 +1,16 @@
-# Reduced RTFS Grammar
+# Reduced RTFS Plan Grammar
 
-## Allowed Forms
+## Plan Structure
+```lisp
+(plan
+  :name "descriptive_name"           ; optional but recommended
+  :language rtfs20                   ; optional (will be set to rtfs20 if missing)
+  :body (do <step> <step> ...)       ; required - contains the actual steps
+  :annotations {:key "value"}        ; optional - metadata
+)
+```
+
+## Allowed Forms (inside :body)
 
 ```lisp
 (do <step> <step> ...)

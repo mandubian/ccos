@@ -33,9 +33,13 @@ async fn test_ccos_with_delegating_arbiter_stub_model() {
     // Security context allowing the capabilities used by the stub plan
     let context = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]
-            .into_iter()
-            .collect(),
+        allowed_capabilities: vec![
+            "ccos.echo".to_string(),
+            "ccos.math.add".to_string(),
+            "ccos.user.ask".to_string(),
+        ]
+        .into_iter()
+        .collect(),
         ..RuntimeContext::pure()
     };
 
@@ -124,9 +128,13 @@ async fn test_agent_registry_delegation_short_circuit() {
 
     let ctx = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec!["ccos.echo".into(), "ccos.math.add".into()]
-            .into_iter()
-            .collect(),
+        allowed_capabilities: vec![
+            "ccos.echo".into(),
+            "ccos.math.add".into(),
+            "ccos.user.ask".into(),
+        ]
+        .into_iter()
+        .collect(),
         ..RuntimeContext::pure()
     };
 
@@ -487,9 +495,13 @@ async fn test_delegation_completed_event_emitted() {
     // Security context for plan execution
     let context = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]
-            .into_iter()
-            .collect(),
+        allowed_capabilities: vec![
+            "ccos.echo".to_string(),
+            "ccos.math.add".to_string(),
+            "ccos.user.ask".to_string(),
+        ]
+        .into_iter()
+        .collect(),
         ..RuntimeContext::pure()
     };
 

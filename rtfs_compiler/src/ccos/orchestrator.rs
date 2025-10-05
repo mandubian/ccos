@@ -625,13 +625,11 @@ impl Orchestrator {
                     return Ok(ExecutionOutcome::Complete(value));
                 }
                 ExecutionOutcome::RequiresHost(host_call) => {
-                    // Handle the host call through CCOS delegation
-                    let result = self.handle_host_call(&host_call).await?;
-
-                    // For now, we'll return the result directly.
-                    // In a more sophisticated implementation, we might resume execution
-                    // with the result substituted back into the expression.
-                    return Ok(ExecutionOutcome::Complete(result));
+                    // Propagate the RequiresHost up so the orchestrator can checkpoint
+                    // and allow CCOS to prompt the user / agent before resuming.
+                    // This avoids performing the host call inline here and then
+                    // prematurely completing execution without a resumable state.
+                    return Ok(ExecutionOutcome::RequiresHost(host_call));
                 }
             }
         }
@@ -741,7 +739,10 @@ impl Orchestrator {
         host.clear_execution_context();
 
         // --- 4. Log Final Plan Status ---
-        // The execution loop now handles all RequiresHost outcomes, so we only get Complete results here.
+        // If the evaluator yielded RequiresHost, we checkpoint and emit a PlanPaused
+        // action so the caller (CCOS) can perform the required host interaction
+        // (e.g., ask the user) and later resume execution. Otherwise, handle
+        // completion or errors as before.
         let (execution_result, error_opt) = match final_result {
             Ok(ExecutionOutcome::Complete(value)) => {
                 let res = ExecutionResult {
@@ -760,16 +761,28 @@ impl Orchestrator {
                 )?;
                 (res, None)
             }
-            Ok(ExecutionOutcome::RequiresHost(_)) => {
-                // This should not happen as we handle RequiresHost in the loop
-                let error =
-                    RuntimeError::Generic("Unexpected RequiresHost in final result".to_string());
+            Ok(ExecutionOutcome::RequiresHost(host_call)) => {
+                // Unified checkpoint path: persist context + log PlanPaused via helper so
+                // resume_and_continue_from_checkpoint can locate checkpoint.
+                let (checkpoint_id, _serialized) = self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
+
+                // Build metadata describing required host capability.
+                let mut metadata_map: std::collections::HashMap<String, RtfsValue> = std::collections::HashMap::new();
+                metadata_map.insert(
+                    "requires_capability".to_string(),
+                    RtfsValue::String(host_call.capability_id.clone()),
+                );
+                if host_call.metadata.is_some() {
+                    metadata_map.insert("has_metadata".to_string(), RtfsValue::String("true".to_string()));
+                }
+                metadata_map.insert("checkpoint_id".to_string(), RtfsValue::String(checkpoint_id));
+
                 let res = ExecutionResult {
                     success: false,
-                    value: RtfsValue::String("error: Unexpected RequiresHost".to_string()),
-                    metadata: Default::default(),
+                    value: RtfsValue::String("paused: requires host interaction".to_string()),
+                    metadata: metadata_map,
                 };
-                (res, Some(error))
+                (res, None)
             }
             Err(e) => {
                 // Log aborted action first
@@ -1187,6 +1200,187 @@ impl Orchestrator {
             ));
         }
         self.resume_plan(plan_id, intent_id, evaluator, &rec.serialized_context)
+    }
+
+    /// Resume execution from a checkpoint and continue running the plan until
+    /// either it completes or it yields another RequiresHost (in which case a
+    /// new checkpoint is created). This helper will:
+    /// - create a fresh Evaluator/RuntimeHost using the provided `context`
+    /// - restore the serialized execution context from `checkpoint_id`
+    /// - log a PlanResumed event (via resume helpers)
+    /// - continue executing the plan body until completion or the next host pause
+    ///
+    /// Inputs:
+    /// - plan: the Plan to execute/continue
+    /// - context: the RuntimeContext to use for creating the evaluator/host
+    /// - checkpoint_id: id of the previously created checkpoint (e.g. "cp-...")
+    ///
+    /// Returns: ExecutionResult mirroring `execute_plan` semantics: success=true
+    /// on completion, success=false and metadata describing the paused capability
+    /// when a new host interaction is required.
+    pub async fn resume_and_continue_from_checkpoint(
+        &self,
+        plan: &Plan,
+        context: &RuntimeContext,
+        checkpoint_id: &str,
+    ) -> RuntimeResult<ExecutionResult> {
+        let plan_id = plan.plan_id.clone();
+        let primary_intent_id = plan.intent_ids.first().cloned().unwrap_or_default();
+
+        // Ensure the primary intent is marked as Executing so audits are correct
+        if !primary_intent_id.is_empty() {
+            if let Ok(mut graph) = self.intent_graph.lock() {
+                let _ = graph.set_intent_status_with_audit(
+                    &primary_intent_id,
+                    IntentStatus::Executing,
+                    Some(&plan_id),
+                    None,
+                );
+            }
+        }
+
+        // --- Recreate Host & Evaluator ---
+        let host = Arc::new(RuntimeHost::new(
+            self.causal_chain.clone(),
+            self.capability_marketplace.clone(),
+            context.clone(),
+        ));
+        host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), "".to_string());
+        let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+        let host_iface: Arc<dyn HostInterface> = host.clone();
+        let evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+
+        // Initialize context manager for resumed execution
+        {
+            let mut context_manager = evaluator.context_manager.borrow_mut();
+            context_manager.initialize(Some(format!("plan-{}", plan_id)));
+        }
+
+        // Restore checkpoint into evaluator (this also logs PlanResumed via resume helpers)
+        // Use resume_plan_from_checkpoint which will lookup the checkpoint and call resume_plan
+        self.resume_plan_from_checkpoint(&plan_id, &primary_intent_id, &evaluator, checkpoint_id)?;
+
+        // Parse and continue executing the plan body
+        let final_result = match &plan.language {
+            PlanLanguage::Rtfs20 => match &plan.body {
+                PlanBody::Rtfs(rtfs_code) => {
+                    let code = rtfs_code.trim();
+                    if code.is_empty() {
+                        Err(RuntimeError::Generic(
+                            "Empty RTFS plan body after trimming".to_string(),
+                        ))
+                    } else {
+                        match parse_expression(code) {
+                            Ok(expr) => self.execute_with_yield_handling(&evaluator, &expr).await,
+                            Err(e) => Err(RuntimeError::Generic(format!(
+                                "Failed to parse RTFS plan body: {:?}",
+                                e
+                            ))),
+                        }
+                    }
+                }
+                PlanBody::Wasm(_) => Err(RuntimeError::Generic(
+                    "RTFS plans must use Rtfs body format".to_string(),
+                )),
+            },
+            _ => Err(RuntimeError::Generic(format!(
+                "Unsupported plan language: {:?}",
+                plan.language
+            ))),
+        };
+
+        host.clear_execution_context();
+
+        // --- Finalize & audit similar to execute_plan ---
+        let (execution_result, error_opt) = match final_result {
+            Ok(ExecutionOutcome::Complete(value)) => {
+                let res = ExecutionResult {
+                    success: true,
+                    value,
+                    metadata: Default::default(),
+                };
+                let _ = self.log_action(
+                    Action::new(
+                        ActionType::PlanCompleted,
+                        plan_id.clone(),
+                        primary_intent_id.clone(),
+                    )
+                    .with_parent(None)
+                    .with_result(res.clone()),
+                );
+                (res, None)
+            }
+            Ok(ExecutionOutcome::RequiresHost(host_call)) => {
+                // Create a new checkpoint and emit PlanPaused
+                let (checkpoint_id, _serialized) = self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
+
+                let mut metadata_map: std::collections::HashMap<String, RtfsValue> = std::collections::HashMap::new();
+                metadata_map.insert(
+                    "requires_capability".to_string(),
+                    RtfsValue::String(host_call.capability_id.clone()),
+                );
+                if host_call.metadata.is_some() {
+                    metadata_map.insert("has_metadata".to_string(), RtfsValue::String("true".to_string()));
+                }
+
+                let res = ExecutionResult {
+                    success: false,
+                    value: RtfsValue::String("paused: requires host interaction".to_string()),
+                    metadata: metadata_map,
+                };
+                (res, None)
+            }
+            Err(e) => {
+                let _ = self.log_action(
+                    Action::new(
+                        ActionType::PlanAborted,
+                        plan_id.clone(),
+                        primary_intent_id.clone(),
+                    )
+                    .with_parent(None)
+                    .with_error(&e.to_string()),
+                );
+                let failure_value = RtfsValue::String(format!("error: {}", e));
+                let res = ExecutionResult {
+                    success: false,
+                    value: failure_value,
+                    metadata: Default::default(),
+                };
+                (res, Some(e))
+            }
+        };
+
+        // Update Intent Graph with final outcome
+        {
+            let mut graph = self
+                .intent_graph
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+            if !primary_intent_id.is_empty() {
+                if let Some(pre_intent) = graph.get_intent(&primary_intent_id) {
+                    graph
+                        .update_intent_with_audit(
+                            pre_intent,
+                            &execution_result,
+                            Some(&plan_id),
+                            None,
+                        )
+                        .map_err(|e| {
+                            RuntimeError::Generic(format!(
+                                "IntentGraph update failed for {}: {:?}",
+                                primary_intent_id, e
+                            ))
+                        })?;
+                }
+            }
+        }
+
+        if let Some(err) = error_opt {
+            Err(err)
+        } else {
+            Ok(execution_result)
+        }
     }
 
     /// Derive and set the security profile for a step before execution

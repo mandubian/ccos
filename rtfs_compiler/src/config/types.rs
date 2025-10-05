@@ -384,6 +384,13 @@ pub struct MarketplaceConfig {
 /// Delegation configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DelegationConfig {
+    /// NOTE: This is the external/serializable shape used for user-provided
+    /// agent configuration (AgentConfig). It intentionally differs from the
+    /// runtime `DelegationConfig` found in `ccos::arbiter::arbiter_config`.
+    /// The runtime shape is more opinionated (concrete types) and is produced
+    /// by `DelegationConfig::to_arbiter_config()` below. Keep both in sync by
+    /// adding fields here and forwarding them in `to_arbiter_config()`.
+
     /// Whether delegation is enabled (fallback: enabled if agent registry present)
     pub enabled: Option<bool>,
     /// Score threshold to approve delegation (default 0.65)
@@ -398,6 +405,12 @@ pub struct DelegationConfig {
     pub feedback_decay: Option<f64>,
     /// Agent registry configuration
     pub agent_registry: Option<AgentRegistryConfig>,
+    /// Whether to print the extracted RTFS intent s-expression when debugging
+    /// (config-level override; runtime may still read env vars).
+    pub print_extracted_intent: Option<bool>,
+    /// Whether to print the extracted RTFS plan s-expression when debugging
+    /// (config-level override; runtime may still read env vars).
+    pub print_extracted_plan: Option<bool>,
     /// Adaptive threshold configuration
     pub adaptive_threshold: Option<AdaptiveThresholdConfig>,
 }
@@ -721,6 +734,8 @@ impl Default for DelegationConfig {
             feedback_success_weight: None,
             feedback_decay: None,
             agent_registry: None,
+            print_extracted_intent: None,
+            print_extracted_plan: None,
             adaptive_threshold: None,
         }
     }
@@ -795,6 +810,8 @@ impl DelegationConfig {
                 )
                 .unwrap_or_default(),
             adaptive_threshold: self.adaptive_threshold.clone(),
+            print_extracted_intent: self.print_extracted_intent,
+            print_extracted_plan: self.print_extracted_plan,
         }
     }
 }

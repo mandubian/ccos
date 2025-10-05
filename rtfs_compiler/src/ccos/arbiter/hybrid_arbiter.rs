@@ -578,6 +578,10 @@ Plan:"#,
 
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
+        // Optionally print extracted RTFS plan for diagnostics (env only for hybrid)
+        if std::env::var("CCOS_PRINT_EXTRACTED_PLAN").map(|s| s == "1").unwrap_or(false) {
+            eprintln!("[HYBRID-ARBITER] Extracted RTFS plan:\n{}", rtfs_content);
+        }
 
         Ok(Plan {
             plan_id: format!("hybrid_llm_plan_{}", uuid::Uuid::new_v4()),

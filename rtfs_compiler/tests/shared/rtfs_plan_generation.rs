@@ -53,6 +53,8 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
         agent_registry: rtfs_compiler::ccos::arbiter::arbiter_config::AgentRegistryConfig::default(
         ),
         adaptive_threshold: None,
+        print_extracted_intent: None,
+        print_extracted_plan: None,
     };
 
     let intent_graph = Arc::new(std::sync::Mutex::new(

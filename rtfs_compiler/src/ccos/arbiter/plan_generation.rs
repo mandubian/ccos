@@ -119,7 +119,9 @@ impl PlanGenerationProvider for StubPlanGenerationProvider {
         // Minimal RTFS body; governance will still validate.
         let body = r#"(do
   (step "Greet" (call :ccos.echo {:message "hi"}))
-  (step "Add" (call :ccos.math.add 2 3)))"#;
+  (step "AddNumbers" (call :ccos.math.add 2 3))
+  (step "Report" (call :ccos.echo {:message "Stub plan execution complete."}))
+)"#;
         // Create a simple JSON IR mirroring the steps
         let ir = serde_json::json!({
             "steps": [
@@ -132,10 +134,17 @@ impl PlanGenerationProvider for StubPlanGenerationProvider {
                 },
                 {
                     "id": "s2",
-                    "name": "Add",
+                    "name": "AddNumbers",
                     "capability": ":ccos.math.add",
                     "args": [2, 3],
                     "deps": ["s1"]
+                },
+                {
+                    "id": "s3",
+                    "name": "Report",
+                    "capability": ":ccos.echo",
+                    "args": {"message": "Stub plan execution complete."},
+                    "deps": ["s2"]
                 }
             ]
         });

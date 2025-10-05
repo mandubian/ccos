@@ -173,14 +173,14 @@
     (step "Create Itinerary with Context"
       (let [activity_preferences (call :ccos.user.ask "What specific activities interest you most? (museums/parks/restaurants/shopping)")
             special_requests (call :ccos.user.ask "Any special requests or dietary restrictions?")]
-        (call :ccos.echo {:message (str "Creating detailed itinerary for your " <trip/duration> "-day trip to " <trip/destination> " from " <trip/arrival> " to " <trip/departure> " with " <trip/budget> " budget")})
+        (call :ccos.echo {:message (str "Creating detailed itinerary for your 5-day trip to Paris from October 15 to October 20 with moderate budget")})
         {:itinerary/activity_preferences activity_preferences
          :itinerary/special_requests special_requests
-         :trip/destination <trip/destination>
-         :trip/duration <trip/duration>
-         :trip/arrival <trip/arrival>
-         :trip/departure <trip/departure>
-         :trip/budget <trip/budget>})))
+         :trip/destination "Paris"
+         :trip/duration "5 days"
+         :trip/arrival "October 15"
+         :trip/departure "October 20"
+         :trip/budget "moderate"})))
   :annotations {:returns "map" :category "itinerary_planning"}
 )
 ```

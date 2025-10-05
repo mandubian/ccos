@@ -1,0 +1,63 @@
+version = "1.0"
+agent_id = "progressive-demo"
+profile = "interactive"
+
+[capabilities]
+llm = { enabled = true }
+delegation = { enabled = true }
+intent_graph = { enabled = true }
+
+[governance.policies]
+default = "moderate"
+dangerous = "strict"
+
+[governance.keys]
+verify = ""
+
+[delegation]
+# Enable delegation for LLM-powered plan generation
+enabled = true
+
+# Debug flags for development
+print_extracted_intent = true
+print_extracted_plan = true
+
+[llm_profiles]
+default = "openai-fast"
+
+[[llm_profiles.profiles]]
+name = "openai-fast"
+provider = "openai"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+quality = "fast"
+
+[[llm_profiles.profiles]]
+name = "openai-balanced"
+provider = "openai"
+model = "gpt-4o"
+api_key_env = "OPENAI_API_KEY"
+quality = "balanced"
+
+[[llm_profiles.profiles]]
+name = "claude-fast"
+provider = "claude"
+model = "claude-3-5-sonnet-20241022"
+api_key_env = "ANTHROPIC_API_KEY"
+quality = "fast"
+
+[[llm_profiles.profiles]]
+name = "openrouter-free"
+provider = "openrouter"
+model = "google/gemma-7b-it:free"
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+quality = "free"
+
+[orchestrator]
+# Allow runtime to handle user.ask for interactive flows
+allow_user_ask = true
+
+[causal_chain]
+# Enable causal chain tracking for intent relationship analysis
+enabled = true

@@ -364,6 +364,8 @@ async fn demo_delegating_arbiter() -> Result<(), Box<dyn std::error::Error>> {
                 },
             ],
         },
+            print_extracted_intent: None,
+            print_extracted_plan: None,
     };
 
     // Create arbiter configuration

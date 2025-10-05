@@ -55,6 +55,8 @@ registry_paths = []
 
 [delegation]
 enabled = true
+print_extracted_intent = true
+print_extracted_plan = true
 
 [llm_profiles]
 default = "openrouter_free:balanced"

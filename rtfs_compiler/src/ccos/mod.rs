@@ -82,6 +82,7 @@ use self::event_sink::CausalChainIntentEventSink;
 use self::governance_kernel::GovernanceKernel;
 use self::intent_graph::{config::IntentGraphConfig, IntentGraph};
 use crate::runtime::error::RuntimeError;
+use crate::ccos::types::StorableIntent;
 
 use self::orchestrator::Orchestrator;
 
@@ -131,6 +132,25 @@ impl CCOS {
         plan_archive_path: Option<std::path::PathBuf>,
         debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> RuntimeResult<Self> {
+        // Delegate to the new initializer that accepts an optional AgentConfig (backwards compatible)
+        Self::new_with_agent_config_and_configs_and_debug_callback(
+            intent_graph_config,
+            plan_archive_path,
+            None,
+            debug_callback,
+        )
+        .await
+    }
+
+    /// New: Creates and initializes a new CCOS instance with an optional loaded AgentConfig,
+    /// custom configs and optional debug callback. When `agent_config_opt` is Some, that
+    /// config will be used instead of `AgentConfig::default()`.
+    pub async fn new_with_agent_config_and_configs_and_debug_callback(
+        intent_graph_config: IntentGraphConfig,
+        plan_archive_path: Option<std::path::PathBuf>,
+        agent_config_opt: Option<crate::config::types::AgentConfig>,
+        debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> RuntimeResult<Self> {
         // 1. Initialize shared, stateful components
         let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
         let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
@@ -153,8 +173,12 @@ impl CCOS {
 
         let capability_marketplace = Arc::new(capability_marketplace);
 
-        // Load agent configuration (placeholder: default; future: parse RTFS (agent.config ...) form)
-        let agent_config = Arc::new(AgentConfig::default());
+        // Use provided AgentConfig or default
+        let agent_config = if let Some(cfg) = agent_config_opt {
+            Arc::new(cfg)
+        } else {
+            Arc::new(AgentConfig::default())
+        };
 
         // Register built-in capabilities required by default plans (await using ambient runtime)
         crate::runtime::stdlib::register_default_capabilities(&capability_marketplace).await?;
@@ -217,44 +241,14 @@ impl CCOS {
         let delegating_arbiter = if enable_delegation {
             // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to OpenAI if OPENAI_API_KEY exists.
             let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                // Accept legacy / mistyped env var alias CCOS_DELEGATION_MODEL for ergonomics.
-                let delegating_model = std::env::var("CCOS_DELEGATING_MODEL")
-                    .or_else(|_| std::env::var("CCOS_DELEGATION_MODEL")) // alias support
-                    .or_else(|_| std::env::var("LLM_MODEL"))
-                    .unwrap_or_else(|_| "moonshotai/kimi-k2:free".to_string());
-                if std::env::var("CCOS_DELEGATING_MODEL").is_err()
-                    && std::env::var("CCOS_DELEGATION_MODEL").is_ok()
-                {
-                    // Warn user they used the alias so they can migrate.
-                    log::warn!(
-                        "Environment variable CCOS_DELEGATION_MODEL detected. Please use CCOS_DELEGATING_MODEL (with 'ING') for consistency."
-                    );
-                }
-                let model = delegating_model;
-                (
-                    Some(key),
-                    Some("https://openrouter.ai/api/v1".to_string()),
-                    model,
-                )
+                (Some(key), Some(std::env::var("CCOS_LLM_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string())), std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "deepseek/deepseek-chat-v3.1:free".to_string()))
+            } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                (Some(key), None, std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string()))
             } else {
-                let key = std::env::var("OPENAI_API_KEY").ok();
-                let delegating_model = std::env::var("CCOS_DELEGATING_MODEL")
-                    .or_else(|_| std::env::var("CCOS_DELEGATION_MODEL")) // alias support
-                    .or_else(|_| std::env::var("LLM_MODEL"))
-                    .unwrap_or_else(|_| "gpt-4o-mini".to_string());
-                if std::env::var("CCOS_DELEGATING_MODEL").is_err()
-                    && std::env::var("CCOS_DELEGATION_MODEL").is_ok()
-                {
-                    log::warn!(
-                        "Environment variable CCOS_DELEGATION_MODEL detected. Please use CCOS_DELEGATING_MODEL (with 'ING') for consistency."
-                    );
-                }
-                let model = delegating_model;
-                (key, None, model)
+                (None, None, std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "stub-model".to_string()))
             };
 
             // Create LLM config for delegating arbiter
-            // Use Stub provider for stub models, otherwise use OpenAI
             let provider_type = if model == "stub-model" || model == "deterministic-stub-model" {
                 crate::ccos::arbiter::arbiter_config::LlmProviderType::Stub
             } else {
@@ -309,6 +303,16 @@ impl CCOS {
             agent_config,
             debug_callback: debug_callback.clone(),
         })
+    }
+
+    /// Returns a snapshot (clone) of all currently stored intents.
+    /// This is a lightweight convenience for examples / inspection and should not
+    /// be used in performance‑critical paths (acquires a mutex briefly, clones intents).
+    pub fn list_intents_snapshot(&self) -> Vec<StorableIntent> {
+        // Acquire lock and use sync helper; IntentGraph already exposes sync accessor wrappers.
+        // Errors are swallowed into empty vec in underlying helper; acceptable for non‑critical read.
+        let ig = self.intent_graph.lock().expect("intent_graph lock poisoned");
+        ig.storage.get_all_intents_sync()
     }
 
     /// Preflight validation (M3 pre-work): ensure all referenced capabilities exist in marketplace
@@ -781,6 +785,151 @@ impl CCOS {
         }
 
         Ok((plan_clone, result))
+    }
+
+    /// Like `process_request` but accepts optional context for intent generation.
+    /// The context is passed to the arbiter's `natural_language_to_intent` method
+    /// to provide additional information (e.g., parent intent for refinements).
+    pub async fn process_request_with_context(
+        &self,
+        natural_language_request: &str,
+        security_context: &RuntimeContext,
+        arbiter_context: Option<&std::collections::HashMap<String, crate::runtime::values::Value>>,
+    ) -> RuntimeResult<ExecutionResult> {
+        self.emit_debug(|m| {
+            format!(
+                "{{\"event\":\"request_received\",\"text\":{},\"ts\":{}}}",
+                json_escape(natural_language_request),
+                current_ts()
+            )
+        });
+        // 1. Arbiter: Generate a plan from the natural language request.
+        let proposed_plan = if let Some(da) = &self.delegating_arbiter {
+            // Use delegating arbiter to produce a plan via its engine API
+            use crate::ccos::arbiter::ArbiterEngine;
+            let intent = da
+                .natural_language_to_intent(natural_language_request, arbiter_context.cloned())
+                .await?;
+
+            // Store the intent in the Intent Graph for later reference
+            {
+                let mut ig = self.intent_graph.lock().map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
+                })?;
+                let storable_intent = crate::ccos::types::StorableIntent {
+                    intent_id: intent.intent_id.clone(),
+                    name: intent.name.clone(),
+                    original_request: intent.original_request.clone(),
+                    rtfs_intent_source: "".to_string(),
+                    goal: intent.goal.clone(),
+                    constraints: intent
+                        .constraints
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                    preferences: intent
+                        .preferences
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                    success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                    parent_intent: None,
+                    child_intents: vec![],
+                    triggered_by: crate::ccos::types::TriggerSource::HumanRequest,
+                    generation_context: crate::ccos::types::GenerationContext {
+                        arbiter_version: "delegating-1.0".to_string(),
+                        generation_timestamp: intent.created_at,
+                        input_context: arbiter_context.cloned().unwrap_or_default().into_iter().map(|(k, v)| (k, v.to_string())).collect(),
+                        reasoning_trace: None,
+                    },
+                    status: intent.status.clone(),
+                    priority: 0,
+                    created_at: intent.created_at,
+                    updated_at: intent.updated_at,
+                    metadata: intent
+                        .metadata
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                };
+                ig.store_intent(storable_intent)?;
+            }
+
+            da.intent_to_plan(&intent).await?
+        } else {
+            return Err(RuntimeError::Generic(
+                "No delegating arbiter configured - cannot process natural language requests"
+                    .to_string(),
+            ));
+        };
+
+        // 1.5 Preflight capability validation (M3)
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"plan_validation_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                proposed_plan.plan_id,
+                current_ts()
+            )
+        });
+        self.preflight_validate_capabilities(&proposed_plan).await?;
+
+        // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
+        self.emit_debug(|_| {
+            format!(
+                "{{\"event\":\"plan_execution_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
+                proposed_plan.plan_id,
+                current_ts()
+            )
+        });
+        let plan_id_for_events = proposed_plan.plan_id.clone();
+        let result = self
+            .governance_kernel
+            .validate_and_execute(proposed_plan, security_context)
+            .await?;
+        self.emit_debug(|_| format!(
+            "{{\"event\":\"plan_execution_completed\",\"plan_id\":\"{}\",\"success\":{},\"ts\":{}}}",
+            plan_id_for_events, result.success, current_ts()
+        ));
+
+        // Delegation completion feedback (M4 extension)
+        if self.delegating_arbiter.is_some() {
+            use crate::runtime::values::Value;
+            // Heuristic: search recent intents matching words from request
+            if let Ok(graph) = self.intent_graph.lock() {
+                let recent = graph.find_relevant_intents(natural_language_request);
+                if let Some(stored) = recent.last() {
+                    // Stored intent metadata is HashMap<String,String>; check delegation key presence
+                    if stored.metadata.get("delegation.selected_agent").is_some() {
+                        let agent_id = stored
+                            .metadata
+                            .get("delegation.selected_agent")
+                            .cloned()
+                            .unwrap_or_default();
+                        // Record completed event
+                        if let Ok(mut chain) = self.causal_chain.lock() {
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert("agent_id".to_string(), Value::String(agent_id.clone()));
+                            meta.insert("success".to_string(), Value::Boolean(result.success));
+                            let _ = chain.record_delegation_event(
+                                &stored.intent_id,
+                                "delegation.agent_feedback",
+                                meta,
+                            );
+                        }
+                        // Update agent registry
+                        if let Ok(mut reg) = self.agent_registry.write() {
+                            if result.success {
+                                let _ = reg.record_feedback(&agent_id, true);
+                            } else {
+                                let _ = reg.record_feedback(&agent_id, false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     // --- Accessors for external analysis ---

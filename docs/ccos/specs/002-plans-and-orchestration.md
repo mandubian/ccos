@@ -190,3 +190,40 @@ sequenceDiagram
 Plans + Orchestrator form CCOS's 'how': Declarative, safe execution where RTFS computes, CCOS acts.
 
 Next: Causal Chain in 003.
+
+### 2.a Resume-and-Continue Semantics (API)
+
+CCOS supports a resume-and-continue flow for long-running or interactive plans where a plan yields to the host (RequiresHost) and a checkpoint is recorded. The orchestrator exposes a helper that restores a serialized execution context and continues executing the plan body until either completion or the next host pause.
+
+Key points:
+- Checkpoint id format: `cp-<sha256hex>`; checkpoints store the serialized evaluator context.
+- To resume and continue the plan in one call, call the Orchestrator API: `resume_and_continue_from_checkpoint(plan, context, checkpoint_id)`.
+- The helper will:
+  - recreate a `RuntimeHost` and `Evaluator` with the provided `RuntimeContext` (must have appropriate capability ACLs),
+  - restore the serialized context from the checkpoint archive,
+  - log a `PlanResumed` action, and
+  - continue execution using the same deterministic evaluation path used by `execute_plan`.
+- Return value: an `ExecutionResult` mirroring `execute_plan` semantics:
+  - success=true + PlanCompleted logged when execution finishes, or
+  - success=false + PlanPaused logged if execution yields again (new checkpoint created), or
+  - success=false + PlanAborted logged on error.
+
+Audit notes:
+- `PlanResumed` and subsequent `PlanCompleted`/`PlanPaused` actions are appended to the Causal Chain so external observers can reconstruct the timeline. If you want stricter parent linkage to the original `PlanStarted` action, consumers may inspect the chain and correlate action ids.
+
+Example usage (pseudo-Rust):
+
+```rust
+let (plan, result) = ccos.process_request_with_plan("Plan a trip", &ctx).await?;
+if !result.success {
+    // find PlanPaused action for plan_id and extract checkpoint id arg
+    let checkpoint_id = find_latest_checkpoint_id(&ccos.get_causal_chain(), &plan.plan_id);
+    let resumed = ccos
+        .get_orchestrator()
+        .resume_and_continue_from_checkpoint(&plan, &ctx, &checkpoint_id)
+        .await?;
+    // resumed now contains final ExecutionResult or a fresh paused result
+}
+```
+
+This flow is helpful for interactive assistants that collect user input mid-plan or for long-running integrations where host actions must be gated and audited. It preserves determinism by restoring the exact serialized evaluator context and replaying the same pure operations up to the next yield.

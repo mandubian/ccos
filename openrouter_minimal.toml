@@ -13,5 +13,5 @@ default = "or-basic"
 [[llm_profiles.profiles]]
 name = "or-basic"
 provider = "openrouter"
-model = "meta-llama/llama-3-8b-instruct"
+model = "google/gemma-7b-it"
 api_key_env = "OPENROUTER_API_KEY"

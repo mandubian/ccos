@@ -96,34 +96,51 @@ pub async fn register_default_capabilities(
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
 
-    // Register ccos.user.ask capability (interactive user input)
+    // Register ccos.user.ask capability (interactive user input - reads from stdin)
     marketplace
         .register_local_capability(
             "ccos.user.ask".to_string(),
             "User Ask Capability".to_string(),
-            "Prompts the user for input and returns their response".to_string(),
+            "Prompts the user for input and reads from stdin".to_string(),
             Arc::new(|input| {
-                match input {
-                    // Map with :args containing [prompt_string]
-                    Value::Map(map) => {
-                        if let Some(args_val) = map.get(&MapKey::Keyword(Keyword("args".to_string()))) {
-                            match args_val {
-                                Value::List(args) => {
+                // Extract prompt
+                let extract_prompt = |val: &Value| -> Result<String, RuntimeError> {
+                    match val {
+                        Value::Map(map) => {
+                            if let Some(args_val) = map.get(&MapKey::Keyword(Keyword("args".to_string()))) {
+                                if let Value::List(args) = args_val {
                                     if args.len() == 1 {
-                                        // For now, echo back the prompt as response to avoid blocking IO in tests
-                                        Ok(args[0].clone())
+                                        return Ok(args[0].to_string());
                                     } else {
-                                        Err(RuntimeError::ArityMismatch { function: "ccos.user.ask".to_string(), expected: "1".to_string(), actual: args.len() })
+                                        return Err(RuntimeError::ArityMismatch { function: "ccos.user.ask".to_string(), expected: "1".to_string(), actual: args.len() });
                                     }
                                 }
-                                other => Err(RuntimeError::TypeError { expected: "list".to_string(), actual: other.type_name().to_string(), operation: "ccos.user.ask".to_string() }),
                             }
-                        } else {
                             Err(RuntimeError::Generic("Missing :args for ccos.user.ask".to_string()))
                         }
+                        Value::List(args) => {
+                            if args.len() == 1 { Ok(args[0].to_string()) } else { Err(RuntimeError::ArityMismatch { function: "ccos.user.ask".to_string(), expected: "1".to_string(), actual: args.len() }) }
+                        }
+                        other => Err(RuntimeError::TypeError { expected: "map or list".to_string(), actual: other.type_name().to_string(), operation: "ccos.user.ask".to_string() })
                     }
-                    _ => Err(RuntimeError::TypeError { expected: "map".to_string(), actual: input.type_name().to_string(), operation: "ccos.user.ask".to_string() }),
-                }
+                };
+
+                let prompt = extract_prompt(&input)?;
+
+                // Print the prompt for the host/operator
+                eprintln!("[ccos.user.ask] {}", prompt);
+
+                // Read a line from stdin (blocking). This is intentional: this capability represents
+                // interactive user input and must be wired to the host's stdin in this example.
+                use std::io::{self, Write};
+                let mut stdout = io::stdout();
+                let _ = stdout.flush();
+                let mut line = String::new();
+                io::stdin()
+                    .read_line(&mut line)
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to read stdin: {}", e)))?;
+                let answer = line.trim().to_string();
+                Ok(Value::String(answer))
             }),
         )
         .await

@@ -1,12 +1,13 @@
 # Plan Generation Strategy
 
-## Multi-Step Approach
-
-1. **Break Down the Goal**: Decompose complex intents into logical steps
-2. **Name Steps Descriptively**: Use clear, action-oriented names in quotes
-3. **Sequence Steps Logically**: Order steps by dependencies
-4. **Minimize Steps**: But don't compromise clarity
-5. **Use Appropriate Control Flow**: `if` for binary choices, `match` for multiple options
+## Plan Structure
+1. **Create Plan Wrapper**: Use `(plan :name "..." :language rtfs20 :body (do ...) :annotations {...})`
+2. **Break Down the Goal**: Decompose complex intents into logical steps within the :body
+3. **Name Steps Descriptively**: Use clear, action-oriented names in quotes
+4. **Sequence Steps Logically**: Order steps by dependencies
+5. **Minimize Steps**: But don't compromise clarity
+6. **Use Appropriate Control Flow**: `if` for binary choices, `match` for multiple options
+7. **Return Values for Reuse**: Include a final expression in the :body to return structured data (captured variables, maps, or computed results) that can be used by other plans or the calling system
 
 ## Variable Scoping Rules
 
