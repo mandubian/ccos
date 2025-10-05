@@ -592,9 +592,9 @@ Only respond with valid JSON."#.to_string()
         ]);
 
         // Add context variables from previous plan executions
-        if let Some(context) = _context {
+        if let Some(ref context) = _context {
             for (key, value) in context {
-                vars.insert(format!("context_{}", key), value);
+                vars.insert(format!("context_{}", key), value.clone());
             }
         }
 
