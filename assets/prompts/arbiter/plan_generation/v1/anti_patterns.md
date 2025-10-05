@@ -82,6 +82,27 @@ This plan will ask for their name...
     {:user/name name}))  ; Explicit structured return
 ```
 
+## Variable Reference Violations
+
+❌ **Referencing undefined variables**
+```lisp
+(step "Plan Trip"
+  (let [destination (call :ccos.user.ask "Where to?")
+        duration (call :ccos.user.ask "How many days?")]
+    (call :ccos.echo {:message (str "Planning " duration "-day trip to " destination " with " budget " budget")})  ; ERROR: budget not defined!
+    {:trip/destination destination :trip/duration duration}))
+```
+
+✅ **CORRECT** - All variables defined in same let binding:
+```lisp
+(step "Plan Trip"
+  (let [destination (call :ccos.user.ask "Where to?")
+        duration (call :ccos.user.ask "How many days?")
+        budget (call :ccos.user.ask "What's your budget?")]
+    (call :ccos.echo {:message (str "Planning " duration "-day trip to " destination " with " budget " budget")})
+    {:trip/destination destination :trip/duration duration :trip/budget budget}))
+```
+
 ## Capability Violations
 
 ❌ **Capabilities not in whitelist**

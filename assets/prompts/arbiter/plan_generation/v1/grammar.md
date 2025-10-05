@@ -66,10 +66,28 @@
     (call :ccos.echo {:message (str "Hello, " name "!")})))
 ```
 
+✅ **CORRECT** - multiple variables in same let binding:
+```lisp
+(step "Plan Trip"
+  (let [destination (call :ccos.user.ask "Where to?")
+        duration (call :ccos.user.ask "How many days?")
+        budget (call :ccos.user.ask "What's your budget?")]
+    (call :ccos.echo {:message (str "Planning " duration "-day trip to " destination " with " budget " budget")})
+    {:trip/destination destination :trip/duration duration :trip/budget budget}))
+```
+
 ❌ **WRONG** - variables out of scope across steps:
 ```lisp
 (step "Get" (let [n (call :ccos.user.ask "Name?")] n))
 (step "Use" (call :ccos.echo {:message n}))  ; ERROR: n not in scope!
+```
+
+❌ **WRONG** - referencing undefined variables:
+```lisp
+(step "Plan Trip"
+  (let [destination (call :ccos.user.ask "Where to?")]
+    (call :ccos.echo {:message (str "Planning trip to " destination " for " duration " days")})  ; ERROR: duration not defined!
+    {:trip/destination destination}))
 ```
 
 ### Structured Results

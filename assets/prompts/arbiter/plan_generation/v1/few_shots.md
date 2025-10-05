@@ -128,6 +128,39 @@
 )
 ```
 
+## ✅ Complex Cultural Trip Planning (all variables in scope)
+
+**Intent**: Plan a cultural trip to Paris
+
+```lisp
+(plan
+  :name "plan_cultural_trip"
+  :language rtfs20
+  :body (do
+    (step "Collect Cultural Trip Details"
+      (let [destination (call :ccos.user.ask "Where would you like to travel?")
+            duration (call :ccos.user.ask "How many days will you stay?")
+            arrival (call :ccos.user.ask "What's your arrival date?")
+            departure (call :ccos.user.ask "What's your departure date?")
+            budget (call :ccos.user.ask "What's your total budget?")
+            art_preference (call :ccos.user.ask "What type of art interests you most? (classical/modern/contemporary)")
+            museum_priority (call :ccos.user.ask "Which museums would you prioritize? (Louvre/Orsay/Pompidou/other)")
+            daily_budget (call :ccos.user.ask "What's your preferred daily cultural budget in EUR?")
+            walking_tolerance (call :ccos.user.ask "How much walking are you comfortable with? (low/medium/high)")]
+        (call :ccos.echo {:message (str "Planning your " duration "-day cultural trip to " destination " from " arrival " to " departure " with " budget " budget")})
+        {:trip/destination destination
+         :trip/duration duration
+         :trip/arrival arrival
+         :trip/departure departure
+         :trip/budget budget
+         :cultural/art_preference art_preference
+         :cultural/museum_priority museum_priority
+         :budget/daily daily_budget
+         :activity/walking walking_tolerance})))
+  :annotations {:returns "map" :category "cultural_planning"}
+)
+```
+
 ## ❌ WRONG - Variables Across Steps
 
 ```lisp
