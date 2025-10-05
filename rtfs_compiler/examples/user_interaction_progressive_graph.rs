@@ -477,8 +477,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                 // Stagnation detection: inspect PlanPaused prompts and see if any new prompt appeared
                                 let mut new_question_seen = false;
+                                if args.verbose {
+                                    println!("[stagnation] Checking for new questions in causal chain...");
+                                }
                                 if let Ok(chain) = ccos.get_causal_chain().lock() {
-                                    for action in chain.get_all_actions().iter().rev() {
+                                    let actions = chain.get_all_actions();
+                                    let plan_paused_count = actions.iter().filter(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused).count();
+                                    if args.verbose {
+                                        println!("[stagnation] Found {} PlanPaused actions in causal chain", plan_paused_count);
+                                    }
+                                    
+                                    for action in actions.iter().rev() {
                                         if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
                                             if let Some(prompt) = extract_question_prompt_from_action(action) {
                                                 if args.verbose {
@@ -487,10 +496,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if asked_questions.insert(prompt.clone()) {
                                                     new_question_seen = true;
                                                     if args.verbose {
-                                                        println!("[stagnation] New question detected: {}", prompt);
+                                                        println!("[stagnation] ✅ NEW question detected: {}", prompt);
                                                     }
                                                 } else if args.verbose {
-                                                    println!("[stagnation] Question already seen: {}", prompt);
+                                                    println!("[stagnation] ⚠️  Question already seen: {}", prompt);
                                                 }
                                             }
                                         }
@@ -498,13 +507,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 if !new_question_seen {
                                     stagnant_turns += 1;
+                                    if args.verbose {
+                                        println!("[stagnation] No new questions detected this turn. Stagnant turns: {}/{}", stagnant_turns, STAGNATION_LIMIT);
+                                    }
                                 } else {
                                     stagnant_turns = 0;
+                                    if args.verbose {
+                                        println!("[stagnation] New question detected - resetting stagnation counter to 0");
+                                    }
                                 }
                                 if stagnant_turns >= STAGNATION_LIMIT {
-                                    println!("{}", "\n[stagnation] No new refinement questions emerging; assuming refinement exhausted.".yellow());
-                                    println!("[stagnation] Model likely needs external capabilities (e.g., travel.search, itinerary.optimize).");
-                                    println!("[stagnation] Ending progressive interaction.");
+                                    println!("{}", "\n[stagnation] STAGNATION DETECTED - Ending progressive interaction".yellow().bold());
+                                    println!("[stagnation] Reason: No new refinement questions for {} consecutive turns", STAGNATION_LIMIT);
+                                    println!("[stagnation] Total questions asked so far: {}", asked_questions.len());
+                                    if args.verbose {
+                                        println!("[stagnation] Questions seen: {:?}", asked_questions);
+                                    }
+                                    println!("[stagnation] Analysis: Model likely needs external capabilities (e.g., travel.search, itinerary.optimize)");
+                                    println!("[stagnation] or has gathered sufficient information to proceed with execution.");
                                     next_request.clear();
                                 }
 
@@ -542,8 +562,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Stagnation detection for successful runs as well
                     let mut new_question_seen = false;
+                    if args.verbose {
+                        println!("[stagnation] Checking for new questions in causal chain (successful run)...");
+                    }
                     if let Ok(chain) = ccos.get_causal_chain().lock() {
-                        for action in chain.get_all_actions().iter().rev() {
+                        let actions = chain.get_all_actions();
+                        let plan_paused_count = actions.iter().filter(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused).count();
+                        if args.verbose {
+                            println!("[stagnation] Found {} PlanPaused actions in causal chain", plan_paused_count);
+                        }
+                        
+                        for action in actions.iter().rev() {
                             if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
                                 if let Some(prompt) = extract_question_prompt_from_action(action) {
                                     if args.verbose {
@@ -552,10 +581,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if asked_questions.insert(prompt.clone()) {
                                         new_question_seen = true;
                                         if args.verbose {
-                                            println!("[stagnation] New question detected: {}", prompt);
+                                            println!("[stagnation] ✅ NEW question detected: {}", prompt);
                                         }
                                     } else if args.verbose {
-                                        println!("[stagnation] Question already seen: {}", prompt);
+                                        println!("[stagnation] ⚠️  Question already seen: {}", prompt);
                                     }
                                 }
                             }
@@ -563,13 +592,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if !new_question_seen {
                         stagnant_turns += 1;
+                        if args.verbose {
+                            println!("[stagnation] No new questions detected this turn. Stagnant turns: {}/{}", stagnant_turns, STAGNATION_LIMIT);
+                        }
                     } else {
                         stagnant_turns = 0;
+                        if args.verbose {
+                            println!("[stagnation] New question detected - resetting stagnation counter to 0");
+                        }
                     }
                     if stagnant_turns >= STAGNATION_LIMIT {
-                        println!("{}", "\n[stagnation] No new refinement questions emerging; assuming refinement exhausted.".yellow());
-                        println!("[stagnation] Model likely needs external capabilities (e.g., travel.search, itinerary.optimize).");
-                        println!("[stagnation] Ending progressive interaction.");
+                        println!("{}", "\n[stagnation] STAGNATION DETECTED - Ending progressive interaction".yellow().bold());
+                        println!("[stagnation] Reason: No new refinement questions for {} consecutive turns", STAGNATION_LIMIT);
+                        println!("[stagnation] Total questions asked so far: {}", asked_questions.len());
+                        if args.verbose {
+                            println!("[stagnation] Questions seen: {:?}", asked_questions);
+                        }
+                        println!("[stagnation] Analysis: Model likely needs external capabilities (e.g., travel.search, itinerary.optimize)");
+                        println!("[stagnation] or has gathered sufficient information to proceed with execution.");
                         next_request.clear();
                     }
                 }
