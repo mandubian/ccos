@@ -76,8 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 metadata: HashMap::new(),
             };
 
-            // Generate plan with context
-            let plan = arbiter.intent_to_plan(&storable_intent, Some(plan_context)).await?;
+            // Generate plan (context passing not yet exposed in public API)
+            let plan = arbiter.intent_to_plan(&intent).await?;
             
             println!("Generated plan: {}", plan.plan_id);
             if let Some(name) = &plan.name {
