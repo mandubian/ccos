@@ -10,6 +10,7 @@ pub mod ir;
 pub mod parser;
 pub mod parser_error_reporter;
 pub mod runtime;
+pub mod examples_helpers;
 
 pub mod bytecode;
 pub mod supervisor;
