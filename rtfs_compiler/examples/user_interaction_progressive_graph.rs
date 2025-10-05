@@ -318,6 +318,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stagnant_turns = 0usize;
     const STAGNATION_LIMIT: usize = 2;
     
+    // Track context from previous plan executions for passing to subsequent plans
+    let mut accumulated_context: HashMap<String, String> = HashMap::new();
+    
     // --- Phase 2: Simulation of Interaction ---
     println!("\n{}", "--- Running Simulated Interaction ---".yellow().bold());
 
@@ -347,15 +350,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else { None }
         } else { None };
 
-        // Use process_request_with_plan so we can inspect the generated Plan and
-        // — if execution paused — resume-and-continue using the orchestrator.
-        let plan_and_result = ccos.process_request_with_plan(&request, &ctx).await;
+        // For context passing demonstration, we'll use the delegating arbiter directly
+        // when we have accumulated context, otherwise fall back to the standard flow
+        let plan_and_result = if !accumulated_context.is_empty() {
+            // Use delegating arbiter directly to pass context
+            if let Some(arbiter) = ccos.get_delegating_arbiter() {
+                match arbiter.natural_language_to_intent(&request, None).await {
+                    Ok(intent) => {
+                        // Convert to storable intent
+                        let storable_intent = rtfs_compiler::ccos::types::StorableIntent {
+                            intent_id: intent.intent_id.clone(),
+                            name: intent.name.clone(),
+                            original_request: intent.original_request.clone(),
+                            rtfs_intent_source: "".to_string(),
+                            goal: intent.goal.clone(),
+                            constraints: intent.constraints.iter()
+                                .map(|(k, v)| (k.clone(), v.to_string()))
+                                .collect(),
+                            preferences: intent.preferences.iter()
+                                .map(|(k, v)| (k.clone(), v.to_string()))
+                                .collect(),
+                            success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                            parent_intent: None,
+                            child_intents: vec![],
+                            triggered_by: rtfs_compiler::ccos::types::TriggerSource::HumanRequest,
+                            generation_context: rtfs_compiler::ccos::types::GenerationContext {
+                                arbiter_version: "delegating-1.0".to_string(),
+                                generation_timestamp: intent.created_at,
+                                input_context: HashMap::new(),
+                                reasoning_trace: None,
+                            },
+                            status: intent.status.clone(),
+                            priority: 0,
+                            created_at: intent.created_at,
+                            updated_at: intent.updated_at,
+                            metadata: HashMap::new(),
+                        };
+
+                        // Generate plan with context
+                        match arbiter.intent_to_plan(&storable_intent, Some(accumulated_context.clone())).await {
+                            Ok(plan) => {
+                                if args.verbose {
+                                    println!("Generated plan with context: {}", plan.plan_id);
+                                    println!("Available context: {:?}", accumulated_context);
+                                }
+                                
+                                // Execute the plan
+                                match ccos.get_orchestrator().execute_plan(&plan, &ctx).await {
+                                    Ok(result) => Ok((plan, result)),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                // Fallback to standard flow if no delegating arbiter
+                ccos.process_request_with_plan(&request, &ctx).await
+            }
+        } else {
+            // Use standard flow when no context available
+            ccos.process_request_with_plan(&request, &ctx).await
+        };
         let mut next_request = String::new();
         match plan_and_result {
             Ok((plan, res)) => {
                 if args.verbose {
                     println!("{} success={} value={}", "✔ Execution".green(), res.success, res.value);
                 }
+                // Handle successful plan execution - extract context for future plans
+                if res.success {
+                    if args.verbose {
+                        println!("{}", "Plan execution successful - extracting context...".green());
+                    }
+                    
+                    // Extract context from successful execution
+                    let new_context = extract_context_from_result(&res);
+                    if !new_context.is_empty() {
+                        accumulated_context.extend(new_context.clone());
+                        if args.verbose {
+                            println!("Extracted context: {:?}", new_context);
+                            println!("Accumulated context: {:?}", accumulated_context);
+                        }
+                    }
+                }
+                
                 // If execution paused (success==false) we attempt to find a PlanPaused
                 // action for this plan and resume-and-continue using the orchestrator.
                 if !res.success {
@@ -721,6 +802,79 @@ impl ResponseHandler {
         value.contains("Based on") ||
         (value.len() > 10 && !value.contains("Error") && !value.contains("failed"))
     }
+}
+
+/// Extract context variables from a successful plan execution result
+fn extract_context_from_result(result: &rtfs_compiler::ccos::types::ExecutionResult) -> HashMap<String, String> {
+    let mut context = HashMap::new();
+    
+    match &result.value {
+        rtfs_compiler::runtime::values::Value::Map(map) => {
+            // Extract structured data from the result map
+            for (key, value) in map {
+                if let rtfs_compiler::runtime::values::Value::String(val_str) = value {
+                    let key_str = key.to_string();
+                    // Only include meaningful context variables (skip system fields)
+                    if !key_str.starts_with("_") && !key_str.starts_with("system") {
+                        context.insert(key_str, val_str.clone());
+                    }
+                }
+            }
+        }
+        rtfs_compiler::runtime::values::Value::String(response_value) => {
+            // Try to parse structured response data from string
+            if let Some(response_data) = parse_response_data(response_value) {
+                for (key, value) in response_data {
+                    context.insert(key, value);
+                }
+            } else {
+                // Store as a general response if it looks like user-provided content
+                if is_user_response(response_value) {
+                    context.insert("last_response".to_string(), response_value.clone());
+                }
+            }
+        }
+        _ => {
+            // For other value types, try to convert to string
+            let value_str = format!("{:?}", result.value);
+            if value_str.len() > 0 && !value_str.contains("Error") {
+                context.insert("result".to_string(), value_str);
+            }
+        }
+    }
+    
+    context
+}
+
+/// Parse response data from string format (helper function)
+fn parse_response_data(response_value: &str) -> Option<HashMap<String, String>> {
+    let mut responses = HashMap::new();
+
+    // Look for patterns like "response-from-step-name:value" or structured formats
+    for line in response_value.lines() {
+        if line.contains("response-from-") {
+            if let Some(colon_idx) = line.find(':') {
+                let key = line[..colon_idx].trim().to_string();
+                let value = line[colon_idx + 1..].trim().to_string();
+                responses.insert(key, value);
+            }
+        }
+    }
+
+    if responses.is_empty() {
+        None
+    } else {
+        Some(responses)
+    }
+}
+
+/// Check if a string value looks like a user response (standalone function)
+fn is_user_response(value: &str) -> bool {
+    // Simple heuristics for identifying user responses
+    value.contains("Hello") ||
+    value.contains("recommend") ||
+    value.contains("Based on") ||
+    (value.len() > 10 && !value.contains("Error") && !value.contains("failed"))
 }
 
 /// Extract pending questions from a plan and generate appropriate responses based on context
