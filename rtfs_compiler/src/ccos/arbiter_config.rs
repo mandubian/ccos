@@ -404,6 +404,7 @@ impl ArbiterConfig {
                         .ok()
                         .and_then(|s| s.parse().ok()),
                     agent_registry: AgentRegistryConfig::default(),
+                    print_extracted_intent: None,
                 };
                 config.delegation_config = Some(delegation_config);
             }

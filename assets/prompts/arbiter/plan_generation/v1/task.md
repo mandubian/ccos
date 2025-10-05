@@ -54,23 +54,23 @@ Return ONLY a single well-formed RTFS plan structure:
 
 ## Context Variables from Previous Plans
 
-**If context variables are provided**, you can reference them using the syntax `<context_variable_name>`. These represent values returned by previous plan executions.
+**If context variables are provided**, you should use the actual values directly in your plan. The context will show you the key-value pairs from previous plan executions, and you should use the actual values (not placeholder syntax).
 
 ✅ **CORRECT** - using context variables:
 ```lisp
-; If context provides trip/destination, trip/duration, etc.
-(call :ccos.echo {:message (str "Creating itinerary for your " <trip/duration> "-day trip to " <trip/destination> " with " <trip/budget> " budget")})
+; If context provides trip/destination="Paris", trip/duration="5 days", etc.
+(call :ccos.echo {:message (str "Creating itinerary for your 5-day trip to Paris with moderate budget")})
 ```
 
-✅ **CORRECT** - mixing context variables with new data collection:
+✅ **CORRECT** - using context values directly with new data collection:
 ```lisp
 (let [activity_preferences (call :ccos.user.ask "What activities interest you?")
       special_requests (call :ccos.user.ask "Any special requests?")]
-  (call :ccos.echo {:message (str "Planning activities for your " <trip/duration> "-day trip to " <trip/destination>)})
+  (call :ccos.echo {:message (str "Planning activities for your 5-day trip to Paris")})
   {:itinerary/activities activity_preferences
    :itinerary/requests special_requests
-   :trip/destination <trip/destination>
-   :trip/duration <trip/duration>})
+   :trip/destination "Paris"
+   :trip/duration "5 days"})
 ```
 
 ❌ **WRONG** - referencing undefined variables (not in context):

@@ -1788,6 +1788,9 @@ impl Evaluator {
                 // Validate function arguments with known signatures (demonstration)
                 self.validate_builtin_function_args(&func.name, args)?;
 
+                // No special interception here for :ccos.user.ask — allow capability implementation
+                // (e.g., local stdin-reading capability) to execute normally.
+
                 // Call the function
                 let result = (func.func)(args.to_vec())?;
 
@@ -1806,6 +1809,8 @@ impl Evaluator {
                         actual: args.len(),
                     });
                 }
+                // Allow builtin-with-context calls (including capability calls) to run the
+                // registered capability implementation (e.g., ccos.user.ask reading stdin).
                 // Call the builtin-with-context and wrap return value into ExecutionOutcome
                 let res = (func.func)(args.to_vec(), self, env)?;
                 Ok(ExecutionOutcome::Complete(res))

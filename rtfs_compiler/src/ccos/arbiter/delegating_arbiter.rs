@@ -30,6 +30,17 @@ use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
 
+// Strong guidance to ensure LLM emits (plan ...) top-level RTFS instead of (do ...)
+const PLAN_FORMAT_GUIDANCE: &str = r#"
+CRITICAL OUTPUT RULES (RTFS PLANNING):
+1. Top-level form MUST be: (plan ...). NEVER output a top-level (do ...) form. If you draft (do ...), rewrite it as (plan ...).
+2. (plan ...) should contain ordered (step "Name" <body>) forms. Each step should be declarative and describe user-value.
+3. At MOST one (call :ccos.user.ask "...") per step. Do not re-ask questions already answered.
+4. When no further refinements are possible, include a final step named "Finalize" or "Finalize Trip Specification" with a map value containing {:status "refinement_exhausted" :needs_capabilities ["capability.id"]} and DO NOT ask further questions.
+5. If specialized capabilities are needed but unknown, list them in :needs_capabilities. Do not fabricate capabilities.
+6. Output only the RTFS (plan ...) s-expression; no prose or explanations outside the s-expression.
+"#;
+
 /// Extract the first top-level `(intent …)` s-expression from the given text.
 /// Returns `None` if no well-formed intent block is found.
 fn extract_intent(text: &str) -> Option<String> {
@@ -378,6 +389,21 @@ impl DelegatingArbiter {
         // Get raw text response
         let response = self.llm_provider.generate_text(&prompt).await?;
 
+        // Optional: print only the extracted RTFS `(intent ...)` s-expression for debugging
+        // This avoids echoing the full prompt/response while letting developers inspect
+        // the structured intent the arbiter will parse. Controlled via env var
+        // CCOS_PRINT_EXTRACTED_INTENT=1 or via DelegationConfig.print_extracted_intent
+        let env_flag = std::env::var("CCOS_PRINT_EXTRACTED_INTENT").map(|v| v == "1").unwrap_or(false);
+        let cfg_flag = self.delegation_config.print_extracted_intent.unwrap_or(false);
+        if env_flag || cfg_flag {
+            if let Some(intent_s_expr) = extract_intent(&response) {
+                // Print a compact header and the extracted s-expression
+                println!("[DELEGATING-ARBITER] Extracted RTFS intent:\n{}\n", intent_s_expr);
+            } else {
+                println!("[DELEGATING-ARBITER] No RTFS intent s-expression found in LLM response.");
+            }
+        }
+
         if show_prompts {
             println!(
                 "\n=== Delegating Arbiter Intent Generation Response ===\n{}\n=== END RESPONSE ===\n",
@@ -539,6 +565,49 @@ impl DelegatingArbiter {
         Ok(intent)
     }
 
+    /// Public helper to generate an intent but also return the raw LLM response text.
+    /// This is useful for diagnostics where the caller wants to inspect the LLM output
+    /// alongside the parsed Intent. It follows the same RTFS-first / JSON-fallback
+    /// parsing behaviour as `generate_intent_with_llm`.
+    pub async fn natural_language_to_intent_with_raw(
+        &self,
+        natural_language: &str,
+        context: Option<HashMap<String, Value>>,
+    ) -> Result<(Intent, String), RuntimeError> {
+        // Determine format mode and build prompt the same way as generate_intent_with_llm
+        let format_mode = std::env::var("CCOS_INTENT_FORMAT").ok().unwrap_or_else(|| "rtfs".to_string());
+        let prompt = self.create_intent_prompt(natural_language, context.clone());
+
+        // Get raw text response from provider
+        let response = self.llm_provider.generate_text(&prompt).await?;
+
+        // Attempt parsing: RTFS first, JSON fallback (mirrors generate_intent_with_llm)
+        let intent = if format_mode == "json" {
+            self.parse_json_intent_response(&response, natural_language)?
+        } else {
+            match self.parse_llm_intent_response(&response, natural_language, context.clone()) {
+                Ok(it) => it,
+                Err(rtfs_err) => {
+                    // Try JSON fallback
+                    match self.parse_json_intent_response(&response, natural_language) {
+                        Ok(it) => it,
+                        Err(json_err) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Both RTFS and JSON parsing failed. RTFS error: {}; JSON error: {}",
+                                rtfs_err, json_err
+                            )));
+                        }
+                    }
+                }
+            }
+        };
+
+        // Store the intent (same side-effects as natural_language_to_intent)
+        self.store_intent(&intent).await?;
+
+        Ok((intent, response))
+    }
+
     /// Generate plan using LLM with agent delegation
     async fn generate_plan_with_delegation(
         &self,
@@ -617,18 +686,83 @@ impl DelegatingArbiter {
         // Select the best agent
         let selected_agent = &candidate_agents[0];
 
-        // Generate delegation plan
-        let prompt = self.create_delegation_plan_prompt(intent, selected_agent, context);
+        // Generate delegation plan using the configured LLM provider.
+        // Build a StorableIntent similar to the direct plan path but include
+        // delegation-specific metadata so providers can tailor prompts.
+        let storable_intent = StorableIntent {
+            intent_id: intent.intent_id.clone(),
+            name: intent.name.clone(),
+            original_request: intent.original_request.clone(),
+            rtfs_intent_source: "".to_string(),
+            goal: intent.goal.clone(),
+            constraints: intent
+                .constraints
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            preferences: intent
+                .preferences
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+            parent_intent: None,
+            child_intents: vec![],
+            triggered_by: crate::ccos::types::TriggerSource::ArbiterInference,
+            generation_context: crate::ccos::types::GenerationContext {
+                arbiter_version: "delegating-1.0".to_string(),
+                generation_timestamp: intent.created_at,
+                input_context: {
+                    let mut m = HashMap::new();
+                    m.insert("delegation_target_agent".to_string(), selected_agent.agent_id.clone());
+                    m
+                },
+                reasoning_trace: None,
+            },
+            status: intent.status.clone(),
+            priority: 0,
+            created_at: intent.created_at,
+            updated_at: intent.updated_at,
+            metadata: {
+                let mut meta = intent
+                    .metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect::<HashMap<String, String>>();
+                meta.insert(
+                    "delegation.selected_agent".to_string(),
+                    selected_agent.agent_id.clone(),
+                );
+                meta.insert(
+                    "delegation.agent_capabilities".to_string(),
+                    format!("{:?}", selected_agent.capabilities),
+                );
+                meta
+            },
+        };
 
-        let response = self.llm_provider.generate_text(&prompt).await?;
+        // Convert context from Value to String for LlmProvider interface
+        let string_context = context.as_ref().map(|ctx| {
+            ctx.iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect::<HashMap<String, String>>()
+        });
 
-        // Log provider, prompt and response
+        // Ask the provider to generate a plan for the selected agent and intent. This
+        // lets provider implementations (including retries/validation) run their
+        // full plan-generation flow instead of us building raw prompts and parsing.
+        let plan = self
+            .llm_provider
+            .generate_plan(&storable_intent, string_context)
+            .await?;
+
+        // Log provider and result (best-effort, non-fatal)
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open("logs/arbiter_llm.log")?;
-            let entry = json!({"event":"llm_delegation_plan","provider": format!("{:?}", self.llm_config.provider_type), "agent": selected_agent.agent_id, "prompt": prompt, "response": response});
+            let entry = json!({"event":"llm_delegation_plan","provider": format!("{:?}", self.llm_config.provider_type), "agent": selected_agent.agent_id, "intent_id": intent.intent_id, "plan_id": plan.plan_id});
             writeln!(
                 f,
                 "[{}] {}",
@@ -638,8 +772,6 @@ impl DelegatingArbiter {
             Ok(())
         })();
 
-        // Parse delegation plan
-        let plan = self.parse_delegation_plan(&response, intent, selected_agent)?;
         // Log parsed plan for debugging
         self.log_parsed_plan(&plan);
         Ok(plan)
@@ -949,7 +1081,7 @@ Plan:"#,
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> String {
-        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
+        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string(), "ccos.user.ask".to_string()];
         let context_for_fallback = context.clone();
         
         let mut vars = HashMap::new();
@@ -960,18 +1092,30 @@ Plan:"#,
 
         let available_capabilities_for_fallback = available_capabilities.clone();
         
-        self.prompt_manager
-            .render("plan_generation", "v1", &vars)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load plan generation prompt from assets: {}. Using fallback.", e);
-                format!(
-                    r#"Generate an RTFS plan for: {:?}
+        // Merge strong plan-format guidance into the prompt to bias the model to emit (plan ...)
+        let mut fallback = format!(
+            r#"Generate an RTFS plan for: {:?}
 Context: {:?}
 Available capabilities: {:?}
-Use (do (step "name" (call :capability args))) syntax.
-Plan:"#,
-                    intent, context_for_fallback.unwrap_or_default(), available_capabilities_for_fallback
-                )
+Plan:
+{}
+"#,
+            intent, context_for_fallback.unwrap_or_default(), available_capabilities_for_fallback, PLAN_FORMAT_GUIDANCE
+        );
+
+        self.prompt_manager
+            .render("plan_generation", "v1", &vars)
+            .map(|mut rendered| {
+                // Ensure guidance is appended to rendered prompt so model sees strict rules
+                if !rendered.contains("CRITICAL OUTPUT RULES") {
+                    rendered.push_str("\n");
+                    rendered.push_str(PLAN_FORMAT_GUIDANCE);
+                }
+                rendered
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load plan generation prompt from assets: {}. Using fallback.", e);
+                fallback
             })
     }
 
@@ -1236,6 +1380,13 @@ Plan:"#,
 
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
+        // Optionally print extracted RTFS plan for diagnostics (env or config)
+        let print_flag = std::env::var("CCOS_PRINT_EXTRACTED_PLAN").map(|s| s == "1").unwrap_or(false)
+            || self.delegation_config.print_extracted_plan.unwrap_or(false);
+
+        if print_flag {
+            println!("[DELEGATING-ARBITER] Extracted RTFS plan:\n{}", rtfs_content);
+        }
 
         Ok(Plan {
             plan_id: format!("delegating_plan_{}", uuid::Uuid::new_v4()),
@@ -1259,7 +1410,7 @@ Plan:"#,
                     Value::String(agent.agent_id.clone()),
                 );
                 meta.insert(
-                    agent::AGENT_TRUST_SCORE.to_string(),
+                    agent ::AGENT_TRUST_SCORE.to_string(),
                     Value::Float(agent.trust_score),
                 );
                 meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost));
@@ -1282,6 +1433,12 @@ Plan:"#,
 
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
+        // Optionally print extracted RTFS plan for diagnostics (env or config)
+        let print_flag = std::env::var("CCOS_PRINT_EXTRACTED_PLAN").map(|s| s == "1").unwrap_or(false)
+            || self.delegation_config.print_extracted_plan.unwrap_or(false);
+        if print_flag {
+            println!("[DELEGATING-ARBITER] Extracted RTFS plan:\n{}", rtfs_content);
+        }
 
         Ok(Plan {
             plan_id: format!("direct_plan_{}", uuid::Uuid::new_v4()),
@@ -1316,6 +1473,16 @@ Plan:"#,
 
     // Note: This helper returns a Plan constructed from the RTFS body; we log the RTFS body for debugging.
     fn log_parsed_plan(&self, plan: &Plan) {
+        // Optionally print the extracted RTFS plan to stdout for diagnostics.
+        // Controlled by env var CCOS_PRINT_EXTRACTED_PLAN=1 or runtime delegation flag.
+        let env_flag = std::env::var("CCOS_PRINT_EXTRACTED_PLAN").map(|v| v == "1").unwrap_or(false);
+        let cfg_flag = self.delegation_config.print_extracted_plan.unwrap_or(false);
+        if env_flag || cfg_flag {
+            if let crate::ccos::types::PlanBody::Rtfs(ref s) = &plan.body {
+                println!("[DELEGATING-ARBITER] Parsed RTFS plan (plan_id={}):\n{}", plan.plan_id, s);
+            }
+        }
+
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new()
                 .create(true)
@@ -1332,7 +1499,7 @@ Plan:"#,
         })();
     }
 
-    /// Extract RTFS plan from LLM response, preferring a balanced (do ...) block
+    /// Extract RTFS plan from LLM response, preferring a balanced (plan ...) or (do ...) block
     fn extract_rtfs_from_response(&self, response: &str) -> Result<String, RuntimeError> {
         // Normalize map-style intent objects (e.g. {:type "intent" :name "root" :goal "..."})
         // into canonical `(intent "name" :goal "...")` forms so downstream parser
@@ -1423,24 +1590,38 @@ Plan:"#,
             out
         }
 
-        let response = normalize_map_style_intents(response);
+        let mut response = normalize_map_style_intents(response);
+
+        // Defensive normalization: if model emits a top-level (do ...) wrap/convert it into a (plan ...)
+        if response.trim_start().starts_with("(do") {
+            // Replace the leading '(do' with '(plan :name "normalized_plan" :language rtfs20 :body (do' and close the plan later
+            if let Some(rest) = response.trim_start().strip_prefix("(do") {
+                response = format!("(plan :name \"normalized_plan\" :language rtfs20 :body (do{} ) )", rest);
+            }
+        }
 
         // 1) Prefer fenced rtfs code blocks
         if let Some(code_start) = response.find("```rtfs") {
             if let Some(code_end) = response[code_start + 7..].find("```") {
                 let fenced = &response[code_start + 7..code_start + 7 + code_end];
-                // If a (do ...) exists inside, extract the balanced block
-                if let Some(idx) = fenced.find("(do") {
+
+                // Look for (plan ...) or (do ...) blocks inside
+                if let Some(idx) = fenced.find("(plan") {
+                    if let Some(block) = Self::extract_balanced_from(fenced, idx) {
+                        return Ok(block);
+                    }
+                } else if let Some(idx) = fenced.find("(do") {
                     if let Some(block) = Self::extract_balanced_from(fenced, idx) {
                         return Ok(block);
                     }
                 }
+
                 // Otherwise, return fenced content trimmed
                 let trimmed = fenced.trim();
                 // Guard: avoid returning a raw (intent ...) block as a plan
                 if trimmed.starts_with("(intent") {
                     return Err(RuntimeError::Generic(
-                        "LLM response contains an intent block, but no plan (do ...) block"
+                        "LLM response contains an intent block, but no plan (plan ... or do ...) block"
                             .to_string(),
                     ));
                 }
@@ -1448,27 +1629,39 @@ Plan:"#,
             }
         }
 
-        // 2) Search raw text for a (do ...) block
-        if let Some(idx) = response.find("(do") {
+        // 2) Search raw text for a (plan ...) or (do ...) block
+        if let Some(idx) = response.find("(plan") {
+            if let Some(block) = Self::extract_balanced_from(&response, idx) {
+                return Ok(block);
+            }
+        } else if let Some(idx) = response.find("(do") {
             if let Some(block) = Self::extract_balanced_from(&response, idx) {
                 return Ok(block);
             }
         }
 
         // 3) As a last resort, handle top-level blocks. If the response contains only (intent ...) blocks,
-        // wrap them into a (do ...) block so they become an executable RTFS plan. If other top-level blocks
-        // exist, return the first non-(intent) balanced block.
+        // wrap them into a (plan ...) block with a (do ...) body so they become an executable RTFS plan.
+        // If other top-level blocks exist, return the first non-(intent) balanced block.
         if let Some(idx) = response.find('(') {
             let mut collected_intents = Vec::new();
+            let mut found_plan_or_do = false;
             let mut remaining = &response[idx..];
 
             // Collect consecutive top-level balanced blocks
             while let Some(block) = Self::extract_balanced_from(remaining, 0) {
-                if block.trim_start().starts_with("(intent") {
+                let trimmed = block.trim_start();
+                if trimmed.starts_with("(intent") {
                     collected_intents.push(block.clone());
-                } else {
-                    // Found a non-intent top-level block: prefer returning it
+                } else if trimmed.starts_with("(plan") || trimmed.starts_with("(do") {
+                    // Found a plan or do block: prefer returning it
+                    found_plan_or_do = true;
                     return Ok(block);
+                } else {
+                    // Found some other top-level block: return it if no plan/do blocks found yet
+                    if !found_plan_or_do {
+                        return Ok(block);
+                    }
                 }
 
                 // Advance remaining slice
@@ -1483,15 +1676,15 @@ Plan:"#,
             }
 
             if !collected_intents.is_empty() {
-                // Wrap collected intent blocks in a (do ...) wrapper
-                let mut do_block = String::from("(do\n");
+                // Wrap collected intent blocks in a (plan ...) wrapper with (do ...) body
+                let mut plan_block = String::from("(plan\n  :name \"generated_from_intents\"\n  :language rtfs20\n  :body (do\n");
                 for ib in collected_intents.iter() {
-                    do_block.push_str("    ");
-                    do_block.push_str(ib.trim());
-                    do_block.push_str("\n");
+                    plan_block.push_str("    ");
+                    plan_block.push_str(ib.trim());
+                    plan_block.push_str("\n");
                 }
-                do_block.push_str(")");
-                return Ok(do_block);
+                plan_block.push_str("  )\n)");
+                return Ok(plan_block);
             }
         }
 
@@ -1503,7 +1696,7 @@ Plan:"#,
                 .open("logs/arbiter_llm.log")?;
             let entry = json!({
                 "event": "llm_plan_extract_failed",
-                "error": "Could not extract an RTFS plan from LLM response",
+                "error": "Could not extract an RTFS plan (plan ... or do ...) from LLM response",
                 "response_sample": response.chars().take(200).collect::<String>()
             });
             writeln!(
@@ -1516,7 +1709,7 @@ Plan:"#,
         })();
 
         Err(RuntimeError::Generic(
-            "Could not extract an RTFS plan from LLM response".to_string(),
+            "Could not extract an RTFS plan (plan ... or do ...) from LLM response".to_string(),
         ))
     }
 
@@ -1885,6 +2078,8 @@ mod tests {
                 ],
             },
             adaptive_threshold: None,
+            print_extracted_intent: None,
+            print_extracted_plan: None,
         };
 
         (llm_config, delegation_config)

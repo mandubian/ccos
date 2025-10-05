@@ -116,6 +116,21 @@ pub struct DelegationConfig {
     pub agent_registry: AgentRegistryConfig,
     /// Adaptive threshold configuration
     pub adaptive_threshold: Option<crate::config::types::AdaptiveThresholdConfig>,
+    /// Optional convenience flag to print the extracted RTFS intent s-expression
+    /// when generating intents. When Some(true), the arbiter will print the
+    /// extracted `(intent ...)` s-expression. This is intended for diagnostics.
+    #[serde(default)]
+    pub print_extracted_intent: Option<bool>,
+    /// Optional convenience flag to print the extracted RTFS plan s-expression
+    /// when generating plans. When Some(true), the arbiter will print the
+    /// extracted RTFS plan (the `(do ...)` or plan body). Intended for diagnostics.
+    #[serde(default)]
+    pub print_extracted_plan: Option<bool>,
+
+    // NOTE: These runtime debug flags are mirrored in the user-facing
+    // `AgentConfig.delegation` shape (`src/config/types.rs::DelegationConfig`).
+    // The external config uses Option<bool> so users can omit fields; they are
+    // converted into concrete runtime values by `to_arbiter_config()`.
 }
 
 /// Agent registry configuration
@@ -460,6 +475,8 @@ impl ArbiterConfig {
                         .and_then(|s| s.parse().ok()),
                     agent_registry: AgentRegistryConfig::default(),
                     adaptive_threshold: None,
+                    print_extracted_intent: None,
+                    print_extracted_plan: None,
                 };
                 config.delegation_config = Some(delegation_config);
             }

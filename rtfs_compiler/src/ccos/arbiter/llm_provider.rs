@@ -643,7 +643,7 @@ Final step should return a structured map with keyword keys for downstream reuse
                 for (key, value) in context {
                     user_message.push_str(&format!("\n- {}: {}", key, value));
                 }
-                user_message.push_str("\n\nYou can reference these context variables in your plan using the syntax: <context_variable_name>");
+                user_message.push_str("\n\nYou can use these context values directly in your plan. For example, if context shows 'trip/destination: Paris', you can use 'Paris' directly in your plan instead of '<trip/destination>'.");
             }
         }
 
