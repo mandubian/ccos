@@ -620,3 +620,36 @@ fn expression_to_value(expr: &Expression) -> Value {
         _ => Value::String(format!("{:?}", expr)),
     }
 }
+
+/// Serialize a CapabilityDefinition TopLevel into canonical RTFS source string.
+/// This builds an s-expression in the form:
+/// (capability "name" :property1 <value> :property2 <value> ...)
+/// It reuses expression_to_rtfs_string for nested expression values.
+pub fn capability_def_to_rtfs_string(cap: &crate::ast::CapabilityDefinition) -> String {
+    // Start with the capability name
+    let mut parts: Vec<String> = Vec::new();
+    parts.push("capability".to_string());
+    parts.push(format!("\"{}\"", cap.name.0));
+
+    // Serialize properties as keyword-value pairs
+    for prop in &cap.properties {
+        // property.key is a Keyword (wrapped struct) - we want the raw string without leading ':'
+        let key = prop.key.0.clone();
+        // Ensure keyword is prefixed with ':' for canonical form
+        let key_formatted = if key.starts_with(':') { key } else { format!(":{}", key) };
+        parts.push(key_formatted);
+        // Serialize the value expression
+        let val = expression_to_rtfs_string(&prop.value);
+        parts.push(val);
+    }
+
+    format!("({})", parts.join(" "))
+}
+
+/// Convert a TopLevel node into an RTFS string when possible. Currently supports Capability.
+pub fn toplevel_to_rtfs_string(tl: &crate::ast::TopLevel) -> Option<String> {
+    match tl {
+        crate::ast::TopLevel::Capability(cap) => Some(capability_def_to_rtfs_string(cap)),
+        _ => None,
+    }
+}

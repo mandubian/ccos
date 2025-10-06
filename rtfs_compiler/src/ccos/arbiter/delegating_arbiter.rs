@@ -608,6 +608,23 @@ impl DelegatingArbiter {
         Ok((intent, response))
     }
 
+    /// Generate raw LLM text without attempting to parse it as an Intent.
+    ///
+    /// This is useful for alternative synthesis workflows (e.g. capability
+    /// generation) where we intentionally prompt the model to output a
+    /// different top-level RTFS construct (like a `(capability ...)` form)
+    /// that would cause the standard intent parser to fail.
+    ///
+    /// No side effects (no intent storage) occur here; caller is responsible
+    /// for any parsing / validation and for deciding whether to fall back to
+    /// the normal intent generation path if synthesis fails.
+    pub async fn generate_raw_text(&self, prompt: &str) -> Result<String, RuntimeError> {
+        match self.llm_provider.generate_text(prompt).await {
+            Ok(s) => Ok(s),
+            Err(e) => Err(RuntimeError::Generic(format!("Raw LLM generation failed: {}", e)))
+        }
+    }
+
     /// Generate plan using LLM with agent delegation
     async fn generate_plan_with_delegation(
         &self,
