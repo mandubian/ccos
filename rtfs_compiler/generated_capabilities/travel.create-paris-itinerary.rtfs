@@ -1,0 +1,9 @@
+(capability "travel.create-paris-itinerary"
+  :description "Create a personalized trip itinerary for Paris based on user preferences"
+  :parameters {:travel_dates "string" :budget "string" :interests "string" :accommodation_preferences "string"}
+  :steps (do
+    (search.paris-attractions :interests $interests)
+    (search.paris-accommodations :preferences $accommodation_preferences :budget $budget)
+    (optimize.itinerary :dates $travel_dates :budget $budget)
+  )
+)

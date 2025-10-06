@@ -26,10 +26,11 @@ use crossterm::style::Stylize;
 use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::ccos::arbiter::ArbiterEngine;
 use rtfs_compiler::config::profile_selection::ProfileMeta;
+use rtfs_compiler::ast::CapabilityDefinition as CapabilityDef;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::config::validation::validate_config;
 use rtfs_compiler::config::{auto_select_model, expand_profiles};
-use rtfs_compiler::ccos::types::StorableIntent;
+use rtfs_compiler::ccos::types::{ExecutionResult, StorableIntent};
 use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityLevel};
 use std::collections::{HashMap, HashSet};
@@ -39,6 +40,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
+
 /// Represents one turn of the conversation for later analysis.
 #[derive(Clone, Debug)]
 struct InteractionTurn {
@@ -46,6 +48,7 @@ struct InteractionTurn {
     // We store the full Intent object for detailed analysis
     created_intent: Option<StorableIntent>,
 }
+
 
 
 #[derive(Parser, Debug)]
@@ -93,6 +96,14 @@ struct Args {
     /// Auto-pick best model within completion cost budget (USD per 1K tokens)
     #[arg(long)]
     model_auto_completion_budget: Option<f64>,
+
+    /// After interaction, attempt LLM-driven capability synthesis & auto-register
+    #[arg(long, default_value_t = false)]
+    synthesize_capability: bool,
+
+    /// Persist synthesized capability spec to disk (implies --synthesize-capability)
+    #[arg(long, default_value_t = false)]
+    persist_synthesized: bool,
 }
 
 #[tokio::main]
@@ -336,381 +347,601 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bound the simulated interaction to avoid runaway loops
     let max_turns = 8usize;
     for turn in 0..max_turns {
-        println!("\n{}: {}", format!("User Turn {}", turn + 1).cyan(), current_request);
+        println!(
+            "\n{}",
+            format!("--- Turn {}/{} ---", turn + 1, max_turns)
+                .yellow()
+                .bold()
+        );
+        println!("{}: {}", "User Input".bold(), current_request.trim());
 
-        let before_ids = snapshot_intent_ids(&ccos);
-        let request = current_request.clone();
+        let before_intents = snapshot_intent_ids(&ccos);
 
-        let _context: Option<std::collections::HashMap<String, Value>> = if let Some(root_id) = &root_intent {
-            if let Some(parent_goal) = known_intents.get(root_id) {
-                Some(std::collections::HashMap::from([
-                    ("parent_intent_id".to_string(), Value::String(root_id.clone())),
-                    ("parent_goal".to_string(), Value::String(parent_goal.clone())),
-                    ("relationship_type".to_string(), Value::String("refinement_of".to_string())),
-                ]))
-            } else { None }
-        } else { None };
-
-        // For context passing demonstration, we'll use the delegating arbiter directly
-        // when we have accumulated context, otherwise fall back to the standard flow
-        let plan_and_result = if !accumulated_context.is_empty() {
-            // Use delegating arbiter directly to pass context
-            if let Some(arbiter) = ccos.get_delegating_arbiter() {
-                match arbiter.natural_language_to_intent(&request, None).await {
-                    Ok(intent) => {
-                        // Convert to storable intent
-                        let storable_intent = rtfs_compiler::ccos::types::StorableIntent {
-                            intent_id: intent.intent_id.clone(),
-                            name: intent.name.clone(),
-                            original_request: intent.original_request.clone(),
-                            rtfs_intent_source: "".to_string(),
-                            goal: intent.goal.clone(),
-                            constraints: intent.constraints.iter()
-                                .map(|(k, v)| (k.clone(), v.to_string()))
-                                .collect(),
-                            preferences: intent.preferences.iter()
-                                .map(|(k, v)| (k.clone(), v.to_string()))
-                                .collect(),
-                            success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
-                            parent_intent: None,
-                            child_intents: vec![],
-                            triggered_by: rtfs_compiler::ccos::types::TriggerSource::HumanRequest,
-                            generation_context: rtfs_compiler::ccos::types::GenerationContext {
-                                arbiter_version: "delegating-1.0".to_string(),
-                                generation_timestamp: intent.created_at,
-                                input_context: HashMap::new(),
-                                reasoning_trace: None,
-                            },
-                            status: intent.status.clone(),
-                            priority: 0,
-                            created_at: intent.created_at,
-                            updated_at: intent.updated_at,
-                            metadata: HashMap::new(),
-                        };
-
-                        // Generate plan (context passing not yet exposed in public API)
-                        match arbiter.intent_to_plan(&intent).await {
-                            Ok(plan) => {
-                                if args.verbose {
-                                    println!("Generated plan with context: {}", plan.plan_id);
-                                    println!("Available context: {:?}", accumulated_context);
-                                }
-                                
-                                // Execute the plan
-                                match ccos.get_orchestrator().execute_plan(&plan, &ctx).await {
-                                    Ok(result) => Ok((plan, result)),
-                                    Err(e) => Err(e),
-                                }
-                            }
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => Err(e),
-                }
-            } else {
-                // Fallback to standard flow if no delegating arbiter
-                ccos.process_request_with_plan(&request, &ctx).await
-            }
-        } else {
-            // Use standard flow when no context available
-            ccos.process_request_with_plan(&request, &ctx).await
-        };
-        let mut next_request = String::new();
-        match plan_and_result {
-            Ok((plan, res)) => {
-                if args.verbose {
-                    println!("{} success={} value={}", "✔ Execution".green(), res.success, res.value);
-                }
-                // Handle successful plan execution - extract context for future plans
-                if res.success {
-                    if args.verbose {
-                        println!("{}", "Plan execution successful - extracting context...".green());
-                    }
-                    
-                    // Extract context from successful execution
-                    let new_context = extract_context_from_result(&res);
-                    if !new_context.is_empty() {
-                        accumulated_context.extend(new_context.clone());
-                        if args.verbose {
-                            println!("Extracted context: {:?}", new_context);
-                            println!("Accumulated context: {:?}", accumulated_context);
-                        }
-                    }
-                }
-                
-                // If execution paused (success==false) we attempt to find a PlanPaused
-                // action for this plan and resume-and-continue using the orchestrator.
-                if !res.success {
-                    if let Some(checkpoint_id) = find_latest_plan_checkpoint(&ccos, &plan.plan_id) {
-                        if args.verbose { println!("Detected PlanPaused checkpoint={} — resuming...", checkpoint_id); }
-
-                        // Extract pending questions and generate appropriate responses
-                        let pending_responses = extract_pending_questions_and_generate_responses(&ccos, &plan.plan_id, &collected_responses);
-
-                        // Set responses for the orchestrator to use
-                        for (question_key, response) in pending_responses {
-                            std::env::set_var(&format!("CCOS_USER_ASK_RESPONSE_{}", question_key), response);
-                        }
-
-                        // Resume and continue until completion or next pause
-                        match ccos.get_orchestrator().resume_and_continue_from_checkpoint(&plan, &ctx, &checkpoint_id).await {
-                            Ok(resumed) => {
-                                if args.verbose { println!("Resume result success={} value={}", resumed.success, resumed.value); }
-
-                                // Extract any new responses from the resumed execution using the enhanced handler
-                                let mut response_handler = ResponseHandler::new();
-                                response_handler.collected_responses = collected_responses.clone();
-                                response_handler.extract_and_store_responses(&resumed);
-
-                                // Update collected responses
-                                collected_responses.extend(response_handler.collected_responses);
-
-                                // Check for explicit refinement exhaustion signal from model
-                                if let Value::Map(m) = &resumed.value {
-                                    if let Some(s) = get_map_string_value(m, "status") {
-                                        if s == "refinement_exhausted" {
-                                            println!("{}", "[model] Refinement exhausted signal received; stopping.".yellow());
-                                            next_request.clear(); // force termination
-                                        }
-                                    }
-                                }
-
-                                // Stagnation detection: inspect PlanPaused prompts and see if any new prompt appeared
-                                let mut new_question_seen = false;
-                                if args.verbose {
-                                    println!("[stagnation] Checking for new questions in causal chain...");
-                                }
-                                if let Ok(chain) = ccos.get_causal_chain().lock() {
-                                    let actions = chain.get_all_actions();
-                                    let plan_paused_count = actions.iter().filter(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused).count();
-                                    if args.verbose {
-                                        println!("[stagnation] Found {} PlanPaused actions in causal chain", plan_paused_count);
-                                    }
-                                    
-                                    for action in actions.iter().rev() {
-                                        if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
-                                            if let Some(prompt) = extract_question_prompt_from_action(action) {
-                                                if args.verbose {
-                                                    println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
-                                                }
-                                                if asked_questions.insert(prompt.clone()) {
-                                                    new_question_seen = true;
-                                                    if args.verbose {
-                                                        println!("[stagnation] ✅ NEW question detected: {}", prompt);
-                                                    }
-                                                } else if args.verbose {
-                                                    println!("[stagnation] ⚠️  Question already seen: {}", prompt);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if !new_question_seen {
-                                    stagnant_turns += 1;
-                                    if args.verbose {
-                                        println!("[stagnation] No new questions detected this turn. Stagnant turns: {}/{}", stagnant_turns, STAGNATION_LIMIT);
-                                    }
-                                } else {
-                                    stagnant_turns = 0;
-                                    if args.verbose {
-                                        println!("[stagnation] New question detected - resetting stagnation counter to 0");
-                                    }
-                                }
-                                if stagnant_turns >= STAGNATION_LIMIT {
-                                    println!("{}", "\n[stagnation] STAGNATION DETECTED - Ending progressive interaction".yellow().bold());
-                                    println!("[stagnation] Reason: No new refinement questions for {} consecutive turns", STAGNATION_LIMIT);
-                                    println!("[stagnation] Total questions asked so far: {}", asked_questions.len());
-                                    if args.verbose {
-                                        println!("[stagnation] Questions seen: {:?}", asked_questions);
-                                    }
-                                    println!("[stagnation] Analysis: Model likely needs external capabilities (e.g., travel.search, itinerary.optimize)");
-                                    println!("[stagnation] or has gathered sufficient information to proceed with execution.");
-                                    next_request.clear();
-                                }
-
-                                next_request = resumed.value.to_string();
-                            }
-                            Err(e) => {
-                                eprintln!("Resume error: {}", e);
-                            }
-                        }
-
-                        // Clear response environment variables after use
-                        cleanup_response_env_vars();
-                    }
-                } else {
-                    // Use the successful execution value as the next user input
-                    next_request = res.value.to_string();
-
-                    // Extract any responses from successful execution using the enhanced handler
-                    let mut response_handler = ResponseHandler::new();
-                    response_handler.collected_responses = collected_responses.clone();
-                    response_handler.extract_and_store_responses(&res);
-
-                    // Update collected responses
-                    collected_responses.extend(response_handler.collected_responses);
-
-                    // Check for explicit refinement exhaustion signal from model on successful finish
-                    if let Value::Map(m) = &res.value {
-                        if let Some(s) = get_map_string_value(m, "status") {
-                            if s == "refinement_exhausted" {
-                                println!("{}", "[model] Refinement exhausted signal received; stopping.".yellow());
-                                next_request.clear(); // force termination
-                            }
-                        }
-                    }
-
-                    // Stagnation detection for successful runs as well
-                    let mut new_question_seen = false;
-                    if args.verbose {
-                        println!("[stagnation] Checking for new questions in causal chain (successful run)...");
-                    }
-                    if let Ok(chain) = ccos.get_causal_chain().lock() {
-                        let actions = chain.get_all_actions();
-                        let plan_paused_count = actions.iter().filter(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused).count();
-                        if args.verbose {
-                            println!("[stagnation] Found {} PlanPaused actions in causal chain", plan_paused_count);
-                        }
-                        
-                        for action in actions.iter().rev() {
-                            if action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
-                                if let Some(prompt) = extract_question_prompt_from_action(action) {
-                                    if args.verbose {
-                                        println!("[stagnation] Found PlanPaused action with prompt: {}", prompt);
-                                    }
-                                    if asked_questions.insert(prompt.clone()) {
-                                        new_question_seen = true;
-                                        if args.verbose {
-                                            println!("[stagnation] ✅ NEW question detected: {}", prompt);
-                                        }
-                                    } else if args.verbose {
-                                        println!("[stagnation] ⚠️  Question already seen: {}", prompt);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !new_question_seen {
-                        stagnant_turns += 1;
-                        if args.verbose {
-                            println!("[stagnation] No new questions detected this turn. Stagnant turns: {}/{}", stagnant_turns, STAGNATION_LIMIT);
-                        }
-                    } else {
-                        stagnant_turns = 0;
-                        if args.verbose {
-                            println!("[stagnation] New question detected - resetting stagnation counter to 0");
-                        }
-                    }
-                    if stagnant_turns >= STAGNATION_LIMIT {
-                        println!("{}", "\n[stagnation] STAGNATION DETECTED - Ending progressive interaction".yellow().bold());
-                        println!("[stagnation] Reason: No new refinement questions for {} consecutive turns", STAGNATION_LIMIT);
-                        println!("[stagnation] Total questions asked so far: {}", asked_questions.len());
-                        if args.verbose {
-                            println!("[stagnation] Questions seen: {:?}", asked_questions);
-                        }
-                        println!("[stagnation] Analysis: Model likely needs external capabilities (e.g., travel.search, itinerary.optimize)");
-                        println!("[stagnation] or has gathered sufficient information to proceed with execution.");
-                        next_request.clear();
-                    }
-                }
-            }
+        // Process the request and handle potential errors. process_request expects a reference
+        // to RuntimeContext. Use process_request_with_plan when we need the synthesized plan id.
+        let res = match ccos.process_request(&current_request, &ctx).await {
+            Ok(r) => r,
             Err(e) => {
-                eprintln!("{} {}", "✖ Error processing request:".red(), e);
+                println!("{}", format!("[error] CCOS failed to process request: {}", e).red());
+                break;
+            }
+        };
+
+        // --- Intent & Graph Update ---
+        let after_intents = snapshot_intent_ids(&ccos);
+        let new_intent_ids: Vec<_> = after_intents.difference(&before_intents).cloned().collect();
+
+        let mut created_intent_this_turn: Option<StorableIntent> = None;
+        if let Some(new_id) = new_intent_ids.get(0) {
+            if let Some(goal) = fetch_intent_goal(&ccos, new_id) {
+                println!("[intent] New intent created: {} ({})", short(new_id), goal);
+                known_intents.insert(new_id.clone(), goal.clone());
+                if root_intent.is_none() {
+                    root_intent = Some(new_id.clone());
+                }
+
+                // Store the full intent for later analysis (IntentGraph API exposes `get_intent`)
+                if let Ok(mut ig) = ccos.get_intent_graph().lock() {
+                    if let Some(intent_obj) = ig.get_intent(new_id) {
+                        created_intent_this_turn = Some(intent_obj.clone());
+                    }
+                }
             }
         }
-        sleep(Duration::from_millis(50)).await; // Allow for propagation
-
-        let after_ids = snapshot_intent_ids(&ccos);
-        let new_ids: HashSet<_> = after_ids.difference(&before_ids).cloned().collect();
-
-        let mut created_intent_for_turn = None;
-        if !new_ids.is_empty() {
-            // For simulation, we'll just grab the first new intent.
-            let new_id = new_ids.iter().next().unwrap().clone();
-            if let Some(intent) = ccos.list_intents_snapshot().into_iter().find(|i| i.intent_id == new_id) {
-                known_intents.insert(new_id.clone(), intent.goal.clone());
-                created_intent_for_turn = Some(intent);
-            }
-            if root_intent.is_none() {
-                root_intent = Some(new_id);
-            }
-        }
-
+        
         conversation_history.push(InteractionTurn {
-            user_input: request,
-            created_intent: created_intent_for_turn,
+            user_input: current_request.clone(),
+            created_intent: created_intent_this_turn,
         });
 
-        // Termination: stop if the runtime didn't return a meaningful next request
-        let trimmed = next_request.trim().to_string();
-        if trimmed.is_empty() {
-            break;
+
+        // --- Plan Execution & Interaction Logic ---
+        let mut next_request = None;
+        let mut plan_exhausted = false;
+
+        match &res.value {
+            Value::String(s) => {
+                // This branch handles simple :ccos.echo or direct string returns
+                if is_user_response(s) {
+                    println!("{}: {}", "System Response".bold(), s.clone().cyan());
+                    next_request = Some(s.clone());
+                } else {
+                    println!("{}: {}", "Execution Result".bold(), s.clone().dim());
+                    // Fallback: use the execution value as the next user input so the
+                    // LLM-driven flow can continue when the capability echoes or
+                    // returns a meaningful string that isn't classified as an explicit
+                    // user response by heuristics.
+                    next_request = Some(s.clone());
+                }
+            }
+            Value::Map(map) => {
+                // This branch handles structured data, typical of final plan steps
+                println!("{}:\n{}", "Execution Result (Map)".bold(), res.value.to_string().dim());
+
+                // Detect explicit refinement_exhausted signal per strategy prompt
+                // Detect explicit refinement_exhausted signal per strategy prompt
+                if is_refinement_exhausted(&res.value) {
+                    println!("{}", "[flow] Refinement exhausted signal detected. Ending interaction.".green());
+                    plan_exhausted = true;
+                }
+
+                // Also treat certain final statuses (no further questions expected) as terminal.
+                if let Some(status_str) = get_map_string_value(map, "status") {
+                    match status_str.as_str() {
+                        "itinerary_ready" | "ready_for_planning" | "completed" => {
+                            println!("{}", format!("[flow] Plan returned terminal status '{}' - ending interaction.", status_str).green());
+                            plan_exhausted = true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Also check for response data within the map (string responses stored under string keys)
+                if let Some(response_str) = get_map_string_value(map, "response") {
+                    if is_user_response(response_str) {
+                        println!("{}: {}", "System Response".bold(), response_str.clone().cyan());
+                        next_request = Some(response_str.to_string());
+                    }
+                }
+                // If the plan provided an explicit next-agent directive, synthesize a concise
+                // natural-language prompt from the structured map so the next turn is
+                // meaningful (avoid passing raw serialized maps as user input).
+                if next_request.is_none() && !plan_exhausted {
+                    if let Some(next_agent) = get_map_string_value(map, "next/agent")
+                        .or_else(|| get_map_string_value(map, "next_agent"))
+                    {
+                        // Build a short context summary from the map
+                        let mut parts: Vec<String> = Vec::new();
+                        for (k, v) in map.iter() {
+                            let key_str = k.to_string().trim_start_matches(':').to_string();
+                            let val_str = match v {
+                                Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            parts.push(format!("{}={}", key_str, val_str));
+                        }
+                        let summary = parts.join(", ");
+                        let prompt = format!(
+                            "Agent {}: continue with planning using the following context: {}",
+                            next_agent, summary
+                        );
+                        next_request = Some(prompt);
+                    } else {
+                        // Fallback: use the serialized map as the next request so the interaction
+                        // can continue when no explicit directive was present.
+                        next_request = Some(res.value.to_string());
+                    }
+                }
+            }
+            _ => {
+                println!("{}: {}", "Execution Result".bold(), res.value.to_string().dim());
+            }
         }
-        // Prevent repeating identical requests (simple loop detection)
-        if trimmed == current_request.trim().to_string() {
+
+        // If the plan signaled completion, break the loop
+        if plan_exhausted {
             break;
         }
 
-        current_request = trimmed;
+        // --- Multi-turn Response Handling ---
+        // Extract context from the current execution to be used in the next turn
+        let new_context = extract_context_from_result(&res);
+        if !new_context.is_empty() {
+            accumulated_context.extend(new_context);
+        }
+
+        // If the plan paused for user input, a PlanPaused action will be emitted into the
+        // causal chain. We need to find the question and generate a response. We don't have
+        // a direct `plan_id` field on ExecutionResult; use metadata or skip this step when
+        // plan id is not present in metadata.
+        if let Some(Value::String(plan_id_val)) = res.metadata.get("plan_id") {
+            let plan_id = plan_id_val.as_str();
+            let responses = extract_pending_questions_and_generate_responses(
+                &ccos,
+                plan_id,
+                &collected_responses,
+            );
+
+            if !responses.is_empty() {
+                println!("[flow] Plan paused. Generated {} responses.", responses.len());
+                collected_responses.extend(responses);
+
+                // If we generated responses, we need to re-run the plan with the new context.
+                // The `find_latest_plan_checkpoint` will give us the point to resume from.
+                if let Some(checkpoint_id) = find_latest_plan_checkpoint(&ccos, plan_id) {
+                    next_request = Some(format!(
+                        "(plan.resume {} :checkpoint {})",
+                        plan_id, checkpoint_id
+                    ));
+                }
+            }
+        }
+
+        // --- Loop continuation or termination ---
+        if let Some(req) = next_request {
+            // Detect if the system is asking the same question repeatedly
+            if asked_questions.contains(&req) {
+                stagnant_turns += 1;
+                println!(
+                    "[flow] System repeated a question. Stagnation count: {}",
+                    stagnant_turns
+                );
+                if stagnant_turns >= STAGNATION_LIMIT {
+                    println!(
+                        "{}",
+                        "[flow] Stagnation limit reached. Terminating interaction."
+                            .red()
+                            .bold()
+                    );
+                    break;
+                }
+            } else {
+                stagnant_turns = 0;
+                asked_questions.insert(req.clone());
+            }
+            current_request = req;
+        } else {
+            println!(
+                "{}",
+                "[flow] No further actions or questions from the system. Terminating interaction."
+                    .green()
+            );
+            break;
+        }
+
+        // Small delay to make the interaction feel more natural
+        sleep(Duration::from_millis(250)).await;
     }
 
     render_ascii_graph(root_intent.as_ref(), &known_intents);
 
     // --- Phase 3: Post-Mortem Analysis and Synthesis ---
-    generate_synthesis_summary(&conversation_history, root_intent.as_ref());
+    if args.synthesize_capability {
+        if let Err(e) = generate_synthesis_summary(&conversation_history, root_intent.as_ref(), &ccos, args.persist_synthesized).await {
+            eprintln!("[synthesis] Error: {}", e);
+        }
+    } else {
+        // Legacy placeholder output for comparison (no registration)
+        if let Err(e) = legacy_placeholder_synthesis(&conversation_history, root_intent.as_ref()) {
+            eprintln!("[synthesis.placeholder] Error: {}", e);
+        }
+    }
 
 
     Ok(())
 }
 
 /// Performs a post-mortem analysis of the conversation to synthesize a new capability.
-fn generate_synthesis_summary(history: &[InteractionTurn], _root_intent_id: Option<&String>) {
-    println!("\n\n{}", "--- Capability Synthesis Analysis ---".bold());
-    
+/// Legacy placeholder synthesis output (retained for fallback when --synthesize-capability not set)
+fn legacy_placeholder_synthesis(history: &[InteractionTurn], _root_intent_id: Option<&String>) -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n\n{}", "--- Capability Synthesis Analysis (Placeholder) ---".bold());
+    if history.is_empty() { println!("Conversation history is empty. Nothing to analyze."); return Ok(()); }
+    let root_goal = history.get(0).and_then(|t| t.created_intent.as_ref()).map_or("Unknown".to_string(), |i| i.goal.clone());
+    println!("{} {}", "Initial Goal:".bold(), root_goal);
+    println!("{} {} turns", "Total Interaction Turns:".bold(), history.len());
+    println!("(Run again with --synthesize-capability for LLM-driven generation)");
+    Ok(())
+}
+
+/// Performs a post-mortem analysis of the conversation, calls the delegating arbiter LLM to propose a reusable capability,
+/// validates & registers it into the capability marketplace, and optionally persists it.
+async fn generate_synthesis_summary(
+    history: &[InteractionTurn],
+    _root_intent_id: Option<&String>,
+    ccos: &Arc<CCOS>,
+    persist: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n\n{}", "--- Capability Synthesis Analysis (LLM) ---".bold());
+
     if history.is_empty() {
         println!("Conversation history is empty. Nothing to analyze.");
-        return;
+        return Ok(());
     }
 
     let root_goal = history.get(0)
         .and_then(|turn| turn.created_intent.as_ref())
         .map_or("Unknown".to_string(), |intent| intent.goal.clone());
-
-    println!("{} {}", "Initial Goal:".bold(), root_goal);
-    println!("{} {} turns", "Total Interaction Turns:".bold(), history.len());
-    
     let refinements: Vec<String> = history.iter().skip(1)
         .filter_map(|turn| turn.created_intent.as_ref().map(|i| i.goal.clone()))
         .collect();
 
+    println!("{} {}", "Initial Goal:".bold(), root_goal);
+    println!("{} {} turns", "Total Interaction Turns:".bold(), history.len());
     if !refinements.is_empty() {
-        println!("\n{}", "Detected Refinements:".bold());
-        for (i, goal) in refinements.iter().enumerate() {
-            println!("  {}. {}", i + 1, truncate(goal, 80));
+        println!("{}", "Refinements:".bold());
+        for (i, r) in refinements.iter().enumerate() { println!("  {}. {}", i+1, truncate(r, 90)); }
+    }
+
+    // 1. Build synthesis prompt
+    let prompt = build_capability_synthesis_prompt(&root_goal, &refinements);
+    println!("{}", "[synthesis] Requesting capability proposal from LLM...".yellow());
+
+    // 2. Obtain raw capability proposal WITHOUT forcing intent parsing first.
+    let arbiter = if let Some(a) = ccos.get_delegating_arbiter() { a } else {
+        println!("[synthesis] Delegating arbiter not available (enable delegation). Skipping.");
+        return Ok(());
+    };
+
+    let raw = match arbiter.generate_raw_text(&prompt).await {
+        Ok(txt) => txt,
+        Err(e) => { eprintln!("[synthesis] Raw capability generation failed: {}", e); return Ok(()); }
+    };
+    println!("[synthesis] Raw LLM proposal (truncated 300 chars): {}", truncate(&raw, 300));
+
+    // 3. Parser-first attempt: try to parse the raw response into TopLevel ASTs and
+    // if we find a TopLevel::Capability, pretty-print it into canonical RTFS source.
+    let mut spec = if let Ok(parsed) = rtfs_compiler::parser::parse_with_enhanced_errors(&raw, None) {
+        // If parser returns at least one capability top-level node, convert it to canonical RTFS
+        let mut found_cap: Option<String> = None;
+        for tl in parsed.iter() {
+            if let rtfs_compiler::ast::TopLevel::Capability(_) = tl {
+                if let Some(s) = rtfs_compiler::ccos::rtfs_bridge::extractors::toplevel_to_rtfs_string(tl) {
+                    // Wrap in fenced block for downstream processing
+                    found_cap = Some(format!("```rtfs\n{}\n```", s));
+                    break;
+                }
+            }
+        }
+        if let Some(c) = found_cap { c } else {
+            // Fall back to older heuristics if parser didn't yield a capability
+            extract_capability_block(&raw).unwrap_or_else(|| extract_capability_spec(&raw).unwrap_or_else(|| raw.clone()))
+        }
+    } else {
+        // If parsing failed (likely because output isn't pure RTFS), fall back to heuristics
+        extract_capability_block(&raw).unwrap_or_else(|| extract_capability_spec(&raw).unwrap_or_else(|| raw.clone()))
+    };
+
+    // Detect likely truncation: if raw contains a starting ```rtfs fence but no closing fence,
+    // or if a (capability appears but parentheses are unbalanced, attempt a targeted completion.
+    if raw.contains("```rtfs") && !raw.matches("```rtfs").count().eq(&2) {
+        println!("[synthesis] Detected possibly truncated fenced rtfs block; requesting completion...");
+        let complete_prompt = format!(
+            "The previous response started an RTFS fenced block but was truncated. Here is the full raw response so far:\n\n{}\n\nPlease OUTPUT ONLY the missing remainder of the RTFS fenced block (no fences) so we can append it to the earlier content and produce a valid (capability ...) s-expression. Do NOT add any commentary.",
+            raw
+        );
+        if let Ok((_it, completion_raw)) = arbiter.natural_language_to_intent_with_raw(&complete_prompt, None).await {
+            // Append the completion to the original raw and re-extract
+            let stitched = format!("{}{}", raw, completion_raw);
+            if let Some(block) = extract_capability_block(&stitched) {
+                spec = block;
+            } else {
+                // last resort: set spec to stitched raw so later parsing will attempt
+                spec = stitched;
+            }
+        } else {
+            println!("[synthesis] Completion re-prompt failed.");
+        }
+    } else if raw.contains("(capability") {
+        // If there's a capability but parentheses appear unbalanced, try to detect and request completion
+        if let Some(idx) = raw.find("(capability") {
+            if extract_balanced_sexpr(&raw, idx).is_none() {
+                println!("[synthesis] Detected unbalanced (capability s-expression; requesting completion...");
+                let complete_prompt = format!(
+                    "The previous response began a (capability ...) s-expression but it appears to be incomplete. Here is the raw response so far:\n\n{}\n\nPlease OUTPUT ONLY the missing remainder of the s-expression (no fences), so we can append it and obtain a valid RTFS (capability ...) top-level form. Do NOT include commentary.",
+                    raw
+                );
+                if let Ok((_it, completion_raw)) = arbiter.natural_language_to_intent_with_raw(&complete_prompt, None).await {
+                    let stitched = format!("{}{}", raw, completion_raw);
+                    if let Some(block) = extract_capability_block(&stitched) {
+                        spec = block;
+                    } else {
+                        spec = stitched;
+                    }
+                } else {
+                    println!("[synthesis] Completion re-prompt failed.");
+                }
+            }
         }
     }
 
-    // Placeholder for the synthesized capability
-    println!("\n{}", "Synthesized Capability (Placeholder):".bold().green());
-    println!("{}", "------------------------------------".green());
-    println!("{} plan_trip", "capability".cyan());
-    println!("  {} \"Plans a detailed trip based on user preferences.\"", "description".cyan());
-    println!("\n  {} {{", "parameters".cyan());
-    println!("    destination: String,");
-    println!("    duration_weeks: Integer,");
-    println!("    month: String,");
-    println!("    interests: [String],");
-    println!("    dietary_needs: [String]");
-    println!("  }}");
-    println!("\n  {} {{", "steps".cyan());
-    println!("    // 1. Decompose high-level goal into sub-intents.");
-    println!("    // 2. Gather parameters (destination, duration, interests).");
-    println!("    // 3. Search for activities based on interests.");
-    println!("    // 4. Search for dining options based on dietary needs.");
-    println!("    // 5. Assemble final itinerary.");
-    println!("  }}");
-    println!("{}", "------------------------------------".green());
-    println!("\n{}", "This demonstrates how CCOS could learn a reusable 'plan_trip' capability from the specific interaction history.".italic());
+    // If we didn't get a proper (capability ...) s-expression, re-prompt the LLM asking for only that form
+    if !spec.contains("(capability") {
+        println!("[synthesis] Initial proposal did not include a (capability ...) block - re-prompting for strict RTFS capability output...");
+        let clarify = format!(
+            "The previous proposal:\n{}\n\nPlease OUTPUT ONLY a single well-formed RTFS s-expression that defines a capability. The top-level form must start with (capability \"id\" ...) and include :description and optionally :parameters and :steps or :implementation. Wrap the s-expression in a ```rtfs fenced code block. Do NOT include any extra commentary.",
+            raw
+        );
+        if let Ok((_it, clarified_raw)) = arbiter.natural_language_to_intent_with_raw(&clarify, None).await {
+            if let Some(block) = extract_capability_block(&clarified_raw) {
+                spec = block;
+            } else {
+                // Last resort: if clarifying response still didn't contain a capability s-expr,
+                // attempt to ask the arbiter to generate an RTFS plan for the parsed intent
+                println!("[synthesis] Clarified response still lacked a (capability ...) block; attempting to generate an RTFS plan from the parsed intent...");
+                // We have no parsed intent yet; attempt to derive an intent ONLY if needed for fallback plan.
+                let parsed_intent_opt = match arbiter.natural_language_to_intent_with_raw(&prompt, None).await {
+                    Ok((it, _r)) => Some(it),
+                    Err(_e) => None,
+                };
+                let plan_result: Result<_, String> = if let Some(pi) = parsed_intent_opt.as_ref() {
+                    match arbiter.intent_to_plan(pi).await {
+                        Ok(p) => Ok(p),
+                        Err(e) => Err(format!("{}", e)),
+                    }
+                } else {
+                    Err("No parsed intent for fallback plan generation".to_string())
+                };
+                match plan_result {
+                    Ok(plan) => {
+                        // Use plan body (Rtfs) as the steps for a synthesized capability
+                        if let rtfs_compiler::ccos::types::PlanBody::Rtfs(plan_body) = plan.body {
+                            // derive a temporary capability id from root_goal (kebab-case) if none yet
+                            let temp_id = extract_capability_id(&spec).unwrap_or_else(|| {
+                                root_goal.to_lowercase()
+                                    .chars()
+                                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                                    .collect::<String>()
+                            });
+                            // Wrap plan_body into a capability :steps form
+                            let wrapped = format!("```rtfs\n(capability \"{}\"\n  :description \"Synthesized capability derived from interaction about '{}'\"\n  :steps {}\n)\n```", temp_id, root_goal.replace('"', "'"), plan_body);
+                            spec = wrapped;
+                            println!("[synthesis] Built capability spec from generated plan (wrapped).");
+                        } else {
+                            println!("[synthesis] Generated plan was not RTFS; cannot wrap into capability.");
+                        }
+                    }
+                    Err(e) => {
+                        println!("[synthesis] Failed to generate fallback plan (no intent parse or plan error): {}. Using best-effort spec.", e);
+                    }
+                }
+            }
+        } else {
+            println!("[synthesis] Clarifying re-prompt failed; using best-effort spec.");
+        }
+    }
+    let capability_id = extract_capability_id(&spec).unwrap_or_else(|| {
+        // Generate id from goal slug
+        root_goal.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>()
+    });
+    // Use as_str() to avoid moving the String when applying style (String::cyan consumes self)
+    println!("[synthesis] Candidate capability id: {}", capability_id.as_str().cyan());
+
+    let marketplace = ccos.get_capability_marketplace();
+    if marketplace.has_capability(&capability_id).await {
+        println!("[synthesis] Capability '{}' already exists; skipping registration.", capability_id);
+        return Ok(());
+    }
+
+    // Validate the RTFS capability spec before registering
+    match parse_and_validate_capability(&spec) {
+        Ok(()) => {
+            // 4. Register capability (local) with handler placeholder for now
+            let register_result = marketplace.register_local_capability(
+                capability_id.clone(),
+                capability_id.clone(),
+                format!("Synthesized capability derived from interaction about '{}'.", root_goal),
+                Arc::new(|value: &Value| {
+                    // Simple echo placeholder; real implementation would be built from spec parsing
+                    Ok(Value::Map({
+                        let mut m = std::collections::HashMap::new();
+                        m.insert(rtfs_compiler::ast::MapKey::String("status".to_string()), Value::String("executed".to_string()));
+                        m.insert(rtfs_compiler::ast::MapKey::String("input".to_string()), value.clone());
+                        m
+                    }))
+                })
+            ).await;
+            match register_result {
+                Ok(_) => println!("{} {}", "[synthesis] Registered capability:".green(), capability_id),
+                Err(e) => { eprintln!("[synthesis] Registration failed: {}", e); return Ok(()); }
+            }
+        }
+        Err(err_msg) => {
+            eprintln!("[synthesis] Capability spec validation failed: {}. Skipping registration.", err_msg);
+        }
+    }
+
+    // 5. Persist if requested
+    if persist {
+        if let Err(e) = persist_capability_spec(&capability_id, &spec) {
+            eprintln!("[synthesis] Persist error: {}", e);
+        } else {
+            println!("[synthesis] Persisted spec to generated_capabilities/{}.rtfs", capability_id);
+        }
+    }
+
+    println!("{}", "[synthesis] Completed.".green());
+    Ok(())
+}
+
+/// Build a focused synthesis prompt for the LLM
+fn build_capability_synthesis_prompt(root_goal: &str, refinements: &[String]) -> String {
+    let mut prompt = String::from("You are a capability synthesis engine. Given an initial user goal and its refinements, produce a reusable RTFS capability definition that can be registered in a capability marketplace.\n");
+    prompt.push_str("IMPORTANT INSTRUCTIONS:\n");
+    prompt.push_str("1) OUTPUT EXACTLY ONE triple-backtick fenced block labeled 'rtfs' that contains exactly one well-formed RTFS s-expression.\n");
+    prompt.push_str("2) The top-level form MUST be (capability \"id\" ...). Use kebab-case for ids.\n");
+    prompt.push_str("3) Do NOT include any prose, commentary, headings, lists, or extra text outside the single fenced block.\n");
+    prompt.push_str("4) Provide :description and optionally :parameters and :steps or :implementation. Keep types simple (string, number, boolean, map, list).\n\n");
+
+    prompt.push_str("Examples (mimic these exactly - each example is a complete, valid response):\n\n");
+    prompt.push_str("```rtfs\n(capability \"travel.create-personalized-itinerary\"\n  :description \"Create a personalized travel itinerary given user preferences\"\n  :parameters {:name \"string\" :destination \"string\" :dates \"string\" :budget \"string\"}\n  :steps (do\n    (search.flights :destination \"$destination\")\n    (search.hotels :destination \"$destination\")\n    (optimize.itinerary :preferences $preferences)\n  )\n)\n```\n\n");
+    prompt.push_str("```rtfs\n(capability \"weather.get-forecast\"\n  :description \"Return a weather forecast summary for a given location and date range\"\n  :parameters {:location \"string\" :start_date \"string\" :end_date \"string\"}\n  :steps (do\n    (weather.lookup :location $location :range { :from $start_date :to $end_date })\n    (format.forecast-summary :forecast $forecast)\n  )\n)\n```\n\n");
+    prompt.push_str("```rtfs\n(capability \"calendar.schedule-meeting\"\n  :description \"Schedule a meeting on the user's calendar given participants, time window, and preferences\"\n  :parameters {:participants :list :title \"string\" :time_window \"string\"}\n  :implementation (do\n    (calendar.find-available-slot :participants $participants :window $time_window)\n    (calendar.create-event :slot $chosen_slot :title $title :participants $participants)\n  )\n)\n```\n\n");
+
+    prompt.push_str(&format!("Initial Goal: {}\n", root_goal));
+    if !refinements.is_empty() {
+        prompt.push_str("Refinements:\n");
+        for r in refinements { prompt.push_str(&format!("- {}\n", r)); }
+    }
+    prompt.push_str("\nProduce a single capability id in kebab-case derived from the goal and refinements.\n");
+    prompt.push_str("Respond ONLY with the fenced rtfs block and nothing else.\n");
+    prompt
+}
+
+/// Naive extraction: find line starting with 'capability'
+fn extract_capability_spec(raw: &str) -> Option<String> {
+    if raw.contains("capability") { Some(raw.to_string()) } else { None }
+}
+
+fn extract_capability_id(spec: &str) -> Option<String> {
+    // Try to find quoted id in (capability "id" ...) form
+    if let Some(idx) = spec.find("(capability") {
+        if let Some(q1_rel) = spec[idx..].find('"') {
+            let start = idx + q1_rel + 1;
+            if let Some(q2_rel) = spec[start..].find('"') {
+                let end = start + q2_rel;
+                return Some(spec[start..end].to_string());
+            }
+        }
+    }
+
+    // Fallback: naive line-based extraction (handles unquoted ids)
+    for line in spec.lines() {
+        let l = line.trim();
+        if l.starts_with("capability ") || l.starts_with("(capability ") {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let mut candidate = parts[1].to_string();
+                if candidate.starts_with('(') { candidate = candidate[1..].to_string(); }
+                candidate = candidate.trim_matches('"').to_string();
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Try parsing the provided RTFS spec using the project parser and validate it contains a Capability top-level
+fn parse_and_validate_capability(spec: &str) -> Result<(), String> {
+    // The project's parser expects a full RTFS program; attempt to strip fenced markers if present
+    let mut src = spec.to_string();
+    // If spec is wrapped in a fenced code block (e.g., ```rtfs or ```plaintext), strip fences
+    if let Some(first) = src.find("```") {
+        if let Some(second_rel) = src[first + 3..].find("```") {
+            src = src[first + 3..first + 3 + second_rel].to_string();
+        }
+    }
+
+    // Use crate::parser to parse
+    match rtfs_compiler::parser::parse_with_enhanced_errors(&src, None) {
+        Ok(items) => {
+            // Ensure at least one TopLevel::Capability is present
+            for tl in items.iter() {
+                match tl {
+                    rtfs_compiler::ast::TopLevel::Capability(_) => return Ok(()),
+                    _ => {}
+                }
+            }
+            Err("Parsed RTFS but no (capability ...) top-level form found".to_string())
+        }
+        Err(e) => Err(format!("RTFS parse error: {}", e)),
+    }
+}
+
+/// Try to extract a balanced (capability ...) s-expression or fenced ```rtfs``` block
+fn extract_capability_block(raw: &str) -> Option<String> {
+    // 1) check for any fenced triple-backtick block (```<label> ... ```)
+    if let Some(fence_start) = raw.find("```") {
+        if let Some(fence_end_rel) = raw[fence_start + 3..].find("```") {
+            let fenced = &raw[fence_start + 3..fence_start + 3 + fence_end_rel];
+            if let Some(idx) = fenced.find("(capability") {
+                if let Some(block) = extract_balanced_sexpr(fenced, idx) {
+                    return Some(block);
+                }
+            }
+        }
+    }
+
+    // 2) Search raw for a top-level (capability ...)
+    if let Some(idx) = raw.find("(capability") {
+        if let Some(block) = extract_balanced_sexpr(raw, idx) {
+            return Some(block);
+        }
+    }
+
+    None
+}
+
+/// Minimal balanced s-expression extractor starting at start_idx where '(' is expected
+fn extract_balanced_sexpr(text: &str, start_idx: usize) -> Option<String> {
+    let bytes = text.as_bytes();
+    if bytes.get(start_idx) != Some(&b'(') {
+        return None;
+    }
+    let mut depth: isize = 0;
+    for (i, ch) in text[start_idx..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = start_idx + i + 1;
+                    return Some(text[start_idx..end].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn persist_capability_spec(id: &str, spec: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs; use std::path::PathBuf;
+    let dir = PathBuf::from("generated_capabilities");
+    if !dir.exists() { fs::create_dir_all(&dir)?; }
+    let mut file = dir.clone();
+    file.push(format!("{}.rtfs", id));
+    fs::write(file, spec)?;
+    Ok(())
 }
 
 /// Enhanced response handling system for multi-turn interactions
@@ -963,13 +1194,13 @@ fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Acti
                 rtfs_compiler::runtime::values::Value::Map(map) => {
                     // Try common keys used for prompts
                     if let Some(p) = get_map_string_value(map, "prompt") {
-                        return Some(p);
+                        return Some(p.clone());
                     }
                     if let Some(p) = get_map_string_value(map, "question") {
-                        return Some(p);
+                        return Some(p.clone());
                     }
                     if let Some(p) = get_map_string_value(map, "text") {
-                        return Some(p);
+                        return Some(p.clone());
                     }
 
                     // Fallback: return the first string value found in the map
@@ -987,18 +1218,10 @@ fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Acti
 }
 
 /// Helper: get a string value for a key from a runtime Value::Map whose keys are MapKey.
-fn get_map_string_value(map: &std::collections::HashMap<rtfs_compiler::ast::MapKey, Value>, key: &str) -> Option<String> {
-    for (k, v) in map.iter() {
-        // Convert the MapKey to a string without moving its internals. Keyword keys
-        // are represented as ":name" by MapKey::to_string(), so strip a leading
-        // ':' to compare against plain keys like "status".
-        let k_str = k.to_string();
-        let k_trim = k_str.trim_start_matches(':');
-        if k_trim == key {
-            return match v {
-                Value::String(s) => Some(s.clone()),
-                other => Some(other.to_string()),
-            };
+fn get_map_string_value<'a>(map: &'a std::collections::HashMap<rtfs_compiler::ast::MapKey, Value>, key: &str) -> Option<&'a String> {
+    if let Some(value) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new(key))) {
+        if let Value::String(s) = value {
+            return Some(s);
         }
     }
     None
@@ -1068,36 +1291,62 @@ fn cleanup_response_env_vars() {
 /// Find the latest PlanPaused action for a given plan_id and return the
 /// checkpoint id (first argument) if present.
 fn find_latest_plan_checkpoint(ccos: &Arc<CCOS>, plan_id: &str) -> Option<String> {
-    if let Ok(chain) = ccos.get_causal_chain().lock() {
-        let actions = chain.get_all_actions();
-        for a in actions.iter().rev() {
-            if a.plan_id == plan_id && a.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
-                if let Some(args) = &a.arguments {
-                    if let Some(first) = args.first() {
-                        // Extract raw string for checkpoint id (Value::String stores without quotes)
-                        if let rtfs_compiler::runtime::values::Value::String(s) = first {
-                            return Some(s.clone());
-                        } else {
-                            // Fallback: remove surrounding quotes if Display formatting was used
-                            let disp = first.to_string();
-                            let trimmed = disp.trim_matches('"').to_string();
-                            return Some(trimmed);
-                        }
+    // Access the causal chain to find actions related to this plan
+    let chain = ccos.get_causal_chain();
+    let history = chain.lock().unwrap();
+    let plan_actions = history.get_actions_for_plan(&plan_id.to_string());
+
+    // Find the most recent 'PlanPaused' action
+    let latest_checkpoint = plan_actions
+        .iter()
+        .filter_map(|action| {
+            // Match PlanPaused actions and extract a checkpoint id from metadata if present.
+            if let rtfs_compiler::ccos::types::Action { action_type, metadata, .. } = action {
+                if *action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
+                    if let Some(Value::String(cp)) = metadata.get("checkpoint_id") {
+                        return Some(cp.clone());
                     }
                 }
+                None
+            } else {
+                None
+            }
+        })
+        .last();
+
+    latest_checkpoint
+}
+
+
+/// Check if the final value from a plan execution signals that refinement is complete.
+fn is_refinement_exhausted(value: &Value) -> bool {
+    if let Value::Map(map) = value {
+        // Match against MapKey::Keyword("status")
+        if let Some(status_val) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("status"))) {
+            if let Value::String(s) = status_val {
+                return s == "refinement_exhausted";
             }
         }
     }
-    None
+    false
 }
 
 
 fn snapshot_intent_ids(ccos: &Arc<CCOS>) -> HashSet<String> {
-    ccos.list_intents_snapshot().into_iter().map(|i| i.intent_id).collect()
+    // Fallback: list intents snapshot and extract ids
+    let snapshot = ccos.list_intents_snapshot();
+    snapshot.into_iter().map(|i| i.intent_id).collect()
 }
 
 fn fetch_intent_goal(ccos: &Arc<CCOS>, id: &str) -> Option<String> {
-    ccos.list_intents_snapshot().into_iter().find(|i| i.intent_id == id).map(|i| i.goal)
+    // Use snapshot or direct get_intent
+    if let Ok(ig) = ccos.get_intent_graph().lock() {
+        let id_str = id.to_string();
+        if let Some(intent) = ig.get_intent(&id_str) {
+            return Some(intent.goal.clone());
+        }
+    }
+    None
 }
 
 fn render_ascii_graph(root: Option<&String>, intents: &HashMap<String, String>) {
