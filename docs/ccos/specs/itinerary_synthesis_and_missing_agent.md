@@ -10,10 +10,18 @@ Scope: Defines conventions and strategy for turning interactive itinerary refine
 - Preserve user-collected preference semantics across turns.
 - Generate higher-quality synthesized capabilities (collector, planner, stub) from dialogue traces.
 - Prevent premature termination when a plan designates a `:next/agent` that is unavailable.
+### 21.0. RTFS Host Delegation Pattern
+All effectful operations in RTFS (I/O, user interaction, external API calls) are delegated to the **host** via the `call` primitive. RTFS code itself is pure and referentially transparent; side effects are managed at the boundary.
+
 - Standardize status taxonomy for itinerary planning flows.
 - Provide graceful fallback paths, persistence, and resumption when missing agents are referenced.
+<<<<<<< Updated upstream
 
 ## 2. Status Taxonomy (Proposed)
+=======
+(call ccos.user.ask "<prompt>")
+## 2. Status Taxonomy (Generic, Domain-Agnostic)
+>>>>>>> Stashed changes
 | Status | Meaning | Terminal? | Next Action |
 |--------|---------|-----------|------------|
 | collecting_info | Asking questions; not all required params known | No | Continue interrogation or synthesis preview |

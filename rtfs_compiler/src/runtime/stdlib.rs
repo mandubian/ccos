@@ -1645,7 +1645,7 @@ impl StandardLibrary {
                         )))
                     }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => {
+                    ExecutionOutcome::RequiresHost(_) => {
                         return Err(RuntimeError::Generic(
                             "Host effect required in stdlib 'update'".to_string(),
                         ))
@@ -1724,7 +1724,7 @@ impl StandardLibrary {
                         )))
                     }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => {
+                    ExecutionOutcome::RequiresHost(_) => {
                         return Err(RuntimeError::Generic(
                             "Host effect required in stdlib 'update'".to_string(),
                         ))
@@ -1855,7 +1855,7 @@ impl StandardLibrary {
                             )))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect required in stdlib 'map-indexed'".to_string(),
                             ))
@@ -1928,7 +1928,7 @@ impl StandardLibrary {
                                 )))
                             }
                             #[cfg(feature = "effect-boundary")]
-                            ExecutionOutcome::RequiresHostEffect(_) => {
+                            ExecutionOutcome::RequiresHost(_) => {
                                 return Err(RuntimeError::Generic(
                                     "Host effect required in stdlib 'remove'".to_string(),
                                 ))
@@ -2005,7 +2005,7 @@ impl StandardLibrary {
                             )))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect required in stdlib 'some?'".to_string(),
                             ))
@@ -2072,7 +2072,7 @@ impl StandardLibrary {
                             )))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect required in stdlib 'every?'".to_string(),
                             ))
@@ -2386,7 +2386,7 @@ impl StandardLibrary {
                     )))
                 }
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(_) => {
+                ExecutionOutcome::RequiresHost(_) => {
                     return Err(RuntimeError::Generic(
                         "Host effect required in stdlib 'map'".to_string(),
                     ))
@@ -2458,7 +2458,7 @@ impl StandardLibrary {
                         )))
                     }
                     #[cfg(feature = "effect-boundary")]
-                    ExecutionOutcome::RequiresHostEffect(_) => {
+                    ExecutionOutcome::RequiresHost(_) => {
                         return Err(RuntimeError::Generic(
                             "Host effect required in stdlib 'filter'".to_string(),
                         ))
@@ -2565,7 +2565,7 @@ impl StandardLibrary {
                     )))
                 }
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(_) => {
+                ExecutionOutcome::RequiresHost(_) => {
                     return Err(RuntimeError::Generic(
                         "Host effect required in stdlib 'reduce'".to_string(),
                     ))
@@ -2679,7 +2679,7 @@ impl StandardLibrary {
                     )))
                 }
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(_) => {
+                ExecutionOutcome::RequiresHost(_) => {
                     return Err(RuntimeError::Generic(
                         "Host effect required in stdlib 'sort-by'".to_string(),
                     ))

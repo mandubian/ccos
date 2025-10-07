@@ -1627,7 +1627,7 @@ impl SecureStandardLibrary {
                             ))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect required in map closure".to_string(),
                             ))
@@ -1694,7 +1694,7 @@ impl SecureStandardLibrary {
                             ))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect required in filter closure".to_string(),
                             ))
@@ -1771,7 +1771,7 @@ impl SecureStandardLibrary {
                             ))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect required in reduce closure".to_string(),
                             ))
@@ -2780,7 +2780,7 @@ impl SecureStandardLibrary {
                             )));
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect requested inside secure stdlib predicate".to_string(),
                             ));
@@ -2818,7 +2818,7 @@ impl SecureStandardLibrary {
                             )))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect requested inside secure stdlib predicate".to_string(),
                             ))
@@ -2880,7 +2880,7 @@ impl SecureStandardLibrary {
                             )));
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect requested inside secure stdlib predicate".to_string(),
                             ));
@@ -2918,7 +2918,7 @@ impl SecureStandardLibrary {
                             )))
                         }
                         #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHostEffect(_) => {
+                        ExecutionOutcome::RequiresHost(_) => {
                             return Err(RuntimeError::Generic(
                                 "Host effect requested inside secure stdlib predicate".to_string(),
                             ))

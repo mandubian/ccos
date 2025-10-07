@@ -28,9 +28,7 @@ pub use capabilities::*;
 pub use environment::{Environment, IrEnvironment};
 pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
-pub use execution_outcome::{CallMetadata, ExecutionOutcome, HostCall};
-#[cfg(feature = "effect-boundary")]
-pub use execution_outcome::{CausalContext, EffectRequest};
+pub use execution_outcome::{CallMetadata, ExecutionOutcome, HostCall, CausalContext};
 pub use ir_runtime::IrRuntime;
 pub use ir_runtime::IrStrategy;
 pub use module_runtime::{Module, ModuleRegistry};

@@ -20,6 +20,7 @@ cuda = []
 # New effect boundary for typed host calls - now the only way to do stateful operations
 effect-boundary = []
 metrics_exporter = []
+benchmarks = ["criterion"]
 
 [[bin]]
 name = "rtfs_compiler"
@@ -127,6 +128,7 @@ axum = { version = "0.7", features = ["ws"] }
 # Add hyper explicitly to control version used for Server
 tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
 tower-http = { version = "0.5", features = ["fs"] }
+criterion = { version = "0.5", features = ["html_reports"], optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

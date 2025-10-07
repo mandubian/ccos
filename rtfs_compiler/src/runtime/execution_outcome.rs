@@ -15,6 +15,7 @@ pub enum ExecutionOutcome {
     /// Execution requires host intervention for a non-pure operation.
     /// Unified structure handles all host calls with mandatory security/audit fields.
     RequiresHost(HostCall),
+    // Legacy variant removed: only `RequiresHost(HostCall)` is supported.
 }
 
 /// A call to the host (CCOS) for handling non-pure operations.

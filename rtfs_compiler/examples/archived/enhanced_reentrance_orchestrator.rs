@@ -84,12 +84,18 @@ impl ReentrantOrchestrator {
                     return Ok(host_result);
                 }
                 #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHostEffect(effect_request) => {
+                ExecutionOutcome::RequiresHost(effect_request) => {
                     println!("  ⏸️  Host effect required at depth {}", execution_depth);
                     println!("      Capability: {}", effect_request.capability_id);
 
-                    // Handle the effect request
-                    let effect_result = self.handle_effect_request(&effect_request).await?;
+                    // Handle the effect request (treat as host call for demo)
+                    let args_value = rtfs_compiler::runtime::values::Value::Vector(
+                        effect_request.input_payload.clone(),
+                    );
+                    let effect_result = self
+                        .capability_marketplace
+                        .execute_capability(&effect_request.capability_id, &args_value)
+                        .await?;
                     println!("      Effect result: {:?}", effect_result);
 
                     // Similar to host calls, we would substitute and continue
