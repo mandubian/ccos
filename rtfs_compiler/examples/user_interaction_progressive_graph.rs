@@ -21,6 +21,12 @@
 //!
 //! NOTE: This example intentionally limits scope to progressive detection so it can ship early.
 
+// Note on RTFS host delegation:
+// This example demonstrates the host-delegation pattern used in RTFS. Any effectful
+// operation (user prompting, external data fetch) is performed via the `(call ...)`
+// primitive. For example, `(call ccos.user.ask "What are your dates?")` delegates a
+// question to the host so that runtime, security, and replayability are enforced.
+
 use clap::Parser;
 use crossterm::style::Stylize;
 use rtfs_compiler::ccos::CCOS;
@@ -643,6 +649,35 @@ async fn generate_synthesis_summary(
         for (i, r) in refinements.iter().enumerate() { println!("  {}. {}", i+1, truncate(r, 90)); }
     }
 
+    // --- Quick, local synthesis using the built-in pipeline (Phase 8 minimal)
+    println!("{}", "[synthesis] Running quick local synthesis pipeline (schema extraction + artifact generation)...".yellow());
+    let interaction_turns_for_synthesis: Vec<rtfs_compiler::ccos::synthesis::InteractionTurn> = history.iter().map(|t| {
+        rtfs_compiler::ccos::synthesis::InteractionTurn { turn_index: 0, prompt: t.user_input.clone(), answer: None }
+    }).collect();
+
+    let synth_result = rtfs_compiler::ccos::synthesis::synthesize_capabilities(&interaction_turns_for_synthesis, ccos);
+    if let Some(col) = &synth_result.collector {
+        println!("[synthesis.quick] Collector:\n{}", col);
+        if persist {
+            let _ = persist_capability_spec("synth.collector", col);
+            println!("[synthesis.quick] Persisted synth.collector.rtfs");
+        }
+    }
+    if let Some(plan) = &synth_result.planner {
+        println!("[synthesis.quick] Planner:\n{}", plan);
+        if persist {
+            let _ = persist_capability_spec("synth.planner", plan);
+            println!("[synthesis.quick] Persisted synth.planner.rtfs");
+        }
+    }
+    if let Some(stub) = &synth_result.stub {
+        println!("[synthesis.quick] Stub:\n{}", stub);
+        if persist {
+            let _ = persist_capability_spec("synth.stub", stub);
+            println!("[synthesis.quick] Persisted synth.stub.rtfs");
+        }
+    }
+
     // 1. Build synthesis prompt
     let prompt = build_capability_synthesis_prompt(&root_goal, &refinements);
     println!("{}", "[synthesis] Requesting capability proposal from LLM...".yellow());
@@ -802,13 +837,48 @@ async fn generate_synthesis_summary(
                 capability_id.clone(),
                 format!("Synthesized capability derived from interaction about '{}'.", root_goal),
                 Arc::new(|value: &Value| {
-                    // Simple echo placeholder; real implementation would be built from spec parsing
-                    Ok(Value::Map({
-                        let mut m = std::collections::HashMap::new();
-                        m.insert(rtfs_compiler::ast::MapKey::String("status".to_string()), Value::String("executed".to_string()));
-                        m.insert(rtfs_compiler::ast::MapKey::String("input".to_string()), value.clone());
-                        m
-                    }))
+                    // Handler behavior:
+                    // - If CCOS_INTERACTIVE_ASK is set, prompt the user on stdin using the example's prompt()
+                    // - Else, attempt to read a canned response from CCOS_USER_ASK_RESPONSE_{KEY}
+                    // - Fallback: echo the input in a small result map (original behavior)
+
+                    // Determine a short prompt text from the incoming value
+                    let prompt_text = match value {
+                        Value::String(s) => s.clone(),
+                        Value::Map(m) => {
+                            if let Some(Value::String(p)) = m.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("prompt"))) {
+                                p.clone()
+                            } else if let Some(Value::String(p)) = m.get(&rtfs_compiler::ast::MapKey::String("prompt".to_string())) {
+                                p.clone()
+                            } else {
+                                "Please provide input:".to_string()
+                            }
+                        }
+                        _ => "Please provide input:".to_string(),
+                    };
+
+                    // Interactive stdin path
+                    if std::env::var("CCOS_INTERACTIVE_ASK").is_ok() {
+                        match prompt_user(&format!("(user.ask) {} ", prompt_text)) {
+                            Ok(ans) => Ok(Value::String(ans)),
+                            Err(e) => Err(rtfs_compiler::runtime::error::RuntimeError::Generic(format!("prompt failed: {}", e)))
+                        }
+                    } else {
+                        // Try canned env response by generating a question key
+                        let qkey = generate_question_key(&prompt_text).unwrap_or_else(|| "last_response".to_string());
+                        let env_key = format!("CCOS_USER_ASK_RESPONSE_{}", qkey.to_uppercase());
+                        if let Ok(env_resp) = std::env::var(&env_key) {
+                            Ok(Value::String(env_resp))
+                        } else {
+                            // Fallback echo map (preserve previous example behavior)
+                            Ok(Value::Map({
+                                let mut m = std::collections::HashMap::new();
+                                m.insert(rtfs_compiler::ast::MapKey::String("status".to_string()), Value::String("executed".to_string()));
+                                m.insert(rtfs_compiler::ast::MapKey::String("input".to_string()), value.clone());
+                                m
+                            }))
+                        }
+                    }
                 })
             ).await;
             match register_result {
@@ -1413,7 +1483,7 @@ fn short(id: &str) -> String {
     if id.len() <= 10 { id.to_string() } else { format!("{}", &id[..10]) }
 }
 
-fn prompt(label: &str) -> io::Result<String> {
+fn prompt_user(label: &str) -> io::Result<String> {
     print!("{}", label);
     io::stdout().flush()?;
     let mut input = String::new();

@@ -7,14 +7,15 @@
 //! - Concurrent execution performance
 //! - Resource cleanup efficiency
 
+#![cfg(feature = "benchmarks")]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rtfs_compiler::runtime::microvm::Program;
-use rtfs_compiler::runtime::microvm::*;
-use rtfs_compiler::runtime::security::RuntimeContext;
+use rtfs_compiler::runtime::microvm::core::{Program, ExecutionContext};
+use rtfs_compiler::runtime::microvm::config::MicroVMConfig;
+use rtfs_compiler::runtime::microvm::providers;
 use rtfs_compiler::runtime::values::Value;
-use std::sync::Arc;
-use std::time::Instant;
 use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 // Simple arithmetic program for basic performance testing
 fn create_simple_arithmetic_program() -> Program {
@@ -77,7 +78,16 @@ fn benchmark_program_execution(c: &mut Criterion) {
         b.iter(|| {
             let mut provider = providers::mock::MockMicroVMProvider::new();
             provider.initialize().unwrap();
-            black_box(provider.execute_program(&simple_program, &RuntimeContext::default()));
+            let ctx = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(simple_program.clone()),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![],
+                config: MicroVMConfig::default(),
+                runtime_context: None,
+            };
+            black_box(provider.execute_program(ctx));
         });
     });
 
@@ -85,7 +95,16 @@ fn benchmark_program_execution(c: &mut Criterion) {
         b.iter(|| {
             let mut provider = providers::mock::MockMicroVMProvider::new();
             provider.initialize().unwrap();
-            black_box(provider.execute_program(&complex_program, &RuntimeContext::default()));
+            let ctx = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(complex_program.clone()),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![],
+                config: MicroVMConfig::default(),
+                runtime_context: None,
+            };
+            black_box(provider.execute_program(ctx));
         });
     });
 
@@ -93,7 +112,16 @@ fn benchmark_program_execution(c: &mut Criterion) {
         b.iter(|| {
             let mut provider = providers::mock::MockMicroVMProvider::new();
             provider.initialize().unwrap();
-            black_box(provider.execute_program(&capability_program, &RuntimeContext::default()));
+            let ctx = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(capability_program.clone()),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![],
+                config: MicroVMConfig::default(),
+                runtime_context: None,
+            };
+            black_box(provider.execute_program(ctx));
         });
     });
 
@@ -109,9 +137,17 @@ fn benchmark_concurrent_execution(c: &mut Criterion) {
         b.iter(|| {
             let mut provider = providers::mock::MockMicroVMProvider::new();
             provider.initialize().unwrap();
-
             for _ in 0..10 {
-                black_box(provider.execute_program(&program, &RuntimeContext::default()));
+                let ctx = ExecutionContext {
+                    execution_id: Uuid::new_v4().to_string(),
+                    program: Some(program.clone()),
+                    capability_id: None,
+                    capability_permissions: vec![],
+                    args: vec![],
+                    config: MicroVMConfig::default(),
+                    runtime_context: None,
+                };
+                black_box(provider.execute_program(ctx.clone()));
             }
         });
     });
@@ -127,7 +163,16 @@ fn benchmark_concurrent_execution(c: &mut Criterion) {
                     let handle = tokio::spawn(async move {
                         let mut provider = providers::mock::MockMicroVMProvider::new();
                         provider.initialize().unwrap();
-                        provider.execute_program(&program, &RuntimeContext::default())
+                        let ctx = ExecutionContext {
+                            execution_id: Uuid::new_v4().to_string(),
+                            program: Some(program.clone()),
+                            capability_id: None,
+                            capability_permissions: vec![],
+                            args: vec![],
+                            config: MicroVMConfig::default(),
+                            runtime_context: None,
+                        };
+                        provider.execute_program(ctx)
                     });
                     handles.push(handle);
                 }
@@ -158,10 +203,18 @@ fn benchmark_memory_usage(c: &mut Criterion) {
         b.iter(|| {
             let program = create_complex_nested_program();
             let start_memory = get_memory_usage();
-
             let mut provider = providers::mock::MockMicroVMProvider::new();
             provider.initialize().unwrap();
-            black_box(provider.execute_program(&program, &RuntimeContext::default()));
+            let ctx = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(program.clone()),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![],
+                config: MicroVMConfig::default(),
+                runtime_context: None,
+            };
+            black_box(provider.execute_program(ctx));
 
             let end_memory = get_memory_usage();
             black_box(end_memory - start_memory);
@@ -180,7 +233,16 @@ fn benchmark_provider_lifecycle(c: &mut Criterion) {
             provider.initialize().unwrap();
 
             let program = create_simple_arithmetic_program();
-            black_box(provider.execute_program(&program, &RuntimeContext::default()));
+            let ctx = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(program.clone()),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![],
+                config: MicroVMConfig::default(),
+                runtime_context: None,
+            };
+            black_box(provider.execute_program(ctx));
 
             provider.cleanup().unwrap();
         });
@@ -216,7 +278,16 @@ fn benchmark_error_handling_performance(c: &mut Criterion) {
         b.iter(|| {
             let mut provider = providers::mock::MockMicroVMProvider::new();
             provider.initialize().unwrap();
-            black_box(provider.execute_program(&invalid_program, &RuntimeContext::default()));
+            let ctx = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(invalid_program.clone()),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![],
+                config: MicroVMConfig::default(),
+                runtime_context: None,
+            };
+            black_box(provider.execute_program(ctx));
         });
     });
 

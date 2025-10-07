@@ -546,7 +546,7 @@ fn expression_to_string(expr: &Expression) -> String {
     }
 }
 
-fn expression_to_rtfs_string(expr: &Expression) -> String {
+pub fn expression_to_rtfs_string(expr: &Expression) -> String {
     match expr {
         Expression::Literal(literal) => match literal {
             Literal::String(s) => format!("\"{}\"", s), // Add quotes for proper RTFS syntax
@@ -653,3 +653,5 @@ pub fn toplevel_to_rtfs_string(tl: &crate::ast::TopLevel) -> Option<String> {
         _ => None,
     }
 }
+
+// `expression_to_rtfs_string` is public now; use it directly.

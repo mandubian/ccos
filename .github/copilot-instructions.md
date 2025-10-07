@@ -53,12 +53,12 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 - docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. Link to these docs in your PR description.
 
 ---
-
 ## 5. IMPORTANT DOCS TO READ
 - CCOS Specs Index: `docs/ccos/specs/` (arbiter, governance, delegation, capability marketplace, causal chain design docs).
 - RTFS Language Specs: `docs/rtfs-2.0/specs/` (philosophy, grammar, types, runtime).
 - Do not read docs in docs/archive/ except when explicitly asked (outdated).
 
+---
 ## 6. IMPORTANT CODE TO READ
 1. `rtfs_compiler/src/ccos/mod.rs` (system assembly + `process_request` pipeline)
 2. Standard Lib with secure functions: grammar `rtfs_compiler/src/rtfs.pest` and secure stdlib `rtfs_compiler/src/runtime/secure_stdlib.rs` and insecure stdlib `rtfs_compiler/src/runtime/stdlib.rs`
