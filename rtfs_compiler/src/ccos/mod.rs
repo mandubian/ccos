@@ -51,6 +51,9 @@ pub mod subconscious;
 // New modular Working Memory (single declaration)
 pub mod working_memory;
 
+// Synthesis utilities (dynamic capability generation prototype)
+pub mod synthesis;
+
 // Orchestration/Arbiter components (if present in tree)
 // pub mod orchestrator;      // commented: module not present in tree
 pub mod agent; // consolidated agent module (registry + types)
@@ -265,6 +268,29 @@ impl CCOS {
                 timeout_seconds: Some(30),
                 prompts: None,
                 retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
+            };
+
+            // Allow examples or environment to override retry config for the LLM provider.
+            // Useful for demos that want the provider to attempt a corrective re-prompt.
+            let mut rc = llm_config.retry_config.clone();
+            if let Ok(v) = std::env::var("CCOS_LLM_RETRY_MAX_RETRIES") {
+                if let Ok(n) = v.parse::<u32>() {
+                    rc.max_retries = n;
+                }
+            }
+            if let Ok(v) = std::env::var("CCOS_LLM_RETRY_SEND_FEEDBACK") {
+                rc.send_error_feedback = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+            }
+            if let Ok(v) = std::env::var("CCOS_LLM_RETRY_SIMPLIFY_FINAL") {
+                rc.simplify_on_final_attempt = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+            }
+            if let Ok(v) = std::env::var("CCOS_LLM_RETRY_USE_STUB_FALLBACK") {
+                rc.use_stub_fallback = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+            }
+            // apply overrides back into llm_config
+            let llm_config = crate::ccos::arbiter::arbiter_config::LlmConfig {
+                retry_config: rc,
+                ..llm_config
             };
 
             // Convert agent config delegation to arbiter delegation config
@@ -946,6 +972,15 @@ impl CCOS {
         &self,
     ) -> Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>> {
         Arc::clone(&self.agent_registry)
+    }
+
+    /// Optional-style accessor for symmetry with older code paths that treated
+    /// the registry as optional. Always returns Some but keeps call sites
+    /// forward-compatible if registry becomes optional again.
+    pub fn get_agent_registry_opt(
+        &self,
+    ) -> Option<Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>>> {
+        Some(Arc::clone(&self.agent_registry))
     }
 
     pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {

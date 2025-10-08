@@ -89,6 +89,10 @@ struct Args {
     #[arg(long)]
     llm_base_url: Option<String>,
 
+    /// Emit preference schema + metrics after each turn (schema extraction slice)
+    #[arg(long, default_value_t = false)]
+    emit_pref_schema: bool,
+
     /// Auto-pick best model within prompt cost budget (USD per 1K tokens)
     #[arg(long)]
     model_auto_prompt_budget: Option<f64>,
@@ -231,6 +235,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.enable_delegation {
         std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+    }
+
+    // Example-level: activate provider retry strategy to ask the LLM to correct malformed outputs.
+    // These can be overridden by the user's environment or AgentConfig.
+    if args.enable_delegation {
+        // 2 attempts by default with feedback-enabled for corrective re-prompts
+        std::env::set_var("CCOS_LLM_RETRY_MAX_RETRIES", "2");
+        std::env::set_var("CCOS_LLM_RETRY_SEND_FEEDBACK", "1");
+        // Keep simplify on final attempt enabled to increase chance of valid output
+        std::env::set_var("CCOS_LLM_RETRY_SIMPLIFY_FINAL", "1");
     }
 
     // Offline deterministic path: if stub provider selected (explicitly or via hint) ensure sensible defaults
@@ -428,9 +442,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Also treat certain final statuses (no further questions expected) as terminal.
                 if let Some(status_str) = get_map_string_value(map, "status") {
                     match status_str.as_str() {
-                        "itinerary_ready" | "ready_for_planning" | "completed" => {
+                        "itinerary_ready" | "completed" => {
                             println!("{}", format!("[flow] Plan returned terminal status '{}' - ending interaction.", status_str).green());
                             plan_exhausted = true;
+                        }
+                        "ready_for_planning" => {
+                            // Check if a next/agent is specified and whether it exists; if missing, transform to requires_agent
+                            let next_agent = get_map_string_value(map, "next/agent")
+                                .or_else(|| get_map_string_value(map, "next_agent"));
+                            if let Some(na) = next_agent.clone() {
+                                // Access registry to verify existence
+                                let mut agent_exists = false;
+                                if let Some(registry) = ccos.get_agent_registry_opt() {
+                                    if let Ok(reg) = registry.read() {
+                                        agent_exists = reg.has_agent(&na);
+                                    }
+                                }
+                                if !agent_exists {
+                                    println!("{}", format!("[flow] next/agent '{}' not registered; emitting requires_agent and continuing interaction", na).yellow());
+                                    // Synthesize a requires_agent contract summary for the next turn instead of terminating
+                                    let mut summary_parts: Vec<String> = Vec::new();
+                                    for (k, v) in map.iter() {
+                                        let key_str = k.to_string().trim_start_matches(':').to_string();
+                                        if key_str != "status" { // avoid duplicating status
+                                            let val_str = match v { Value::String(s) => s.clone(), other => other.to_string() };
+                                            summary_parts.push(format!("{}={}", key_str, val_str));
+                                        }
+                                    }
+                                    let summary = summary_parts.join(", ");
+                                    let contract = format!("Missing agent '{}' required for planning. Context: {}. Options: synthesize_stub | generic_builder | ask_user | abort", na, summary);
+                                    next_request = Some(contract);
+                                } else {
+                                    println!("{}", format!("[flow] ready_for_planning and agent '{}' exists; treating as terminal for demo.", na).green());
+                                    plan_exhausted = true;
+                                }
+                            } else {
+                                // No next agent; treat as terminal (nothing more to do)
+                                println!("{}", "[flow] ready_for_planning without next/agent; ending interaction.".green());
+                                plan_exhausted = true;
+                            }
                         }
                         _ => {}
                     }
@@ -550,6 +600,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Small delay to make the interaction feel more natural
+
+        // Optional: Emit preference schema + metrics (either via CLI flag or env var CCOS_EMIT_PREF_SCHEMA=1)
+        let emit_schema = args.emit_pref_schema || std::env::var("CCOS_EMIT_PREF_SCHEMA").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        if emit_schema {
+            if let Ok(chain_lock) = ccos.get_causal_chain().lock() {
+                use rtfs_compiler::ccos::synthesis::preference_schema::extract_with_metrics;
+                let (schema, metrics) = extract_with_metrics(&chain_lock);
+                println!("\n[pref.schema] params={} coverage={:.2} redundancy={:.2} enum_specificity={:.2}",
+                    schema.params.len(), metrics.coverage, metrics.redundancy, metrics.enum_specificity);
+                for (name, meta) in schema.params.iter() {
+                    let kind = match meta.param_type { rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Enum => "enum", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::String => "string", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Integer => "int", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Float => "float", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Boolean => "bool", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Unknown => "?" };
+                    let enum_desc = if !meta.enum_values.is_empty() { format!(" {:?}", meta.enum_values) } else { String::new() };
+                    println!("[pref.param] {} type={} required={} turns={}..{} asked={}{}", name, kind, meta.required, meta.first_turn, meta.last_turn, meta.questions_asked, enum_desc);
+                }
+            }
+        }
+
         sleep(Duration::from_millis(250)).await;
     }
 
