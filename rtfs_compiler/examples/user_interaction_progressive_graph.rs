@@ -440,25 +440,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Also treat certain final statuses (no further questions expected) as terminal.
-                // Per spec, `ready_for_planning` is only terminal if no `next/agent` is specified.
                 if let Some(status_str) = get_map_string_value(map, "status") {
                     match status_str.as_str() {
-                        "itinerary_ready" | "completed" => {
+                        "itinerary_ready" | "ready_for_planning" | "completed" => {
                             println!("{}", format!("[flow] Plan returned terminal status '{}' - ending interaction.", status_str).green());
                             plan_exhausted = true;
-                        },
-                        "requires_agent" => {
-                            println!("{}", "[flow] Plan requires a missing agent. Ending interaction.".yellow());
-                            plan_exhausted = true;
                         }
-                        "ready_for_planning" => {
-                            // If a next agent is specified, the plan is NOT exhausted.
-                            if get_map_string_value(map, "next/agent").is_none() && get_map_string_value(map, "next_agent").is_none() {
-                                println!("{}", "[flow] Plan is ready for planning and no next agent specified. Ending interaction.".green());
-                                plan_exhausted = true;
-                            }
-                            // Otherwise, the loop will continue, attempting to handle the next agent.
-                        },
                         _ => {}
                     }
                 }
@@ -477,38 +464,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(next_agent) = get_map_string_value(map, "next/agent")
                         .or_else(|| get_map_string_value(map, "next_agent"))
                     {
-                        // Check if the agent exists in the marketplace
-                        let marketplace = ccos.get_capability_marketplace();
-                        if !marketplace.has_capability(next_agent).await {
-                            println!("{}", format!("[flow] Agent '{}' not found. Emitting 'requires_agent' status.", next_agent).yellow());
-                            // Per spec, emit a `requires_agent` contract.
-                            let mut new_map = HashMap::new();
-                            new_map.insert(rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("status")), Value::String("requires_agent".to_string()));
-                            new_map.insert(rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("agent")), Value::String(next_agent.clone()));
-                            // Preserve the original map as context for the eventual agent.
-                            new_map.insert(rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("context")), Value::Map(map.clone()));
-                            
-                            // The next "request" is this structured requirement.
-                            next_request = Some(Value::Map(new_map).to_string());
-
-                        } else {
-                            // Agent exists, build a prompt to continue the flow.
-                            let mut parts: Vec<String> = Vec::new();
-                            for (k, v) in map.iter() {
-                                let key_str = k.to_string().trim_start_matches(':').to_string();
-                                let val_str = match v {
-                                    Value::String(s) => s.clone(),
-                                    other => other.to_string(),
-                                };
-                                parts.push(format!("{}={}", key_str, val_str));
-                            }
-                            let summary = parts.join(", ");
-                            let prompt = format!(
-                                "Agent {}: continue with planning using the following context: {}",
-                                next_agent, summary
-                            );
-                            next_request = Some(prompt);
+                        // Build a short context summary from the map
+                        let mut parts: Vec<String> = Vec::new();
+                        for (k, v) in map.iter() {
+                            let key_str = k.to_string().trim_start_matches(':').to_string();
+                            let val_str = match v {
+                                Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            parts.push(format!("{}={}", key_str, val_str));
                         }
+                        let summary = parts.join(", ");
+                        let prompt = format!(
+                            "Agent {}: continue with planning using the following context: {}",
+                            next_agent, summary
+                        );
+                        next_request = Some(prompt);
                     } else {
                         // Fallback: use the serialized map as the next request so the interaction
                         // can continue when no explicit directive was present.
