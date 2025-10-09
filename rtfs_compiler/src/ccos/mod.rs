@@ -53,7 +53,7 @@ pub mod subconscious;
 pub mod working_memory;
 
 // Synthesis utilities (dynamic capability generation prototype)
-pub mod synthesis;
+// (single declaration kept above to avoid duplicates)
 
 // Orchestration/Arbiter components (if present in tree)
 // pub mod orchestrator;      // commented: module not present in tree
