@@ -12,7 +12,7 @@ Conducted comprehensive audit of all open GitHub issues to identify completed, o
 - Cross-referencing with closed issues
 - Current CCOS/RTFS 2.0 architecture
 
-## Immediate Closures Recommended (9 issues)
+## Immediate Closures Recommended (11 issues)
 
 ### ✅ Completed Issues with Evidence
 
@@ -43,7 +43,17 @@ Conducted comprehensive audit of all open GitHub issues to identify completed, o
 - **Evidence**: Part of Issue #23 which is complete
 - **Action**: Close all 5 milestone issues
 
-## Issues Requiring Further Investigation (10 issues)
+#### Issue #80 - Orchestrator Critical Features
+- **Status**: COMPLETE (all tracked children closed)
+- **Evidence**: Issues #13 (CLOSED), #78 (CLOSED), #79 (CLOSED)
+- **Action**: Close as tracking issue
+
+#### Issue #120 - Tracking: Worktrees & Issue Groups  
+- **Status**: Obsolete (organizational tracking)
+- **Evidence**: Worktrees mentioned completed and merged
+- **Action**: Close as served its purpose
+
+## Issues Requiring Further Investigation (8 issues)
 
 ### MicroVM & Agent Isolation (#63-67)
 
@@ -75,33 +85,23 @@ Conducted comprehensive audit of all open GitHub issues to identify completed, o
 
 ### Orchestrator & Execution
 
-#### Issue #13 - Action Execution with Parameter Binding
-- **Requested**: Full RTFS 2.0 parameter binding
-- **Found**: Execution context exists (#79 complete)
-- **Cross-check**: May be covered by #79 completion
-- **Recommendation**: Review - Check if #79 covers this completely
+### Follow-ups from Completed Work (Additional Closures Found)
 
-#### Issue #80 - Orchestrator Critical Features  
-- **Requested**: Tracking issue for orchestrator features
-- **Found**: Some features implemented (step forms via #79)
-- **Recommendation**: Review - Check completion status
+#### Issues #87, #94, #96 - Arbiter Enhancements  
+- **Status**: ALL CLOSED (verified)
+- **Evidence**: 
+  - #87: DelegationConfig - CLOSED 2025-08-25
+  - #94: Delegation metadata constants - CLOSED 2025-08-25
+  - #96: Adaptive delegation threshold - CLOSED 2025-08-25
+- **Note**: Already closed, no action needed
 
-### Tracking & Organization
-
-#### Issue #120 - Tracking: Worktrees & Issue Groups
-- **Type**: Organizational/tracking
-- **Current State**: Worktree information may be outdated
-- **Recommendation**: Review - May be obsolete
-
-### Follow-ups from Completed Work
-
-#### Issues #91-96 - Arbiter Enhancements
+#### Issues #91, #92, #93, #95 - Remaining Arbiter Follow-ups
 - **Type**: Follow-up enhancements from PR #90
 - **Parent**: Issue #23 (now complete)
 - **Status**: Valid enhancement requests
 - **Recommendation**: KEEP OPEN - These are future enhancements, not completion blockers
 
-## Issues to Keep Open (57 issues)
+## Issues to Keep Open (55 issues)
 
 ### Valid Future Enhancements
 
@@ -164,10 +164,69 @@ Conducted comprehensive audit of all open GitHub issues to identify completed, o
 
 | Category | Count | Action |
 |----------|-------|--------|
-| **Immediate Closures** | 9 | Close with documentation |
-| **Need Investigation** | 10 | Review before decision |
-| **Keep Open** | 57 | Valid future work |
+| **Immediate Closures** | 11 | Close with documentation |
+| **Already Closed (Found)** | 3 | No action needed (#87, #94, #96) |
+| **Need Investigation** | 8 | Review before decision |
+| **Keep Open** | 55 | Valid future work |
 | **Total Analyzed** | 76 | |
+
+### Updated After Investigation
+
+**Phase 1 (Initial)**: 9 issues identified for closure  
+**Phase 2 (Short-term investigation)**: +2 issues (#80, #120)  
+**Phase 3 (Found already closed)**: 3 issues verified closed (#87, #94, #96)  
+**Total to Close**: 11 issues
+
+## Investigation Results: Short-Term Issues
+
+### ✅ Issue #13 - Action Execution with Parameter Binding
+- **Original Status**: Flagged for review
+- **Investigation Result**: **ALREADY CLOSED** (2025-08-15)
+- **Reason**: Completed as part of orchestrator implementation
+- **Action**: No action needed - already closed
+
+### ✅ Issue #78 - Advanced Orchestration Primitives
+- **Original Status**: Not in original audit
+- **Investigation Result**: **ALREADY CLOSED** (2025-08-07)
+- **Evidence**: step.if, step.loop, step.parallel implemented
+- **Action**: No action needed - already closed
+
+### ✅ Issue #80 - Orchestrator Critical Features Tracking
+- **Original Status**: Flagged for review
+- **Investigation Result**: **READY TO CLOSE**
+- **Reason**: All tracked children closed (#13, #78, #79)
+- **Action**: Close as tracking issue
+
+### ✅ Issue #120 - Tracking: Worktrees & Issue Groups
+- **Original Status**: Flagged for review (organizational)
+- **Investigation Result**: **READY TO CLOSE**
+- **Reason**: Worktrees completed/merged, served its purpose
+- **Action**: Close as obsolete tracking issue
+
+### ❌ Issues #63-67 - MicroVM & Agent Isolation
+- **Investigation Result**: **KEEP OPEN**
+- **Reason**: Core "IsolatedAgent" abstraction not found
+- **Evidence**: MicroVM providers exist but no wrapper struct
+- **Action**: Keep open - valid future work
+
+## Investigation Results: Long-Term Issues (Arbiter Follow-ups)
+
+### ✅ Issues #87, #94, #96 - Arbiter Enhancements
+- **Investigation Result**: **ALREADY CLOSED** (2025-08-25)
+- **Issues**:
+  - #87: DelegationConfig implementation
+  - #94: Delegation metadata key constants
+  - #96: Adaptive delegation threshold
+- **Action**: No action needed - already closed
+
+### 📝 Issues #91, #92, #93, #95 - Remaining Open
+- **Status**: **KEEP OPEN** - Valid enhancement requests
+- **Issues**:
+  - #91: AST-based capability extraction
+  - #92: Wire Task Protocol into Orchestrator
+  - #93: Document delegation lifecycle
+  - #95: Negative/edge-case tests
+- **Action**: Keep open - future work
 
 ## Implementation Evidence Summary
 
