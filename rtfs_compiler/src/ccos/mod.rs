@@ -23,6 +23,7 @@ pub mod types;
 pub mod wm_integration; // Pluggable storage backend implementations (file/sqlite)
                         // pub mod archive_manager;   // Unified archive coordination (not yet present)
 pub mod execution_context; // Hierarchical execution context management
+pub mod synthesis; // Capability synthesis (AST-only generators, schema extraction)
 
 // Delegation and execution stack
 pub mod adaptive_threshold;

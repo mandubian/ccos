@@ -1,12 +1,10 @@
 use crate::runtime::error::RuntimeResult;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod preference_schema;
 pub mod status;
 pub mod schema_builder;
 pub mod artifact_generator;
-pub mod rtfs_builder;
 pub mod telemetry;
 
 // Explicitly re-export commonly used items so examples and consumers can
@@ -15,7 +13,6 @@ pub use preference_schema::{extract_with_metrics, ParamType};
 // Keep a blanket re-export for convenience (non-breaking)
 pub use preference_schema::*;
 pub use status::*;
-pub use rtfs_builder::*;
 
 // ===== Public Data Types for Synthesis Pipeline =====
 

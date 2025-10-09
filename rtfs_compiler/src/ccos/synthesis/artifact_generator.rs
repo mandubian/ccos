@@ -4,7 +4,7 @@
 //! Uses (call ...) primitive for host delegation. Implements spec section 21.3-21.5.
 
 use super::schema_builder::{ParamSchema, ParamTypeInfo};
-use super::status::{STATUS_COLLECTING_INFO, STATUS_READY_FOR_EXECUTION, STATUS_REQUIRES_AGENT, STATUS_PROCESSING};
+use super::status::{STATUS_READY_FOR_EXECUTION, STATUS_REQUIRES_AGENT, STATUS_PROCESSING};
 use crate::ccos::rtfs_bridge::extractors::capability_def_to_rtfs_string;
 use crate::ast::{Expression, Literal, Symbol, CapabilityDefinition, Property, Keyword, MapKey, LetBinding, LetExpr, DoExpr};
 use std::collections::HashMap;
