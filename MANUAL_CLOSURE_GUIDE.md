@@ -139,12 +139,42 @@ Closing Issue #85 as it was Milestone M5 (Task delegation protocol) of Issue #23
 
 ---
 
+---
+
+### Issue #80 - Orchestrator Critical Features
+
+**Close with comment**:
+```markdown
+Closing Issue #80 as all tracked critical features are now implemented:
+- ✅ #78: Advanced Orchestration Primitives (step.if, step.loop, step.parallel) - CLOSED
+- ✅ #79: Hierarchical Execution Context Management - CLOSED
+- ✅ #13: Action execution with parameter binding - CLOSED
+
+All orchestration primitives and execution context features have been delivered. Remaining features (Plan Archive, enhanced Causal Chain, resource management) are tracked in separate active issues.
+```
+
+**URL**: https://github.com/mandubian/ccos/issues/80
+
+---
+
+### Issue #120 - Tracking: Worktrees & Issue Groups
+
+**Close with comment**:
+```markdown
+Closing Issue #120 as a tracking/organizational issue that has served its purpose. The worktrees mentioned (`wt/rtfs-stability-core`, `wt/orch-core-status-context`) have been completed and merged. Active work is now tracked in specific feature issues rather than worktree-based organization.
+```
+
+**URL**: https://github.com/mandubian/ccos/issues/120
+
+---
+
 ## Quick Close Checklist
 
 Use this checklist to track manual closures:
 
 - [ ] #23 - Arbiter V1
 - [ ] #79 - Execution Context Management
+- [ ] #80 - Orchestrator Critical Features
 - [ ] #81 - Arbiter M1
 - [ ] #82 - Arbiter M2
 - [ ] #83 - Arbiter M3
@@ -152,6 +182,7 @@ Use this checklist to track manual closures:
 - [ ] #85 - Arbiter M5
 - [ ] #86 - Progress Update for #79
 - [ ] #115 - RTFS Stability Umbrella
+- [ ] #120 - Tracking/Organizational
 
 ## Automated Alternative
 

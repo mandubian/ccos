@@ -32,11 +32,18 @@ Follow the step-by-step instructions in `MANUAL_CLOSURE_GUIDE.md`
 
 | Category | Count | Action |
 |----------|-------|--------|
-| Close Now | 9 | Ready for immediate closure |
-| Review Needed | 10 | Require investigation |
-| Keep Open | 57 | Valid future work |
+| Close Now | 11 | Ready for immediate closure |
+| Already Closed | 3 | Found during investigation (#87, #94, #96) |
+| Review Needed | 8 | Still require investigation |
+| Keep Open | 55 | Valid future work |
 
-## ✅ Issues to Close (9 total)
+### Investigation Phases
+- **Phase 1**: 9 issues identified for closure
+- **Phase 2**: +2 additional issues (#80, #120)  
+- **Phase 3**: 3 already closed (#87, #94, #96)
+- **Total**: 11 issues to close
+
+## ✅ Issues to Close (11 total)
 
 ### Completed Issues
 - **#23** - Arbiter V1 (feature complete)
@@ -52,6 +59,17 @@ Follow the step-by-step instructions in `MANUAL_CLOSURE_GUIDE.md`
 
 ### Progress Updates
 - **#86** - Progress update for #79 (now complete)
+
+### Tracking Issues
+- **#80** - Orchestrator critical features (all children closed: #13, #78, #79)
+- **#120** - Worktrees & issue groups (organizational, completed)
+
+## 📋 Already Closed (Found During Investigation)
+
+These issues were discovered to be already closed during the investigation phase:
+- **#87** - DelegationConfig (CLOSED 2025-08-25)
+- **#94** - Delegation metadata constants (CLOSED 2025-08-25)
+- **#96** - Adaptive delegation threshold (CLOSED 2025-08-25)
 
 ## 🔍 Evidence of Completion
 
@@ -69,12 +87,11 @@ Follow the step-by-step instructions in `MANUAL_CLOSURE_GUIDE.md`
 - ✅ All child issues closed: #109, #110, #111, #112, #113, #114
 - ✅ Documentation: `docs/archive/rtfs-2.0/specs-before-migration/RTFS_STABILITY_IMPLEMENTATION_SUMMARY.md`
 
-## 🔬 Issues Requiring Further Review (10)
+## 🔬 Issues Still Requiring Review (8)
 
 See `ISSUE_151_ANALYSIS_REPORT.md` for detailed analysis of:
-- MicroVM & Agent Isolation (#63-67)
-- Orchestrator parameter binding (#13, #80)
-- Tracking & organization (#120)
+- **MicroVM & Agent Isolation (#63-67)** - Need IsolatedAgent verification
+- **Arbiter Enhancements (#91-93, #95)** - Valid future work, keep open
 
 ## 📝 Methodology
 
