@@ -48,3 +48,6 @@ viewer_server/target
 # Demo storage (persistent intents and plans)
 demo_storage/
 generated_capabilities/
+
+# Nested build artifacts (accidental duplicates)
+rtfs_compiler/rtfs_compiler/
