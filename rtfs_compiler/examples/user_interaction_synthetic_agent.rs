@@ -182,10 +182,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_context = RuntimeContext::controlled(vec!["ccos.user.ask".to_string()]);
     let plan_body = build_two_turn_plan(&args.q1, &args.q2);
 
+    // Phase 0: User's original intent (in real flow, this comes from natural language)
+    let original_goal = std::env::var("CCOS_INTENT_GOAL")
+        .unwrap_or_else(|_| "Automate a workflow based on collected criteria".to_string());
+    
     let intent_id = "intent.synthetic.agent".to_string();
-    let mut storable_intent = StorableIntent::new("Collect user intent for synthetic agent".to_string());
+    let mut storable_intent = StorableIntent::new(original_goal.clone());
     storable_intent.intent_id = intent_id.clone();
     storable_intent.name = Some("synthetic-agent-collection".to_string());
+    storable_intent.goal = original_goal.clone();
 
     if let Ok(mut graph) = ccos.get_intent_graph().lock() {
         graph.store_intent(storable_intent)?;
@@ -210,10 +215,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   A{}: {}\n", idx + 1, turn.answer);
     }
 
-    let goal_text = derive_goal_from_answers(&conversation);
     let parameters = extract_parameters(&conversation);
 
-    println!("🎯 Derived Goal: {}", goal_text);
+    println!("🎯 Original Intent: {}", original_goal);
     println!("📊 Collected Parameters:");
     for (key, value) in &parameters {
         println!("   :{} = \"{}\"", key, value);
@@ -229,7 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let discovered = if let Some(arbiter) = ccos.get_delegating_arbiter() {
         discover_capabilities(
             &arbiter,
-            &goal_text,
+            &original_goal,
             &parameters,
         )
         .await?
@@ -254,7 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let executor_rtfs = if let Some(arbiter) = ccos.get_delegating_arbiter() {
         synthesize_executor(
             &arbiter,
-            &goal_text,
+            &original_goal,
             &parameters,
             &discovered,
         )
@@ -343,8 +347,8 @@ fn build_discovery_prompt(goal: &str, parameters: &HashMap<String, String>) -> S
     format!(
         concat!(
             "You are analyzing a user goal to discover required capabilities.\n\n",
-            "## Collected Context\n{}\n\n",
-            "## Derived Goal\n{}\n\n",
+            "## Collected Context (from conversation)\n{}\n\n",
+            "## Original User Intent\n{}\n\n",
             "## Your Task\n",
             "Generate 2-5 capability search queries to find tools needed to achieve this goal.\n\n",
             "## Available Categories\n",
@@ -465,9 +469,9 @@ fn build_synthesis_prompt(
 
     format!(
         concat!(
-            "You are synthesizing an RTFS capability to execute a user goal.\n\n",
+            "You are synthesizing an RTFS capability to execute a user intent.\n\n",
             "## Collected Parameters (DO NOT re-ask these)\n{}\n\n",
-            "## Derived Goal\n{}\n\n",
+            "## Original User Intent\n{}\n\n",
             "## Discovered Capabilities (from marketplace)\n{}\n\n",
             "## RTFS Grammar Reference\n{}\n\n",
             "## STRICT FORBIDDEN CONSTRUCTS\n",
@@ -552,20 +556,7 @@ fn load_grammar_snippet() -> String {
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════
 
-fn derive_goal_from_answers(convo: &[ConversationRecord]) -> String {
-    let param1 = convo.get(0).map(|c| c.answer.trim()).unwrap_or("");
-    let param2 = convo.get(1).map(|c| c.answer.trim()).unwrap_or("");
-
-    if param1.is_empty() && param2.is_empty() {
-        "Execute user request".to_string()
-    } else if param2.is_empty() {
-        format!("Process: {}", param1)
-    } else if param1.is_empty() {
-        format!("Apply: {}", param2)
-    } else {
-        format!("{} with {}", param1, param2)
-    }
-}
+// Removed derive_goal_from_answers - we use the original Intent.goal instead
 
 fn extract_parameters(convo: &[ConversationRecord]) -> HashMap<String, String> {
     let mut params = HashMap::new();
