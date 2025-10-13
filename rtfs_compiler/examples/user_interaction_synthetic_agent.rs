@@ -560,11 +560,57 @@ fn load_grammar_snippet() -> String {
 
 fn extract_parameters(convo: &[ConversationRecord]) -> HashMap<String, String> {
     let mut params = HashMap::new();
-    for (idx, record) in convo.iter().enumerate() {
-        let key = format!("param{}", idx + 1);
+    for record in convo.iter() {
+        let key = derive_param_name(&record.prompt);
         params.insert(key, record.answer.clone());
     }
     params
+}
+
+/// Derive a meaningful parameter name from the question
+/// Examples:
+/// - "What GitHub repository?" → "github/repository"
+/// - "What data source should I analyze?" → "data/source"
+/// - "What event should trigger notification?" → "event/trigger"
+/// - "What criteria?" → "criteria"
+fn derive_param_name(question: &str) -> String {
+    // Remove question marks and common question starters
+    let cleaned = question
+        .trim_end_matches('?')
+        .trim()
+        .to_lowercase()
+        .replace("what ", "")
+        .replace("which ", "")
+        .replace("where ", "")
+        .replace("when ", "")
+        .replace("how ", "")
+        .replace("should i ", "")
+        .replace(" i ", " ")
+        .replace(" do you ", " ")
+        .replace(" you ", " ");
+    
+    // Common filler words to skip (expanded list)
+    let stop_words = [
+        "the", "a", "an", "is", "are", "for", "to", "of", "in", "on", "at",
+        "should", "would", "could", "will", "can", "do", "does", "did",
+        "be", "been", "being", "or", "and", "but", "if", "then", "than",
+        "with", "from", "by", "as", "into", "through", "during", "before",
+        "after", "above", "below", "between", "under", "again", "further",
+    ];
+    
+    // Extract key words (skip filler words)
+    let words: Vec<&str> = cleaned
+        .split_whitespace()
+        .filter(|w| !stop_words.contains(w))
+        .take(2) // Take first 2 meaningful words
+        .collect();
+    
+    if words.is_empty() {
+        return "param".to_string();
+    }
+    
+    // Join with slash for namespace-like structure
+    words.join("/")
 }
 
 fn build_two_turn_plan(q1: &str, q2: &str) -> String {
