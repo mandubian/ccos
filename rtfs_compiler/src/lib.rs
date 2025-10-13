@@ -5,12 +5,12 @@ pub mod ccos;
 pub mod config;
 pub mod development_tooling;
 pub mod error_reporting;
+pub mod examples_helpers;
 pub mod input_handling;
 pub mod ir;
 pub mod parser;
 pub mod parser_error_reporter;
 pub mod runtime;
-pub mod examples_helpers;
 
 pub mod bytecode;
 pub mod supervisor;

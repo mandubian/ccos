@@ -14,6 +14,78 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // for validating reduced-grammar RTFS plans
 use std::sync::atomic::{AtomicU64, Ordering};
+use crate::runtime::values::Value;
+
+/// Convert a HashMap<String, Value> into an RTFS map literal string.
+/// Example: {:k1 "v" :k2 123}
+fn hashmap_to_rtfs_map(m: &std::collections::HashMap<String, Value>) -> String {
+    if m.is_empty() {
+        return "{}".to_string();
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(m.len());
+    for (k, v) in m {
+        let val_str = match v {
+            Value::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+            Value::Integer(i) => format!("{}", i),
+            Value::Float(f) => format!("{}", f),
+            Value::Boolean(b) => format!(":{}", if *b { "true" } else { "false" }),
+            Value::Symbol(sym) => format!(":{}", sym.0),
+            Value::Map(map) => {
+                // nested map -> render keys (MapKey) and values recursively
+                let items: Vec<String> = map
+                    .iter()
+                    .map(|(mk, mv)| {
+                        let key_str = match mk {
+                            crate::ast::MapKey::String(s) => s.clone(),
+                            crate::ast::MapKey::Keyword(k) => format!(":{}", k.0),
+                            crate::ast::MapKey::Integer(i) => format!("{}", i),
+                        };
+                        // Reuse Display for nested values where appropriate
+                        let val = match mv {
+                            Value::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                            Value::Map(_) | Value::Vector(_) | Value::List(_) => format!("{}", mv),
+                            _ => format!("{}", mv),
+                        };
+                        format!("{} {}", key_str, val)
+                    })
+                    .collect();
+                format!("{{{}}}", items.join(" "))
+            }
+            Value::Vector(vec) | Value::List(vec) => {
+                let elems = vec
+                    .iter()
+                    .map(|e| match e {
+                        Value::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                        Value::Integer(i) => format!("{}", i),
+                        Value::Float(f) => format!("{}", f),
+                        Value::Boolean(b) => format!(":{}", if *b { "true" } else { "false" }),
+                        Value::Symbol(sym) => format!(":{}", sym.0),
+                        _ => format!("{}", e),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("[{}]", elems)
+            }
+            _ => format!("{}", v),
+        };
+        parts.push(format!(":{} {}", k.replace('/', "/"), val_str));
+    }
+    format!("{{{}}}", parts.join(" "))
+}
+
+/// Convert a HashMap<String, String> (storable intent representation) into an RTFS map literal string.
+/// The stored strings are expected to be RTFS source expressions and will be inlined as-is.
+fn hashmap_str_to_rtfs_map(m: &std::collections::HashMap<String, String>) -> String {
+    if m.is_empty() {
+        return "{}".to_string();
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(m.len());
+    for (k, v) in m {
+        // values in StorableIntent are RTFS source snippets; insert directly
+        parts.push(format!(":{} {}", k.replace('/', "/"), v));
+    }
+    format!("{{{}}}", parts.join(" "))
+}
 
 /// Result of plan validation by an LLM provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,7 +181,8 @@ impl RetryMetricsSummary {
         if self.total_attempts == 0 {
             0.0
         } else {
-            (self.first_attempt_successes + self.successful_retries) as f64 / self.total_attempts as f64
+            (self.first_attempt_successes + self.successful_retries) as f64
+                / self.total_attempts as f64
         }
     }
 
@@ -226,8 +299,8 @@ impl OpenAILlmProvider {
         let prompt_store = FilePromptStore::new(prompt_path);
         let prompt_manager = PromptManager::new(prompt_store);
 
-        Ok(Self { 
-            config, 
+        Ok(Self {
+            config,
             client,
             metrics: RetryMetrics::new(),
             prompt_manager,
@@ -491,7 +564,6 @@ impl OpenAILlmProvider {
     }
 }
 
-
 #[async_trait]
 impl LlmProvider for OpenAILlmProvider {
     async fn generate_intent(
@@ -500,10 +572,8 @@ impl LlmProvider for OpenAILlmProvider {
         _context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError> {
         // Load prompt from assets with fallback
-        let vars = HashMap::from([
-            ("user_request".to_string(), prompt.to_string()),
-        ]);
-        
+        let vars = HashMap::from([("user_request".to_string(), prompt.to_string())]);
+
         let system_message = self.prompt_manager
             .render("intent_generation", "v1", &vars)
             .unwrap_or_else(|e| {
@@ -539,7 +609,7 @@ Only respond with valid JSON."#.to_string()
             || std::env::var("CCOS_DEBUG")
                 .map(|v| v == "1")
                 .unwrap_or(false);
-        
+
         if show_prompts {
             println!(
                 "\n=== LLM Intent Generation Prompt ===\n[system]\n{}\n\n[user]\n{}\n=== END PROMPT ===\n",
@@ -560,7 +630,7 @@ Only respond with valid JSON."#.to_string()
         ];
 
         let response = self.make_request(messages).await?;
-        
+
         if show_prompts {
             println!(
                 "\n=== LLM Raw Response (Intent Generation) ===\n{}\n=== END RESPONSE ===\n",
@@ -584,11 +654,15 @@ Only respond with valid JSON."#.to_string()
             .map(|v| v == "1")
             .unwrap_or(false);
 
-        // Prepare variables for prompt rendering
+    // Prepare variables for prompt rendering
+    // Render constraints/preferences (stored as strings) as RTFS maps for insertion into RTFS prompts
+    let constraints_str = hashmap_str_to_rtfs_map(&intent.constraints);
+    let preferences_str = hashmap_str_to_rtfs_map(&intent.preferences);
+
         let mut vars = HashMap::from([
             ("goal".to_string(), intent.goal.clone()),
-            ("constraints".to_string(), format!("{:?}", intent.constraints)),
-            ("preferences".to_string(), format!("{:?}", intent.preferences)),
+            ("constraints".to_string(), constraints_str.clone()),
+            ("preferences".to_string(), preferences_str.clone()),
         ]);
 
         // Add context variables from previous plan executions
@@ -604,7 +678,7 @@ Only respond with valid JSON."#.to_string()
         } else if use_legacy_reduced {
             "plan_generation_reduced"
         } else {
-            "plan_generation"  // Consolidated unified prompts
+            "plan_generation" // Consolidated unified prompts
         };
 
         let system_message = self.prompt_manager
@@ -632,8 +706,8 @@ Final step should return a structured map with keyword keys for downstream reuse
             });
 
         let mut user_message = format!(
-            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}",
-            intent.goal, intent.constraints, intent.preferences
+            "Intent goal: {}\nConstraints: {}\nPreferences: {}",
+            intent.goal, constraints_str, preferences_str
         );
 
         // Add context information if available
@@ -647,7 +721,8 @@ Final step should return a structured map with keyword keys for downstream reuse
             }
         }
 
-        user_message.push_str("\n\nGenerate the (plan ...) now, following the grammar and constraints:");
+        user_message
+            .push_str("\n\nGenerate the (plan ...) now, following the grammar and constraints:");
 
         // Optional: display prompts during live runtime when enabled
         // Enable by setting RTFS_SHOW_PROMPTS=1 or CCOS_DEBUG=1
@@ -686,7 +761,7 @@ Final step should return a structured map with keyword keys for downstream reuse
         // Extract plan: consolidated format always expects (plan ...) wrapper
         // Legacy modes may return different formats
         let expect_plan_wrapper = !use_legacy_reduced;
-        
+
         if expect_plan_wrapper {
             if let Some(plan_block) = Self::extract_plan_block(&response) {
                 // Prefer extracting the (do ...) right after :body; fallback to generic do search
@@ -697,9 +772,7 @@ Final step should return a structured map with keyword keys for downstream reuse
                     // Parser validation is skipped because LLM may generate function calls
                     // that aren't yet defined in the parser's symbol table
                     let mut plan_name: Option<String> = None;
-                    if let Some(name) =
-                        Self::extract_quoted_value_after_key(&plan_block, ":name")
-                    {
+                    if let Some(name) = Self::extract_quoted_value_after_key(&plan_block, ":name") {
                         plan_name = Some(name);
                     }
                     return Ok(Plan {
@@ -760,51 +833,96 @@ Final step should return a structured map with keyword keys for downstream reuse
     ) -> Result<Plan, RuntimeError> {
         let mut last_error = None;
         let mut last_plan_text = None;
-        
+
         for attempt in 1..=self.config.retry_config.max_retries {
             // First: try to render a retry prompt asset into complete OpenAI messages.
             // If rendering succeeds we will use those messages directly; otherwise fall back to legacy inline prompts below.
-            let vars = HashMap::from([
+                let vars = HashMap::from([
                 ("goal".to_string(), intent.goal.clone()),
-                ("constraints".to_string(), format!("{:?}", intent.constraints)),
-                ("preferences".to_string(), format!("{:?}", intent.preferences)),
+                (
+                    "constraints".to_string(),
+                    hashmap_str_to_rtfs_map(&intent.constraints),
+                ),
+                (
+                    "preferences".to_string(),
+                    hashmap_str_to_rtfs_map(&intent.preferences),
+                ),
                 ("attempt".to_string(), format!("{}", attempt)),
-                ("max_retries".to_string(), format!("{}", self.config.retry_config.max_retries)),
-                ("variant".to_string(), if self.config.retry_config.send_error_feedback { "feedback".to_string() } else { "simple".to_string() }),
-                ("last_plan_text".to_string(), last_plan_text.clone().unwrap_or_default()),
-                ("last_error".to_string(), last_error.clone().unwrap_or_default()),
+                (
+                    "max_retries".to_string(),
+                    format!("{}", self.config.retry_config.max_retries),
+                ),
+                (
+                    "variant".to_string(),
+                    if self.config.retry_config.send_error_feedback {
+                        "feedback".to_string()
+                    } else {
+                        "simple".to_string()
+                    },
+                ),
+                (
+                    "last_plan_text".to_string(),
+                    last_plan_text.clone().unwrap_or_default(),
+                ),
+                (
+                    "last_error".to_string(),
+                    last_error.clone().unwrap_or_default(),
+                ),
             ]);
 
-            if let Ok(text) = self.prompt_manager.render("plan_generation_retry", "v1", &vars) {
+            if let Ok(text) = self
+                .prompt_manager
+                .render("plan_generation_retry", "v1", &vars)
+            {
                 // If the prompt asset contains '---' treat left as system and right as user
                 let messages = if let Some(idx) = text.find("---") {
                     let system = text[..idx].trim().to_string();
                     let user = text[idx + 3..].trim().to_string();
                     vec![
-                        OpenAIMessage { role: "system".to_string(), content: system },
-                        OpenAIMessage { role: "user".to_string(), content: user },
+                        OpenAIMessage {
+                            role: "system".to_string(),
+                            content: system,
+                        },
+                        OpenAIMessage {
+                            role: "user".to_string(),
+                            content: user,
+                        },
                     ]
                 } else {
                     let system_msg = text;
-                    let user_message = if attempt == 1 {
+                        let user_message = if attempt == 1 {
                         format!(
-                            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
-                            intent.goal, intent.constraints, intent.preferences
+                            "Intent goal: {}\nConstraints: {}\nPreferences: {}\n\nGenerate the (do ...) body now:",
+                            intent.goal,
+                            hashmap_str_to_rtfs_map(&intent.constraints),
+                            hashmap_str_to_rtfs_map(&intent.preferences),
                         )
                     } else if self.config.retry_config.send_error_feedback {
                         format!(
-                            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nPrevious attempt that failed:\n{}\n\nError: {}\n\nPlease generate a corrected (do ...) body:",
-                            intent.goal, intent.constraints, intent.preferences, last_plan_text.as_ref().unwrap_or(&"".to_string()), last_error.as_ref().unwrap_or(&"".to_string())
+                            "Intent goal: {}\nConstraints: {}\nPreferences: {}\n\nPrevious attempt that failed:\n{}\n\nError: {}\n\nPlease generate a corrected (do ...) body:",
+                            intent.goal,
+                            hashmap_str_to_rtfs_map(&intent.constraints),
+                            hashmap_str_to_rtfs_map(&intent.preferences),
+                            last_plan_text.as_ref().unwrap_or(&"".to_string()),
+                            last_error.as_ref().unwrap_or(&"".to_string())
                         )
                     } else {
                         format!(
-                            "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
-                            intent.goal, intent.constraints, intent.preferences
+                            "Intent goal: {}\nConstraints: {}\nPreferences: {}\n\nGenerate the (do ...) body now:",
+                            intent.goal,
+                            hashmap_str_to_rtfs_map(&intent.constraints),
+                            hashmap_str_to_rtfs_map(&intent.preferences),
                         )
                     };
                     vec![
-                        OpenAIMessage { role: "system".to_string(), content: system_msg },
-                        OpenAIMessage { role: "user".to_string(), content: user_message },
+                        OpenAIMessage {
+                            role: "system".to_string(),
+                            content: system_msg,
+                        },
+                        OpenAIMessage {
+                            role: "user".to_string(),
+                            content: user_message,
+                        },
                     ]
                 };
 
@@ -812,33 +930,37 @@ Final step should return a structured map with keyword keys for downstream reuse
                 let response = self.make_request(messages).await?;
 
                 // Validate and parse the plan just like the legacy path
-                let plan_result = if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response) {
-                    if parser::parse(&do_block).is_ok() {
-                        Ok(Plan {
-                            plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
-                            name: None,
-                            intent_ids: vec![intent.intent_id.clone()],
-                            language: PlanLanguage::Rtfs20,
-                            body: PlanBody::Rtfs(do_block.to_string()),
-                            status: crate::ccos::types::PlanStatus::Draft,
-                            created_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                            metadata: HashMap::new(),
-                            input_schema: None,
-                            output_schema: None,
-                            policies: HashMap::new(),
-                            capabilities_required: vec![],
-                            annotations: HashMap::new(),
-                        })
+                let plan_result =
+                    if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response) {
+                        if parser::parse(&do_block).is_ok() {
+                            Ok(Plan {
+                                plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                                name: None,
+                                intent_ids: vec![intent.intent_id.clone()],
+                                language: PlanLanguage::Rtfs20,
+                                body: PlanBody::Rtfs(do_block.to_string()),
+                                status: crate::ccos::types::PlanStatus::Draft,
+                                created_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs(),
+                                metadata: HashMap::new(),
+                                input_schema: None,
+                                output_schema: None,
+                                policies: HashMap::new(),
+                                capabilities_required: vec![],
+                                annotations: HashMap::new(),
+                            })
+                        } else {
+                            Err(RuntimeError::Generic(format!(
+                                "Failed to parse RTFS plan: {}",
+                                do_block
+                            )))
+                        }
                     } else {
-                        Err(RuntimeError::Generic(format!("Failed to parse RTFS plan: {}", do_block)))
-                    }
-                } else {
-                    // Fallback to JSON parsing
-                    self.parse_plan_from_json(&response, &intent.intent_id)
-                };
+                        // Fallback to JSON parsing
+                        self.parse_plan_from_json(&response, &intent.intent_id)
+                    };
 
                 match plan_result {
                     Ok(plan) => {
@@ -853,14 +975,21 @@ Final step should return a structured map with keyword keys for downstream reuse
                         let error_context = if attempt == 1 {
                             format!("Initial attempt failed: {}", e)
                         } else {
-                            format!("Retry attempt {}/{} failed: {}", attempt, self.config.retry_config.max_retries, e)
+                            format!(
+                                "Retry attempt {}/{} failed: {}",
+                                attempt, self.config.retry_config.max_retries, e
+                            )
                         };
                         log::warn!("❌ {}", error_context);
                         let enhanced_error = format!(
                             "Attempt {}: {} (Response: {})",
                             attempt,
                             e,
-                            if response.len() > 200 { format!("{}...", &response[..200]) } else { response.clone() }
+                            if response.len() > 200 {
+                                format!("{}...", &response[..200])
+                            } else {
+                                response.clone()
+                            }
                         );
                         last_error = Some(enhanced_error);
                         last_plan_text = Some(response.clone());
@@ -943,8 +1072,10 @@ Multiple choice (CORRECT - match for many options):
 Return exactly one (plan ...) with these constraints.
 "#;
                 let user_message = format!(
-                    "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
-                    intent.goal, intent.constraints, intent.preferences
+                    "Intent goal: {}\nConstraints: {}\nPreferences: {}\n\nGenerate the (do ...) body now:",
+                    intent.goal,
+                    hashmap_str_to_rtfs_map(&intent.constraints),
+                    hashmap_str_to_rtfs_map(&intent.preferences),
                 );
                 vec![
                     OpenAIMessage {
@@ -958,7 +1089,9 @@ Return exactly one (plan ...) with these constraints.
                 ]
             } else if self.config.retry_config.send_error_feedback {
                 // Retry prompt with error feedback
-                let system_message = if attempt == self.config.retry_config.max_retries && self.config.retry_config.simplify_on_final_attempt {
+                let system_message = if attempt == self.config.retry_config.max_retries
+                    && self.config.retry_config.simplify_on_final_attempt
+                {
                     r#"You translate an RTFS intent into a concrete RTFS execution body using a SIMPLIFIED grammar.
 
 This is your final attempt. Keep it simple and basic.
@@ -1033,8 +1166,12 @@ Return exactly one (plan ...) with these constraints.
 "#
                 };
                 let user_message = format!(
-                    "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nPrevious attempt that failed:\n{}\n\nError: {}\n\nPlease generate a corrected (do ...) body:",
-                    intent.goal, intent.constraints, intent.preferences, last_plan_text.as_ref().unwrap(), last_error.as_ref().unwrap()
+                    "Intent goal: {}\nConstraints: {}\nPreferences: {}\n\nPrevious attempt that failed:\n{}\n\nError: {}\n\nPlease generate a corrected (do ...) body:",
+                    intent.goal,
+                    hashmap_str_to_rtfs_map(&intent.constraints),
+                    hashmap_str_to_rtfs_map(&intent.preferences),
+                    last_plan_text.as_ref().unwrap(),
+                    last_error.as_ref().unwrap()
                 );
                 vec![
                     OpenAIMessage {
@@ -1116,8 +1253,10 @@ Multiple choice (CORRECT - match for many options):
 Return exactly one (plan ...) with these constraints.
 "#;
                 let user_message = format!(
-                    "Intent goal: {}\nConstraints: {:?}\nPreferences: {:?}\n\nGenerate the (do ...) body now:",
-                    intent.goal, intent.constraints, intent.preferences
+                    "Intent goal: {}\nConstraints: {}\nPreferences: {}\n\nGenerate the (do ...) body now:",
+                    intent.goal,
+                    hashmap_str_to_rtfs_map(&intent.constraints),
+                    hashmap_str_to_rtfs_map(&intent.preferences),
                 );
                 vec![
                     OpenAIMessage {
@@ -1130,11 +1269,12 @@ Return exactly one (plan ...) with these constraints.
                     },
                 ]
             };
-            
+
             let response = self.make_request(prompt).await?;
-            
+
             // Validate and parse the plan
-            let plan_result = if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response) {
+            let plan_result = if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response)
+            {
                 if parser::parse(&do_block).is_ok() {
                     Ok(Plan {
                         plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
@@ -1155,13 +1295,16 @@ Return exactly one (plan ...) with these constraints.
                         annotations: HashMap::new(),
                     })
                 } else {
-                    Err(RuntimeError::Generic(format!("Failed to parse RTFS plan: {}", do_block)))
+                    Err(RuntimeError::Generic(format!(
+                        "Failed to parse RTFS plan: {}",
+                        do_block
+                    )))
                 }
             } else {
                 // Fallback to JSON parsing
                 self.parse_plan_from_json(&response, &intent.intent_id)
             };
-            
+
             match plan_result {
                 Ok(plan) => {
                     // Record successful attempt
@@ -1174,16 +1317,19 @@ Return exactly one (plan ...) with these constraints.
                 Err(e) => {
                     // Record failed attempt
                     self.metrics.record_failure(attempt);
-                    
+
                     // Create detailed error message for logging
                     let error_context = if attempt == 1 {
                         format!("Initial attempt failed: {}", e)
                     } else {
-                        format!("Retry attempt {}/{} failed: {}", attempt, self.config.retry_config.max_retries, e)
+                        format!(
+                            "Retry attempt {}/{} failed: {}",
+                            attempt, self.config.retry_config.max_retries, e
+                        )
                     };
-                    
+
                     log::warn!("❌ {}", error_context);
-                    
+
                     // Store enhanced error message for final error reporting
                     let enhanced_error = format!(
                         "Attempt {}: {} (Response: {})",
@@ -1197,19 +1343,23 @@ Return exactly one (plan ...) with these constraints.
                     );
                     last_error = Some(enhanced_error);
                     last_plan_text = Some(response.clone());
-                    
+
                     if attempt < self.config.retry_config.max_retries {
                         continue; // Retry
                     }
                 }
             }
         }
-        
+
         // All retries exhausted
         if self.config.retry_config.use_stub_fallback {
-            log::warn!("⚠️  Using stub fallback after {} failed attempts", self.config.retry_config.max_retries);
+            log::warn!(
+                "⚠️  Using stub fallback after {} failed attempts",
+                self.config.retry_config.max_retries
+            );
             // Record stub fallback as a success (since we're providing a working plan)
-            self.metrics.record_success(self.config.retry_config.max_retries + 1);
+            self.metrics
+                .record_success(self.config.retry_config.max_retries + 1);
             let safe_goal = intent.goal.replace('"', r#"\""#);
             let stub_body = format!(
                 r#"(do
@@ -1238,10 +1388,11 @@ Return exactly one (plan ...) with these constraints.
                 annotations: HashMap::new(),
             });
         }
-        
+
         // Record final failure (all retries exhausted, no stub fallback)
-        self.metrics.record_failure(self.config.retry_config.max_retries);
-        
+        self.metrics
+            .record_failure(self.config.retry_config.max_retries);
+
         // Create detailed error message with helpful suggestions
         let detailed_error = format!(
             "❌ Plan generation failed after {} attempts.\n\n\
@@ -1262,8 +1413,8 @@ Return exactly one (plan ...) with these constraints.
             🔧 **Technical details:**\n\
             - Total attempts: {}\n\
             - Retry configuration: max_retries={}, feedback={}, stub_fallback={}\n\
-            - Intent constraints: {:?}\n\
-            - Intent preferences: {:?}",
+            - Intent constraints: {}
+            - Intent preferences: {}",
             self.config.retry_config.max_retries,
             intent.goal,
             last_error.unwrap_or_else(|| "Unknown error".to_string()),
@@ -1271,13 +1422,12 @@ Return exactly one (plan ...) with these constraints.
             self.config.retry_config.max_retries,
             self.config.retry_config.send_error_feedback,
             self.config.retry_config.use_stub_fallback,
-            intent.constraints,
-            intent.preferences
+            serde_json::to_string(&intent.constraints).unwrap_or_else(|_| format!("{:?}", intent.constraints)),
+            serde_json::to_string(&intent.preferences).unwrap_or_else(|_| format!("{:?}", intent.preferences))
         );
-        
+
         Err(RuntimeError::Generic(detailed_error))
     }
-
 
     async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError> {
         let system_message = r#"You are an AI assistant that validates RTFS plans.
@@ -1415,8 +1565,8 @@ impl AnthropicLlmProvider {
         let prompt_store = FilePromptStore::new(prompt_path);
         let prompt_manager = PromptManager::new(prompt_store);
 
-        Ok(Self { 
-            config, 
+        Ok(Self {
+            config,
             client,
             metrics: RetryMetrics::new(),
             prompt_manager,
@@ -1572,10 +1722,8 @@ impl LlmProvider for AnthropicLlmProvider {
         context: Option<HashMap<String, String>>,
     ) -> Result<StorableIntent, RuntimeError> {
         // Load prompt from assets with fallback
-        let vars = HashMap::from([
-            ("user_request".to_string(), prompt.to_string()),
-        ]);
-        
+        let vars = HashMap::from([("user_request".to_string(), prompt.to_string())]);
+
         let system_message = self.prompt_manager
             .render("intent_generation", "v1", &vars)
             .unwrap_or_else(|e| {
@@ -1622,7 +1770,7 @@ Only respond with valid JSON."#.to_string()
             || std::env::var("CCOS_DEBUG")
                 .map(|v| v == "1")
                 .unwrap_or(false);
-        
+
         if show_prompts {
             println!(
                 "\n=== LLM Intent Generation Prompt (Anthropic) ===\n[system]\n{}\n\n[user]\n{}\n=== END PROMPT ===\n",
@@ -1637,14 +1785,14 @@ Only respond with valid JSON."#.to_string()
         }];
 
         let response = self.make_request(messages).await?;
-        
+
         if show_prompts {
             println!(
                 "\n=== LLM Raw Response (Intent Generation - Anthropic) ===\n{}\n=== END RESPONSE ===\n",
                 response
             );
         }
-        
+
         let mut intent = self.parse_intent_from_json(&response)?;
         intent.original_request = prompt.to_string();
 
@@ -1966,26 +2114,25 @@ impl LlmProvider for StubLlmProvider {
             || std::env::var("CCOS_DEBUG")
                 .map(|v| v == "1")
                 .unwrap_or(false);
-        
+
         if show_prompts {
             println!(
                 "\n=== Stub Intent Generation ===\n[prompt]\n{}\n=== END PROMPT ===\n",
                 prompt
             );
         }
-        
+
         // For stub provider, we'll use a simple pattern matching approach
         // In a real implementation, this would parse the prompt and context
         let intent = self.generate_stub_intent(prompt);
-        
+
         if show_prompts {
             println!(
                 "\n=== Stub Intent Result ===\nIntent ID: {}\nGoal: {}\n=== END RESULT ===\n",
-                intent.intent_id,
-                intent.goal
+                intent.intent_id, intent.goal
             );
         }
-        
+
         Ok(intent)
     }
 
@@ -2001,7 +2148,7 @@ impl LlmProvider for StubLlmProvider {
             || std::env::var("CCOS_DEBUG")
                 .map(|v| v == "1")
                 .unwrap_or(false);
-        
+
         if show_prompts {
             println!(
                 "\n=== Stub Plan Generation ===\n[intent]\nGoal: {}\nConstraints: {:?}\nPreferences: {:?}\n=== END INPUT ===\n",
@@ -2010,18 +2157,15 @@ impl LlmProvider for StubLlmProvider {
                 intent.preferences
             );
         }
-        
+
         let plan = self.generate_stub_plan(intent);
-        
+
         if show_prompts {
             if let PlanBody::Rtfs(ref body) = plan.body {
-                println!(
-                    "\n=== Stub Plan Result ===\n{}\n=== END RESULT ===\n",
-                    body
-                );
+                println!("\n=== Stub Plan Result ===\n{}\n=== END RESULT ===\n", body);
             }
         }
-        
+
         Ok(plan)
     }
 
@@ -2086,7 +2230,19 @@ impl LlmProvider for StubLlmProvider {
 }"#
                 .to_string())
             }
-        } else {
+                } else if lower_prompt.contains("delegating arbiter llm tasked with synthesizing a new rtfs capability") {
+                        Ok(r#"(do
+    (capability "stub.generated.capability.v1"
+        :description "Stub capability generated by delegating arbiter"
+        :parameters {:context "map"}
+        :implementation (do {:status "ready_for_execution" :context context}))
+    (plan
+        :plan-id "stub.generated.plan.v1"
+        :language "rtfs20"
+        :body "(do\n  (let [ctx context]\n    {:status \"completed\"\n     :context ctx\n     :result {:message \"stub capability executed\" :context ctx}}))"
+        :needs_capabilities [:stub.generated.capability.v1])
+)"#.to_string())
+                } else {
             // Regular intent generation - returns RTFS intent
             if lower_prompt.contains("sentiment") || lower_prompt.contains("analyze") {
                 Ok(r#"(intent "analyze_user_sentiment"

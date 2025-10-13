@@ -35,11 +35,11 @@ struct Args {
     profile: Option<String>,
 
     /// First question to ask user
-    #[arg(long, default_value = "What GitHub repository should I monitor for issues?")]
+    #[arg(long, default_value = "What data source should I analyze?")]
     q1: String,
 
     /// Second question to ask user
-    #[arg(long, default_value = "What criteria should trigger automatic triage?")]
+    #[arg(long, default_value = "What analysis or action should I perform?")]
     q2: String,
 }
 
@@ -486,20 +486,20 @@ fn build_synthesis_prompt(
             "Parameters are ALREADY BOUND. Reference them directly:\n",
             "- NOT: (let [x :param1] ...) ❌\n",
             "- YES: Use param1 directly in expressions ✅\n\n",
-            "## Example (using collected param1=\"repo\" param2=\"criteria\")\n",
-            "(capability \"github.triage.executor.v1\"\n",
-            "  :description \"Triage GitHub issues\"\n",
+            "## Generic Example Template\n",
+            "(capability \"domain.executor.v1\"\n",
+            "  :description \"Execute task using collected parameters\"\n",
             "  :parameters [:param1 :param2]\n",
-            "  :needs_capabilities [:github.search.issues :github.issues.add_label :ccos.echo]\n",
+            "  :needs_capabilities [:discovered.tool.one :discovered.tool.two :ccos.echo]\n",
             "  :implementation\n",
             "    (do\n",
-            "      (step \"Search Issues\"\n",
-            "        (let ((issues (call :github.search.issues {{:repo param1 :query param2}})))\n",
-            "          (call :ccos.echo {{:message (str \"Found issues in \" param1)}})))\n",
-            "      (step \"Apply Labels\"\n",
-            "        (call :github.issues.add_label {{:repo param1 :label \"triaged\"}}))\n",
+            "      (step \"Process Input\"\n",
+            "        (let ((result (call :discovered.tool.one {{:input param1}})))\n",
+            "          (call :ccos.echo {{:message (str \"Processing \" param1)}})))\n",
+            "      (step \"Execute Action\"\n",
+            "        (call :discovered.tool.two {{:data param2}}))\n",
             "      (step \"Return Results\"\n",
-            "        {{:status \"completed\" :repo param1 :criteria param2}})))\n\n",
+            "        {{:status \"completed\" :param1 param1 :param2 param2}})))\n\n",
             "Start response with `(capability` on first line. NO prose, NO markdown fences.\n"
         ),
         params_section,

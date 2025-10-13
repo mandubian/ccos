@@ -126,7 +126,6 @@ pub struct DelegationConfig {
     /// extracted RTFS plan (the `(do ...)` or plan body). Intended for diagnostics.
     #[serde(default)]
     pub print_extracted_plan: Option<bool>,
-
     // NOTE: These runtime debug flags are mirrored in the user-facing
     // `AgentConfig.delegation` shape (`src/config/types.rs::DelegationConfig`).
     // The external config uses Option<bool> so users can omit fields; they are

@@ -1,5 +1,7 @@
 use crate::ccos::agent::registry::AgentRegistry;
-use crate::ccos::agent::{AgentDescriptor, CostModel, LatencyStats, SuccessStats, TrustTier};
+use crate::ccos::agent::{
+    AgentDescriptor, AgentExecutionMode, CostModel, LatencyStats, SuccessStats, TrustTier,
+};
 use crate::ccos::CCOS;
 use crate::runtime::security::{RuntimeContext, SecurityLevel};
 use crate::runtime::values::Value;
@@ -65,12 +67,15 @@ async fn test_ccos_with_delegating_arbiter_stub_model() {
     // The intent should be stored and searchable in the IntentGraph
     let ig = ccos.get_intent_graph();
     let ig_locked = ig.lock().expect("lock intent graph");
-    
+
     // With the stub model, the generated intent may not exactly match the input request.
     // The important thing is that an intent was created and stored successfully.
     // List all intents to verify storage is working
     let all_intents = ig_locked.find_relevant_intents("");
-    assert!(all_intents.len() >= 1, "expected at least one stored intent");
+    assert!(
+        all_intents.len() >= 1,
+        "expected at least one stored intent"
+    );
     println!("✓ Found {} stored intent(s)", all_intents.len());
 
     // Clean up environment variables
@@ -103,7 +108,7 @@ async fn test_agent_registry_delegation_short_circuit() {
         let mut reg = reg_arc.write().unwrap();
         reg.register(AgentDescriptor {
             agent_id: "competitive_agent".into(),
-            kind: "planner".into(),
+            execution_mode: AgentExecutionMode::Planner,
             skills: vec!["competitive".into(), "analysis".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T1Trusted,
@@ -190,7 +195,7 @@ async fn test_delegation_env_threshold_overrides_config() {
         let mut reg = reg_arc.write().unwrap();
         reg.register(AgentDescriptor {
             agent_id: "high_agent".into(),
-            kind: "planner".into(),
+            execution_mode: AgentExecutionMode::Planner,
             skills: vec!["analysis".into(), "eu".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T1Trusted,
@@ -258,7 +263,7 @@ async fn test_delegation_min_skill_hits_enforced() {
         let mut reg = reg_arc.write().unwrap();
         reg.register(AgentDescriptor {
             agent_id: "two_skill_agent".into(),
-            kind: "planner".into(),
+            execution_mode: AgentExecutionMode::Planner,
             skills: vec!["analysis".into(), "market".into()], // only 2 possible hits
             supported_constraints: vec!["budget".into()],
             trust_tier: TrustTier::T1Trusted,
@@ -323,7 +328,7 @@ async fn test_delegation_disabled_flag_blocks_delegation() {
         let mut reg = reg_arc.write().unwrap();
         reg.register(AgentDescriptor {
             agent_id: "high_skill_agent".into(),
-            kind: "planner".into(),
+            execution_mode: AgentExecutionMode::Planner,
             skills: vec!["analysis".into(), "market".into(), "eu".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T2Privileged,
@@ -382,7 +387,7 @@ async fn test_delegation_governance_rejection_records_event() {
         let mut reg = reg_arc.write().unwrap();
         reg.register(AgentDescriptor {
             agent_id: "analysis_non_eu_agent".into(),
-            kind: "planner".into(),
+            execution_mode: AgentExecutionMode::Planner,
             skills: vec!["analysis".into(), "eu".into(), "market".into()],
             supported_constraints: vec!["budget".into(), "data-locality".into()],
             trust_tier: TrustTier::T1Trusted,
@@ -469,7 +474,7 @@ async fn test_delegation_completed_event_emitted() {
         let mut reg = reg_arc.write().unwrap();
         reg.register(AgentDescriptor {
             agent_id: "high_perf_agent".into(),
-            kind: "planner".into(),
+            execution_mode: AgentExecutionMode::Planner,
             skills: vec!["delegated".into(), "task".into(), "small".into()],
             supported_constraints: vec!["budget".into()],
             trust_tier: TrustTier::T2Privileged,

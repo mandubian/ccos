@@ -1,10 +1,10 @@
-use rtfs_compiler::ccos::orchestrator::Orchestrator;
-use rtfs_compiler::ccos::types::{ActionType, Plan, PlanBody, PlanLanguage, PlanStatus};
-use rtfs_compiler::ccos::causal_chain::CausalChain;
-use rtfs_compiler::ccos::intent_graph::IntentGraph;
 use rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace;
-use rtfs_compiler::ccos::plan_archive::PlanArchive;
+use rtfs_compiler::ccos::causal_chain::CausalChain;
 use rtfs_compiler::ccos::event_sink::CausalChainIntentEventSink;
+use rtfs_compiler::ccos::intent_graph::IntentGraph;
+use rtfs_compiler::ccos::orchestrator::Orchestrator;
+use rtfs_compiler::ccos::plan_archive::PlanArchive;
+use rtfs_compiler::ccos::types::{ActionType, Plan, PlanBody, PlanLanguage, PlanStatus};
 use rtfs_compiler::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs_compiler::runtime::security::RuntimeContext;
 use rtfs_compiler::runtime::values::Value;
@@ -24,7 +24,9 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
     // Setup orchestrator components
     let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
     let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&chain)));
-    let graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink).expect("intent graph")));
+    let graph = Arc::new(Mutex::new(
+        IntentGraph::with_event_sink(sink).expect("intent graph"),
+    ));
     let marketplace = Arc::new(CapabilityMarketplace::new(Default::default()));
     let plan_archive = Arc::new(PlanArchive::new());
 
@@ -56,7 +58,9 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
                             other => value_to_plain_string(other),
                         })
                         .unwrap_or_default(),
-                    Value::List(args) if args.len() == 1 => value_to_plain_string(&args[0]).unwrap_or_default(),
+                    Value::List(args) if args.len() == 1 => {
+                        value_to_plain_string(&args[0]).unwrap_or_default()
+                    }
                     other => value_to_plain_string(other).unwrap_or_default(),
                 };
 
@@ -82,8 +86,8 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
 
     // Create a simple RTFS plan that performs a host capability call
     // The plan body uses RTFS call form which the evaluator will desugar to a host call
-        // Use the same (do ...) body shape as the StubPlanGenerationProvider
-        let rtfs = r#"(do
+    // Use the same (do ...) body shape as the StubPlanGenerationProvider
+    let rtfs = r#"(do
     (step "Greet" (call :ccos.echo {:message "hi"}))
     (step "AskDates" (call :ccos.user.ask "What dates would you like to travel to Paris?"))
     (step "Add" (call :ccos.math.add 2 3)))"#;
@@ -106,7 +110,10 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
     let ctx = make_context();
 
     // Execute plan - expect a paused ExecutionResult
-    let _res = orchestrator.execute_plan(&plan, &ctx).await.expect("execute_plan");
+    let _res = orchestrator
+        .execute_plan(&plan, &ctx)
+        .await
+        .expect("execute_plan");
 
     // Depending on runtime wiring, the evaluator may either yield a RequiresHost
     // (pause + checkpoint) or execute registered capabilities immediately (complete).
@@ -131,13 +138,21 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
                     match first {
                         rtfs_compiler::runtime::values::Value::String(s) => {
                             let raw = s.as_str();
-                            assert!(raw.starts_with("cp-"), "expected checkpoint arg starting with cp- got {}", raw);
+                            assert!(
+                                raw.starts_with("cp-"),
+                                "expected checkpoint arg starting with cp- got {}",
+                                raw
+                            );
                             paused_checkpoint_id = Some(raw.to_string());
                         }
                         other => {
                             let disp = format!("{}", other);
                             let trimmed = disp.trim_matches('"');
-                            assert!(trimmed.starts_with("cp-"), "expected checkpoint string arg, got {}", disp);
+                            assert!(
+                                trimmed.starts_with("cp-"),
+                                "expected checkpoint string arg, got {}",
+                                disp
+                            );
                             paused_checkpoint_id = Some(trimmed.to_string());
                         }
                     }
@@ -153,13 +168,17 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
         }
     }
 
-    assert!(saw_plan_paused || saw_plan_completed, "expected to find PlanPaused or PlanCompleted action in causal chain");
+    assert!(
+        saw_plan_paused || saw_plan_completed,
+        "expected to find PlanPaused or PlanCompleted action in causal chain"
+    );
 
     // If paused, attempt to resume using the orchestrator's checkpoint archive helper
     if let Some(cp) = paused_checkpoint_id {
         // Create an evaluator capable of being deserialized into. We construct it inline
         // instead of using internal test helpers so this integration test remains self-contained.
-        let module_registry = std::sync::Arc::new(rtfs_compiler::runtime::module_runtime::ModuleRegistry::new());
+        let module_registry =
+            std::sync::Arc::new(rtfs_compiler::runtime::module_runtime::ModuleRegistry::new());
         let security_context = rtfs_compiler::runtime::security::RuntimeContext::controlled(vec![
             "ccos.echo".to_string(),
             "ccos.math.add".to_string(),
@@ -170,7 +189,11 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
             marketplace.clone(),
             security_context.clone(),
         ));
-        let evaluator = rtfs_compiler::runtime::evaluator::Evaluator::new(module_registry, security_context, host);
+        let evaluator = rtfs_compiler::runtime::evaluator::Evaluator::new(
+            module_registry,
+            security_context,
+            host,
+        );
 
         // Use the orchestrator helper to resume by checkpoint id
         orchestrator
@@ -187,6 +210,9 @@ async fn orchestrator_pauses_on_host_call_and_logs_plan_paused() {
         let has_resumed = actions2
             .iter()
             .any(|a| a.action_type == ActionType::PlanResumed);
-        assert!(has_resumed, "expected PlanResumed action after resume_from_checkpoint");
+        assert!(
+            has_resumed,
+            "expected PlanResumed action after resume_from_checkpoint"
+        );
     }
 }

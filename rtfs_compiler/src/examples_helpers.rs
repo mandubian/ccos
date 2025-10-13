@@ -1,5 +1,5 @@
-use crate::runtime::values::Value;
 use crate::ast::MapKey;
+use crate::runtime::values::Value;
 use std::collections::HashMap;
 
 /// Helper: get a string value for a key from a runtime Value::Map whose keys are MapKey.
@@ -23,11 +23,19 @@ pub fn extract_question_prompt_from_value(val: &Value) -> Option<String> {
     match val {
         Value::String(s) => Some(s.clone()),
         Value::Map(map) => {
-            if let Some(p) = get_map_string_value(map, "prompt") { return Some(p); }
-            if let Some(p) = get_map_string_value(map, "question") { return Some(p); }
-            if let Some(p) = get_map_string_value(map, "text") { return Some(p); }
+            if let Some(p) = get_map_string_value(map, "prompt") {
+                return Some(p);
+            }
+            if let Some(p) = get_map_string_value(map, "question") {
+                return Some(p);
+            }
+            if let Some(p) = get_map_string_value(map, "text") {
+                return Some(p);
+            }
             for (_k, v) in map.iter() {
-                if let Value::String(s) = v { return Some(s.clone()); }
+                if let Value::String(s) = v {
+                    return Some(s.clone());
+                }
             }
             None
         }

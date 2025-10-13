@@ -89,10 +89,8 @@ async fn stub_plan_generation_and_execution_works() {
 
     // Execute plan
     // Allow the capabilities used by the stub plan in the Controlled runtime context.
-    let runtime_ctx = RuntimeContext::controlled(vec![
-        "ccos.echo".to_string(),
-        "ccos.math.add".to_string(),
-    ]);
+    let runtime_ctx =
+        RuntimeContext::controlled(vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]);
 
     // let orchestrator = Orchestrator::new(causal_chain.clone(), intent_graph.clone(), marketplace.clone());
     let orchestrator = orchestrator::Orchestrator::new(
@@ -132,13 +130,20 @@ async fn stub_plan_generation_and_execution_works() {
     } else {
         // Paused outcome: execution should indicate paused and causal chain should contain PlanPaused
         let val_str = format!("{:?}", exec.value);
-        assert!(val_str.contains("paused"), "expected paused execution, got: {}", val_str);
+        assert!(
+            val_str.contains("paused"),
+            "expected paused execution, got: {}",
+            val_str
+        );
 
         let cc = causal_chain.lock().unwrap();
         let actions = cc.get_all_actions();
         let has_plan_paused = actions
             .iter()
             .any(|a| a.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused);
-        assert!(has_plan_paused, "missing PlanPaused action for paused execution");
+        assert!(
+            has_plan_paused,
+            "missing PlanPaused action for paused execution"
+        );
     }
 }

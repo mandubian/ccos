@@ -262,7 +262,6 @@ impl LlmArbiter {
         natural_language: &str,
         context: Option<HashMap<String, Value>>,
     ) -> String {
-        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
         let prompt_cfg: PromptConfig = self
             .config
             .llm_config
@@ -271,13 +270,15 @@ impl LlmArbiter {
             .unwrap_or_default();
         let store = FilePromptStore::new("assets/prompts/arbiter");
         let manager = PromptManager::new(store);
+        let context_str = serde_json::to_string(&context).unwrap_or_else(|_| format!("{:?}", context));
+        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
+        let available_caps_str = serde_json::to_string(&available_capabilities)
+            .unwrap_or_else(|_| format!("{:?}", available_capabilities));
         let mut vars = std::collections::HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());
-        vars.insert("context".to_string(), format!("{:?}", context));
-        vars.insert(
-            "available_capabilities".to_string(),
-            format!("{:?}", available_capabilities),
-        );
+        vars.insert("context".to_string(), context_str.clone());
+        vars.insert("available_capabilities".to_string(), available_caps_str.clone());
+
         manager
             .render(
                 &prompt_cfg.intent_prompt_id,
@@ -289,34 +290,22 @@ impl LlmArbiter {
 
     /// Generate a structured prompt for plan generation
     fn generate_plan_prompt(&self, intent: &Intent) -> String {
-        let available_capabilities = {
-            // TODO: Get actual capabilities from marketplace
-            vec!["ccos.echo".to_string(), "ccos.math.add".to_string()]
-        };
-
-        format!(
-            r#"Generate an RTFS plan to achieve this intent:
-
-Intent: {:?}
-
-Available capabilities: {:?}
-
-Generate a plan using RTFS syntax with step special forms. The plan should:
-1. Use (step "Step Name" (call :capability.name args)) for each step
-2. Use (do ...) to group multiple steps
-3. Include appropriate error handling
-4. Be specific and actionable
-
-Example plan structure:
-(do
-  (step "Fetch Data" (call :ccos.echo "fetching data"))
-  (step "Process Data" (call :ccos.echo "processing data"))
-  (step "Generate Report" (call :ccos.echo "report generated"))
-)
-
-Generate the plan:"#,
-            intent, available_capabilities
-        )
+        let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
+        let available_caps_str = serde_json::to_string(&available_capabilities)
+            .unwrap_or_else(|_| format!("{:?}", available_capabilities));
+        let mut s = String::new();
+        s.push_str("Generate an RTFS plan to achieve this intent:\n\n");
+        s.push_str("Intent Goal: ");
+        s.push_str(&intent.goal);
+        s.push_str("\n\nAvailable capabilities: ");
+        s.push_str(&available_caps_str);
+        s.push_str("\n\nGenerate a plan using RTFS syntax with step special forms. The plan should:\n");
+        s.push_str("1. Use (step \"Step Name\" (call :capability.name args)) for each step\n");
+        s.push_str("2. Use (do ...) to group multiple steps\n");
+        s.push_str("3. Include appropriate error handling\n");
+        s.push_str("4. Be specific and actionable\n\n");
+        s.push_str("Example plan structure:\n(do\n  (step \"Fetch Data\" (call :ccos.echo \"fetching data\"))\n  (step \"Process Data\" (call :ccos.echo \"processing data\"))\n  (step \"Generate Report\" (call :ccos.echo \"report generated\"))\n)\n\nGenerate the plan:");
+        s
     }
 
     /// Parse RTFS response into intent structure using RTFS parser
@@ -336,7 +325,7 @@ Generate the plan:"#,
 
         // Parse using RTFS parser
         let ast_items = crate::parser::parse(&sanitized)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse RTFS intent: {:?}", e)))?;
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse RTFS intent: {}", e)))?;
 
         // Find the first expression and convert to Intent
         if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
@@ -359,9 +348,7 @@ Generate the plan:"#,
         let marker = "GENERATE_INTENT_GRAPH";
 
         // Keep grammar aligned with graph_interpreter.rs docstring
-        format!(
-            r#"{marker}
-You are an Arbiter that translates a natural language goal into an RTFS intent graph.
+        let body = r#"You are an Arbiter that translates a natural language goal into an RTFS intent graph.
 
 Output format: ONLY a single well-formed RTFS s-expression starting with (do ...). No prose, no JSON.
 
@@ -386,11 +373,16 @@ Example shape (illustrative):
   (edge :IsSubgoalOf "fetch" "root")
 )
 
-Now generate the RTFS graph for this goal:
-"{goal}""#,
-            marker = marker,
-            goal = natural_language_goal
-        )
+Now generate the RTFS graph for this goal:"#;
+
+        let mut s = String::new();
+        s.push_str(marker);
+        s.push_str("\n");
+        s.push_str(body);
+        s.push_str("\n\"");
+        s.push_str(natural_language_goal);
+        s.push_str("\"");
+        s
     }
 
     /// Extract the first top-level (do ...) s-expression from a text blob.

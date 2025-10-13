@@ -1802,10 +1802,10 @@ impl StandardLibrary {
                 Value::Boolean(b) => result.push_str(&b.to_string()),
                 Value::Keyword(k) => result.push_str(&format!(":{}", k.0)),
                 Value::Nil => result.push_str("nil"),
-                Value::Vector(v) => result.push_str(&format!("{:?}", v)),
-                Value::List(l) => result.push_str(&format!("{:?}", l)),
-                Value::Map(m) => result.push_str(&format!("{:?}", m)),
-                _ => result.push_str(&format!("{:?}", arg)),
+                Value::Vector(v) => result.push_str(&Value::Vector(v).to_string()),
+                Value::List(l) => result.push_str(&Value::List(l).to_string()),
+                Value::Map(m) => result.push_str(&Value::Map(m).to_string()),
+                _ => result.push_str(&arg.to_string()),
             }
         }
         Ok(Value::String(result))
@@ -2927,7 +2927,11 @@ impl StandardLibrary {
 pub async fn register_default_capabilities(
     marketplace: &CapabilityMarketplace,
 ) -> RuntimeResult<()> {
-    crate::ccos::capabilities::defaults::register_default_capabilities(marketplace).await.map_err(|e| RuntimeError::Generic(format!("Failed to register default capabilities: {:?}", e)))
+    crate::ccos::capabilities::defaults::register_default_capabilities(marketplace)
+        .await
+        .map_err(|e| {
+            RuntimeError::Generic(format!("Failed to register default capabilities: {:?}", e))
+        })
 }
 
 /// Load the standard library into a module registry

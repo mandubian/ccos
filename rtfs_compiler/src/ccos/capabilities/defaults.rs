@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use crate::runtime::values::Value;
-use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ast::{Keyword, MapKey};
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::values::Value;
+use std::sync::Arc;
 
 pub async fn register_default_capabilities(
     marketplace: &CapabilityMarketplace,
@@ -29,10 +29,18 @@ pub async fn register_default_capabilities(
                                 if args.len() == 1 {
                                     Ok(args[0].clone())
                                 } else {
-                                    Err(RuntimeError::ArityMismatch { function: "ccos.echo".to_string(), expected: "1".to_string(), actual: args.len() })
+                                    Err(RuntimeError::ArityMismatch {
+                                        function: "ccos.echo".to_string(),
+                                        expected: "1".to_string(),
+                                        actual: args.len(),
+                                    })
                                 }
                             }
-                            other => Err(RuntimeError::TypeError { expected: "list".to_string(), actual: other.type_name().to_string(), operation: "ccos.echo".to_string() }),
+                            other => Err(RuntimeError::TypeError {
+                                expected: "list".to_string(),
+                                actual: other.type_name().to_string(),
+                                operation: "ccos.echo".to_string(),
+                            }),
                         }
                     }
                     // Backward compatibility: still accept a plain list
@@ -40,10 +48,18 @@ pub async fn register_default_capabilities(
                         if args.len() == 1 {
                             Ok(args[0].clone())
                         } else {
-                            Err(RuntimeError::ArityMismatch { function: "ccos.echo".to_string(), expected: "1".to_string(), actual: args.len() })
+                            Err(RuntimeError::ArityMismatch {
+                                function: "ccos.echo".to_string(),
+                                expected: "1".to_string(),
+                                actual: args.len(),
+                            })
                         }
                     }
-                    _ => Err(RuntimeError::TypeError { expected: "map or list".to_string(), actual: input.type_name().to_string(), operation: "ccos.echo".to_string() }),
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "map or list".to_string(),
+                        actual: input.type_name().to_string(),
+                        operation: "ccos.echo".to_string(),
+                    }),
                 }
             }),
         )
@@ -60,22 +76,36 @@ pub async fn register_default_capabilities(
                 match input {
                     // New calling convention: map with :args containing the argument list
                     Value::Map(map) => {
-                        if let Some(args_val) = map.get(&MapKey::Keyword(Keyword("args".to_string()))) {
+                        if let Some(args_val) =
+                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
+                        {
                             match args_val {
                                 Value::List(args) => {
                                     let mut sum = 0i64;
                                     for arg in args {
                                         match arg {
                                             Value::Integer(i) => sum += *i,
-                                            _ => return Err(RuntimeError::TypeError { expected: "integer".to_string(), actual: arg.type_name().to_string(), operation: "ccos.math.add".to_string() }),
+                                            _ => {
+                                                return Err(RuntimeError::TypeError {
+                                                    expected: "integer".to_string(),
+                                                    actual: arg.type_name().to_string(),
+                                                    operation: "ccos.math.add".to_string(),
+                                                })
+                                            }
                                         }
                                     }
                                     Ok(Value::Integer(sum))
                                 }
-                                other => Err(RuntimeError::TypeError { expected: "list".to_string(), actual: other.type_name().to_string(), operation: "ccos.math.add".to_string() }),
+                                other => Err(RuntimeError::TypeError {
+                                    expected: "list".to_string(),
+                                    actual: other.type_name().to_string(),
+                                    operation: "ccos.math.add".to_string(),
+                                }),
                             }
                         } else {
-                            Err(RuntimeError::Generic("Missing :args for ccos.math.add".to_string()))
+                            Err(RuntimeError::Generic(
+                                "Missing :args for ccos.math.add".to_string(),
+                            ))
                         }
                     }
                     // Backward compatibility: direct list of arguments
@@ -84,12 +114,22 @@ pub async fn register_default_capabilities(
                         for arg in args {
                             match arg {
                                 Value::Integer(i) => sum += *i,
-                                _ => return Err(RuntimeError::TypeError { expected: "integer".to_string(), actual: arg.type_name().to_string(), operation: "ccos.math.add".to_string() }),
+                                _ => {
+                                    return Err(RuntimeError::TypeError {
+                                        expected: "integer".to_string(),
+                                        actual: arg.type_name().to_string(),
+                                        operation: "ccos.math.add".to_string(),
+                                    })
+                                }
                             }
                         }
                         Ok(Value::Integer(sum))
                     }
-                    other => Err(RuntimeError::TypeError { expected: "map or list".to_string(), actual: other.type_name().to_string(), operation: "ccos.math.add".to_string() }),
+                    other => Err(RuntimeError::TypeError {
+                        expected: "map or list".to_string(),
+                        actual: other.type_name().to_string(),
+                        operation: "ccos.math.add".to_string(),
+                    }),
                 }
             }),
         )
@@ -107,34 +147,54 @@ pub async fn register_default_capabilities(
                 let extract_prompt = |val: &Value| -> Result<String, RuntimeError> {
                     match val {
                         Value::Map(map) => {
-                            if let Some(args_val) = map.get(&MapKey::Keyword(Keyword("args".to_string()))) {
+                            if let Some(args_val) =
+                                map.get(&MapKey::Keyword(Keyword("args".to_string())))
+                            {
                                 if let Value::List(args) = args_val {
                                     if args.len() == 1 {
                                         return Ok(args[0].to_string());
                                     } else {
-                                        return Err(RuntimeError::ArityMismatch { function: "ccos.user.ask".to_string(), expected: "1".to_string(), actual: args.len() });
+                                        return Err(RuntimeError::ArityMismatch {
+                                            function: "ccos.user.ask".to_string(),
+                                            expected: "1".to_string(),
+                                            actual: args.len(),
+                                        });
                                     }
                                 }
                             }
-                            Err(RuntimeError::Generic("Missing :args for ccos.user.ask".to_string()))
+                            Err(RuntimeError::Generic(
+                                "Missing :args for ccos.user.ask".to_string(),
+                            ))
                         }
                         Value::List(args) => {
-                            if args.len() == 1 { Ok(args[0].to_string()) } else { Err(RuntimeError::ArityMismatch { function: "ccos.user.ask".to_string(), expected: "1".to_string(), actual: args.len() }) }
+                            if args.len() == 1 {
+                                Ok(args[0].to_string())
+                            } else {
+                                Err(RuntimeError::ArityMismatch {
+                                    function: "ccos.user.ask".to_string(),
+                                    expected: "1".to_string(),
+                                    actual: args.len(),
+                                })
+                            }
                         }
-                        other => Err(RuntimeError::TypeError { expected: "map or list".to_string(), actual: other.type_name().to_string(), operation: "ccos.user.ask".to_string() })
+                        other => Err(RuntimeError::TypeError {
+                            expected: "map or list".to_string(),
+                            actual: other.type_name().to_string(),
+                            operation: "ccos.user.ask".to_string(),
+                        }),
                     }
                 };
 
                 let prompt = extract_prompt(&input)?;
 
                 // Print the prompt for the host/operator
-                eprintln!("[ccos.user.ask] {}", prompt);
-
-                // Read a line from stdin (blocking). This is intentional: this capability represents
-                // interactive user input and must be wired to the host's stdin in this example.
+                print!("[ccos.user.ask] {}", prompt);
                 use std::io::{self, Write};
                 let mut stdout = io::stdout();
                 let _ = stdout.flush();
+
+                // Read a line from stdin (blocking). This is intentional: this capability represents
+                // interactive user input and must be wired to the host's stdin in this example.
                 let mut line = String::new();
                 io::stdin()
                     .read_line(&mut line)

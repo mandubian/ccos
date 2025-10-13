@@ -3,8 +3,8 @@
 //! This example shows how to pass results from previous plan executions
 //! as context to subsequent plan generations, enabling more modular plans.
 
-use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::ccos::arbiter::ArbiterEngine;
+use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::runtime::security::RuntimeContext;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(arbiter) = ccos.get_delegating_arbiter() {
             // Generate intent
             let intent = arbiter.natural_language_to_intent(request, None).await?;
-            
+
             // Convert to storable intent
             let storable_intent = rtfs_compiler::ccos::types::StorableIntent {
                 intent_id: intent.intent_id.clone(),
@@ -53,10 +53,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 original_request: intent.original_request.clone(),
                 rtfs_intent_source: "".to_string(),
                 goal: intent.goal.clone(),
-                constraints: intent.constraints.iter()
+                constraints: intent
+                    .constraints
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.to_string()))
                     .collect(),
-                preferences: intent.preferences.iter()
+                preferences: intent
+                    .preferences
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.to_string()))
                     .collect(),
                 success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
@@ -78,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Generate plan (context passing not yet exposed in public API)
             let plan = arbiter.intent_to_plan(&intent).await?;
-            
+
             println!("Generated plan: {}", plan.plan_id);
             if let Some(name) = &plan.name {
                 println!("Plan name: {}", name);
@@ -88,13 +92,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Simulate plan execution (in real scenario, this would be executed)
             // For demonstration, we'll simulate some results based on the plan
             let simulated_results = simulate_plan_execution(&plan, &accumulated_context);
-            
+
             // Update accumulated context with new results
             for (key, value) in simulated_results {
                 accumulated_context.insert(key, value);
             }
-            
-            println!("Plan execution completed. Updated context: {:?}", accumulated_context);
+
+            println!(
+                "Plan execution completed. Updated context: {:?}",
+                accumulated_context
+            );
             println!("----------------------------------------");
             println!();
         }
@@ -109,10 +116,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Simulate plan execution and return results that would be passed as context
 fn simulate_plan_execution(
     plan: &rtfs_compiler::ccos::types::Plan,
-    existing_context: &HashMap<String, String>
+    existing_context: &HashMap<String, String>,
 ) -> HashMap<String, String> {
     let mut results = HashMap::new();
-    
+
     // Simulate different types of results based on plan content
     if let Some(name) = &plan.name {
         match name.as_str() {
@@ -122,30 +129,45 @@ fn simulate_plan_execution(
                 results.insert("trip/budget".to_string(), "€2000".to_string());
                 results.insert("trip/arrival".to_string(), "2024-06-15".to_string());
                 results.insert("trip/departure".to_string(), "2024-06-20".to_string());
-            },
+            }
             name if name.contains("itinerary") => {
-                results.insert("itinerary/activities".to_string(), "museums, parks, restaurants".to_string());
-                results.insert("itinerary/accommodation".to_string(), "Hotel in Marais district".to_string());
-                results.insert("itinerary/transport".to_string(), "Metro and walking".to_string());
-            },
+                results.insert(
+                    "itinerary/activities".to_string(),
+                    "museums, parks, restaurants".to_string(),
+                );
+                results.insert(
+                    "itinerary/accommodation".to_string(),
+                    "Hotel in Marais district".to_string(),
+                );
+                results.insert(
+                    "itinerary/transport".to_string(),
+                    "Metro and walking".to_string(),
+                );
+            }
             name if name.contains("cultural") => {
-                results.insert("cultural/museums".to_string(), "Louvre, Orsay, Pompidou".to_string());
-                results.insert("cultural/art_preference".to_string(), "classical and modern".to_string());
+                results.insert(
+                    "cultural/museums".to_string(),
+                    "Louvre, Orsay, Pompidou".to_string(),
+                );
+                results.insert(
+                    "cultural/art_preference".to_string(),
+                    "classical and modern".to_string(),
+                );
                 results.insert("cultural/walking_tolerance".to_string(), "high".to_string());
-            },
+            }
             _ => {
                 results.insert("plan/type".to_string(), "general".to_string());
                 results.insert("plan/status".to_string(), "completed".to_string());
             }
         }
     }
-    
+
     // Add some context from previous executions
     for (key, value) in existing_context {
         if key.starts_with("trip/") {
             results.insert(key.clone(), value.clone());
         }
     }
-    
+
     results
 }

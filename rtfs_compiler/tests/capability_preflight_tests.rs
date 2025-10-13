@@ -2,7 +2,10 @@
 //! Ensures capability identifiers inside string literals do not trigger false positives
 //! and real capability invocations are accepted when capability exists.
 
-use rtfs_compiler::ccos::{CCOS, types::{Plan, PlanBody, PlanLanguage, PlanStatus}};
+use rtfs_compiler::ccos::{
+    types::{Plan, PlanBody, PlanLanguage, PlanStatus},
+    CCOS,
+};
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityLevel};
 use std::sync::Arc;
 
@@ -19,7 +22,7 @@ async fn plan_with_capabilities_only_in_string_is_valid() {
         intent_ids: vec![],
         language: PlanLanguage::Rtfs20,
         body: PlanBody::Rtfs(plan_src.to_string()),
-    status: PlanStatus::Draft,
+        status: PlanStatus::Draft,
         created_at: 0,
         metadata: Default::default(),
         input_schema: None,
@@ -28,8 +31,13 @@ async fn plan_with_capabilities_only_in_string_is_valid() {
         capabilities_required: vec![],
         annotations: Default::default(),
     };
-    let _ctx = RuntimeContext { security_level: SecurityLevel::Controlled, ..RuntimeContext::pure() };
-    ccos.preflight_validate_capabilities(&plan).await.expect("preflight should ignore string mentions");
+    let _ctx = RuntimeContext {
+        security_level: SecurityLevel::Controlled,
+        ..RuntimeContext::pure()
+    };
+    ccos.preflight_validate_capabilities(&plan)
+        .await
+        .expect("preflight should ignore string mentions");
 }
 
 #[tokio::test]
@@ -44,7 +52,7 @@ async fn plan_with_real_add_invocation_passes() {
         intent_ids: vec![],
         language: PlanLanguage::Rtfs20,
         body: PlanBody::Rtfs(plan_src.to_string()),
-    status: PlanStatus::Draft,
+        status: PlanStatus::Draft,
         created_at: 0,
         metadata: Default::default(),
         input_schema: None,
@@ -53,6 +61,11 @@ async fn plan_with_real_add_invocation_passes() {
         capabilities_required: vec![],
         annotations: Default::default(),
     };
-    let _ctx = RuntimeContext { security_level: SecurityLevel::Controlled, ..RuntimeContext::pure() };
-    ccos.preflight_validate_capabilities(&plan).await.expect("preflight should accept real capability invocation");
+    let _ctx = RuntimeContext {
+        security_level: SecurityLevel::Controlled,
+        ..RuntimeContext::pure()
+    };
+    ccos.preflight_validate_capabilities(&plan)
+        .await
+        .expect("preflight should accept real capability invocation");
 }

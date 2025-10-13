@@ -764,18 +764,26 @@ impl Orchestrator {
             Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                 // Unified checkpoint path: persist context + log PlanPaused via helper so
                 // resume_and_continue_from_checkpoint can locate checkpoint.
-                let (checkpoint_id, _serialized) = self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
+                let (checkpoint_id, _serialized) =
+                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
 
                 // Build metadata describing required host capability.
-                let mut metadata_map: std::collections::HashMap<String, RtfsValue> = std::collections::HashMap::new();
+                let mut metadata_map: std::collections::HashMap<String, RtfsValue> =
+                    std::collections::HashMap::new();
                 metadata_map.insert(
                     "requires_capability".to_string(),
                     RtfsValue::String(host_call.capability_id.clone()),
                 );
                 if host_call.metadata.is_some() {
-                    metadata_map.insert("has_metadata".to_string(), RtfsValue::String("true".to_string()));
+                    metadata_map.insert(
+                        "has_metadata".to_string(),
+                        RtfsValue::String("true".to_string()),
+                    );
                 }
-                metadata_map.insert("checkpoint_id".to_string(), RtfsValue::String(checkpoint_id));
+                metadata_map.insert(
+                    "checkpoint_id".to_string(),
+                    RtfsValue::String(checkpoint_id),
+                );
 
                 let res = ExecutionResult {
                     success: false,
@@ -1312,15 +1320,20 @@ impl Orchestrator {
             }
             Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                 // Create a new checkpoint and emit PlanPaused
-                let (checkpoint_id, _serialized) = self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
+                let (checkpoint_id, _serialized) =
+                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
 
-                let mut metadata_map: std::collections::HashMap<String, RtfsValue> = std::collections::HashMap::new();
+                let mut metadata_map: std::collections::HashMap<String, RtfsValue> =
+                    std::collections::HashMap::new();
                 metadata_map.insert(
                     "requires_capability".to_string(),
                     RtfsValue::String(host_call.capability_id.clone()),
                 );
                 if host_call.metadata.is_some() {
-                    metadata_map.insert("has_metadata".to_string(), RtfsValue::String("true".to_string()));
+                    metadata_map.insert(
+                        "has_metadata".to_string(),
+                        RtfsValue::String("true".to_string()),
+                    );
                 }
 
                 let res = ExecutionResult {

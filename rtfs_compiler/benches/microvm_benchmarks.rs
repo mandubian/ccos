@@ -10,8 +10,8 @@
 #![cfg(feature = "benchmarks")]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rtfs_compiler::runtime::microvm::core::{Program, ExecutionContext};
 use rtfs_compiler::runtime::microvm::config::MicroVMConfig;
+use rtfs_compiler::runtime::microvm::core::{ExecutionContext, Program};
 use rtfs_compiler::runtime::microvm::providers;
 use rtfs_compiler::runtime::values::Value;
 use tokio::runtime::Runtime;

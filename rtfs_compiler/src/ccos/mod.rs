@@ -77,6 +77,7 @@ use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::config::types::AgentConfig;
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::security::RuntimeContext;
+use crate::runtime::values::Value;
 use crate::runtime::{ModuleRegistry, RTFSRuntime, Runtime};
 
 use self::types::ExecutionResult;
@@ -85,8 +86,8 @@ use self::causal_chain::CausalChain;
 use self::event_sink::CausalChainIntentEventSink;
 use self::governance_kernel::GovernanceKernel;
 use self::intent_graph::{config::IntentGraphConfig, IntentGraph};
-use crate::runtime::error::RuntimeError;
 use crate::ccos::types::StorableIntent;
+use crate::runtime::error::RuntimeError;
 
 use self::orchestrator::Orchestrator;
 
@@ -245,11 +246,29 @@ impl CCOS {
         let delegating_arbiter = if enable_delegation {
             // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to OpenAI if OPENAI_API_KEY exists.
             let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                (Some(key), Some(std::env::var("CCOS_LLM_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string())), std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "deepseek/deepseek-chat-v3.1:free".to_string()))
+                (
+                    Some(key),
+                    Some(
+                        std::env::var("CCOS_LLM_BASE_URL")
+                            .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string()),
+                    ),
+                    std::env::var("CCOS_DELEGATING_MODEL")
+                        .unwrap_or_else(|_| "deepseek/deepseek-chat-v3.1:free".to_string()),
+                )
             } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-                (Some(key), None, std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string()))
+                (
+                    Some(key),
+                    None,
+                    std::env::var("CCOS_DELEGATING_MODEL")
+                        .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
+                )
             } else {
-                (None, None, std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "stub-model".to_string()))
+                (
+                    None,
+                    None,
+                    std::env::var("CCOS_DELEGATING_MODEL")
+                        .unwrap_or_else(|_| "stub-model".to_string()),
+                )
             };
 
             // Create LLM config for delegating arbiter
@@ -338,7 +357,10 @@ impl CCOS {
     pub fn list_intents_snapshot(&self) -> Vec<StorableIntent> {
         // Acquire lock and use sync helper; IntentGraph already exposes sync accessor wrappers.
         // Errors are swallowed into empty vec in underlying helper; acceptable for non‑critical read.
-        let ig = self.intent_graph.lock().expect("intent_graph lock poisoned");
+        let ig = self
+            .intent_graph
+            .lock()
+            .expect("intent_graph lock poisoned");
         ig.storage.get_all_intents_sync()
     }
 
@@ -353,17 +375,22 @@ impl CCOS {
             // On parse failure, we do NOT hard fail preflight here; governance / parser stage will surface rich errors later.
             // Fallback: if parsing fails, skip capability preflight rather than produce false positives.
             if let Ok(items) = crate::parser::parse(body) {
-                use crate::ast::{Expression, TopLevel, Literal, Keyword, ModuleLevelDefinition};
-                let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+                use crate::ast::{Expression, Keyword, Literal, ModuleLevelDefinition, TopLevel};
+                let mut referenced: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
 
                 // Recursive walker
                 fn walk_expr(expr: &Expression, acc: &mut std::collections::HashSet<String>) {
                     match expr {
                         Expression::List(items) | Expression::Vector(items) => {
-                            for e in items { walk_expr(e, acc); }
+                            for e in items {
+                                walk_expr(e, acc);
+                            }
                         }
                         Expression::Map(map) => {
-                            for v in map.values() { walk_expr(v, acc); }
+                            for v in map.values() {
+                                walk_expr(v, acc);
+                            }
                         }
                         Expression::FunctionCall { callee, arguments } => {
                             // Recognize (call :ccos.cap ...) by structure: callee symbol or list where first symbol is 'call'
@@ -373,11 +400,15 @@ impl CCOS {
                                     if let Some(first) = arguments.first() {
                                         match first {
                                             Expression::Literal(Literal::Keyword(Keyword(k))) => {
-                                                if let Some(rest) = k.strip_prefix("ccos.") { // stored without leading colon in Keyword?
+                                                if let Some(rest) = k.strip_prefix("ccos.") {
+                                                    // stored without leading colon in Keyword?
                                                     acc.insert(format!("ccos.{}", rest));
-                                                } else if k.starts_with(":ccos.") { // defensive variant if colon retained
+                                                } else if k.starts_with(":ccos.") {
+                                                    // defensive variant if colon retained
                                                     let trimmed = k.trim_start_matches(':');
-                                                    if trimmed.starts_with("ccos.") { acc.insert(trimmed.to_string()); }
+                                                    if trimmed.starts_with("ccos.") {
+                                                        acc.insert(trimmed.to_string());
+                                                    }
                                                 }
                                             }
                                             Expression::Symbol(sym2) => {
@@ -391,77 +422,162 @@ impl CCOS {
                                             _ => {}
                                         }
                                     }
-                                    for arg in arguments { walk_expr(arg, acc); }
+                                    for arg in arguments {
+                                        walk_expr(arg, acc);
+                                    }
                                 }
                                 _ => {
                                     walk_expr(callee, acc);
-                                    for arg in arguments { walk_expr(arg, acc); }
+                                    for arg in arguments {
+                                        walk_expr(arg, acc);
+                                    }
                                 }
                             }
                         }
                         Expression::If(ifx) => {
                             walk_expr(&ifx.condition, acc);
                             walk_expr(&ifx.then_branch, acc);
-                            if let Some(e) = &ifx.else_branch { walk_expr(e, acc); }
+                            if let Some(e) = &ifx.else_branch {
+                                walk_expr(e, acc);
+                            }
                         }
                         Expression::Let(letx) => {
-                            for b in &letx.bindings { walk_expr(&b.value, acc); }
-                            for b in &letx.body { walk_expr(b, acc); }
+                            for b in &letx.bindings {
+                                walk_expr(&b.value, acc);
+                            }
+                            for b in &letx.body {
+                                walk_expr(b, acc);
+                            }
                         }
-                        Expression::Do(dox) => { for e in &dox.expressions { walk_expr(e, acc); } }
-                        Expression::Fn(fnexpr) => { for e in &fnexpr.body { walk_expr(e, acc); } }
-                        Expression::Def(defexpr) => { walk_expr(&defexpr.value, acc); }
-                        Expression::Defn(defn) => { for e in &defn.body { walk_expr(e, acc); } }
+                        Expression::Do(dox) => {
+                            for e in &dox.expressions {
+                                walk_expr(e, acc);
+                            }
+                        }
+                        Expression::Fn(fnexpr) => {
+                            for e in &fnexpr.body {
+                                walk_expr(e, acc);
+                            }
+                        }
+                        Expression::Def(defexpr) => {
+                            walk_expr(&defexpr.value, acc);
+                        }
+                        Expression::Defn(defn) => {
+                            for e in &defn.body {
+                                walk_expr(e, acc);
+                            }
+                        }
                         Expression::Defstruct(_) => {}
                         Expression::DiscoverAgents(d) => {
                             walk_expr(&d.criteria, acc);
-                            if let Some(opt) = &d.options { walk_expr(opt, acc); }
+                            if let Some(opt) = &d.options {
+                                walk_expr(opt, acc);
+                            }
                         }
-                        Expression::LogStep(logx) => { for v in &logx.values { walk_expr(v, acc); } }
+                        Expression::LogStep(logx) => {
+                            for v in &logx.values {
+                                walk_expr(v, acc);
+                            }
+                        }
                         Expression::TryCatch(tc) => {
-                            for e in &tc.try_body { walk_expr(e, acc); }
-                            for clause in &tc.catch_clauses { for e in &clause.body { walk_expr(e, acc); } }
-                            if let Some(fb) = &tc.finally_body { for e in fb { walk_expr(e, acc); } }
+                            for e in &tc.try_body {
+                                walk_expr(e, acc);
+                            }
+                            for clause in &tc.catch_clauses {
+                                for e in &clause.body {
+                                    walk_expr(e, acc);
+                                }
+                            }
+                            if let Some(fb) = &tc.finally_body {
+                                for e in fb {
+                                    walk_expr(e, acc);
+                                }
+                            }
                         }
-                        Expression::Parallel(px) => { for b in &px.bindings { walk_expr(&b.expression, acc); } }
-                        Expression::WithResource(wx) => { walk_expr(&wx.resource_init, acc); for e in &wx.body { walk_expr(e, acc); } }
+                        Expression::Parallel(px) => {
+                            for b in &px.bindings {
+                                walk_expr(&b.expression, acc);
+                            }
+                        }
+                        Expression::WithResource(wx) => {
+                            walk_expr(&wx.resource_init, acc);
+                            for e in &wx.body {
+                                walk_expr(e, acc);
+                            }
+                        }
                         Expression::Match(mx) => {
                             // match expression then each clause pattern guard + body
                             walk_expr(&mx.expression, acc);
                             for c in &mx.clauses {
-                                if let Some(g) = &c.guard { walk_expr(g, acc); }
+                                if let Some(g) = &c.guard {
+                                    walk_expr(g, acc);
+                                }
                                 // c.body is Box<Expression>
                                 walk_expr(&c.body, acc);
                             }
                         }
                         Expression::For(fx) => {
                             // For bindings are expressions in pairs [sym coll ...]; traverse each expression node
-                            for b in &fx.bindings { walk_expr(b, acc); }
+                            for b in &fx.bindings {
+                                walk_expr(b, acc);
+                            }
                             walk_expr(&fx.body, acc); // body is Box<Expression>
                         }
                         Expression::Deref(inner) => walk_expr(inner, acc),
-                        Expression::Metadata(map) => { for v in map.values() { walk_expr(v, acc); } }
-                        Expression::Literal(_) | Expression::Symbol(_) | Expression::ResourceRef(_) => {}
+                        Expression::Metadata(map) => {
+                            for v in map.values() {
+                                walk_expr(v, acc);
+                            }
+                        }
+                        Expression::Literal(_)
+                        | Expression::Symbol(_)
+                        | Expression::ResourceRef(_) => {}
                     }
                 }
 
                 for item in items {
                     match item {
                         TopLevel::Expression(expr) => walk_expr(&expr, &mut referenced),
-                        TopLevel::Plan(pdef) => { for prop in &pdef.properties { walk_expr(&prop.value, &mut referenced); } },
-                        TopLevel::Intent(idef) => { for prop in &idef.properties { walk_expr(&prop.value, &mut referenced); } },
-                        TopLevel::Action(adef) => { for prop in &adef.properties { walk_expr(&prop.value, &mut referenced); } },
-                        TopLevel::Capability(cdef) => { for prop in &cdef.properties { walk_expr(&prop.value, &mut referenced); } },
-                        TopLevel::Resource(rdef) => { for prop in &rdef.properties { walk_expr(&prop.value, &mut referenced); } },
+                        TopLevel::Plan(pdef) => {
+                            for prop in &pdef.properties {
+                                walk_expr(&prop.value, &mut referenced);
+                            }
+                        }
+                        TopLevel::Intent(idef) => {
+                            for prop in &idef.properties {
+                                walk_expr(&prop.value, &mut referenced);
+                            }
+                        }
+                        TopLevel::Action(adef) => {
+                            for prop in &adef.properties {
+                                walk_expr(&prop.value, &mut referenced);
+                            }
+                        }
+                        TopLevel::Capability(cdef) => {
+                            for prop in &cdef.properties {
+                                walk_expr(&prop.value, &mut referenced);
+                            }
+                        }
+                        TopLevel::Resource(rdef) => {
+                            for prop in &rdef.properties {
+                                walk_expr(&prop.value, &mut referenced);
+                            }
+                        }
                         TopLevel::Module(mdef) => {
                             for def in &mdef.definitions {
                                 match def {
-                                    ModuleLevelDefinition::Def(d) => walk_expr(&d.value, &mut referenced),
-                                    ModuleLevelDefinition::Defn(dn) => { for e in &dn.body { walk_expr(e, &mut referenced); } },
+                                    ModuleLevelDefinition::Def(d) => {
+                                        walk_expr(&d.value, &mut referenced)
+                                    }
+                                    ModuleLevelDefinition::Defn(dn) => {
+                                        for e in &dn.body {
+                                            walk_expr(e, &mut referenced);
+                                        }
+                                    }
                                     ModuleLevelDefinition::Import(_) => {}
                                 }
                             }
-                        },
+                        }
                     }
                 }
 
@@ -659,6 +775,12 @@ impl CCOS {
                     }
                 }
             }
+        }
+
+        // Learning phase is currently opt-in to avoid penalizing hot paths during tests
+        if self.synthesis_enabled() {
+            // This is a no-fail operation - synthesis errors don't affect the request result
+            let _ = self.conclude_and_learn().await;
         }
 
         Ok(result)
@@ -866,7 +988,12 @@ impl CCOS {
                     generation_context: crate::ccos::types::GenerationContext {
                         arbiter_version: "delegating-1.0".to_string(),
                         generation_timestamp: intent.created_at,
-                        input_context: arbiter_context.cloned().unwrap_or_default().into_iter().map(|(k, v)| (k, v.to_string())).collect(),
+                        input_context: arbiter_context
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(k, v)| (k, v.to_string()))
+                            .collect(),
                         reasoning_trace: None,
                     },
                     status: intent.status.clone(),
@@ -1016,6 +1143,213 @@ impl CCOS {
             .validate_and_execute(plan, context)
             .await
     }
+
+    /// Analyze the current session's interactions and synthesize new capabilities.
+    /// This method should be called after successful request processing to enable
+    /// CCOS to learn from user interactions and generate reusable capabilities.
+    ///
+    /// The synthesis process:
+    /// 1. Extracts interaction data from IntentGraph and CausalChain
+    /// 2. Identifies patterns in user requests and agent responses
+    /// 3. Generates collector, planner, and stub capabilities
+    /// 4. Registers new capabilities in the marketplace for future use
+    pub async fn conclude_and_learn(&self) -> RuntimeResult<()> {
+        let recent_intents = self.extract_recent_intents().await?;
+
+        if recent_intents.is_empty() {
+            // No interactions to analyze
+            return Ok(());
+        }
+
+        let interaction_turns = self.convert_intents_to_interaction_turns(&recent_intents);
+
+        // Run the synthesis pipeline, passing a snapshot of the capability marketplace.
+        // Take the snapshot inside a small scope so the read lock is released before we try to
+        // register synthesized capabilities (which requires a write lock).
+        let marketplace = self.get_capability_marketplace();
+        let snapshot: Vec<crate::ccos::capability_marketplace::types::CapabilityManifest> = {
+            let caps = marketplace.capabilities.read().await;
+            caps.values().cloned().collect()
+        };
+
+        // Always prefer the registry-first synthesis entrypoint (Option A).
+        // If the marketplace snapshot is empty we still call the registry-first
+        // entrypoint and let the v0.1 generator decide to produce a stub.
+        let synth_result = crate::ccos::synthesis::synthesize_capabilities_with_marketplace(
+            &interaction_turns,
+            &snapshot,
+        );
+
+        self.log_synthesis_results(&synth_result).await;
+
+        Ok(())
+    }
+
+    /// Extract recent intents from the IntentGraph for analysis.
+    async fn extract_recent_intents(
+        &self,
+    ) -> RuntimeResult<Vec<crate::ccos::types::StorableIntent>> {
+        let ig = self
+            .intent_graph
+            .lock()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to lock intent graph: {}", e)))?;
+
+        // Get recent intents using list_intents with empty filter
+        let intents = ig
+            .storage
+            .list_intents(crate::ccos::intent_storage::IntentFilter::default())
+            .await
+            .unwrap_or_default();
+
+        Ok(intents)
+    }
+
+    /// Convert stored intents to InteractionTurn format for synthesis.
+    fn convert_intents_to_interaction_turns(
+        &self,
+        intents: &[crate::ccos::types::StorableIntent],
+    ) -> Vec<crate::ccos::synthesis::InteractionTurn> {
+        intents
+            .iter()
+            .enumerate()
+            .map(|(i, intent)| crate::ccos::synthesis::InteractionTurn {
+                turn_index: i,
+                prompt: intent.original_request.clone(),
+                answer: Some(intent.goal.clone()), // Use goal as the "answer" for synthesis
+            })
+            .collect()
+    }
+
+    /// Log the results of capability synthesis.
+    async fn log_synthesis_results(&self, synth_result: &crate::ccos::synthesis::SynthesisResult) {
+        if let Some(collector_code) = &synth_result.collector {
+            // Parse and register the collector capability
+            match self
+                .register_synthesized_capability(collector_code, "collector")
+                .await
+            {
+                Ok(capability_id) => println!(
+                    "[synthesis] Registered collector capability: {}",
+                    capability_id
+                ),
+                Err(e) => eprintln!("[synthesis] Failed to register collector capability: {}", e),
+            }
+        }
+
+        if let Some(planner_code) = &synth_result.planner {
+            // Parse and register the planner capability
+            match self
+                .register_synthesized_capability(planner_code, "planner")
+                .await
+            {
+                Ok(capability_id) => println!(
+                    "[synthesis] Registered planner capability: {}",
+                    capability_id
+                ),
+                Err(e) => eprintln!("[synthesis] Failed to register planner capability: {}", e),
+            }
+        }
+
+        if let Some(stub_code) = &synth_result.stub {
+            // Parse and register the stub capability
+            match self
+                .register_synthesized_capability(stub_code, "stub")
+                .await
+            {
+                Ok(capability_id) => {
+                    println!("[synthesis] Registered stub capability: {}", capability_id)
+                }
+                Err(e) => eprintln!("[synthesis] Failed to register stub capability: {}", e),
+            }
+        }
+    }
+
+    /// Register a synthesized RTFS capability by parsing the code and creating a handler.
+    async fn register_synthesized_capability(
+        &self,
+        rtfs_code: &str,
+        capability_type: &str,
+    ) -> RuntimeResult<String> {
+        // Parse the RTFS code to extract the capability definition
+        let parsed = crate::parser::parse_with_enhanced_errors(rtfs_code, None).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to parse synthesized {} capability: {}",
+                capability_type, e
+            ))
+        })?;
+
+        // Find the capability definition
+        let capability_def = parsed
+            .iter()
+            .find_map(|top| {
+                if let crate::ast::TopLevel::Capability(cap) = top {
+                    Some(cap)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                RuntimeError::Generic(format!(
+                    "No capability definition found in synthesized {} code",
+                    capability_type
+                ))
+            })?;
+
+        let capability_id = capability_def.name.0.clone();
+
+        // Extract the implementation property
+        let _implementation_expr = capability_def
+            .properties
+            .iter()
+            .find_map(|prop| {
+                if prop.key.0 == "implementation" {
+                    Some(&prop.value)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                RuntimeError::Generic(format!(
+                    "No implementation found in synthesized {} capability",
+                    capability_type
+                ))
+            })?;
+
+        let capability_id_clone = capability_id.clone();
+        let handler = Arc::new(move |input: &Value| {
+            // TODO: Implement proper RTFS execution for synthesized capabilities
+            // For now, return a placeholder result
+            let mut result_map = std::collections::HashMap::new();
+            result_map.insert(
+                crate::ast::MapKey::String("capability_id".to_string()),
+                Value::String(capability_id_clone.clone()),
+            );
+            result_map.insert(
+                crate::ast::MapKey::String("status".to_string()),
+                Value::String("synthesized_capability_placeholder".to_string()),
+            );
+            result_map.insert(
+                crate::ast::MapKey::String("input".to_string()),
+                input.clone(),
+            );
+            Ok(Value::Map(result_map))
+        });
+
+        // Register the capability in the marketplace
+        self.capability_marketplace
+            .register_local_capability(
+                capability_id.clone(),
+                format!("Synthesized {} capability", capability_type),
+                format!(
+                    "Automatically generated {} capability from interaction synthesis",
+                    capability_type
+                ),
+                handler,
+            )
+            .await?;
+
+        Ok(capability_id)
+    }
 }
 
 // --- Internal helpers (debug instrumentation) ---
@@ -1045,6 +1379,45 @@ fn json_escape(s: &str) -> String {
 }
 
 impl CCOS {
+    /// Determine whether synthesis should run after processing requests.
+    fn synthesis_enabled(&self) -> bool {
+        fn truthy(value: &str) -> bool {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        }
+
+        fn falsy(value: &str) -> bool {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        }
+
+        if let Ok(flag) = std::env::var("CCOS_DISABLE_SYNTHESIS") {
+            if truthy(&flag) {
+                return false;
+            }
+        }
+
+        if let Ok(flag) = std::env::var("CCOS_ENABLE_SYNTHESIS") {
+            if truthy(&flag) {
+                return true;
+            }
+            if falsy(&flag) {
+                return false;
+            }
+        }
+
+        self.agent_config.features.iter().any(|feature| {
+            matches!(
+                feature.trim().to_ascii_lowercase().as_str(),
+                "synthesis" | "auto-synthesis"
+            )
+        })
+    }
+
     fn emit_debug<F>(&self, build: F)
     where
         F: FnOnce(()) -> String,

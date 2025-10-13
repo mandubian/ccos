@@ -202,7 +202,9 @@ fn run_test_case(
                     feature_name, case_index
                 )),
                 #[cfg(feature = "effect-boundary")]
-                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_)) => Err(format!(
+                Ok(rtfs_compiler::runtime::execution_outcome::ExecutionOutcome::RequiresHost(
+                    _,
+                )) => Err(format!(
                     "Host effect required in {}[{}]",
                     feature_name, case_index
                 )),

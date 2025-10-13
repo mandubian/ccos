@@ -38,6 +38,12 @@ impl Symbol {
     }
 }
 
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[schemars(transparent)]
 pub struct Keyword(pub String);
@@ -45,6 +51,13 @@ pub struct Keyword(pub String);
 impl Keyword {
     pub fn new(s: &str) -> Self {
         Keyword(s.to_string())
+    }
+}
+
+impl std::fmt::Display for Keyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Keywords are printed with a leading colon
+        write!(f, ":{}", self.0)
     }
 }
 
@@ -513,7 +526,24 @@ impl std::fmt::Display for TypeExpr {
                 let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
                 write!(f, "[:and {}]", type_strs.join(" "))
             }
-            TypeExpr::Literal(lit) => write!(f, "[:val {:?}]", lit),
+            TypeExpr::Literal(lit) => write!(f, "[:val {}]", lit),
+        }
+    }
+}
+
+impl std::fmt::Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Integer(i) => write!(f, "{}", i),
+            Literal::Float(fl) => write!(f, "{}", fl),
+            Literal::String(s) => write!(f, "\"{}\"", s),
+            Literal::Boolean(b) => write!(f, "{}", b),
+            Literal::Keyword(k) => write!(f, ":{}", k.0),
+            Literal::Symbol(sym) => write!(f, "{}", sym.0),
+            Literal::Timestamp(ts) => write!(f, "\"{}\"", ts),
+            Literal::Uuid(u) => write!(f, "\"{}\"", u),
+            Literal::ResourceHandle(r) => write!(f, "\"{}\"", r),
+            Literal::Nil => write!(f, "nil"),
         }
     }
 }
@@ -985,5 +1015,13 @@ impl TryFrom<Value> for Expression {
                 value.type_name()
             ))),
         }
+    }
+}
+
+impl std::fmt::Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Delegate to the RTFS bridge printer to keep canonical formatting in one place
+        let s = crate::ccos::rtfs_bridge::extractors::expression_to_rtfs_string(self);
+        write!(f, "{}", s)
     }
 }

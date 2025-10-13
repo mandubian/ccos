@@ -33,7 +33,13 @@ pub struct Metrics {
 }
 
 pub fn extract_with_metrics(_chain: &crate::ccos::causal_chain::CausalChain) -> (Schema, Metrics) {
-    let schema = Schema { params: HashMap::new() };
-    let metrics = Metrics { coverage: 0.0, redundancy: 0.0, enum_specificity: 0.0 };
+    let schema = Schema {
+        params: HashMap::new(),
+    };
+    let metrics = Metrics {
+        coverage: 0.0,
+        redundancy: 0.0,
+        enum_specificity: 0.0,
+    };
     (schema, metrics)
 }

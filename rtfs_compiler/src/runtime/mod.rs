@@ -28,7 +28,7 @@ pub use capabilities::*;
 pub use environment::{Environment, IrEnvironment};
 pub use error::{RuntimeError, RuntimeResult};
 pub use evaluator::Evaluator;
-pub use execution_outcome::{CallMetadata, ExecutionOutcome, HostCall, CausalContext};
+pub use execution_outcome::{CallMetadata, CausalContext, ExecutionOutcome, HostCall};
 pub use ir_runtime::IrRuntime;
 pub use ir_runtime::IrStrategy;
 pub use module_runtime::{Module, ModuleRegistry};
@@ -124,7 +124,7 @@ impl Runtime {
     pub fn evaluate(&self, input: &str) -> Result<Value, RuntimeError> {
         let parsed = match parser::parse(input) {
             Ok(p) => p,
-            Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {:?}", e))),
+                Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {}", e))),
         };
         let module_registry = ModuleRegistry::new();
         let security_context = RuntimeContext::pure();
@@ -148,7 +148,7 @@ impl Runtime {
     pub fn evaluate_with_stdlib(&self, input: &str) -> Result<Value, RuntimeError> {
         let parsed = match parser::parse(input) {
             Ok(p) => p,
-            Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {:?}", e))),
+            Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {}", e))),
         };
         let mut module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
@@ -217,14 +217,14 @@ impl RTFSRuntime for Runtime {
         let expr: Expression = if toplevels.len() == 1 {
             match toplevels.remove(0) {
                 TopLevel::Expression(e) => e,
-                other => Expression::Literal(Literal::String(format!("{:?}", other))),
+                other => Expression::Literal(Literal::String(serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)))),
             }
         } else {
             let exprs: Vec<Expression> = toplevels
                 .into_iter()
                 .map(|t| match t {
                     TopLevel::Expression(e) => e,
-                    other => Expression::Literal(Literal::String(format!("{:?}", other))),
+                    other => Expression::Literal(Literal::String(serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)))),
                 })
                 .collect();
             Expression::Do(DoExpr { expressions: exprs })
