@@ -3,8 +3,8 @@
 //! Emits JSON events for observability (spec section 25).
 //! All events have format: {"type":"...", "timestamp":"ISO8601", ...}
 
-use std::time::SystemTime;
 use chrono::{DateTime, Utc};
+use std::time::SystemTime;
 
 /// Synthesis events emitted during conversation lifecycle.
 #[derive(Debug, Clone)]
@@ -57,33 +57,53 @@ impl TelemetryEvent {
     pub fn to_json(&self) -> String {
         let now: DateTime<Utc> = SystemTime::now().into();
         let timestamp = now.to_rfc3339();
-        
+
         match self {
-            TelemetryEvent::StatusTransition { from, to, conversation_id } => {
+            TelemetryEvent::StatusTransition {
+                from,
+                to,
+                conversation_id,
+            } => {
                 format!(
                     r#"{{"type":"status_transition","timestamp":"{}","from":"{}","to":"{}","conversation_id":"{}"}}"#,
                     timestamp, from, to, conversation_id
                 )
             }
-            TelemetryEvent::ParameterExtracted { key, value, source_turn, conversation_id } => {
+            TelemetryEvent::ParameterExtracted {
+                key,
+                value,
+                source_turn,
+                conversation_id,
+            } => {
                 format!(
                     r#"{{"type":"parameter_extracted","timestamp":"{}","key":"{}","value":"{}","source_turn":{},"conversation_id":"{}"}}"#,
                     timestamp, key, value, source_turn, conversation_id
                 )
             }
-            TelemetryEvent::ArtifactGenerated { artifact_type, capability_id, conversation_id } => {
+            TelemetryEvent::ArtifactGenerated {
+                artifact_type,
+                capability_id,
+                conversation_id,
+            } => {
                 format!(
                     r#"{{"type":"artifact_generated","timestamp":"{}","artifact_type":"{}","capability_id":"{}","conversation_id":"{}"}}"#,
                     timestamp, artifact_type, capability_id, conversation_id
                 )
             }
-            TelemetryEvent::MissingCapability { capability_id, conversation_id } => {
+            TelemetryEvent::MissingCapability {
+                capability_id,
+                conversation_id,
+            } => {
                 format!(
                     r#"{{"type":"missing_capability","timestamp":"{}","capability_id":"{}","conversation_id":"{}"}}"#,
                     timestamp, capability_id, conversation_id
                 )
             }
-            TelemetryEvent::PendingExecutionCreated { execution_id, capability_id, conversation_id } => {
+            TelemetryEvent::PendingExecutionCreated {
+                execution_id,
+                capability_id,
+                conversation_id,
+            } => {
                 format!(
                     r#"{{"type":"pending_execution_created","timestamp":"{}","execution_id":"{}","capability_id":"{}","conversation_id":"{}"}}"#,
                     timestamp, execution_id, capability_id, conversation_id

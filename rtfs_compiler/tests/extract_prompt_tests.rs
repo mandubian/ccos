@@ -1,6 +1,6 @@
+use rtfs_compiler::ast::{Keyword, MapKey};
 use rtfs_compiler::ccos::types::{Action, ActionType, ExecutionResult};
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ast::{MapKey, Keyword};
 use std::collections::HashMap;
 
 // The function under test is exported from the crate's examples_helpers module
@@ -15,7 +15,10 @@ fn action_with_string_prompt(prompt: &str) -> Action {
         intent_id: "intent-1".to_string(),
         action_type: ActionType::PlanPaused,
         function_name: None,
-        arguments: Some(vec![Value::String("checkpoint-1".to_string()), Value::String(prompt.to_string())]),
+        arguments: Some(vec![
+            Value::String("checkpoint-1".to_string()),
+            Value::String(prompt.to_string()),
+        ]),
         result: None,
         cost: None,
         duration_ms: None,
@@ -27,7 +30,10 @@ fn action_with_string_prompt(prompt: &str) -> Action {
 // Helper to construct an Action with a map argument containing a prompt key
 fn action_with_map_prompt(prompt: &str) -> Action {
     let mut map = HashMap::new();
-    map.insert(MapKey::Keyword(Keyword("prompt".to_string())), Value::String(prompt.to_string()));
+    map.insert(
+        MapKey::Keyword(Keyword("prompt".to_string())),
+        Value::String(prompt.to_string()),
+    );
     Action {
         action_id: "a2".to_string(),
         parent_action_id: None,
@@ -35,7 +41,10 @@ fn action_with_map_prompt(prompt: &str) -> Action {
         intent_id: "intent-1".to_string(),
         action_type: ActionType::PlanPaused,
         function_name: None,
-        arguments: Some(vec![Value::String("checkpoint-2".to_string()), Value::Map(map)]),
+        arguments: Some(vec![
+            Value::String("checkpoint-2".to_string()),
+            Value::Map(map),
+        ]),
         result: None,
         cost: None,
         duration_ms: None,

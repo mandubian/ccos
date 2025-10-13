@@ -1,6 +1,6 @@
 use clap::Parser;
-use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::ccos::arbiter::ArbiterEngine;
+use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::config::expand_profiles;
 use rtfs_compiler::config::types::AgentConfig;
 use rtfs_compiler::config::types::LlmProfile;
@@ -69,7 +69,10 @@ fn apply_profile_env(p: &LlmProfile, announce: bool) {
     }
     std::env::set_var("CCOS_LLM_MODEL", &p.model);
     if announce {
-        println!("[config] applied profile '{}' provider={} model={}", p.name, p.provider, p.model);
+        println!(
+            "[config] applied profile '{}' provider={} model={}",
+            p.name, p.provider, p.model
+        );
     }
 }
 
@@ -85,7 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (expanded_profiles, _profile_meta, expansion_rationale) = if let Some(cfg) = &loaded_config {
+    let (expanded_profiles, _profile_meta, expansion_rationale) = if let Some(cfg) = &loaded_config
+    {
         expand_profiles(cfg)
     } else {
         (Vec::new(), std::collections::HashMap::new(), String::new())
@@ -110,10 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // CLI overrides
-    if let Some(m) = &args.llm_model { std::env::set_var("CCOS_DELEGATING_MODEL", m); }
+    if let Some(m) = &args.llm_model {
+        std::env::set_var("CCOS_DELEGATING_MODEL", m);
+    }
     if let Some(provider) = &args.llm_provider {
         std::env::set_var("CCOS_LLM_PROVIDER_HINT", provider);
-        if provider == "stub" { std::env::set_var("CCOS_LLM_PROVIDER", "stub"); }
+        if provider == "stub" {
+            std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+        }
     }
     if let Some(key) = &args.llm_api_key {
         let hint = args.llm_provider.as_deref().unwrap_or("openai");
@@ -130,7 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ctx = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.user.ask".to_string()].into_iter().collect(),
+        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.user.ask".to_string()]
+            .into_iter()
+            .collect(),
         ..RuntimeContext::pure()
     };
 
@@ -139,10 +149,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(prompt) = &args.prompt {
         // If a delegating arbiter is available, call it directly to see the raw Intent it produces
         if let Some(da) = ccos.get_delegating_arbiter() {
-            match (&*da).natural_language_to_intent_with_raw(prompt, None).await {
+            match (&*da)
+                .natural_language_to_intent_with_raw(prompt, None)
+                .await
+            {
                 Ok((intent, raw)) => {
-                    println!("--- ARBITER RAW LLM RESPONSE ---\n{}\n--- END RAW RESPONSE ---", raw);
-                    println!("--- ARBITER PARSED INTENT ---\n{:#?}\n--- END PARSED INTENT ---", intent);
+                    println!(
+                        "--- ARBITER RAW LLM RESPONSE ---\n{}\n--- END RAW RESPONSE ---",
+                        raw
+                    );
+                    println!(
+                        "--- ARBITER PARSED INTENT ---\n{:#?}\n--- END PARSED INTENT ---",
+                        intent
+                    );
                 }
                 Err(e) => {
                     eprintln!("failed to produce intent via delegating arbiter: {}", e);
@@ -158,10 +177,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("--- GENERATED PLAN (RTFS) ---");
                 match &plan.body {
                     rtfs_compiler::ccos::types::PlanBody::Rtfs(src) => println!("{}", src),
-                    rtfs_compiler::ccos::types::PlanBody::Wasm{..} => println!("<wasm module plan>"),
+                    rtfs_compiler::ccos::types::PlanBody::Wasm { .. } => {
+                        println!("<wasm module plan>")
+                    }
                 }
                 println!("--- END PLAN ---");
-                println!("--- EXECUTION RESULT ---\nsuccess={} value={}\n--- END RESULT ---", res.success, res.value);
+                println!(
+                    "--- EXECUTION RESULT ---\nsuccess={} value={}\n--- END RESULT ---",
+                    res.success, res.value
+                );
             }
             Err(e) => {
                 eprintln!("process_request_with_plan error: {}", e);

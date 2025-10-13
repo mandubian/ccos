@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Trust tiers categorize governance expectations for agents.
@@ -35,11 +36,37 @@ pub struct CostModel {
     pub tokens_per_second: f64,
 }
 
+/// Execution modes for agents, defining how they perform their tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AgentExecutionMode {
+    /// Agent executes a RTFS plan in the RTFS runtime.
+    RTFS {
+        plan: String,
+    },
+    /// Agent calls a remote complex service.
+    RemoteService {
+        endpoint: String,
+        protocol: String,
+    },
+    /// Agent calls a program written in another language/runtime.
+    ExternalProgram {
+        command: String,
+        args: Vec<String>,
+        runtime: String,
+    },
+    /// Legacy kinds without specific execution (for backward compatibility).
+    Planner,
+    Analyzer,
+    Synthesizer,
+    RemoteArbiter,
+    Composite,
+}
+
 /// Descriptor for a higher‑order cognitive agent able to accept intents.
 #[derive(Debug, Clone)]
 pub struct AgentDescriptor {
     pub agent_id: String,
-    pub kind: String, // planner | analyzer | synthesizer | remote-arbiter | composite
+    pub execution_mode: AgentExecutionMode,
     pub skills: Vec<String>,
     pub supported_constraints: Vec<String>,
     pub trust_tier: TrustTier,

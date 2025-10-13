@@ -283,10 +283,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("CCOS_LLM_PROVIDER_HINT", provider);
         // Provide a direct provider env for Arbiter if supported
         match provider.as_str() {
-            "openai" => { std::env::set_var("CCOS_LLM_PROVIDER", "openai"); },
-            "claude" | "anthropic" => { std::env::set_var("CCOS_LLM_PROVIDER", "anthropic"); },
-            "gemini" => { std::env::set_var("CCOS_LLM_PROVIDER", "gemini"); },
-            "stub" => { std::env::set_var("CCOS_LLM_PROVIDER", "stub"); },
+            "openai" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "openai");
+            }
+            "claude" | "anthropic" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "anthropic");
+            }
+            "gemini" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "gemini");
+            }
+            "stub" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+            }
             _ => { /* openrouter & others may be inferred later */ }
         }
     }
@@ -313,7 +321,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(|p| p.eq_ignore_ascii_case("stub"))
         .unwrap_or(false)
-        || std::env::var("CCOS_LLM_PROVIDER_HINT").map(|v| v == "stub").unwrap_or(false);
+        || std::env::var("CCOS_LLM_PROVIDER_HINT")
+            .map(|v| v == "stub")
+            .unwrap_or(false);
     if provider_is_stub {
         // Always prefer RTFS intent format for stub to exercise primary code path while offline
         std::env::set_var("CCOS_INTENT_FORMAT", "rtfs");
@@ -408,7 +418,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "ccos.echo".to_string(),
             "ccos.math.add".to_string(),
             "ccos.network.http-fetch".to_string(), // may be filtered if registry not mocked
-            "ccos.user.ask".to_string(), // interactive user input
+            "ccos.user.ask".to_string(),           // interactive user input
         ]
         .into_iter()
         .collect(),
@@ -806,13 +816,13 @@ fn draw_profile_picker(
     active_profile: Option<&str>,
 ) -> std::io::Result<()> {
     use std::io::Write;
-    
+
     crossterm::execute!(
         stdout,
         terminal::Clear(terminal::ClearType::All),
         crossterm::cursor::MoveTo(0, 0)
     )?;
-    
+
     write!(stdout, "{}\r\n", "🧠 Select an LLM profile".bold())?;
     write!(
         stdout,
@@ -824,7 +834,7 @@ fn draw_profile_picker(
     for (idx, profile) in profiles.iter().enumerate() {
         let is_selected = idx == selected;
         let is_active = active_profile == Some(profile.name.as_str());
-        
+
         // Build compact detail string
         let mut detail_parts: Vec<String> = Vec::new();
         if let Some(meta) = profile_meta.get(&profile.name) {
@@ -842,16 +852,16 @@ fn draw_profile_picker(
                 detail_parts.push(format!("q:{}", q));
             }
         }
-        
+
         let details = if detail_parts.is_empty() {
             String::new()
         } else {
             format!(" [{}]", detail_parts.join(" "))
         };
-        
+
         let active_mark = if is_active { " ⭐" } else { "" };
         let cursor = if is_selected { "➤" } else { " " };
-        
+
         // Format: cursor name | provider=X model=Y [details] active_mark
         let line = format!(
             "{} {} | {}={} {}={}{}{}",
@@ -864,7 +874,7 @@ fn draw_profile_picker(
             details.dark_grey(),
             active_mark
         );
-        
+
         if is_selected {
             write!(
                 stdout,
@@ -877,7 +887,7 @@ fn draw_profile_picker(
             write!(stdout, "{}\r\n", line)?;
         }
     }
-    
+
     stdout.flush()?;
     Ok(())
 }

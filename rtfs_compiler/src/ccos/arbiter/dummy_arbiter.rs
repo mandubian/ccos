@@ -59,10 +59,12 @@ impl DummyArbiter {
                 .collect();
 
             let mut metadata = HashMap::new();
-            if !numbers.is_empty() {
+                if !numbers.is_empty() {
+                // Store numbers as an RTFS-like vector literal so prompts expecting RTFS see a native form
+                let vec_literal = format!("[{}]", numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" "));
                 metadata.insert(
                     "numbers".to_string(),
-                    Value::String(format!("{:?}", numbers)),
+                    Value::String(vec_literal),
                 );
             }
 
@@ -107,10 +109,11 @@ impl DummyArbiter {
                 .collect();
 
             let mut metadata = HashMap::new();
-            if !numbers.is_empty() {
+                if !numbers.is_empty() {
+                let vec_literal = format!("[{}]", numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" "));
                 metadata.insert(
                     "numbers".to_string(),
-                    Value::String(format!("{:?}", numbers)),
+                    Value::String(vec_literal),
                 );
             }
 
@@ -189,7 +192,7 @@ impl DummyArbiter {
                 if !numbers.is_empty() {
                     metadata.insert(
                         "numbers".to_string(),
-                        Value::String(format!("{:?}", numbers)),
+                        Value::String(format!("[{}]", numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" "))),
                     );
                 }
 
@@ -296,7 +299,7 @@ impl DummyArbiter {
                             r#"
 (do
     (step "Generate Greeting" (call :ccos.echo "Hello! Let me help you with that calculation."))
-    (step "Perform Addition" (call :ccos.math.add {{:args [{:?} {:?}]}}))
+    (step "Perform Addition" (call :ccos.math.add {{:args [{} {}]}}))
     (step "Display Result" (call :ccos.echo "The result is: "))
 )
 "#,
@@ -334,8 +337,8 @@ impl DummyArbiter {
                         format!(
                             r#"
 (do
-    (let [result (call :ccos.math.add {{:args [{:?} {:?}]}})]
-      (call :ccos.echo (str "The result of adding {:?} and {:?} is: " result)))
+    (let [result (call :ccos.math.add {{:args [{} {}]}})]
+    (call :ccos.echo (str "The result of adding {} and {} is: " result)))
 )
 "#,
                             a, b, a, b

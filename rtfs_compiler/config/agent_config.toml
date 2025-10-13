@@ -85,7 +85,7 @@ default = "balanced"
 
   [[llm_profiles.model_sets.models]]
   name = "balanced"
-  model = "deepseek/deepseek-chat-v3.1:free"
+  model = "deepseek/deepseek-v3.2-exp"
   max_prompt_cost_per_1k = 0.0
   max_completion_cost_per_1k = 0.0
   quality = "balanced"

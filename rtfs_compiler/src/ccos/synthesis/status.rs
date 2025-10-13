@@ -102,10 +102,11 @@ mod tests {
 
     #[test]
     fn test_status_descriptions() {
-        assert_eq!(status_description(STATUS_COLLECTING_INFO), "Collecting user information");
+        assert_eq!(
+            status_description(STATUS_COLLECTING_INFO),
+            "Collecting user information"
+        );
         assert_eq!(status_description(STATUS_COMPLETED), "Completed (terminal)");
         assert_eq!(status_description("unknown"), "Unknown status");
     }
 }
-
-

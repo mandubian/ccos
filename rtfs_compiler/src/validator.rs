@@ -259,46 +259,40 @@ impl SchemaValidator {
     fn validate_capability(def: &CapabilityDefinition) -> Result<(), ValidationError> {
         let mut errors = Vec::new();
 
-        // Validate name
-        if !Self::is_valid_versioned_type(&def.name.0) {
-            errors.push(format!(
-                "Capability name '{}' is not a valid versioned type identifier",
-                def.name.0
-            ));
-        }
+        // For RTFS capability definitions, we only require basic validation
+        // The full marketplace manifest validation happens during registration
 
         let properties = Self::properties_to_map(&def.properties);
 
-        // Check required fields
-        let required_fields = [
-            "type",
-            "capability-id",
-            "name",
-            "version",
-            "created-at",
-            "created-by",
-            "interface",
-            "implementation",
-        ];
+        // Check for required RTFS capability fields
+        let required_fields = ["implementation"];
         for field in &required_fields {
             if !properties.contains_key(&field.to_string()) {
                 errors.push(format!("Capability missing required field: {}", field));
             }
         }
 
-        // Validate type field
-        if let Some(type_prop) = properties.get("type") {
-            if !Self::is_valid_type_field(type_prop, ":rtfs.core:v2.0:capability") {
-                errors
-                    .push("Capability type field must be ':rtfs.core:v2.0:capability'".to_string());
+        // Validate implementation is present and is a valid expression
+        if let Some(impl_expr) = properties.get("implementation") {
+            // Basic check that implementation exists - detailed validation happens during execution
+            match impl_expr {
+                crate::ast::Expression::Let(_)
+                | crate::ast::Expression::Do(_)
+                | crate::ast::Expression::Symbol(_)
+                | crate::ast::Expression::FunctionCall { .. } => {
+                    // Valid implementation forms
+                }
+                _ => {
+                    errors.push("Capability implementation must be a valid RTFS expression (let, do, symbol, or function call)".to_string());
+                }
             }
         }
 
         if !errors.is_empty() {
-            return Err(ValidationError::SchemaError {
-                type_name: "Capability".to_string(),
-                errors: validator::ValidationErrors::new(),
-            });
+            return Err(ValidationError::Custom(format!(
+                "Capability validation failed: {}",
+                errors.join(", ")
+            )));
         }
 
         Ok(())
@@ -341,10 +335,10 @@ impl SchemaValidator {
         }
 
         if !errors.is_empty() {
-            return Err(ValidationError::SchemaError {
-                type_name: "Resource".to_string(),
-                errors: validator::ValidationErrors::new(),
-            });
+            return Err(ValidationError::Custom(format!(
+                "Resource validation failed: {}",
+                errors.join(", ")
+            )));
         }
 
         Ok(())

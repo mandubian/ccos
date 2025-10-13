@@ -29,23 +29,23 @@
 
 use clap::Parser;
 use crossterm::style::Stylize;
-use rtfs_compiler::ccos::CCOS;
-use rtfs_compiler::ccos::arbiter::ArbiterEngine;
-use rtfs_compiler::config::profile_selection::ProfileMeta;
 use rtfs_compiler::ast::CapabilityDefinition as CapabilityDef;
+use rtfs_compiler::ccos::agent::registry::AgentRegistry;
+use rtfs_compiler::ccos::arbiter::ArbiterEngine;
+use rtfs_compiler::ccos::types::{ExecutionResult, StorableIntent};
+use rtfs_compiler::ccos::CCOS;
+use rtfs_compiler::config::profile_selection::ProfileMeta;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::config::validation::validate_config;
 use rtfs_compiler::config::{auto_select_model, expand_profiles};
-use rtfs_compiler::ccos::types::{ExecutionResult, StorableIntent};
-use rtfs_compiler::runtime::values::Value;
 use rtfs_compiler::runtime::security::{RuntimeContext, SecurityLevel};
+use rtfs_compiler::runtime::values::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-
 
 /// Represents one turn of the conversation for later analysis.
 #[derive(Clone, Debug)]
@@ -54,8 +54,6 @@ struct InteractionTurn {
     // We store the full Intent object for detailed analysis
     created_intent: Option<StorableIntent>,
 }
-
-
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -181,7 +179,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None,
             );
             if let Some(best) = best {
-                println!("[config] auto-selected profile '{}' for budget constraints", best.name);
+                println!(
+                    "[config] auto-selected profile '{}' for budget constraints",
+                    best.name
+                );
                 apply_profile_env(best, true);
                 std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
             } else {
@@ -194,7 +195,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(cfg) = &loaded_config {
                 if let Some(llm_cfg) = &cfg.llm_profiles {
                     if let Some(default_name) = &llm_cfg.default {
-                        if let Some(p) = expanded_profiles.iter().find(|p| &p.name == default_name) {
+                        if let Some(p) = expanded_profiles.iter().find(|p| &p.name == default_name)
+                        {
                             apply_profile_env(p, true);
                             std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
                         } else if !expanded_profiles.is_empty() {
@@ -219,10 +221,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("CCOS_LLM_PROVIDER_HINT", provider);
         // Provide a direct provider env for Arbiter if supported
         match provider.as_str() {
-            "openai" => { std::env::set_var("CCOS_LLM_PROVIDER", "openai"); },
-            "claude" | "anthropic" => { std::env::set_var("CCOS_LLM_PROVIDER", "anthropic"); },
-            "gemini" => { std::env::set_var("GEMINI_API_KEY", "gemini"); },
-            "stub" => { std::env::set_var("CCOS_LLM_PROVIDER", "stub"); },
+            "openai" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "openai");
+            }
+            "claude" | "anthropic" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "anthropic");
+            }
+            "gemini" => {
+                std::env::set_var("GEMINI_API_KEY", "gemini");
+            }
+            "stub" => {
+                std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+            }
             _ => { /* openrouter & others may be inferred later */ }
         }
     }
@@ -259,7 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(|p| p.eq_ignore_ascii_case("stub"))
         .unwrap_or(false)
-        || std::env::var("CCOS_LLM_PROVIDER_HINT").map(|v| v == "stub").unwrap_or(false);
+        || std::env::var("CCOS_LLM_PROVIDER_HINT")
+            .map(|v| v == "stub")
+            .unwrap_or(false);
     if provider_is_stub {
         // Always prefer RTFS intent format for stub to exercise primary code path while offline
         std::env::set_var("CCOS_INTENT_FORMAT", "rtfs");
@@ -318,12 +330,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Security context: allow basic user input & echo capability for demo.
     let ctx = RuntimeContext {
         security_level: SecurityLevel::Controlled,
-        allowed_capabilities: vec![
-            "ccos.echo".to_string(),
-            "ccos.user.ask".to_string(),
-        ]
-        .into_iter()
-        .collect(),
+        allowed_capabilities: vec!["ccos.echo".to_string(), "ccos.user.ask".to_string()]
+            .into_iter()
+            .collect(),
         ..RuntimeContext::pure()
     };
 
@@ -336,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loaded_config.take(),
             None,
         )
-        .await?
+        .await?,
     );
 
     // Track known intents (intent_id -> goal snippet)
@@ -349,12 +358,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut asked_questions: HashSet<String> = HashSet::new();
     let mut stagnant_turns = 0usize;
     const STAGNATION_LIMIT: usize = 2;
-    
+
     // Track context from previous plan executions for passing to subsequent plans
     let mut accumulated_context: HashMap<String, String> = HashMap::new();
-    
+
     // --- Phase 2: Simulation of Interaction ---
-    println!("\n{}", "--- Running Simulated Interaction ---".yellow().bold());
+    println!(
+        "\n{}",
+        "--- Running Simulated Interaction ---".yellow().bold()
+    );
 
     // Start with a single seed input and allow the LLM-driven plan to ask follow-up
     // questions via `ccos.user.ask`. The runtime's `ccos.user.ask` currently echoes
@@ -382,7 +394,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let res = match ccos.process_request(&current_request, &ctx).await {
             Ok(r) => r,
             Err(e) => {
-                println!("{}", format!("[error] CCOS failed to process request: {}", e).red());
+                println!(
+                    "{}",
+                    format!("[error] CCOS failed to process request: {}", e).red()
+                );
                 break;
             }
         };
@@ -408,12 +423,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
+
         conversation_history.push(InteractionTurn {
             user_input: current_request.clone(),
             created_intent: created_intent_this_turn,
         });
-
 
         // --- Plan Execution & Interaction Logic ---
         let mut next_request = None;
@@ -436,12 +450,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Value::Map(map) => {
                 // This branch handles structured data, typical of final plan steps
-                println!("{}:\n{}", "Execution Result (Map)".bold(), res.value.to_string().dim());
+                println!(
+                    "{}:\n{}",
+                    "Execution Result (Map)".bold(),
+                    res.value.to_string().dim()
+                );
 
                 // Detect explicit refinement_exhausted signal per strategy prompt
                 // Detect explicit refinement_exhausted signal per strategy prompt
                 if is_refinement_exhausted(&res.value) {
-                    println!("{}", "[flow] Refinement exhausted signal detected. Ending interaction.".green());
+                    println!(
+                        "{}",
+                        "[flow] Refinement exhausted signal detected. Ending interaction.".green()
+                    );
                     plan_exhausted = true;
                 }
 
@@ -459,7 +480,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Also check for response data within the map (string responses stored under string keys)
                 if let Some(response_str) = get_map_string_value(map, "response") {
                     if is_user_response(response_str) {
-                        println!("{}: {}", "System Response".bold(), response_str.clone().cyan());
+                        println!(
+                            "{}: {}",
+                            "System Response".bold(),
+                            response_str.clone().cyan()
+                        );
                         next_request = Some(response_str.to_string());
                     }
                 }
@@ -494,7 +519,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             _ => {
-                println!("{}: {}", "Execution Result".bold(), res.value.to_string().dim());
+                println!(
+                    "{}: {}",
+                    "Execution Result".bold(),
+                    res.value.to_string().dim()
+                );
             }
         }
 
@@ -523,7 +552,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             if !responses.is_empty() {
-                println!("[flow] Plan paused. Generated {} responses.", responses.len());
+                println!(
+                    "[flow] Plan paused. Generated {} responses.",
+                    responses.len()
+                );
                 collected_responses.extend(responses);
 
                 // If we generated responses, we need to re-run the plan with the new context.
@@ -572,7 +604,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Small delay to make the interaction feel more natural
 
         // Optional: Emit preference schema + metrics (either via CLI flag or env var CCOS_EMIT_PREF_SCHEMA=1)
-        let emit_schema = args.emit_pref_schema || std::env::var("CCOS_EMIT_PREF_SCHEMA").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        let emit_schema = args.emit_pref_schema
+            || std::env::var("CCOS_EMIT_PREF_SCHEMA")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
         if emit_schema {
             if let Ok(chain_lock) = ccos.get_causal_chain().lock() {
                 use rtfs_compiler::ccos::synthesis::preference_schema::extract_with_metrics;
@@ -580,9 +615,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("\n[pref.schema] params={} coverage={:.2} redundancy={:.2} enum_specificity={:.2}",
                     schema.params.len(), metrics.coverage, metrics.redundancy, metrics.enum_specificity);
                 for (name, meta) in schema.params.iter() {
-                    let kind = match meta.param_type { rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Enum => "enum", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::String => "string", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Integer => "int", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Float => "float", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Boolean => "bool", rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Unknown => "?" };
-                    let enum_desc = if !meta.enum_values.is_empty() { format!(" {:?}", meta.enum_values) } else { String::new() };
-                    println!("[pref.param] {} type={} required={} turns={}..{} asked={}{}", name, kind, meta.required, meta.first_turn, meta.last_turn, meta.questions_asked, enum_desc);
+                    let kind = match meta.param_type {
+                        rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Enum => {
+                            "enum"
+                        }
+                        rtfs_compiler::ccos::synthesis::preference_schema::ParamType::String => {
+                            "string"
+                        }
+                        rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Integer => {
+                            "int"
+                        }
+                        rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Float => {
+                            "float"
+                        }
+                        rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Boolean => {
+                            "bool"
+                        }
+                        rtfs_compiler::ccos::synthesis::preference_schema::ParamType::Unknown => {
+                            "?"
+                        }
+                    };
+                    let enum_desc = if !meta.enum_values.is_empty() {
+                        format!(" {:?}", meta.enum_values)
+                    } else {
+                        String::new()
+                    };
+                    println!(
+                        "[pref.param] {} type={} required={} turns={}..{} asked={}{}",
+                        name,
+                        kind,
+                        meta.required,
+                        meta.first_turn,
+                        meta.last_turn,
+                        meta.questions_asked,
+                        enum_desc
+                    );
                 }
             }
         }
@@ -594,7 +661,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Phase 3: Post-Mortem Analysis and Synthesis ---
     if args.synthesize_capability {
-        if let Err(e) = generate_synthesis_summary(&conversation_history, root_intent.as_ref(), &ccos, args.persist_synthesized).await {
+        if let Err(e) = generate_synthesis_summary(
+            &conversation_history,
+            root_intent.as_ref(),
+            &ccos,
+            args.persist_synthesized,
+        )
+        .await
+        {
             eprintln!("[synthesis] Error: {}", e);
         }
     } else {
@@ -604,18 +678,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-
     Ok(())
 }
 
 /// Performs a post-mortem analysis of the conversation to synthesize a new capability.
 /// Legacy placeholder synthesis output (retained for fallback when --synthesize-capability not set)
-fn legacy_placeholder_synthesis(history: &[InteractionTurn], _root_intent_id: Option<&String>) -> Result<(), Box<dyn std::error::Error>> {
-    println!("\n\n{}", "--- Capability Synthesis Analysis (Placeholder) ---".bold());
-    if history.is_empty() { println!("Conversation history is empty. Nothing to analyze."); return Ok(()); }
-    let root_goal = history.get(0).and_then(|t| t.created_intent.as_ref()).map_or("Unknown".to_string(), |i| i.goal.clone());
+fn legacy_placeholder_synthesis(
+    history: &[InteractionTurn],
+    _root_intent_id: Option<&String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "\n\n{}",
+        "--- Capability Synthesis Analysis (Placeholder) ---".bold()
+    );
+    if history.is_empty() {
+        println!("Conversation history is empty. Nothing to analyze.");
+        return Ok(());
+    }
+    let root_goal = history
+        .get(0)
+        .and_then(|t| t.created_intent.as_ref())
+        .map_or("Unknown".to_string(), |i| i.goal.clone());
     println!("{} {}", "Initial Goal:".bold(), root_goal);
-    println!("{} {} turns", "Total Interaction Turns:".bold(), history.len());
+    println!(
+        "{} {} turns",
+        "Total Interaction Turns:".bold(),
+        history.len()
+    );
     println!("(Run again with --synthesize-capability for LLM-driven generation)");
     Ok(())
 }
@@ -628,34 +717,53 @@ async fn generate_synthesis_summary(
     ccos: &Arc<CCOS>,
     persist: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("\n\n{}", "--- Capability Synthesis Analysis (LLM) ---".bold());
+    println!(
+        "\n\n{}",
+        "--- Capability Synthesis Analysis (LLM) ---".bold()
+    );
 
     if history.is_empty() {
         println!("Conversation history is empty. Nothing to analyze.");
         return Ok(());
     }
 
-    let root_goal = history.get(0)
+    let root_goal = history
+        .get(0)
         .and_then(|turn| turn.created_intent.as_ref())
         .map_or("Unknown".to_string(), |intent| intent.goal.clone());
-    let refinements: Vec<String> = history.iter().skip(1)
+    let refinements: Vec<String> = history
+        .iter()
+        .skip(1)
         .filter_map(|turn| turn.created_intent.as_ref().map(|i| i.goal.clone()))
         .collect();
 
     println!("{} {}", "Initial Goal:".bold(), root_goal);
-    println!("{} {} turns", "Total Interaction Turns:".bold(), history.len());
+    println!(
+        "{} {} turns",
+        "Total Interaction Turns:".bold(),
+        history.len()
+    );
     if !refinements.is_empty() {
         println!("{}", "Refinements:".bold());
-        for (i, r) in refinements.iter().enumerate() { println!("  {}. {}", i+1, truncate(r, 90)); }
+        for (i, r) in refinements.iter().enumerate() {
+            println!("  {}. {}", i + 1, truncate(r, 90));
+        }
     }
 
     // --- Quick, local synthesis using the built-in pipeline (Phase 8 minimal)
     println!("{}", "[synthesis] Running quick local synthesis pipeline (schema extraction + artifact generation)...".yellow());
-    let interaction_turns_for_synthesis: Vec<rtfs_compiler::ccos::synthesis::InteractionTurn> = history.iter().map(|t| {
-        rtfs_compiler::ccos::synthesis::InteractionTurn { turn_index: 0, prompt: t.user_input.clone(), answer: None }
-    }).collect();
+    let interaction_turns_for_synthesis: Vec<rtfs_compiler::ccos::synthesis::InteractionTurn> =
+        history
+            .iter()
+            .map(|t| rtfs_compiler::ccos::synthesis::InteractionTurn {
+                turn_index: 0,
+                prompt: t.user_input.clone(),
+                answer: None,
+            })
+            .collect();
 
-    let synth_result = rtfs_compiler::ccos::synthesis::synthesize_capabilities(&interaction_turns_for_synthesis, ccos);
+    let synth_result =
+        rtfs_compiler::ccos::synthesis::synthesize_capabilities(&interaction_turns_for_synthesis);
     if let Some(col) = &synth_result.collector {
         println!("[synthesis.quick] Collector:\n{}", col);
         if persist {
@@ -678,54 +786,98 @@ async fn generate_synthesis_summary(
         }
     }
 
+    // --- Agent Synthesis: If interactions show complex orchestration, create an agent with RTFS plan
+    let should_create_agent = history.len() > 3 || refinements.len() > 2; // heuristic: complex if many turns/refinements
+    if should_create_agent {
+        println!("{}", "[synthesis] Interactions show complex orchestration - attempting to synthesize an agent with RTFS plan...".yellow());
+        if let Err(e) =
+            synthesize_agent_from_interactions(history, &root_goal, &refinements, ccos, persist)
+                .await
+        {
+            println!(
+                "[synthesis] Agent synthesis failed: {}. Falling back to capability synthesis.",
+                e
+            );
+        } else {
+            println!(
+                "{}",
+                "[synthesis] Agent synthesis completed successfully.".green()
+            );
+            return Ok(()); // If agent synthesis succeeds, skip capability synthesis
+        }
+    }
+
     // 1. Build synthesis prompt
     let prompt = build_capability_synthesis_prompt(&root_goal, &refinements);
-    println!("{}", "[synthesis] Requesting capability proposal from LLM...".yellow());
+    println!(
+        "{}",
+        "[synthesis] Requesting capability proposal from LLM...".yellow()
+    );
 
     // 2. Obtain raw capability proposal WITHOUT forcing intent parsing first.
-    let arbiter = if let Some(a) = ccos.get_delegating_arbiter() { a } else {
+    let arbiter = if let Some(a) = ccos.get_delegating_arbiter() {
+        a
+    } else {
         println!("[synthesis] Delegating arbiter not available (enable delegation). Skipping.");
         return Ok(());
     };
 
     let raw = match arbiter.generate_raw_text(&prompt).await {
         Ok(txt) => txt,
-        Err(e) => { eprintln!("[synthesis] Raw capability generation failed: {}", e); return Ok(()); }
+        Err(e) => {
+            eprintln!("[synthesis] Raw capability generation failed: {}", e);
+            return Ok(());
+        }
     };
-    println!("[synthesis] Raw LLM proposal (truncated 300 chars): {}", truncate(&raw, 300));
+    println!(
+        "[synthesis] Raw LLM proposal (truncated 300 chars): {}",
+        truncate(&raw, 300)
+    );
 
     // 3. Parser-first attempt: try to parse the raw response into TopLevel ASTs and
     // if we find a TopLevel::Capability, pretty-print it into canonical RTFS source.
-    let mut spec = if let Ok(parsed) = rtfs_compiler::parser::parse_with_enhanced_errors(&raw, None) {
+    let mut spec = if let Ok(parsed) = rtfs_compiler::parser::parse_with_enhanced_errors(&raw, None)
+    {
         // If parser returns at least one capability top-level node, convert it to canonical RTFS
         let mut found_cap: Option<String> = None;
         for tl in parsed.iter() {
             if let rtfs_compiler::ast::TopLevel::Capability(_) = tl {
-                if let Some(s) = rtfs_compiler::ccos::rtfs_bridge::extractors::toplevel_to_rtfs_string(tl) {
+                if let Some(s) =
+                    rtfs_compiler::ccos::rtfs_bridge::extractors::toplevel_to_rtfs_string(tl)
+                {
                     // Wrap in fenced block for downstream processing
                     found_cap = Some(format!("```rtfs\n{}\n```", s));
                     break;
                 }
             }
         }
-        if let Some(c) = found_cap { c } else {
+        if let Some(c) = found_cap {
+            c
+        } else {
             // Fall back to older heuristics if parser didn't yield a capability
-            extract_capability_block(&raw).unwrap_or_else(|| extract_capability_spec(&raw).unwrap_or_else(|| raw.clone()))
+            extract_capability_block(&raw)
+                .unwrap_or_else(|| extract_capability_spec(&raw).unwrap_or_else(|| raw.clone()))
         }
     } else {
         // If parsing failed (likely because output isn't pure RTFS), fall back to heuristics
-        extract_capability_block(&raw).unwrap_or_else(|| extract_capability_spec(&raw).unwrap_or_else(|| raw.clone()))
+        extract_capability_block(&raw)
+            .unwrap_or_else(|| extract_capability_spec(&raw).unwrap_or_else(|| raw.clone()))
     };
 
     // Detect likely truncation: if raw contains a starting ```rtfs fence but no closing fence,
     // or if a (capability appears but parentheses are unbalanced, attempt a targeted completion.
     if raw.contains("```rtfs") && !raw.matches("```rtfs").count().eq(&2) {
-        println!("[synthesis] Detected possibly truncated fenced rtfs block; requesting completion...");
+        println!(
+            "[synthesis] Detected possibly truncated fenced rtfs block; requesting completion..."
+        );
         let complete_prompt = format!(
             "The previous response started an RTFS fenced block but was truncated. Here is the full raw response so far:\n\n{}\n\nPlease OUTPUT ONLY the missing remainder of the RTFS fenced block (no fences) so we can append it to the earlier content and produce a valid (capability ...) s-expression. Do NOT add any commentary.",
             raw
         );
-        if let Ok((_it, completion_raw)) = arbiter.natural_language_to_intent_with_raw(&complete_prompt, None).await {
+        if let Ok((_it, completion_raw)) = arbiter
+            .natural_language_to_intent_with_raw(&complete_prompt, None)
+            .await
+        {
             // Append the completion to the original raw and re-extract
             let stitched = format!("{}{}", raw, completion_raw);
             if let Some(block) = extract_capability_block(&stitched) {
@@ -746,7 +898,10 @@ async fn generate_synthesis_summary(
                     "The previous response began a (capability ...) s-expression but it appears to be incomplete. Here is the raw response so far:\n\n{}\n\nPlease OUTPUT ONLY the missing remainder of the s-expression (no fences), so we can append it and obtain a valid RTFS (capability ...) top-level form. Do NOT include commentary.",
                     raw
                 );
-                if let Ok((_it, completion_raw)) = arbiter.natural_language_to_intent_with_raw(&complete_prompt, None).await {
+                if let Ok((_it, completion_raw)) = arbiter
+                    .natural_language_to_intent_with_raw(&complete_prompt, None)
+                    .await
+                {
                     let stitched = format!("{}{}", raw, completion_raw);
                     if let Some(block) = extract_capability_block(&stitched) {
                         spec = block;
@@ -764,10 +919,13 @@ async fn generate_synthesis_summary(
     if !spec.contains("(capability") {
         println!("[synthesis] Initial proposal did not include a (capability ...) block - re-prompting for strict RTFS capability output...");
         let clarify = format!(
-            "The previous proposal:\n{}\n\nPlease OUTPUT ONLY a single well-formed RTFS s-expression that defines a capability. The top-level form must start with (capability \"id\" ...) and include :description and optionally :parameters and :steps or :implementation. Wrap the s-expression in a ```rtfs fenced code block. Do NOT include any extra commentary.",
+            "The previous proposal:\n{}\n\nPlease OUTPUT ONLY a single well-formed RTFS s-expression that defines a capability. The top-level form must start with (capability \"id\" ...) and include :description and optionally :parameters and :implementation. Wrap the s-expression in a ```rtfs fenced code block. Do NOT include any extra commentary.",
             raw
         );
-        if let Ok((_it, clarified_raw)) = arbiter.natural_language_to_intent_with_raw(&clarify, None).await {
+        if let Ok((_it, clarified_raw)) = arbiter
+            .natural_language_to_intent_with_raw(&clarify, None)
+            .await
+        {
             if let Some(block) = extract_capability_block(&clarified_raw) {
                 spec = block;
             } else {
@@ -775,7 +933,10 @@ async fn generate_synthesis_summary(
                 // attempt to ask the arbiter to generate an RTFS plan for the parsed intent
                 println!("[synthesis] Clarified response still lacked a (capability ...) block; attempting to generate an RTFS plan from the parsed intent...");
                 // We have no parsed intent yet; attempt to derive an intent ONLY if needed for fallback plan.
-                let parsed_intent_opt = match arbiter.natural_language_to_intent_with_raw(&prompt, None).await {
+                let parsed_intent_opt = match arbiter
+                    .natural_language_to_intent_with_raw(&prompt, None)
+                    .await
+                {
                     Ok((it, _r)) => Some(it),
                     Err(_e) => None,
                 };
@@ -793,7 +954,8 @@ async fn generate_synthesis_summary(
                         if let rtfs_compiler::ccos::types::PlanBody::Rtfs(plan_body) = plan.body {
                             // derive a temporary capability id from root_goal (kebab-case) if none yet
                             let temp_id = extract_capability_id(&spec).unwrap_or_else(|| {
-                                root_goal.to_lowercase()
+                                root_goal
+                                    .to_lowercase()
                                     .chars()
                                     .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                                     .collect::<String>()
@@ -801,7 +963,9 @@ async fn generate_synthesis_summary(
                             // Wrap plan_body into a capability :steps form
                             let wrapped = format!("```rtfs\n(capability \"{}\"\n  :description \"Synthesized capability derived from interaction about '{}'\"\n  :steps {}\n)\n```", temp_id, root_goal.replace('"', "'"), plan_body);
                             spec = wrapped;
-                            println!("[synthesis] Built capability spec from generated plan (wrapped).");
+                            println!(
+                                "[synthesis] Built capability spec from generated plan (wrapped)."
+                            );
                         } else {
                             println!("[synthesis] Generated plan was not RTFS; cannot wrap into capability.");
                         }
@@ -817,14 +981,24 @@ async fn generate_synthesis_summary(
     }
     let capability_id = extract_capability_id(&spec).unwrap_or_else(|| {
         // Generate id from goal slug
-        root_goal.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>()
+        root_goal
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
     });
     // Use as_str() to avoid moving the String when applying style (String::cyan consumes self)
-    println!("[synthesis] Candidate capability id: {}", capability_id.as_str().cyan());
+    println!(
+        "[synthesis] Candidate capability id: {}",
+        capability_id.as_str().cyan()
+    );
 
     let marketplace = ccos.get_capability_marketplace();
     if marketplace.has_capability(&capability_id).await {
-        println!("[synthesis] Capability '{}' already exists; skipping registration.", capability_id);
+        println!(
+            "[synthesis] Capability '{}' already exists; skipping registration.",
+            capability_id
+        );
         return Ok(());
     }
 
@@ -832,62 +1006,94 @@ async fn generate_synthesis_summary(
     match parse_and_validate_capability(&spec) {
         Ok(()) => {
             // 4. Register capability (local) with handler placeholder for now
-            let register_result = marketplace.register_local_capability(
-                capability_id.clone(),
-                capability_id.clone(),
-                format!("Synthesized capability derived from interaction about '{}'.", root_goal),
-                Arc::new(|value: &Value| {
-                    // Handler behavior:
-                    // - If CCOS_INTERACTIVE_ASK is set, prompt the user on stdin using the example's prompt()
-                    // - Else, attempt to read a canned response from CCOS_USER_ASK_RESPONSE_{KEY}
-                    // - Fallback: echo the input in a small result map (original behavior)
+            let register_result = marketplace
+                .register_local_capability(
+                    capability_id.clone(),
+                    capability_id.clone(),
+                    format!(
+                        "Synthesized capability derived from interaction about '{}'.",
+                        root_goal
+                    ),
+                    Arc::new(|value: &Value| {
+                        // Handler behavior:
+                        // - If CCOS_INTERACTIVE_ASK is set, prompt the user on stdin using the example's prompt()
+                        // - Else, attempt to read a canned response from CCOS_USER_ASK_RESPONSE_{KEY}
+                        // - Fallback: echo the input in a small result map (original behavior)
 
-                    // Determine a short prompt text from the incoming value
-                    let prompt_text = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Map(m) => {
-                            if let Some(Value::String(p)) = m.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("prompt"))) {
-                                p.clone()
-                            } else if let Some(Value::String(p)) = m.get(&rtfs_compiler::ast::MapKey::String("prompt".to_string())) {
-                                p.clone()
+                        // Determine a short prompt text from the incoming value
+                        let prompt_text = match value {
+                            Value::String(s) => s.clone(),
+                            Value::Map(m) => {
+                                if let Some(Value::String(p)) =
+                                    m.get(&rtfs_compiler::ast::MapKey::Keyword(
+                                        rtfs_compiler::ast::Keyword::new("prompt"),
+                                    ))
+                                {
+                                    p.clone()
+                                } else if let Some(Value::String(p)) =
+                                    m.get(&rtfs_compiler::ast::MapKey::String("prompt".to_string()))
+                                {
+                                    p.clone()
+                                } else {
+                                    "Please provide input:".to_string()
+                                }
+                            }
+                            _ => "Please provide input:".to_string(),
+                        };
+
+                        // Interactive stdin path
+                        if std::env::var("CCOS_INTERACTIVE_ASK").is_ok() {
+                            match prompt_user(&format!("(user.ask) {} ", prompt_text)) {
+                                Ok(ans) => Ok(Value::String(ans)),
+                                Err(e) => {
+                                    Err(rtfs_compiler::runtime::error::RuntimeError::Generic(
+                                        format!("prompt failed: {}", e),
+                                    ))
+                                }
+                            }
+                        } else {
+                            // Try canned env response by generating a question key
+                            let qkey = generate_question_key(&prompt_text)
+                                .unwrap_or_else(|| "last_response".to_string());
+                            let env_key = format!("CCOS_USER_ASK_RESPONSE_{}", qkey.to_uppercase());
+                            if let Ok(env_resp) = std::env::var(&env_key) {
+                                Ok(Value::String(env_resp))
                             } else {
-                                "Please provide input:".to_string()
+                                // Fallback echo map (preserve previous example behavior)
+                                Ok(Value::Map({
+                                    let mut m = std::collections::HashMap::new();
+                                    m.insert(
+                                        rtfs_compiler::ast::MapKey::String("status".to_string()),
+                                        Value::String("executed".to_string()),
+                                    );
+                                    m.insert(
+                                        rtfs_compiler::ast::MapKey::String("input".to_string()),
+                                        value.clone(),
+                                    );
+                                    m
+                                }))
                             }
                         }
-                        _ => "Please provide input:".to_string(),
-                    };
-
-                    // Interactive stdin path
-                    if std::env::var("CCOS_INTERACTIVE_ASK").is_ok() {
-                        match prompt_user(&format!("(user.ask) {} ", prompt_text)) {
-                            Ok(ans) => Ok(Value::String(ans)),
-                            Err(e) => Err(rtfs_compiler::runtime::error::RuntimeError::Generic(format!("prompt failed: {}", e)))
-                        }
-                    } else {
-                        // Try canned env response by generating a question key
-                        let qkey = generate_question_key(&prompt_text).unwrap_or_else(|| "last_response".to_string());
-                        let env_key = format!("CCOS_USER_ASK_RESPONSE_{}", qkey.to_uppercase());
-                        if let Ok(env_resp) = std::env::var(&env_key) {
-                            Ok(Value::String(env_resp))
-                        } else {
-                            // Fallback echo map (preserve previous example behavior)
-                            Ok(Value::Map({
-                                let mut m = std::collections::HashMap::new();
-                                m.insert(rtfs_compiler::ast::MapKey::String("status".to_string()), Value::String("executed".to_string()));
-                                m.insert(rtfs_compiler::ast::MapKey::String("input".to_string()), value.clone());
-                                m
-                            }))
-                        }
-                    }
-                })
-            ).await;
+                    }),
+                )
+                .await;
             match register_result {
-                Ok(_) => println!("{} {}", "[synthesis] Registered capability:".green(), capability_id),
-                Err(e) => { eprintln!("[synthesis] Registration failed: {}", e); return Ok(()); }
+                Ok(_) => println!(
+                    "{} {}",
+                    "[synthesis] Registered capability:".green(),
+                    capability_id
+                ),
+                Err(e) => {
+                    eprintln!("[synthesis] Registration failed: {}", e);
+                    return Ok(());
+                }
             }
         }
         Err(err_msg) => {
-            eprintln!("[synthesis] Capability spec validation failed: {}. Skipping registration.", err_msg);
+            eprintln!(
+                "[synthesis] Capability spec validation failed: {}. Skipping registration.",
+                err_msg
+            );
         }
     }
 
@@ -896,7 +1102,10 @@ async fn generate_synthesis_summary(
         if let Err(e) = persist_capability_spec(&capability_id, &spec) {
             eprintln!("[synthesis] Persist error: {}", e);
         } else {
-            println!("[synthesis] Persisted spec to generated_capabilities/{}.rtfs", capability_id);
+            println!(
+                "[synthesis] Persisted spec to generated_capabilities/{}.rtfs",
+                capability_id
+            );
         }
     }
 
@@ -904,33 +1113,227 @@ async fn generate_synthesis_summary(
     Ok(())
 }
 
+/// Synthesize an agent with RTFS plan from interaction history
+async fn synthesize_agent_from_interactions(
+    history: &[InteractionTurn],
+    root_goal: &str,
+    refinements: &[String],
+    ccos: &Arc<CCOS>,
+    persist: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("[agent-synthesis] Generating RTFS plan from interaction history...");
+
+    // Build a comprehensive prompt for agent synthesis
+    let prompt = build_agent_synthesis_prompt(root_goal, refinements, history);
+
+    let arbiter = ccos
+        .get_delegating_arbiter()
+        .ok_or("Delegating arbiter not available for agent synthesis")?;
+
+    // Generate RTFS plan from the interaction history
+    let (intent, _raw_response) = arbiter
+        .natural_language_to_intent_with_raw(&prompt, None)
+        .await
+        .map_err(|e| format!("Failed to parse intent from agent synthesis prompt: {}", e))?;
+
+    let plan = arbiter
+        .intent_to_plan(&intent)
+        .await
+        .map_err(|e| format!("Failed to generate RTFS plan for agent: {}", e))?;
+
+    let rtfs_plan = match plan.body {
+        rtfs_compiler::ccos::types::PlanBody::Rtfs(plan_code) => plan_code,
+        _ => return Err("Generated plan was not RTFS format".into()),
+    };
+
+    // Generate agent ID from goal
+    let agent_id = format!(
+        "agent-{}",
+        root_goal
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+    );
+
+    // Extract skills from the interaction history
+    let skills = extract_skills_from_history(history);
+
+    // Create agent descriptor
+    let agent_descriptor = rtfs_compiler::ccos::agent::registry::AgentDescriptor {
+        agent_id: agent_id.clone(),
+        execution_mode: rtfs_compiler::ccos::agent::registry::AgentExecutionMode::RTFS {
+            plan: rtfs_plan.clone(),
+        },
+        skills,
+        supported_constraints: vec![
+            "complex-orchestration".to_string(),
+            "multi-step-planning".to_string(),
+        ],
+        trust_tier: rtfs_compiler::ccos::agent::registry::TrustTier::T1Trusted,
+        cost: rtfs_compiler::ccos::agent::registry::CostModel::default(),
+        latency: rtfs_compiler::ccos::agent::registry::LatencyStats::default(),
+        success: rtfs_compiler::ccos::agent::registry::SuccessStats::default(),
+        provenance: Some(format!(
+            "Synthesized from {} interaction turns about '{}'",
+            history.len(),
+            root_goal
+        )),
+    };
+
+    // Register the agent
+    let registry = ccos.get_agent_registry();
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register(agent_descriptor.clone());
+    }
+
+    println!(
+        "[agent-synthesis] Registered agent: {} with RTFS plan",
+        agent_id.clone().cyan()
+    );
+
+    // Persist if requested
+    if persist {
+        let agent_spec = format!(";; Synthesized Agent: {}\n;; Generated from {} interactions about '{}'\n;; RTFS Plan:\n{}",
+            agent_id.clone(), history.len(), root_goal, rtfs_plan);
+        if let Err(e) = persist_capability_spec(&agent_id, &agent_spec) {
+            eprintln!("[agent-synthesis] Persist error: {}", e);
+        } else {
+            println!(
+                "[agent-synthesis] Persisted agent spec to generated_capabilities/{}.rtfs",
+                agent_id
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Build a prompt for synthesizing an agent with RTFS plan
+fn build_agent_synthesis_prompt(
+    root_goal: &str,
+    refinements: &[String],
+    history: &[InteractionTurn],
+) -> String {
+    let mut prompt = String::from("You are an agent synthesis engine. Given an interaction history showing complex user goal refinement, create an executable RTFS plan that an agent can use to handle similar tasks autonomously.\n\n");
+
+    prompt.push_str("INSTRUCTIONS:\n");
+    prompt.push_str(
+        "1) Analyze the interaction history to understand the user's evolving requirements\n",
+    );
+    prompt.push_str("2) Generate an RTFS plan that orchestrates multiple capabilities to achieve the final goal\n");
+    prompt.push_str("3) The plan should be reusable for similar complex tasks\n");
+    prompt.push_str("4) Use (call ...) for external operations and proper error handling\n\n");
+
+    prompt.push_str(&format!("Initial Goal: {}\n\n", root_goal));
+
+    if !refinements.is_empty() {
+        prompt.push_str("Refinement Process:\n");
+        for (i, r) in refinements.iter().enumerate() {
+            prompt.push_str(&format!("{}. {}\n", i + 1, r));
+        }
+        prompt.push_str("\n");
+    }
+
+    prompt.push_str("Interaction History:\n");
+    for (i, turn) in history.iter().enumerate() {
+        prompt.push_str(&format!("Turn {}: User said: {}\n", i + 1, turn.user_input));
+        if let Some(intent) = &turn.created_intent {
+            prompt.push_str(&format!("  → Created intent: {}\n", intent.goal));
+        }
+    }
+
+    prompt.push_str("\nGenerate an RTFS plan that captures this complex interaction pattern and can be executed by an agent.\n");
+    prompt
+}
+
+/// Extract skills from interaction history
+fn extract_skills_from_history(history: &[InteractionTurn]) -> Vec<String> {
+    let mut skills = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Extract keywords from goals and user inputs
+    for turn in history {
+        let text = format!(
+            "{} {}",
+            turn.user_input,
+            turn.created_intent
+                .as_ref()
+                .map(|i| i.goal.clone())
+                .unwrap_or_default()
+        );
+
+        // Simple keyword extraction (could be enhanced with NLP)
+        let keywords = [
+            "plan",
+            "itinerary",
+            "travel",
+            "schedule",
+            "organize",
+            "research",
+            "find",
+            "search",
+            "book",
+            "reserve",
+            "optimize",
+            "create",
+        ];
+
+        for &keyword in &keywords {
+            if text.to_lowercase().contains(keyword) && seen.insert(keyword.to_string()) {
+                skills.push(keyword.to_string());
+            }
+        }
+    }
+
+    if skills.is_empty() {
+        skills.push("complex-task-orchestration".to_string());
+    }
+
+    skills
+}
+
 /// Build a focused synthesis prompt for the LLM
 fn build_capability_synthesis_prompt(root_goal: &str, refinements: &[String]) -> String {
     let mut prompt = String::from("You are a capability synthesis engine. Given an initial user goal and its refinements, produce a reusable RTFS capability definition that can be registered in a capability marketplace.\n");
     prompt.push_str("IMPORTANT INSTRUCTIONS:\n");
     prompt.push_str("1) OUTPUT EXACTLY ONE triple-backtick fenced block labeled 'rtfs' that contains exactly one well-formed RTFS s-expression.\n");
-    prompt.push_str("2) The top-level form MUST be (capability \"id\" ...). Use kebab-case for ids.\n");
+    prompt.push_str(
+        "2) The top-level form MUST be (capability \"id\" ...). Use kebab-case for ids.\n",
+    );
     prompt.push_str("3) Do NOT include any prose, commentary, headings, lists, or extra text outside the single fenced block.\n");
-    prompt.push_str("4) Provide :description and optionally :parameters and :steps or :implementation. Keep types simple (string, number, boolean, map, list).\n\n");
+    prompt.push_str("4) Provide :description and optionally :parameters and :implementation. Keep types simple (string, number, boolean, map, list).\n\n");
 
-    prompt.push_str("Examples (mimic these exactly - each example is a complete, valid response):\n\n");
-    prompt.push_str("```rtfs\n(capability \"travel.create-personalized-itinerary\"\n  :description \"Create a personalized travel itinerary given user preferences\"\n  :parameters {:name \"string\" :destination \"string\" :dates \"string\" :budget \"string\"}\n  :steps (do\n    (search.flights :destination \"$destination\")\n    (search.hotels :destination \"$destination\")\n    (optimize.itinerary :preferences $preferences)\n  )\n)\n```\n\n");
-    prompt.push_str("```rtfs\n(capability \"weather.get-forecast\"\n  :description \"Return a weather forecast summary for a given location and date range\"\n  :parameters {:location \"string\" :start_date \"string\" :end_date \"string\"}\n  :steps (do\n    (weather.lookup :location $location :range { :from $start_date :to $end_date })\n    (format.forecast-summary :forecast $forecast)\n  )\n)\n```\n\n");
-    prompt.push_str("```rtfs\n(capability \"calendar.schedule-meeting\"\n  :description \"Schedule a meeting on the user's calendar given participants, time window, and preferences\"\n  :parameters {:participants :list :title \"string\" :time_window \"string\"}\n  :implementation (do\n    (calendar.find-available-slot :participants $participants :window $time_window)\n    (calendar.create-event :slot $chosen_slot :title $title :participants $participants)\n  )\n)\n```\n\n");
+    prompt.push_str(
+        "Examples (mimic these exactly - each example is a complete, valid response):\n\n",
+    );
+    prompt.push_str("```rtfs\n(capability \"travel.create-personalized-itinerary\"\n  :description \"Create a personalized travel itinerary given user preferences\"\n  :parameters {:name \"string\" :destination \"string\" :dates \"string\" :budget \"string\"}\n  :implementation (do\n    (search.flights :destination destination)\n    (search.hotels :destination destination)\n    (optimize.itinerary :preferences preferences)\n  )\n)\n```\n\n");
+    prompt.push_str("```rtfs\n(capability \"weather.get-forecast\"\n  :description \"Return a weather forecast summary for a given location and date range\"\n  :parameters {:location \"string\" :start_date \"string\" :end_date \"string\"}\n  :implementation (do\n    (weather.lookup :location location :range { :from start_date :to end_date })\n    (format.forecast-summary :forecast forecast)\n  )\n)\n```\n\n");
+    prompt.push_str("```rtfs\n(capability \"calendar.schedule-meeting\"\n  :description \"Schedule a meeting on the user's calendar given participants, time window, and preferences\"\n  :parameters {:participants :list :title \"string\" :time_window \"string\"}\n  :implementation (do\n    (calendar.find-available-slot :participants participants :window time_window)\n    (calendar.create-event :slot chosen_slot :title title :participants participants)\n  )\n)\n```\n\n");
 
     prompt.push_str(&format!("Initial Goal: {}\n", root_goal));
     if !refinements.is_empty() {
         prompt.push_str("Refinements:\n");
-        for r in refinements { prompt.push_str(&format!("- {}\n", r)); }
+        for r in refinements {
+            prompt.push_str(&format!("- {}\n", r));
+        }
     }
-    prompt.push_str("\nProduce a single capability id in kebab-case derived from the goal and refinements.\n");
+    prompt.push_str(
+        "\nProduce a single capability id in kebab-case derived from the goal and refinements.\n",
+    );
     prompt.push_str("Respond ONLY with the fenced rtfs block and nothing else.\n");
     prompt
 }
 
 /// Naive extraction: find line starting with 'capability'
 fn extract_capability_spec(raw: &str) -> Option<String> {
-    if raw.contains("capability") { Some(raw.to_string()) } else { None }
+    if raw.contains("capability") {
+        Some(raw.to_string())
+    } else {
+        None
+    }
 }
 
 fn extract_capability_id(spec: &str) -> Option<String> {
@@ -952,7 +1355,9 @@ fn extract_capability_id(spec: &str) -> Option<String> {
             let parts: Vec<&str> = l.split_whitespace().collect();
             if parts.len() >= 2 {
                 let mut candidate = parts[1].to_string();
-                if candidate.starts_with('(') { candidate = candidate[1..].to_string(); }
+                if candidate.starts_with('(') {
+                    candidate = candidate[1..].to_string();
+                }
                 candidate = candidate.trim_matches('"').to_string();
                 return Some(candidate);
             }
@@ -1036,9 +1441,12 @@ fn extract_balanced_sexpr(text: &str, start_idx: usize) -> Option<String> {
 }
 
 fn persist_capability_spec(id: &str, spec: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use std::fs; use std::path::PathBuf;
+    use std::fs;
+    use std::path::PathBuf;
     let dir = PathBuf::from("generated_capabilities");
-    if !dir.exists() { fs::create_dir_all(&dir)?; }
+    if !dir.exists() {
+        fs::create_dir_all(&dir)?;
+    }
     let mut file = dir.clone();
     file.push(format!("{}.rtfs", id));
     fs::write(file, spec)?;
@@ -1075,7 +1483,9 @@ impl ResponseHandler {
         if let Ok(chain) = ccos.get_causal_chain().lock() {
             let actions = chain.get_all_actions();
             for action in actions.iter().rev() {
-                if action.plan_id == plan_id && action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
+                if action.plan_id == plan_id
+                    && action.action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused
+                {
                     if let Some(question) = self.extract_question_from_action(action) {
                         self.pending_questions.push(question);
                     }
@@ -1094,11 +1504,15 @@ impl ResponseHandler {
     }
 
     /// Extract question details from a PlanPaused action
-    fn extract_question_from_action(&self, action: &rtfs_compiler::ccos::types::Action) -> Option<PendingQuestion> {
+    fn extract_question_from_action(
+        &self,
+        action: &rtfs_compiler::ccos::types::Action,
+    ) -> Option<PendingQuestion> {
         if let Some(args) = &action.arguments {
             if args.len() >= 2 {
                 if let rtfs_compiler::runtime::values::Value::String(prompt) = &args[1] {
-                    let question_id = generate_question_key(prompt).unwrap_or_else(|| "unknown_question".to_string());
+                    let question_id = generate_question_key(prompt)
+                        .unwrap_or_else(|| "unknown_question".to_string());
                     let response_map = HashMap::from([
                         ("name".to_string(), "John Doe".to_string()),
                         ("destination".to_string(), "Paris".to_string()),
@@ -1107,7 +1521,11 @@ impl ResponseHandler {
                         ("dates".to_string(), "July 10-20".to_string()),
                         ("budget".to_string(), "$2000".to_string()),
                     ]);
-                    let suggested_response = generate_contextual_response(prompt, &self.collected_responses, &response_map);
+                    let suggested_response = generate_contextual_response(
+                        prompt,
+                        &self.collected_responses,
+                        &response_map,
+                    );
 
                     return Some(PendingQuestion {
                         question_id,
@@ -1122,7 +1540,11 @@ impl ResponseHandler {
     }
 
     /// Generate a response for a specific question
-    fn generate_response_for_question(&self, question: &PendingQuestion, collected_responses: &HashMap<String, String>) -> String {
+    fn generate_response_for_question(
+        &self,
+        question: &PendingQuestion,
+        collected_responses: &HashMap<String, String>,
+    ) -> String {
         // Use collected responses if available, otherwise use suggested response
         if let Some(collected) = collected_responses.get(&question.question_id) {
             collected.clone()
@@ -1132,7 +1554,10 @@ impl ResponseHandler {
     }
 
     /// Extract and store responses from execution results
-    fn extract_and_store_responses(&mut self, result: &rtfs_compiler::ccos::types::ExecutionResult) {
+    fn extract_and_store_responses(
+        &mut self,
+        result: &rtfs_compiler::ccos::types::ExecutionResult,
+    ) {
         match &result.value {
             rtfs_compiler::runtime::values::Value::String(response_value) => {
                 // Try to identify if this contains structured response data
@@ -1143,7 +1568,8 @@ impl ResponseHandler {
                 } else {
                     // Store as a general response if it looks like user-provided content
                     if self.is_user_response(&response_value) {
-                        self.collected_responses.insert("last_response".to_string(), response_value.clone());
+                        self.collected_responses
+                            .insert("last_response".to_string(), response_value.clone());
                     }
                 }
             }
@@ -1186,17 +1612,19 @@ impl ResponseHandler {
     /// Check if a string value looks like a user response
     fn is_user_response(&self, value: &str) -> bool {
         // Simple heuristics for identifying user responses
-        value.contains("Hello") ||
-        value.contains("recommend") ||
-        value.contains("Based on") ||
-        (value.len() > 10 && !value.contains("Error") && !value.contains("failed"))
+        value.contains("Hello")
+            || value.contains("recommend")
+            || value.contains("Based on")
+            || (value.len() > 10 && !value.contains("Error") && !value.contains("failed"))
     }
 }
 
 /// Extract context variables from a successful plan execution result
-fn extract_context_from_result(result: &rtfs_compiler::ccos::types::ExecutionResult) -> HashMap<String, String> {
+fn extract_context_from_result(
+    result: &rtfs_compiler::ccos::types::ExecutionResult,
+) -> HashMap<String, String> {
     let mut context = HashMap::new();
-    
+
     match &result.value {
         rtfs_compiler::runtime::values::Value::Map(map) => {
             // Extract structured data from the result map
@@ -1231,7 +1659,7 @@ fn extract_context_from_result(result: &rtfs_compiler::ccos::types::ExecutionRes
             }
         }
     }
-    
+
     context
 }
 
@@ -1260,10 +1688,10 @@ fn parse_response_data(response_value: &str) -> Option<HashMap<String, String>> 
 /// Check if a string value looks like a user response (standalone function)
 fn is_user_response(value: &str) -> bool {
     // Simple heuristics for identifying user responses
-    value.contains("Hello") ||
-    value.contains("recommend") ||
-    value.contains("Based on") ||
-    (value.len() > 10 && !value.contains("Error") && !value.contains("failed"))
+    value.contains("Hello")
+        || value.contains("recommend")
+        || value.contains("Based on")
+        || (value.len() > 10 && !value.contains("Error") && !value.contains("failed"))
 }
 
 /// Extract pending questions from a plan and generate appropriate responses based on context
@@ -1285,7 +1713,9 @@ fn extract_pending_questions_and_generate_responses(
 }
 
 /// Extract question prompt from a PlanPaused action
-fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Action) -> Option<String> {
+fn extract_question_prompt_from_action(
+    action: &rtfs_compiler::ccos::types::Action,
+) -> Option<String> {
     if let Some(args) = &action.arguments {
         if args.len() >= 2 {
             match &args[1] {
@@ -1319,8 +1749,13 @@ fn extract_question_prompt_from_action(action: &rtfs_compiler::ccos::types::Acti
 }
 
 /// Helper: get a string value for a key from a runtime Value::Map whose keys are MapKey.
-fn get_map_string_value<'a>(map: &'a std::collections::HashMap<rtfs_compiler::ast::MapKey, Value>, key: &str) -> Option<&'a String> {
-    if let Some(value) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new(key))) {
+fn get_map_string_value<'a>(
+    map: &'a std::collections::HashMap<rtfs_compiler::ast::MapKey, Value>,
+    key: &str,
+) -> Option<&'a String> {
+    if let Some(value) = map.get(&rtfs_compiler::ast::MapKey::Keyword(
+        rtfs_compiler::ast::Keyword::new(key),
+    )) {
         if let Value::String(s) = value {
             return Some(s);
         }
@@ -1370,7 +1805,6 @@ fn generate_question_key(question_prompt: &str) -> Option<String> {
     }
 }
 
-
 /// Clean up response environment variables after use
 fn cleanup_response_env_vars() {
     // Remove any CCOS_USER_ASK_RESPONSE_* environment variables
@@ -1402,28 +1836,30 @@ fn find_latest_plan_checkpoint(ccos: &Arc<CCOS>, plan_id: &str) -> Option<String
         .iter()
         .filter_map(|action| {
             // Match PlanPaused actions and extract a checkpoint id from metadata if present.
-            if let rtfs_compiler::ccos::types::Action { action_type, metadata, .. } = action {
-                if *action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
-                    if let Some(Value::String(cp)) = metadata.get("checkpoint_id") {
-                        return Some(cp.clone());
-                    }
+            let rtfs_compiler::ccos::types::Action {
+                action_type,
+                metadata,
+                ..
+            } = action;
+            if *action_type == rtfs_compiler::ccos::types::ActionType::PlanPaused {
+                if let Some(Value::String(cp)) = metadata.get("checkpoint_id") {
+                    return Some(cp.clone());
                 }
-                None
-            } else {
-                None
             }
+            None
         })
         .last();
 
     latest_checkpoint
 }
 
-
 /// Check if the final value from a plan execution signals that refinement is complete.
 fn is_refinement_exhausted(value: &Value) -> bool {
     if let Value::Map(map) = value {
         // Match against MapKey::Keyword("status")
-        if let Some(status_val) = map.get(&rtfs_compiler::ast::MapKey::Keyword(rtfs_compiler::ast::Keyword::new("status"))) {
+        if let Some(status_val) = map.get(&rtfs_compiler::ast::MapKey::Keyword(
+            rtfs_compiler::ast::Keyword::new("status"),
+        )) {
             if let Value::String(s) = status_val {
                 return s == "refinement_exhausted";
             }
@@ -1431,7 +1867,6 @@ fn is_refinement_exhausted(value: &Value) -> bool {
     }
     false
 }
-
 
 fn snapshot_intent_ids(ccos: &Arc<CCOS>) -> HashSet<String> {
     // Fallback: list intents snapshot and extract ids
@@ -1453,13 +1888,22 @@ fn fetch_intent_goal(ccos: &Arc<CCOS>, id: &str) -> Option<String> {
 fn render_ascii_graph(root: Option<&String>, intents: &HashMap<String, String>) {
     println!("\n{}", "Current Intent Graph".bold());
     println!("{}", "---------------------".bold());
-    if intents.is_empty() { println!("(empty)"); return; }
+    if intents.is_empty() {
+        println!("(empty)");
+        return;
+    }
 
     if let Some(root_id) = root {
-        println!("{} {}", format!("ROOT {}", short(root_id)).bold().yellow(), display_goal(intents.get(root_id)));
+        println!(
+            "{} {}",
+            format!("ROOT {}", short(root_id)).bold().yellow(),
+            display_goal(intents.get(root_id))
+        );
         // Phase 1: naive — treat all non-root as direct descendants (will evolve later)
         for (id, goal) in intents.iter() {
-            if id == root_id { continue; }
+            if id == root_id {
+                continue;
+            }
             println!("  └─ {} {}", short(id).cyan(), display_goal(Some(goal)));
         }
     } else {
@@ -1470,17 +1914,27 @@ fn render_ascii_graph(root: Option<&String>, intents: &HashMap<String, String>) 
 }
 
 fn display_goal(goal_opt: Option<&String>) -> String {
-    goal_opt.map(|g| truncate(g, 70)).unwrap_or_else(|| "(no goal)".into())
+    goal_opt
+        .map(|g| truncate(g, 70))
+        .unwrap_or_else(|| "(no goal)".into())
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }
 
 // Removed serde_json-based truncation; runtime Value is rendered via Display already.
 
 fn short(id: &str) -> String {
-    if id.len() <= 10 { id.to_string() } else { format!("{}", &id[..10]) }
+    if id.len() <= 10 {
+        id.to_string()
+    } else {
+        format!("{}", &id[..10])
+    }
 }
 
 fn prompt_user(label: &str) -> io::Result<String> {

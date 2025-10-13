@@ -1,5 +1,5 @@
 use super::errors::RtfsBridgeError;
-use crate::ast::{Expression, Keyword, Literal, MapKey};
+use crate::ast::{Expression, Keyword, Literal, MapKey, Pattern};
 use crate::ccos::types::{Intent, IntentStatus, Plan};
 use crate::runtime::values::Value;
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ pub fn extract_intent_from_rtfs(expr: &Expression) -> Result<Intent, RtfsBridgeE
         }
         Expression::Map(map) => extract_intent_from_map(map),
         _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!("Expected FunctionCall or Map for Intent, got {:?}", expr),
+            message: format!("Expected FunctionCall or Map for Intent, got {}", expression_to_rtfs_string(expr)),
         }),
     }
 }
@@ -31,7 +31,7 @@ pub fn extract_plan_from_rtfs(expr: &Expression) -> Result<Plan, RtfsBridgeError
         }
         Expression::Map(map) => extract_plan_from_map(map),
         _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!("Expected FunctionCall or Map for Plan, got {:?}", expr),
+            message: format!("Expected FunctionCall or Map for Plan, got {}", expression_to_rtfs_string(expr)),
         }),
     }
 }
@@ -67,7 +67,7 @@ fn extract_intent_from_function_call(
                 return Err(RtfsBridgeError::InvalidFieldType {
                     field: "name".to_string(),
                     expected: "string literal".to_string(),
-                    actual: format!("{:?}", first_arg),
+                    actual: expression_to_string(first_arg),
                 })
             }
         }
@@ -335,7 +335,7 @@ fn extract_plan_from_function_call(
                 return Err(RtfsBridgeError::InvalidFieldType {
                     field: "name".to_string(),
                     expected: "string literal".to_string(),
-                    actual: format!("{:?}", first_arg),
+                    actual: expression_to_string(first_arg),
                 })
             }
         }
@@ -521,7 +521,10 @@ fn expression_to_string(expr: &Expression) -> String {
             Literal::Float(f) => f.to_string(),
             Literal::Boolean(b) => b.to_string(),
             Literal::Nil => "nil".to_string(),
-            _ => format!("{:?}", literal),
+            Literal::Keyword(k) => format!(":{}", k.0),
+            Literal::Symbol(s) => s.0.clone(),
+            // Fallback to RTFS serialization for any literal variants we don't explicitly handle
+            _ => expression_to_rtfs_string(&Expression::Literal(literal.clone())),
         },
         Expression::Symbol(s) => s.0.clone(),
         Expression::FunctionCall { callee, arguments } => {
@@ -542,7 +545,31 @@ fn expression_to_string(expr: &Expression) -> String {
                 .join(" ");
             format!("(do {})", exprs_str)
         }
-        _ => format!("{:?}", expr),
+        Expression::Let(let_expr) => {
+            // compact string form: (let (p1 v1) (p2 v2) body...)
+            let bindings = let_expr
+                .bindings
+                .iter()
+                .map(|b| format!("({} {})", pattern_to_string(&b.pattern), expression_to_string(&b.value)))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let body_str = if let_expr.body.len() == 1 {
+                expression_to_string(&let_expr.body[0])
+            } else {
+                let parts = let_expr
+                    .body
+                    .iter()
+                    .map(expression_to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("(do {})", parts)
+            };
+
+            format!("(let ({}) {})", bindings, body_str)
+        }
+        // Fallback: produce a compact string instead of Debug to avoid leaking AST debug forms
+        _ => expression_to_string(expr),
     }
 }
 
@@ -554,7 +581,10 @@ pub fn expression_to_rtfs_string(expr: &Expression) -> String {
             Literal::Float(f) => f.to_string(),
             Literal::Boolean(b) => b.to_string(),
             Literal::Nil => "nil".to_string(),
-            _ => format!("{:?}", literal),
+            Literal::Keyword(k) => format!(":{}", k.0),
+            Literal::Symbol(s) => s.0.clone(),
+            // Unknown literal variants: fall back to compact string form rather than Debug
+            _ => expression_to_string(&Expression::Literal(literal.clone())),
         },
         Expression::Symbol(s) => s.0.clone(),
         Expression::FunctionCall { callee, arguments } => {
@@ -575,7 +605,97 @@ pub fn expression_to_rtfs_string(expr: &Expression) -> String {
                 .join(" ");
             format!("(do {})", exprs_str)
         }
-        _ => format!("{:?}", expr),
+        Expression::Vector(vec) => {
+            let vals = vec.iter().map(expression_to_rtfs_string).collect::<Vec<_>>().join(" ");
+            format!("[{}]", vals)
+        }
+        Expression::List(list) => {
+            let vals = list.iter().map(expression_to_rtfs_string).collect::<Vec<_>>().join(" ");
+            format!("({})", vals)
+        }
+        Expression::Map(map) => {
+            // Serialize map in canonical RTFS form: {:key1 val1 :key2 val2}
+            let mut parts: Vec<String> = Vec::new();
+            for (k, v) in map {
+                let kstr = match k {
+                    crate::ast::MapKey::Keyword(kw) => format!(":{}", kw.0),
+                    crate::ast::MapKey::String(s) => format!("\"{}\"", s),
+                    crate::ast::MapKey::Integer(i) => i.to_string(),
+                };
+                parts.push(kstr);
+                parts.push(expression_to_rtfs_string(v));
+            }
+            format!("{{{}}}", parts.join(" "))
+        }
+        Expression::Let(let_expr) => {
+            // RTFS canonical form for let: (let (p1 v1) (p2 v2) body...)
+            let bindings = let_expr
+                .bindings
+                .iter()
+                .map(|b| format!("({} {})", pattern_to_string(&b.pattern), expression_to_rtfs_string(&b.value)))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let body_str = if let_expr.body.len() == 1 {
+                expression_to_rtfs_string(&let_expr.body[0])
+            } else {
+                let parts = let_expr
+                    .body
+                    .iter()
+                    .map(expression_to_rtfs_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("(do {})", parts)
+            };
+
+            format!("(let ({}) {})", bindings, body_str)
+        }
+        // Fallback: produce a compact string representation
+        _ => expression_to_string(expr),
+    }
+}
+
+// Convert a binding pattern into a readable string for RTFS output.
+fn pattern_to_string(pat: &Pattern) -> String {
+    match pat {
+        Pattern::Symbol(s) => s.0.clone(),
+        Pattern::Wildcard => "_".to_string(),
+        Pattern::VectorDestructuring { elements, rest, as_symbol } => {
+            let mut parts: Vec<String> = elements.iter().map(pattern_to_string).collect();
+            if let Some(r) = rest {
+                parts.push(format!("& {}", r.0));
+            }
+            if let Some(a) = as_symbol {
+                parts.push(format!(":as {}", a.0));
+            }
+            format!("[{}]", parts.join(" "))
+        }
+        Pattern::MapDestructuring { entries, rest, as_symbol } => {
+            let mut parts: Vec<String> = Vec::new();
+            for entry in entries {
+                match entry {
+                    crate::ast::MapDestructuringEntry::KeyBinding { key, pattern } => {
+                        let key_str = match key {
+                            crate::ast::MapKey::Keyword(kw) => format!(":{}", kw.0),
+                            crate::ast::MapKey::String(s) => format!("\"{}\"", s),
+                            crate::ast::MapKey::Integer(i) => i.to_string(),
+                        };
+                        parts.push(format!("{} {}", key_str, pattern_to_string(pattern)));
+                    }
+                    crate::ast::MapDestructuringEntry::Keys(keys) => {
+                        let ks = keys.iter().map(|k| k.0.clone()).collect::<Vec<_>>().join(" ");
+                        parts.push(format!(":keys [{}]", ks));
+                    }
+                }
+            }
+            if let Some(r) = rest {
+                parts.push(format!("& {}", r.0));
+            }
+            if let Some(a) = as_symbol {
+                parts.push(format!(":as {}", a.0));
+            }
+            format!("{{{}}}", parts.join(" "))
+        }
     }
 }
 
@@ -614,10 +734,12 @@ fn expression_to_value(expr: &Expression) -> Value {
             Literal::Boolean(b) => Value::Boolean(*b),
             Literal::Nil => Value::Nil,
             Literal::Keyword(k) => Value::Keyword(k.clone()),
-            _ => Value::String(format!("{:?}", literal)),
+            // Fall back to a readable string for unknown literal forms
+            _ => Value::String(expression_to_string(&Expression::Literal(literal.clone()))),
         },
         Expression::Symbol(s) => Value::Symbol(s.clone()),
-        _ => Value::String(format!("{:?}", expr)),
+        // For other expressions, produce a compact string representation rather than raw Debug
+        _ => Value::String(expression_to_string(expr)),
     }
 }
 

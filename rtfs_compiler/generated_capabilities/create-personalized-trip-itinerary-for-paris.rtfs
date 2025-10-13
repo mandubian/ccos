@@ -1,9 +1,0 @@
-(capability "travel.create-personalized-paris-itinerary"
-  :description "Create a personalized trip itinerary for Paris based on user preferences including pace, interests, and duration"
-  :parameters {:preferences "map" :duration "number"}
-  :steps (do
-    (attractions.search :destination "Paris" :interests (get $preferences :interests))
-    (itinerary.generate :attractions $found_attractions :pace (get $preferences :pace) :duration $duration)
-    (itinerary.optimize :itinerary $draft_itinerary :preferences $preferences)
-  )
-)

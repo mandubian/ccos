@@ -455,7 +455,17 @@ impl HybridArbiter {
         let manager = PromptManager::new(store);
         let mut vars = std::collections::HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());
-        vars.insert("context".to_string(), format!("{:?}", context));
+        let fallback_context = context
+            .as_ref()
+            .map(|ctx| {
+                ctx.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let context_str = serde_json::to_string(&context).unwrap_or_else(|_| fallback_context);
+        vars.insert("context".to_string(), context_str);
         vars.insert(
             "available_capabilities".to_string(),
             ":ccos.echo, :ccos.math.add".to_string(),
@@ -579,7 +589,10 @@ Plan:"#,
         // Extract RTFS content from response
         let rtfs_content = self.extract_rtfs_from_response(response)?;
         // Optionally print extracted RTFS plan for diagnostics (env only for hybrid)
-        if std::env::var("CCOS_PRINT_EXTRACTED_PLAN").map(|s| s == "1").unwrap_or(false) {
+        if std::env::var("CCOS_PRINT_EXTRACTED_PLAN")
+            .map(|s| s == "1")
+            .unwrap_or(false)
+        {
             eprintln!("[HYBRID-ARBITER] Extracted RTFS plan:\n{}", rtfs_content);
         }
 
@@ -602,7 +615,8 @@ Plan:"#,
                 );
                 meta.insert(
                     "llm_provider".to_string(),
-                    Value::String(format!("{:?}", self.llm_config.provider_type)),
+                    Value::String(serde_json::to_string(&self.llm_config.provider_type)
+                        .unwrap_or_else(|_| "unknown".to_string())),
                 );
                 meta
             },

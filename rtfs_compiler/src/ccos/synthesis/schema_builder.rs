@@ -3,10 +3,8 @@
 //! Extracts parameter schemas from CausalChain by analyzing user.ask actions.
 //! Implements the algorithm from spec section 23.1.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use crate::ccos::CCOS;
 use super::InteractionTurn;
+use std::collections::HashMap;
 
 /// Complete parameter schema extracted from conversation.
 #[derive(Debug, Clone)]
@@ -47,10 +45,7 @@ pub enum ParamTypeInfo {
 ///    - Detect enum via "(low / medium / high)" pattern
 ///    - Mark required based on usage
 /// 3. Return ParamSchema with provenance
-pub fn extract_param_schema(
-    conversation: &[InteractionTurn],
-    _ccos: &Arc<CCOS>,
-) -> ParamSchema {
+pub fn extract_param_schema(conversation: &[InteractionTurn]) -> ParamSchema {
     // MVP implementation for Phase 5: derive parameter schema heuristically
     // from the supplied conversation turns. This avoids heavy CCOS setup
     // in unit tests while still following spec heuristics.
@@ -110,17 +105,32 @@ pub fn extract_param_schema(
 fn namespace_infer(prompt: &str) -> String {
     let lower = prompt.to_lowercase();
 
-    if lower.contains("destination") || lower.contains("where do you") || lower.contains("where would") || lower.contains("which city") {
+    if lower.contains("destination")
+        || lower.contains("where do you")
+        || lower.contains("where would")
+        || lower.contains("which city")
+    {
         "trip/destination".to_string()
-    } else if lower.contains("date") || lower.contains("when") || lower.contains("which day") || lower.contains("what dates") {
+    } else if lower.contains("date")
+        || lower.contains("when")
+        || lower.contains("which day")
+        || lower.contains("what dates")
+    {
         "trip/dates".to_string()
-    } else if lower.contains("budget") || lower.contains("how much") || lower.contains("cost") || lower.contains("price") {
+    } else if lower.contains("budget")
+        || lower.contains("how much")
+        || lower.contains("cost")
+        || lower.contains("price")
+    {
         "trip/budget".to_string()
     } else if lower.contains("risk tolerance") || lower.contains("risk") {
         "investment/risk_tolerance".to_string()
     } else if lower.contains("name") || lower.contains("what is your name") {
         "person/name".to_string()
-    } else if lower.contains("interest") || lower.contains("interests") || lower.contains("what are your interests") {
+    } else if lower.contains("interest")
+        || lower.contains("interests")
+        || lower.contains("what are your interests")
+    {
         "trip/interests".to_string()
     } else if lower.contains("duration") || lower.contains("how long") || lower.contains("length") {
         "trip/duration".to_string()
@@ -150,8 +160,17 @@ fn extract_enumeration(prompt: &str) -> Option<Vec<String>> {
     if p.contains("/") {
         let parts: Vec<String> = p
             .split('/')
-            .map(|s| s.trim().trim_matches(|c: char| c == '(' || c == ')' || c == '?' || c == '"' || c == '\'')).filter(|s| !s.is_empty())
-            .map(|s| s.trim().trim_end_matches(|c: char| c == '.' || c == ',' ).to_string())
+            .map(|s| {
+                s.trim().trim_matches(|c: char| {
+                    c == '(' || c == ')' || c == '?' || c == '"' || c == '\''
+                })
+            })
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.trim()
+                    .trim_end_matches(|c: char| c == '.' || c == ',')
+                    .to_string()
+            })
             .collect();
         // Heuristic: only treat as enum if at least 2 items and short tokens
         if parts.len() >= 2 && parts.iter().all(|s| s.len() <= 30) {
@@ -171,17 +190,25 @@ fn extract_enumeration(prompt: &str) -> Option<Vec<String>> {
         // If the last segment contains ' or ' or ' and ', split it further
         if let Some(last) = parts.last().cloned() {
             if last.contains(" or ") {
-                let mut tail: Vec<String> = last.split(" or ").map(|s| s.trim().to_string()).collect();
+                let mut tail: Vec<String> =
+                    last.split(" or ").map(|s| s.trim().to_string()).collect();
                 parts.pop();
                 parts.append(&mut tail);
             } else if last.contains(" and ") {
-                let mut tail: Vec<String> = last.split(" and ").map(|s| s.trim().to_string()).collect();
+                let mut tail: Vec<String> =
+                    last.split(" and ").map(|s| s.trim().to_string()).collect();
                 parts.pop();
                 parts.append(&mut tail);
             }
         }
 
-        let parts_clean: Vec<String> = parts.into_iter().map(|s| s.trim_matches(|c: char| c == '.' || c == '?' || c == '"').to_string()).collect();
+        let parts_clean: Vec<String> = parts
+            .into_iter()
+            .map(|s| {
+                s.trim_matches(|c: char| c == '.' || c == '?' || c == '"')
+                    .to_string()
+            })
+            .collect();
         if parts_clean.len() >= 2 {
             return Some(parts_clean);
         }
@@ -190,12 +217,10 @@ fn extract_enumeration(prompt: &str) -> Option<Vec<String>> {
     None
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ccos::synthesis::InteractionTurn;
-    use std::sync::Arc;
 
     fn make_turn(i: usize, prompt: &str, ans: Option<&str>) -> InteractionTurn {
         InteractionTurn {
@@ -210,16 +235,26 @@ mod tests {
         let convo = vec![
             make_turn(0, "Where would you like to go?", Some("Paris")),
             make_turn(1, "What dates will you travel?", None),
-            make_turn(2, "What are your interests (art / food / history)?", Some("art")),
-            make_turn(3, "What's your budget? (low, medium, or high)", Some("medium")),
+            make_turn(
+                2,
+                "What are your interests (art / food / history)?",
+                Some("art"),
+            ),
+            make_turn(
+                3,
+                "What's your budget? (low, medium, or high)",
+                Some("medium"),
+            ),
             make_turn(4, "Please provide your name.", Some("Jane")),
         ];
 
-        let ccos = Arc::new(CCOS::new().await.unwrap());
-        let schema = extract_param_schema(&convo, &ccos);
+        let schema = extract_param_schema(&convo);
 
         // destination
-        let dest = schema.params.get("trip/destination").expect("destination present");
+        let dest = schema
+            .params
+            .get("trip/destination")
+            .expect("destination present");
         assert!(matches!(dest.param_type, ParamTypeInfo::String));
         assert_eq!(dest.answer.as_deref(), Some("Paris"));
 
@@ -229,7 +264,10 @@ mod tests {
         assert!(dates.answer.is_none());
 
         // interests (enum)
-        let inter = schema.params.get("trip/interests").expect("interests present");
+        let inter = schema
+            .params
+            .get("trip/interests")
+            .expect("interests present");
         match &inter.param_type {
             ParamTypeInfo::Enum { values } => {
                 assert!(values.iter().any(|v| v.to_lowercase().contains("art")));
