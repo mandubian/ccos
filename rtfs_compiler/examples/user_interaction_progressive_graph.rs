@@ -374,7 +374,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // result `res.value` and use its string form as the next user input. This lets
     // the LLM drive the multi-turn flow rather than hardcoding follow-ups here.
     let mut conversation_history: Vec<InteractionTurn> = Vec::new();
-    let mut current_request = "I need to plan a trip to Paris.".to_string();
+    let mut current_request = "I want to build an AI-powered code review system for my team.".to_string();
 
     // Bound the simulated interaction to avoid runaway loops
     let max_turns = 8usize;
@@ -1267,18 +1267,18 @@ fn extract_skills_from_history(history: &[InteractionTurn]) -> Vec<String> {
 
         // Simple keyword extraction (could be enhanced with NLP)
         let keywords = [
-            "plan",
-            "itinerary",
-            "travel",
-            "schedule",
-            "organize",
-            "research",
-            "find",
-            "search",
-            "book",
-            "reserve",
+            "code",
+            "review",
+            "analysis",
+            "security",
+            "testing",
+            "integration",
+            "automation",
+            "build",
+            "deploy",
+            "monitor",
             "optimize",
-            "create",
+            "configure",
         ];
 
         for &keyword in &keywords {
@@ -1514,12 +1514,12 @@ impl ResponseHandler {
                     let question_id = generate_question_key(prompt)
                         .unwrap_or_else(|| "unknown_question".to_string());
                     let response_map = HashMap::from([
-                        ("name".to_string(), "John Doe".to_string()),
-                        ("destination".to_string(), "Paris".to_string()),
-                        ("duration".to_string(), "2".to_string()),
-                        ("interests".to_string(), "art, food, history".to_string()),
-                        ("dates".to_string(), "July 10-20".to_string()),
-                        ("budget".to_string(), "$2000".to_string()),
+                        ("team".to_string(), "5 developers".to_string()),
+                        ("repository".to_string(), "GitHub Enterprise".to_string()),
+                        ("language".to_string(), "TypeScript and Python".to_string()),
+                        ("rules".to_string(), "security vulnerabilities, code style, test coverage".to_string()),
+                        ("integration".to_string(), "GitHub Actions and Slack".to_string()),
+                        ("budget".to_string(), "$500/month".to_string()),
                     ]);
                     let suggested_response = generate_contextual_response(
                         prompt,
@@ -1783,17 +1783,18 @@ fn generate_contextual_response(
 /// Generate a unique key for a question to use in environment variable naming
 fn generate_question_key(question_prompt: &str) -> Option<String> {
     // Simple key generation based on question content
-    if question_prompt.contains("name") {
-        Some("name".to_string())
-    } else if question_prompt.contains("destination") {
-        Some("destination".to_string())
-    } else if question_prompt.contains("duration") {
-        Some("duration".to_string())
-    } else if question_prompt.contains("interests") {
-        Some("interests".to_string())
-    } else if question_prompt.contains("dates") {
-        Some("dates".to_string())
-    } else if question_prompt.contains("budget") {
+    let lower = question_prompt.to_lowercase();
+    if lower.contains("team") || lower.contains("developers") {
+        Some("team".to_string())
+    } else if lower.contains("repository") || lower.contains("repo") {
+        Some("repository".to_string())
+    } else if lower.contains("language") || lower.contains("programming") {
+        Some("language".to_string())
+    } else if lower.contains("rules") || lower.contains("checks") || lower.contains("review") {
+        Some("rules".to_string())
+    } else if lower.contains("integration") || lower.contains("ci") || lower.contains("pipeline") {
+        Some("integration".to_string())
+    } else if lower.contains("budget") || lower.contains("cost") {
         Some("budget".to_string())
     } else {
         // Generate a hash-based key for unknown questions
