@@ -1,8 +1,39 @@
 # Dynamic Self-Learning Demo Usage
 
-The Smart Research Assistant demo is now **fully dynamic** - no more hardcoded simulations!
+The Smart Assistant demo is now **fully dynamic** and **goal-agnostic** - it adapts to ANY user goal!
+
+## 🌟 Goal-Agnostic Learning
+
+The demo now uses LLM to generate appropriate questions and capabilities for **any goal domain**:
+
+```bash
+# Trip planning
+RESEARCH_TOPIC="plan a trip to paris" ./demo_smart_assistant.sh full
+→ Asks about: travel dates, budget, interests, accommodation
+→ Generates: travel.trip-planner.paris.v1
+
+# Web development
+RESEARCH_TOPIC="build a REST API" ./demo_smart_assistant.sh full
+→ Asks about: language, database, authentication, endpoints
+→ Generates: development.api-builder.v1
+
+# Research (default)
+RESEARCH_TOPIC="quantum computing applications" ./demo_smart_assistant.sh full
+→ Asks about: domains, depth, sources, format
+→ Generates: research.quantum-applications.v1
+```
 
 ## What's Dynamic Now
+
+### ✅ Goal-Agnostic Question Generation (NEW!)
+- LLM generates questions specific to the user's actual goal
+- No more hardcoded "research" questions for every goal
+- Adapts to trip planning, development, research, analysis, etc.
+
+### ✅ Context-Aware Capability Synthesis (IMPROVED!)
+- Synthesis prompt emphasizes matching the ACTUAL goal
+- Provides goal-specific examples (e.g., trip planning)
+- Generates capability IDs matching the goal domain
 
 ### ✅ Real CCOS Execution
 - Uses actual `ccos.user.ask` capability through RTFS plan execution
@@ -43,14 +74,16 @@ In this mode, you'll be prompted to answer each question manually via stdin.
 ### Custom Canned Responses
 
 ```bash
-# Override specific responses
-export CCOS_USER_ASK_RESPONSE_DOMAINS="arxiv, research papers"
-export CCOS_USER_ASK_RESPONSE_DEPTH="deep dive with code examples"
-export CCOS_USER_ASK_RESPONSE_FORMAT="technical report with diagrams"
-export CCOS_USER_ASK_RESPONSE_SOURCES="github, arxiv, papers with code"
-export CCOS_USER_ASK_RESPONSE_TIME="1 week for thorough analysis"
+# Override specific responses (Q1-Q5 correspond to dynamically generated questions)
+export CCOS_USER_ASK_RESPONSE_Q1="July 15-22, 7 days total"
+export CCOS_USER_ASK_RESPONSE_Q2="$3000 total budget"
+export CCOS_USER_ASK_RESPONSE_Q3="Couple traveling together"
+export CCOS_USER_ASK_RESPONSE_Q4="Art museums, cafes, architecture"
+export CCOS_USER_ASK_RESPONSE_Q5="Boutique hotel in Marais district"
+RESEARCH_TOPIC="plan a trip to paris" ./demo_smart_assistant.sh full
 
-./demo_smart_assistant.sh full
+# The questions are now dynamically generated based on your goal!
+# For a different goal, the same Q1-Q5 variables will answer different questions
 ```
 
 ### With Real LLM Provider
