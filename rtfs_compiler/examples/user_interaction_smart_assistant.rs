@@ -281,14 +281,17 @@ async fn run_application_phase(
     println!("{} {}", "User Request:".bold(), new_topic.clone().cyan());
     println!();
 
-    // Check if capability exists
-    let capability_id = "research.smart-assistant.v1";
+    // Find the most recently registered research capability
     let marketplace = ccos.get_capability_marketplace();
+    let all_caps = marketplace.list_capabilities().await;
     
-    if !marketplace.has_capability(capability_id).await {
-        println!("{}", "⚠️  Learned capability not found. Run in 'learn' or 'full' mode first.".yellow());
-        return Err("Capability not registered".into());
-    }
+    let capability_manifest = all_caps
+        .iter()
+        .filter(|c| c.id.starts_with("research."))
+        .last() // Get the most recent one
+        .ok_or("No research capability found. Run in 'learn' or 'full' mode first")?;
+    
+    let capability_id = &capability_manifest.id;
 
     println!("{}", "🔍 Checking capability marketplace...".dim());
     sleep(Duration::from_millis(300)).await;
