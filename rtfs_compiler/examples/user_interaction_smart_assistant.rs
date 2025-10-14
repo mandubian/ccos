@@ -543,29 +543,49 @@ CRITICAL: The capability MUST match the user's goal, not generic research.
 The capability should:
 1. Have an ID matching the goal domain (e.g., "travel.trip-planner.v1", "research.assistant.v1")
 2. Accept relevant parameters based on the goal
-3. Orchestrate steps appropriate for achieving THIS SPECIFIC goal
-4. Use preferences from the conversation
+3. Call external sub-capabilities to delegate specialized tasks
+4. Use RTFS 'let' syntax to bind capability results to variables
+5. Return a complete result map with all relevant information
+
+CRITICAL RTFS PATTERN - Use 'let' to bind results:
+- When calling a capability, ALWAYS bind the result with 'let'
+- Use the bound variable in subsequent steps
+- Final step should return the complete result
 
 OUTPUT EXACTLY ONE fenced ```rtfs block containing a well-formed (capability ...) s-expression.
 
-Example for trip planning goal:
+Example for trip planning goal (showing proper 'let' binding):
 ```rtfs
 (capability "travel.trip-planner.paris.v1"
   :description "Paris trip planner with user's budget and duration preferences"
-  :parameters {{:destination "string" :duration "string"}}
+  :parameters {{:destination "string" :duration "number" :budget "number" :interests "list"}}
   :implementation
     (do
-      (step "Research Attractions"
-        (call :travel.research {{:destination destination :interests ["culture" "food"]}}))
-      (step "Find Accommodation"
-        (call :travel.hotels {{:city destination :budget "mid-range" :duration duration}}))
-      (step "Plan Transportation"
-        (call :travel.transport {{:mode "train" :within destination}}))
-      (step "Create Itinerary"
-        (call :travel.itinerary {{:days duration :activities attractions}}))
-      (step "Return"
-        {{:status "completed" :itinerary full_plan}})))
+      (let attractions 
+        (call :travel.research {{:destination destination :interests interests}}))
+      (let hotels
+        (call :travel.hotels {{:city destination :budget budget :duration duration}}))
+      (let transport
+        (call :travel.transport {{:destination destination :mode "metro_and_walk"}}))
+      (let food_spots
+        (call :food.recommendations {{:city destination :interests interests :budget budget}}))
+      (let itinerary
+        (call :travel.itinerary {{:days duration :attractions attractions :hotels hotels :food food_spots}}))
+      {{:status "research_completed"
+        :summary (str "Complete " duration "-day trip plan for " destination " with $" budget " budget")
+        :destination destination
+        :attractions attractions
+        :hotels hotels
+        :transport transport
+        :food_recommendations food_spots
+        :itinerary itinerary}}))
 ```
+
+KEY POINTS:
+1. Use (let variable_name (call :capability {{:params}})) to bind results
+2. Each 'let' captures the capability's return value
+3. Use bound variables in subsequent capability calls
+4. Final map can reference all bound variables
 
 Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no other text."#,
         topic, interaction_summary
