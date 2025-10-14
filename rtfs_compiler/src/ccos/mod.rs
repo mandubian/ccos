@@ -244,36 +244,36 @@ impl CCOS {
 
         // Initialize delegating arbiter if delegation is enabled in agent config (or via env)
         let delegating_arbiter = if enable_delegation {
-            // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to OpenAI if OPENAI_API_KEY exists.
-            let (api_key, base_url, model) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                (
-                    Some(key),
-                    Some(
-                        std::env::var("CCOS_LLM_BASE_URL")
-                            .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string()),
-                    ),
-                    std::env::var("CCOS_DELEGATING_MODEL")
-                        .unwrap_or_else(|_| "deepseek/deepseek-chat-v3.1:free".to_string()),
-                )
+            // Require explicit model selection so operators know which LLM powers delegation.
+            let model = std::env::var("CCOS_DELEGATING_MODEL")
+                .expect("CCOS_DELEGATING_MODEL environment variable must be set");
+
+            // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to other providers.
+            let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                let base = std::env::var("CCOS_LLM_BASE_URL")
+                    .ok()
+                    .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+                (Some(key), base)
             } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-                (
-                    Some(key),
-                    None,
-                    std::env::var("CCOS_DELEGATING_MODEL")
-                        .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
-                )
+                (Some(key), None)
+            } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
             } else {
-                (
-                    None,
-                    None,
-                    std::env::var("CCOS_DELEGATING_MODEL")
-                        .unwrap_or_else(|_| "stub-model".to_string()),
-                )
+                (None, std::env::var("CCOS_LLM_BASE_URL").ok())
             };
 
             // Create LLM config for delegating arbiter
-            let provider_type = if model == "stub-model" || model == "deterministic-stub-model" {
+            let provider_hint = std::env::var("CCOS_LLM_PROVIDER_HINT")
+                .unwrap_or_else(|_| String::from(""));
+            let provider_type = if model == "stub-model"
+                || model == "deterministic-stub-model"
+                || model == "stub"
+            {
                 crate::ccos::arbiter::arbiter_config::LlmProviderType::Stub
+            } else if provider_hint.eq_ignore_ascii_case("anthropic") {
+                crate::ccos::arbiter::arbiter_config::LlmProviderType::Anthropic
+            } else if provider_hint.eq_ignore_ascii_case("local") {
+                crate::ccos::arbiter::arbiter_config::LlmProviderType::Local
             } else {
                 crate::ccos::arbiter::arbiter_config::LlmProviderType::OpenAI
             };
