@@ -110,8 +110,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 eprintln!("⚠️  Failed to load config {}: {}", cfg_path, e);
+                eprintln!("⚠️  Delegation may not work without valid config");
             }
         }
+    } else {
+        // No config provided - enable delegation with stub provider for demo
+        eprintln!("⚠️  No config provided. Using stub provider for demonstration.");
+        eprintln!("⚠️  For real LLM synthesis, provide --config with valid LLM settings.");
+        std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+        std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+        std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
     }
 
     // Initialize CCOS
@@ -430,7 +438,19 @@ async fn synthesize_capability_via_llm(
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
     
     let arbiter = ccos.get_delegating_arbiter()
-        .ok_or("Delegating arbiter not available - enable delegation")?;
+        .ok_or_else(|| {
+            eprintln!("\n❌ Delegating arbiter not initialized!");
+            eprintln!("   This usually means:");
+            eprintln!("   1. No valid LLM configuration in config file");
+            eprintln!("   2. Missing API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)");
+            eprintln!("   3. Invalid provider/model settings");
+            eprintln!("\n   Solutions:");
+            eprintln!("   • Check config/agent_config.toml has valid llm_profiles");
+            eprintln!("   • Ensure API key environment variable is set");
+            eprintln!("   • Try: export OPENAI_API_KEY=sk-...");
+            eprintln!("   • Or use --profile to select a valid profile\n");
+            "Delegating arbiter not available - check LLM configuration"
+        })?;
     
     // Build synthesis prompt from the actual interaction
     let mut interaction_summary = String::new();
@@ -695,6 +715,9 @@ fn apply_llm_profile(
     config: &AgentConfig,
     profile_name: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Always enable delegation for this demo
+    std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+    
     if let Some(llm_cfg) = &config.llm_profiles {
         let (profiles, _meta, _why) = expand_profiles(config);
         let chosen_name = profile_name
@@ -705,8 +728,10 @@ fn apply_llm_profile(
         if let Some(name) = chosen_name {
             if let Some(p) = profiles.iter().find(|pp| pp.name == name) {
                 apply_profile_env(p);
-                std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
             }
+        } else if !profiles.is_empty() {
+            // Fallback to first profile if no default specified
+            apply_profile_env(&profiles[0]);
         }
     }
     Ok(())
