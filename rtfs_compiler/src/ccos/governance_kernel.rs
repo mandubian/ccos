@@ -60,8 +60,10 @@ impl GovernanceKernel {
         context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
         // --- 1. Intent Sanitization (SEP-012) ---
-        let intent = self.get_intent(&plan)?;
-        self.sanitize_intent(&intent, &plan)?;
+        // For capability-internal plans, intent may be None. Only sanitize if present.
+        if let Some(intent) = self.get_intent(&plan)? {
+            self.sanitize_intent(&intent, &plan)?;
+        }
 
         // --- 2. Plan Scaffolding (SEP-012) ---
         let safe_plan = self.scaffold_plan(plan)?;
@@ -78,21 +80,24 @@ impl GovernanceKernel {
         self.orchestrator.execute_plan(&safe_plan, context).await
     }
 
-    /// Retrieves the primary intent associated with the plan.
-    fn get_intent(&self, plan: &Plan) -> RuntimeResult<StorableIntent> {
-        let intent_id = plan
-            .intent_ids
-            .first()
-            .ok_or_else(|| RuntimeError::Generic("Plan has no associated intent".to_string()))?;
+    /// Retrieves the primary intent associated with the plan, if present.
+    /// Returns None for capability-internal plans that don't have associated intents.
+    fn get_intent(&self, plan: &Plan) -> RuntimeResult<Option<StorableIntent>> {
+        let intent_id = match plan.intent_ids.first() {
+            Some(id) => id,
+            None => return Ok(None), // No intent for capability-internal plans
+        };
 
         let graph = self
             .intent_graph
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
-        graph
+        let intent = graph
             .get_intent(intent_id)
-            .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", intent_id)))
+            .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", intent_id)))?;
+        
+        Ok(Some(intent))
     }
 
     /// Checks the plan and its originating intent for malicious patterns.
