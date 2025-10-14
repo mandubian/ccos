@@ -4,7 +4,9 @@
 
 This document demonstrates how CCOS/RTFS exhibits **self-learning** capabilities by synthesizing reusable capabilities from user interactions driven by the LLM-powered Arbiter.
 
-> **New!** We now have an enhanced demo using a **Smart Research Assistant** use case that showcases the learning loop more effectively. See [Smart Research Assistant Demo](#smart-research-assistant-demo) below.
+> **🚀 Quick Start:** Want to run the demo immediately? See [QUICK_START.md](QUICK_START.md) for 3-step setup!
+
+> **New!** We now have an enhanced demo using a **Smart Research Assistant** use case that showcases the learning loop more effectively. The demo is fully **dynamic** - it uses real CCOS execution and real LLM synthesis (no hardcoded simulations). See [Smart Research Assistant Demo](#smart-research-assistant-demo) below.
 
 ## What is Self-Learning?
 
