@@ -172,6 +172,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ccos.get_delegating_arbiter().is_some()
     );
 
+    // Display LLM configuration used by DelegatingArbiter
+    if let Some(arbiter) = ccos.get_delegating_arbiter() {
+        let llm_config = arbiter.get_llm_config();
+        println!("\n📋 DelegatingArbiter LLM Configuration:");
+        println!("   Provider: {:?}", llm_config.provider_type);
+        println!("   Model: {}", llm_config.model);
+        if let Some(url) = &llm_config.base_url {
+            println!("   Base URL: {}", url);
+        }
+        if let Some(max_tokens) = llm_config.max_tokens {
+            println!("   Max Tokens: {}", max_tokens);
+        }
+        if let Some(temp) = llm_config.temperature {
+            println!("   Temperature: {}", temp);
+        }
+        if let Some(timeout) = llm_config.timeout_seconds {
+            println!("   Timeout: {}s", timeout);
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // PHASE 1: COLLECT USER INTENT
     // ═══════════════════════════════════════════════════════════════
