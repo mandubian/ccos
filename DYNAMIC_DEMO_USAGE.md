@@ -202,10 +202,76 @@ This is normal - the demo focuses on learning and synthesis, not implementing th
 
 ## Troubleshooting
 
-### "Delegating arbiter not available"
-- Ensure config has valid LLM profile
-- Check API keys are set
-- Verify `--config ../config/agent_config.toml` is passed
+### ❌ "Delegating arbiter not available"
+
+This is the most common error. The demo requires a working LLM configuration.
+
+**Root Causes:**
+1. No config file provided
+2. Config file has no valid LLM profiles
+3. Missing API key for the selected provider
+4. Invalid provider/model combination
+
+**Solutions:**
+
+#### Option 1: Use Valid Config (Recommended)
+```bash
+# Make sure config exists and has llm_profiles
+cat config/agent_config.toml
+
+# Run with config
+./demo_smart_assistant.sh --config config/agent_config.toml full
+```
+
+#### Option 2: Set API Key
+```bash
+# For OpenAI
+export OPENAI_API_KEY="sk-..."
+./demo_smart_assistant.sh --profile openai-fast full
+
+# For Anthropic/Claude
+export ANTHROPIC_API_KEY="sk-ant-..."
+./demo_smart_assistant.sh --profile claude-fast full
+
+# For OpenRouter
+export OPENROUTER_API_KEY="sk-or-..."
+./demo_smart_assistant.sh --profile openrouter-free full
+```
+
+#### Option 3: Verify Config Contents
+```bash
+# Check if config has llm_profiles section
+grep -A 10 "llm_profiles" config/agent_config.toml
+
+# Should see something like:
+# [llm_profiles]
+# default = "openai-fast"
+# [[llm_profiles.profiles]]
+# name = "openai-fast"
+# provider = "openai"
+# model = "gpt-4o-mini"
+```
+
+#### Option 4: Create Minimal Config
+If you don't have a config file, create one:
+
+```toml
+# config/agent_config.toml
+[llm_profiles]
+default = "openai-fast"
+
+[[llm_profiles.profiles]]
+name = "openai-fast"
+provider = "openai"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+```
+
+Then set your API key:
+```bash
+export OPENAI_API_KEY="sk-..."
+./demo_smart_assistant.sh full
+```
 
 ### "Failed to ask question"
 - Check `ccos.user.ask` capability is registered
