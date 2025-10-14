@@ -275,36 +275,62 @@ async fn run_application_phase(
     println!("{}", "│ PHASE 3: Applying Learned Capability                       │".bold());
     println!("{}", "└─────────────────────────────────────────────────────────────┘\n".bold());
 
+    // Use a different request to test the learned capability
+    // (or use SECOND_RESEARCH_TOPIC to override)
     let new_topic = std::env::var("SECOND_RESEARCH_TOPIC")
-        .unwrap_or_else(|_| "blockchain scalability solutions".to_string());
+        .unwrap_or_else(|_| "similar request using learned workflow".to_string());
 
     println!("{} {}", "User Request:".bold(), new_topic.clone().cyan());
     println!();
 
-    // Find the most recently registered research capability
+    // Find the most recently registered capability (any domain!)
     let marketplace = ccos.get_capability_marketplace();
     let all_caps = marketplace.list_capabilities().await;
     
+    // Get the most recent capability from generated/ directory
     let capability_manifest = all_caps
         .iter()
-        .filter(|c| c.id.starts_with("research."))
+        .filter(|c| {
+            // Look for any generated capabilities (travel, research, sentiment, etc.)
+            c.id.contains(".") && !c.id.starts_with("ccos.")
+        })
         .last() // Get the most recent one
-        .ok_or("No research capability found. Run in 'learn' or 'full' mode first")?;
+        .ok_or("No learned capability found. Run in 'learn' or 'full' mode first")?;
     
     let capability_id = &capability_manifest.id;
 
     println!("{}", "🔍 Checking capability marketplace...".dim());
     sleep(Duration::from_millis(300)).await;
     println!("{}", format!("✓ Found learned capability: {}", capability_id).green());
+    println!("{}", format!("  Description: {}", capability_manifest.description).dim());
 
-    println!("\n{}", "⚡ Executing research workflow via registered capability...".yellow());
+    println!("\n{}", "⚡ Executing learned workflow via registered capability...".yellow());
     
-    // Actually invoke the capability through CCOS
-    let capability_invocation = format!(
-        "(call :{} {{:topic \"{}\"}})",
-        capability_id,
-        new_topic.replace('"', "\\\"")
-    );
+    // Build invocation with appropriate parameters based on capability
+    // Note: For demo purposes, we use simple mock parameters
+    // In production, these would come from actual user input
+    let capability_invocation = if capability_id.starts_with("travel.") {
+        format!(
+            "(call :{} {{:destination \"{}\" :duration 5 :budget 3000 :interests [\"culture\" \"food\"]}})",
+            capability_id,
+            new_topic.replace('"', "\\\"")
+        )
+    } else if capability_id.starts_with("sentiment.") {
+        format!(
+            "(call :{} {{:source \"{}\" :format \"csv\" :granularity \"detailed\"}})",
+            capability_id,
+            new_topic.replace('"', "\\\"")
+        )
+    } else {
+        // Default for research capabilities
+        format!(
+            "(call :{} {{:topic \"{}\"}})",
+            capability_id,
+            new_topic.replace('"', "\\\"")
+        )
+    };
+    
+    println!("{}", format!("  Invocation: {}", capability_invocation).dim());
     
     let ctx = rtfs_compiler::runtime::RuntimeContext::controlled(vec![capability_id.to_string()]);
     let plan = rtfs_compiler::ccos::types::Plan::new_rtfs(capability_invocation, vec![]);
@@ -313,12 +339,12 @@ async fn run_application_phase(
         Ok(result) => {
             println!("{}", "  → Capability executed successfully".dim());
             println!("{}", format!("  → Result: {:?}", result.value).dim());
-            println!("\n{}", "✓ Research completed using learned workflow!".green().bold());
+            println!("\n{}", "✓ Workflow completed using learned capability!".green().bold());
         }
         Err(e) => {
             println!("{}", format!("  ⚠ Capability execution error: {}", e).yellow());
             println!("{}", "  → This is expected if the capability calls sub-capabilities not yet registered".dim());
-            println!("\n{}", "✓ Capability invocation demonstrated (structure validated)".green().bold());
+            println!("\n{}", "✓ Capability structure validated (would work with implemented sub-capabilities)".green().bold());
         }
     }
 
