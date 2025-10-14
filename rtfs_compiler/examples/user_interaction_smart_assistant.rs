@@ -332,6 +332,51 @@ async fn run_application_phase(
     })
 }
 
+/// Generate appropriate clarification questions based on user's goal using LLM
+async fn generate_questions_for_goal(
+    ccos: &Arc<CCOS>,
+    goal: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let arbiter = ccos.get_delegating_arbiter()
+        .ok_or("Delegating arbiter not available for question generation")?;
+    
+    let prompt = format!(
+        r#"You are analyzing a user's goal to determine what clarifying questions to ask.
+
+User Goal: "{}"
+
+Generate 5 specific, relevant questions to understand how to best help achieve this goal.
+The questions should gather preferences, constraints, and requirements specific to THIS goal.
+
+IMPORTANT: Generate questions appropriate for the ACTUAL goal, not generic research questions.
+
+Output ONLY a JSON array of question strings, no markdown fences:
+["question 1", "question 2", "question 3", "question 4", "question 5"]"#,
+        goal
+    );
+    
+    let response = arbiter.generate_raw_text(&prompt).await
+        .map_err(|e| format!("Question generation failed: {}", e))?;
+    
+    // Parse JSON response
+    let cleaned = response
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    
+    let questions: Vec<String> = serde_json::from_str(cleaned)
+        .map_err(|e| format!("Failed to parse questions JSON: {}", e))?;
+    
+    if questions.len() < 3 {
+        return Err("LLM generated too few questions".into());
+    }
+    
+    // Limit to 5 questions
+    Ok(questions.into_iter().take(5).collect())
+}
+
 /// Real interaction using CCOS user.ask capability
 async fn gather_preferences_via_ccos(
     ccos: &Arc<CCOS>,
@@ -342,24 +387,21 @@ async fn gather_preferences_via_ccos(
     println!("{}", "💬 Interactive Preference Collection:".bold());
     println!();
 
-    let questions = vec![
-        "What domains should I focus on? (e.g., academic, industry, blogs)",
-        "How deep should the analysis be? (e.g., overview, comprehensive)",
-        "What format do you prefer? (e.g., summary, detailed report)",
-        "Which sources do you trust? (e.g., arxiv, IEEE, ACM, Google Scholar)",
-        "Any time constraints? (e.g., 24 hours, 1 week)",
-    ];
+    // Generate questions dynamically based on the user's goal using LLM
+    let questions = generate_questions_for_goal(ccos, topic).await?;
 
     let mut interaction_history = vec![];
     interaction_history.push(("initial_topic".to_string(), topic.to_string()));
 
-    // Set up env variables for canned responses if not in interactive mode
+    // Set up fallback canned responses if not in interactive mode
+    // These are generic fallbacks - for real usage, set CCOS_INTERACTIVE_ASK=1
     if std::env::var("CCOS_INTERACTIVE_ASK").is_err() {
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_DOMAINS", "academic papers, industry reports, expert blogs");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_DEPTH", "comprehensive with examples and case studies");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_FORMAT", "structured summary with key findings and citations");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_SOURCES", "peer-reviewed journals, arxiv, IEEE, ACM");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_TIME", "complete within 24 hours");
+        // Set some generic responses for automated testing
+        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q1", "Medium budget, prefer quality over cheapness");
+        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q2", "7 days in total");
+        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q3", "Mix of sightseeing, food, and culture");
+        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q4", "Train and walking, avoid driving");
+        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q5", "Mid-range hotels or nice Airbnbs");
     }
 
     // Runtime context allowing user.ask
@@ -390,46 +432,66 @@ async fn gather_preferences_via_ccos(
             }
             Err(e) => {
                 eprintln!("Failed to ask question: {}", e);
-                // Use fallback answer
-                let fallback = match i {
-                    0 => "academic, industry",
-                    1 => "comprehensive",
-                    2 => "structured summary",
-                    3 => "arxiv, IEEE",
-                    4 => "24 hours",
-                    _ => "default",
-                };
-                answers.insert(question.to_string(), fallback.to_string());
-                interaction_history.push((question.to_string(), fallback.to_string()));
+                // Use fallback answer from env or generic
+                let env_key = format!("CCOS_USER_ASK_RESPONSE_Q{}", i + 1);
+                let fallback = std::env::var(&env_key)
+                    .unwrap_or_else(|_| format!("Reasonable preference for question {}", i + 1));
+                
+                println!("{} {}", format!("  A{}:", i + 1).dim(), fallback.clone().cyan());
+                println!();
+                
+                answers.insert(question.to_string(), fallback.clone());
+                interaction_history.push((question.to_string(), fallback));
             }
         }
     }
 
     // Parse answers into structured preferences
+    // Extract common patterns from answers (budget, duration, style, etc.)
+    let all_answers_text: String = answers.values().cloned().collect::<Vec<_>>().join(", ");
+    
     let preferences = ResearchPreferences {
         topic: topic.to_string(),
-        domains: answers.get(questions[0])
-            .unwrap_or(&"academic, industry".to_string())
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect(),
-        depth: answers.get(questions[1])
-            .unwrap_or(&"comprehensive".to_string())
-            .clone(),
-        format: answers.get(questions[2])
-            .unwrap_or(&"summary".to_string())
-            .clone(),
-        sources: answers.get(questions[3])
-            .unwrap_or(&"arxiv".to_string())
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect(),
-        time_constraint: answers.get(questions[4])
-            .unwrap_or(&"24h".to_string())
-            .clone(),
+        domains: extract_list_from_text(&all_answers_text, &["domain", "area", "type"]),
+        depth: extract_single_from_text(&all_answers_text, &["depth", "detail", "level"]),
+        format: extract_single_from_text(&all_answers_text, &["format", "style", "output"]),
+        sources: extract_list_from_text(&all_answers_text, &["source", "resource", "using"]),
+        time_constraint: extract_single_from_text(&all_answers_text, &["time", "duration", "when", "deadline"]),
     };
 
     Ok((preferences, interaction_history))
+}
+
+/// Extract a single preference value from text based on keywords
+fn extract_single_from_text(text: &str, keywords: &[&str]) -> String {
+    // Simple heuristic: find sentences containing keywords
+    for sentence in text.split(['.', ',', ';']) {
+        let lower = sentence.to_lowercase();
+        if keywords.iter().any(|kw| lower.contains(kw)) {
+            return sentence.trim().to_string();
+        }
+    }
+    text.split(',').next().unwrap_or("moderate").trim().to_string()
+}
+
+/// Extract a list of items from text based on keywords
+fn extract_list_from_text(text: &str, keywords: &[&str]) -> Vec<String> {
+    let mut items = Vec::new();
+    for sentence in text.split(['.', ';']) {
+        let lower = sentence.to_lowercase();
+        if keywords.iter().any(|kw| lower.contains(kw)) {
+            for item in sentence.split(',') {
+                let trimmed = item.trim();
+                if !trimmed.is_empty() {
+                    items.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    if items.is_empty() {
+        items.push("general".to_string());
+    }
+    items
 }
 
 /// Real LLM-driven capability synthesis using the delegating arbiter
@@ -462,41 +524,51 @@ async fn synthesize_capability_via_llm(
     }
     
     let synthesis_prompt = format!(
-        r#"You are synthesizing an RTFS capability from a user interaction about research workflow preferences.
+        r#"You are synthesizing an RTFS capability from a user interaction.
 
-## Interaction History
-{}
+## User's Goal
+"{}"
 
-## Initial Topic
+## Conversation History (Questions & Answers)
 {}
 
 ## Your Task
-Generate a reusable RTFS capability that captures this research workflow. The capability should:
-1. Accept a :topic parameter
-2. Orchestrate the research process (gather sources, analyze, synthesize, format)
-3. Use the learned preferences as defaults or configuration
+Analyze the user's ACTUAL GOAL and the conversation to create a capability that helps achieve THAT SPECIFIC GOAL.
+
+CRITICAL: The capability MUST match the user's goal, not generic research.
+- If goal is "plan a trip", create a trip planning capability
+- If goal is "research X", create a research capability  
+- If goal is "build Y", create a building/development capability
+
+The capability should:
+1. Have an ID matching the goal domain (e.g., "travel.trip-planner.v1", "research.assistant.v1")
+2. Accept relevant parameters based on the goal
+3. Orchestrate steps appropriate for achieving THIS SPECIFIC goal
+4. Use preferences from the conversation
 
 OUTPUT EXACTLY ONE fenced ```rtfs block containing a well-formed (capability ...) s-expression.
 
-Example structure:
+Example for trip planning goal:
 ```rtfs
-(capability "research.smart-assistant.v1"
-  :description "Smart research assistant with learned workflow preferences"
-  :parameters {{:topic "string"}}
+(capability "travel.trip-planner.paris.v1"
+  :description "Paris trip planner with user's budget and duration preferences"
+  :parameters {{:destination "string" :duration "string"}}
   :implementation
     (do
-      (step "Gather Sources" 
-        (call :research.gather {{:topic topic :sources ["arxiv" "IEEE"]}}))
-      (step "Analyze" 
-        (call :research.analyze {{:depth "comprehensive"}}))
-      (step "Synthesize" 
-        (call :research.synthesize {{:format "summary"}}))
-      (step "Return" 
-        {{:status "completed" :summary result}})))
+      (step "Research Attractions"
+        (call :travel.research {{:destination destination :interests ["culture" "food"]}}))
+      (step "Find Accommodation"
+        (call :travel.hotels {{:city destination :budget "mid-range" :duration duration}}))
+      (step "Plan Transportation"
+        (call :travel.transport {{:mode "train" :within destination}}))
+      (step "Create Itinerary"
+        (call :travel.itinerary {{:days duration :activities attractions}}))
+      (step "Return"
+        {{:status "completed" :itinerary full_plan}})))
 ```
 
-Respond ONLY with the fenced RTFS block, no other text."#,
-        interaction_summary, topic
+Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no other text."#,
+        topic, interaction_summary
     );
     
     // Call LLM to generate the capability
