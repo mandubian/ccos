@@ -1,3 +1,4 @@
+[agent]
 version = "1.0"
 agent_id = "progressive-demo"
 profile = "interactive"
@@ -18,6 +19,7 @@ verify = ""
 # Enable delegation for LLM-powered plan generation
 enabled = true
 
+[debug]
 # Debug flags for development
 print_extracted_intent = true
 print_extracted_plan = true

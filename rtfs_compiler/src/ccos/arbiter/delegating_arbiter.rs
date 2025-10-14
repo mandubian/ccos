@@ -355,6 +355,11 @@ impl DelegatingArbiter {
         })
     }
 
+    /// Get the LLM configuration used by this arbiter
+    pub fn get_llm_config(&self) -> &LlmConfig {
+        &self.llm_config
+    }
+
     /// Generate intent using LLM
     ///
     /// This method prioritizes RTFS format output from the LLM, but gracefully falls back

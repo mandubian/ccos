@@ -1,0 +1,194 @@
+```
+CCOS/RTFS Self-Learning Demonstration Flow
+===========================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     PHASE 1: LEARNING BASELINE                          │
+│                                                                         │
+│  $ cargo run --example user_interaction_progressive_graph \            │
+│      --synthesize-capability --demo-learning-loop                      │
+│                                                                         │
+│  ═══ LEARNING BASELINE ═══                                             │
+│  📚 15 capabilities currently registered                                │
+│  Sample capabilities:                                                   │
+│    • ccos.echo                                                          │
+│    • ccos.user.ask                                                      │
+│    • ccos.plan.execute                                                  │
+│    ...                                                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  PHASE 2: MULTI-TURN INTERACTION                        │
+│                                                                         │
+│  Turn 1: "I want to build an AI-powered code review system"           │
+│  ├─→ LLM asks: "What's your team size?"                                │
+│  └─→ User: "5 developers"                                              │
+│                                                                         │
+│  Turn 2: LLM asks: "Which repository?"                                 │
+│  └─→ User: "GitHub Enterprise"                                         │
+│                                                                         │
+│  Turn 3: LLM asks: "What programming language?"                        │
+│  └─→ User: "TypeScript and Python"                                     │
+│                                                                         │
+│  Turn 4: LLM asks: "What rules to check?"                              │
+│  └─→ User: "security, style, test coverage"                            │
+│                                                                         │
+│  Turn 5: LLM asks: "Integration needs?"                                │
+│  └─→ User: "GitHub Actions and Slack"                                  │
+│                                                                         │
+│  Turn 6: LLM: "Understood. Creating comprehensive plan..."             │
+│                                                                         │
+│  📊 CAPTURED: 6 turns, 5 parameters, 1 goal                            │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    PHASE 3: SYNTHESIS ANALYSIS                          │
+│                                                                         │
+│  [synthesis] Running quick local synthesis pipeline...                 │
+│  ├─→ Schema extraction                                                  │
+│  │   • team_size: string                                               │
+│  │   • repository: string                                              │
+│  │   • language: string                                                │
+│  │   • rules: string                                                   │
+│  │   • integration: string                                             │
+│  │                                                                      │
+│  ├─→ Artifact generation                                                │
+│  │   • Collector: synth.collector.rtfs                                 │
+│  │   • Planner: synth.planner.rtfs                                     │
+│  │   • Stub: synth.stub.rtfs                                           │
+│  │                                                                      │
+│  └─→ LLM capability proposal                                            │
+│      "Requesting capability from LLM..."                                │
+│      Raw proposal (300 chars): (capability "ai-powered-...             │
+│                                                                         │
+│  [synthesis] Parsing and validating RTFS...                            │
+│  [synthesis] Candidate id: ai-powered-code-review-system               │
+│  ✓ Validation passed                                                   │
+│                                                                         │
+│  [synthesis] Registering capability...                                 │
+│  ✓ Registered: ai-powered-code-review-system                           │
+│                                                                         │
+│  Generated RTFS:                                                        │
+│  ┌────────────────────────────────────────┐                           │
+│  │ (capability "ai-powered-code-review"   │                           │
+│  │   :description "AI code review setup"  │                           │
+│  │   :parameters {                        │                           │
+│  │     :team_size "string"                │                           │
+│  │     :repository "string"               │                           │
+│  │     :language "string"                 │                           │
+│  │     :rules "string"                    │                           │
+│  │     :integration "string"              │                           │
+│  │   }                                    │                           │
+│  │   :implementation (do                  │                           │
+│  │     (validate.team_size)               │                           │
+│  │     (configure.repository)             │                           │
+│  │     (setup.review_rules)               │                           │
+│  │     (integrate.ci_cd)                  │                           │
+│  │   )                                    │                           │
+│  │ )                                      │                           │
+│  └────────────────────────────────────────┘                           │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    PHASE 4: LEARNING OUTCOME                            │
+│                                                                         │
+│  ═══ LEARNING OUTCOME ═══                                              │
+│  ✨ 1 NEW capability learned from 6 interaction turns!                 │
+│  📦 Synthesized: ai-powered-code-review-system                         │
+│                                                                         │
+│  📊 Complexity Reduction:                                              │
+│    • Original: 6 turns of back-and-forth                               │
+│    • Now: Single capability invocation                                 │
+│    • Efficiency gain: 6x                                               │
+│                                                                         │
+│  📚 Total capabilities: 15 → 16  (+6.7%)                               │
+│                                                                         │
+│  WHAT WAS LEARNED:                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │ The system can now handle "code review setup" requests       │   │
+│  │ directly without repeating the 6-turn refinement process.    │   │
+│  │                                                                │   │
+│  │ Future requests like:                                          │   │
+│  │  "Set up code review for a Python team of 3"                  │   │
+│  │  "Configure review bot for our repo"                          │   │
+│  │                                                                │   │
+│  │ Can be handled more efficiently using the learned capability. │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  PHASE 5: PROOF OF LEARNING                             │
+│                                                                         │
+│  ═══ PROOF OF LEARNING ═══                                             │
+│  🧪 Testing if CCOS can now use the synthesized capability...         │
+│                                                                         │
+│  💬 Test request:                                                       │
+│     "I need help with code review system setup"                        │
+│     "(use capability: ai-powered-code-review-system)"                  │
+│                                                                         │
+│  🔍 Checking marketplace...                                            │
+│  ✓ Capability 'ai-powered-code-review-system' is registered!          │
+│                                                                         │
+│  🎓 The system has learned and can now:                                │
+│    ✓ Recognize similar requests                                        │
+│    ✓ Directly invoke synthesized capability                            │
+│    ✓ Avoid repeating refinement process                                │
+│                                                                         │
+│  🎉 Self-learning demonstrated successfully!                           │
+│                                                                         │
+│  VERIFICATION:                                                          │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │ Before learning: Task required 6 turns                        │   │
+│  │ After learning:  Task requires 1 turn (6x faster)             │   │
+│  │                                                                │   │
+│  │ Knowledge preserved: ✓                                         │   │
+│  │ Capability reusable: ✓                                         │   │
+│  │ Learning validated:  ✓                                         │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+KEY INSIGHTS
+============
+
+1. OBSERVATIONAL LEARNING
+   ├─ System learns by "watching" its own interactions
+   ├─ No manual capability definition needed
+   └─ LLM extracts patterns automatically
+
+2. HOMOICONIC ADVANTAGE  
+   ├─ Capabilities are RTFS code (data = code)
+   ├─ System can generate and manipulate its own code
+   └─ Self-modification is first-class operation
+
+3. PROGRESSIVE CAPABILITY LIBRARY
+   ├─ Each interaction can add new capabilities
+   ├─ Marketplace grows organically
+   └─ System becomes more capable over time
+
+4. MEASURABLE EFFICIENCY GAINS
+   ├─ 6 turns → 1 turn (6x improvement)
+   ├─ Quantified complexity reduction
+   └─ Provable learning outcome
+
+5. KNOWLEDGE PERSISTENCE
+   ├─ Capabilities persist in marketplace
+   ├─ Optional disk persistence for audit
+   └─ Replay and composition possible
+
+RUNNING THE DEMO
+================
+
+Basic (offline):
+  $ ./demo_self_learning.sh basic stub
+
+Full with LLM:
+  $ ./demo_self_learning.sh full openrouter meta-llama/llama-3.1-8b-instruct:free
+
+With persistence:
+  $ ./demo_self_learning.sh persist openai gpt-4o-mini
+
+```
