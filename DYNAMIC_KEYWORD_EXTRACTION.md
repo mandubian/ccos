@@ -290,10 +290,45 @@ Run the demo to verify dynamic extraction:
 ```
 
 Expected output shows:
-1. **Phase 1**: LLM asks dynamic questions
-2. **Phase 2**: Extracts domain-specific parameters (budget, duration, travelers, interests)
-3. **Phase 3**: Generates trip-planning capability using extracted parameters
-4. **Phase 3**: Reuses capability for similar requests
+
+**Phase 1**: Interactive preference collection
+```
+💬 Interactive Preference Collection:
+  Q1: What are your intended travel dates and how long do you plan to stay?
+  A1: (user answers or fallback)
+  ...
+```
+
+**Phase 2**: Dynamically extracted preferences
+```
+📊 Learned Preferences:
+   • Goal: plan trip to paris
+   • 5 Parameters:
+     - accommodation (string): Mid-range hotels or nice Airbnbs
+     - budget (currency): Medium budget, prefer quality over cheapness
+     - interests (list): Mix of sightseeing, food, and culture
+     - travel_dates (string): 7 days in total
+     - travelers (string): couple
+```
+
+**Phase 3**: Domain-specific capability generated using extracted parameters
+```
+📦 Synthesized Capability:
+(capability "travel.trip-planner.paris.v1"
+  :parameters {:destination "string" :budget "currency" :duration "number" ...}
+  :implementation
+    (do
+      (let flights (call :travel.flights ...))
+      (let accommodation (call :travel.accommodation ...))
+      ...))
+```
+
+**Key validation points**:
+1. ✅ Preferences display shows ALL extracted parameters (not just hardcoded ones)
+2. ✅ Parameter names are semantic (budget, duration, interests)
+3. ✅ Parameter types are inferred (currency, number, list, etc.)
+4. ✅ Capability ID matches domain (travel.trip-planner.paris.v1)
+5. ✅ Reuse works for similar requests without re-asking questions
 
 ## Performance Impact
 
