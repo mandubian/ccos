@@ -279,12 +279,20 @@ async fn run_learning_phase(
     let (preferences, interaction_history) = gather_preferences_via_ccos(&ccos, &research_topic).await?;
     
     println!("\n{}", "📊 Learned Preferences:".bold().green());
-    println!("   • Topic: {}", preferences.goal);
-    println!("   • Domains: {}", preferences.parameters.get("domains").map(|p| p.value.clone()).unwrap_or_default());
-    println!("   • Depth: {}", preferences.parameters.get("depth").map(|p| p.value.clone()).unwrap_or_default());
-    println!("   • Format: {}", preferences.parameters.get("format").map(|p| p.value.clone()).unwrap_or_default());
-    println!("   • Sources: {}", preferences.parameters.get("sources").map(|p| p.value.clone()).unwrap_or_default());
-    println!("   • Time: {}", preferences.parameters.get("duration").map(|p| p.value.clone()).unwrap_or_default());
+    println!("   • Goal: {}", preferences.goal);
+    
+    if preferences.parameters.is_empty() {
+        println!("   • (No specific parameters extracted)");
+    } else {
+        println!("   • {} Parameters:", preferences.parameters.len());
+        for (param_name, param) in &preferences.parameters {
+            println!("     - {} ({}): {}", 
+                param_name.as_str().bold().cyan(), 
+                param.param_type.as_str().yellow(),
+                param.value
+            );
+        }
+    }
 
     let turns_count = interaction_history.len();
     let questions_asked = turns_count.saturating_sub(1); // Exclude initial request
