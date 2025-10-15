@@ -48,9 +48,9 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 ---
 
 ## 4. git and documentation
-- commit: commit as soon as a big-enough feature is implemented, don't wait for the end of worktree or staging area. Use present tense, imperative mood, reference issues/PRs when relevant.
+- commit: commit as soon as a big-enough feature (not a tiny fix or code update) is implemented, don't wait for the end of worktree or staging area. Use present tense, imperative mood, reference issues/PRs when relevant.
 - PR: includea summary of changes, test results, known issues, and next steps.
-- docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. Link to these docs in your PR description.
+- docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. For examples or guides, put it in `docs/ccos/guides` and `docs/rtfs-2.0/guides`. Link to these docs in your PR description.
 
 ---
 ## 5. IMPORTANT DOCS TO READ

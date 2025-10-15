@@ -2,11 +2,13 @@
 alwaysApply: true
 ---
 
-# When Feature Complete: Document and Commit Immediately
+# When Feature Complete: Document and Commit if needed
 
-## 🚀 **Immediate Documentation and Commit Rule**
+## 🚀 **Documentation and Commit Rule**
 
-When you have successfully implemented and tested a feature, you MUST:
+A complete feature is not a tiny update or a small fix. It is a significant addition or change to the codebase that enhances functionality, performance, or usability.
+
+When you have successfully implemented and tested a complete feature, not a tiny update, you MUST:
 
 ### 1. **Document First** 📝
 - **Update relevant documentation** immediately after feature completion
@@ -14,106 +16,12 @@ When you have successfully implemented and tested a feature, you MUST:
 - **Update SPEC files** spec files for CCOS are in docs/ccos/specs and for RTFS-2.0 in docs/rtfs-2.0/specs
 - **Update README files** if the feature affects user-facing functionality
 - **Update progress reports** (like WORKTREE_PROGRESS.md) with completion status
-- **Add usage examples** if the feature is user-facing
+- **Add usage examples** if the feature is user-facing in docs/ccos/guides or docs/rtfs-2.0/guides, never in root direct
 
-### 2. **Commit Immediately** 💾
+### 2. **Commit when you think it is meaningful to commit** 💾
 - **DO NOT wait** until the end of a PR or issue to commit
 - **Commit as soon as** the feature is implemented and tested
 - **Use descriptive commit messages** that explain what was implemented
 - **Include test results** in commit messages if relevant
 - **Reference issue numbers** in commit messages when applicable
 
-### 3. **Why This Matters** ⚡
-- **Prevents loss of work** if something goes wrong
-- **Maintains clear history** of feature development
-- **Enables code review** of individual features
-- **Facilitates rollback** if needed
-- **Improves collaboration** by keeping changes small and focused
-
-### 4. **Commit Message Format** 📋
-```
-feat: implement [feature name]
-
-- Add [specific functionality]
-- Include [key components]
-- Test [test coverage details]
-- Update [documentation files]
-
-Fixes #[issue-number] or Closes #[issue-number]
-```
-
-### 5. **Documentation Checklist** ✅
-- [ ] Code comments added
-- [ ] README updated (if applicable)
-- [ ] Progress report updated
-- [ ] Usage examples added (if applicable)
-- [ ] API documentation updated (if applicable)
-- [ ] Test documentation updated
-
-### 6. **Commit Checklist** ✅
-- [ ] Feature fully implemented
-- [ ] Tests passing
-- [ ] Documentation complete
-- [ ] Descriptive commit message
-- [ ] Issue referenced (if applicable)
-- [ ] No sensitive data in commit
-
-## 🎯 **Remember**
-**Document and commit immediately after each feature completion. Don't wait for the end of a PR or issue!**
-# When Feature Complete: Document and Commit Immediately
-
-## 🚀 **Immediate Documentation and Commit Rule**
-
-When you have successfully implemented and tested a feature, you MUST:
-
-### 1. **Document First** 📝
-- **Update relevant documentation** immediately after feature completion
-- **Add comprehensive comments** to the code explaining the implementation
-- **Update README files** if the feature affects user-facing functionality
-- **Update progress reports** (like WORKTREE_PROGRESS.md) with completion status
-- **Add usage examples** if the feature is user-facing
-
-### 2. **Commit Immediately** 💾
-- **DO NOT wait** until the end of a PR or issue to commit
-- **Commit as soon as** the feature is implemented and tested
-- **Use descriptive commit messages** that explain what was implemented
-- **Include test results** in commit messages if relevant
-- **Reference issue numbers** in commit messages when applicable
-
-### 3. **Why This Matters** ⚡
-- **Prevents loss of work** if something goes wrong
-- **Maintains clear history** of feature development
-- **Enables code review** of individual features
-- **Facilitates rollback** if needed
-- **Improves collaboration** by keeping changes small and focused
-
-### 4. **Commit Message Format** 📋
-```
-feat: implement [feature name]
-
-- Add [specific functionality]
-- Include [key components]
-- Test [test coverage details]
-- Update [documentation files]
-
-Fixes #[issue-number] or Closes #[issue-number]
-```
-
-### 5. **Documentation Checklist** ✅
-- [ ] Code comments added
-- [ ] README updated (if applicable)
-- [ ] Progress report updated
-- [ ] Usage examples added (if applicable)
-- [ ] API documentation updated (if applicable)
-- [ ] Test documentation updated
-
-### 6. **Commit Checklist** ✅
-- [ ] Feature fully implemented
-- [ ] Tests passing
-- [ ] Documentation complete
-- [ ] Descriptive commit message
-- [ ] Issue referenced (if applicable)
-- [ ] No sensitive data in commit
-
-## 🎯 **Remember**
-**Document and commit immediately after each feature completion. Don't wait for the end of a PR or issue!**
