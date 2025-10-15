@@ -473,9 +473,23 @@ async fn gather_preferences_via_ccos(
     }
 
     // Parse answers into structured preferences
-    // Extract common patterns from answers (budget, duration, style, etc.)
-    let all_answers_text: String = answers.values().cloned().collect::<Vec<_>>().join(", ");
-    
+    // First try to ask the delegating LLM to parse the Q/A pairs into the preference schema.
+    // This produces a more robust mapping than the simple heuristics below. If the arbiter
+    // isn't available or parsing fails, fallback to the original heuristic parsing.
+    if let Ok(Some(parsed)) = parse_preferences_via_llm(ccos, topic, &interaction_history).await {
+        return Ok((parsed, interaction_history));
+    }
+
+    // Fallback: Use the ordered interaction_history (preserves Q1..Qn order) rather than HashMap values
+    // which have an unspecified iteration order. This ensures extracted fields map to the
+    // corresponding questions when heuristics are used.
+    let all_answers_text: String = interaction_history
+        .iter()
+        .skip(1) // skip the initial_topic entry
+        .map(|(_, answer)| answer.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let preferences = ResearchPreferences {
         topic: topic.to_string(),
         domains: extract_list_from_text(&all_answers_text, &["domain", "area", "type"]),
@@ -518,6 +532,80 @@ fn extract_list_from_text(text: &str, keywords: &[&str]) -> Vec<String> {
         items.push("general".to_string());
     }
     items
+}
+
+/// Ask the delegating LLM to parse the Q/A pairs into a JSON matching ResearchPreferences.
+/// Returns Ok(Some(...)) on success, Ok(None) if arbiter missing or parsing failed, Err on unexpected errors.
+async fn parse_preferences_via_llm(
+    ccos: &Arc<CCOS>,
+    topic: &str,
+    interaction_history: &[(String, String)],
+) -> Result<Option<ResearchPreferences>, Box<dyn std::error::Error>> {
+    // Try to get the delegating arbiter. If missing, bail to allow fallback heuristics.
+    let arbiter = match ccos.get_delegating_arbiter() {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    // Build a compact JSON-friendly prompt containing the Q/A pairs and required schema.
+    let mut qa_list = Vec::new();
+    for (i, (q, a)) in interaction_history.iter().enumerate().skip(1) {
+        qa_list.push(format!("{{\"q\": {}, \"a\": {}}}", serde_json::to_string(q)?, serde_json::to_string(a)?));
+    }
+    let qa_json = format!("[{}]", qa_list.join(","));
+
+    let prompt = format!(
+        r#"Parse the following question/answer pairs into a JSON object matching this schema:
+{{
+  "topic": string,
+  "domains": [string],
+  "depth": string,
+  "format": string,
+  "sources": [string],
+  "time_constraint": string
+}}
+
+Respond ONLY with valid JSON matching the schema. If a field cannot be determined, use an empty string or empty list.
+
+Topic: {topic}
+
+Q/A pairs: {qa_json}
+"#,
+        topic = topic,
+        qa_json = qa_json
+    );
+
+    let raw = arbiter.generate_raw_text(&prompt).await;
+    let raw = match raw {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    // Clean fenced code if present
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    // Try to parse JSON
+    let v: serde_json::Value = match serde_json::from_str(cleaned) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+
+    // Map to ResearchPreferences
+    let prefs = ResearchPreferences {
+        topic: v.get("topic").and_then(|x| x.as_str()).unwrap_or(topic).to_string(),
+        domains: v.get("domains").and_then(|x| x.as_array()).map(|arr| arr.iter().filter_map(|it| it.as_str().map(|s| s.to_string())).collect()).unwrap_or_else(|| vec!["general".to_string()]),
+        depth: v.get("depth").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        format: v.get("format").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        sources: v.get("sources").and_then(|x| x.as_array()).map(|arr| arr.iter().filter_map(|it| it.as_str().map(|s| s.to_string())).collect()).unwrap_or_else(|| vec!["general".to_string()]),
+        time_constraint: v.get("time_constraint").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+    };
+
+    Ok(Some(prefs))
 }
 
 /// Real LLM-driven capability synthesis using the delegating arbiter
