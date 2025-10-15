@@ -25,20 +25,21 @@ defn_expr = { "(" ~ defn_keyword ~ ... ~ symbol ~ ... ~ fn_param_list ~ (COLON ~
 
 ## Correct Syntax
 
+The COLON syntax allows **both spaced and unspaced** forms (verified by test_type_annotation_whitespace.rs):
+
+### With whitespace (explicit):
 ```rtfs
-;; Type-annotated function - CORRECT
-(defn add [a b] : [Integer Integer] Integer
+(defn add [a : int b : int] : int
   (+ a b))
 ```
 
-Or with multi-line formatting:
-
+### Without whitespace (shorthand - also valid!):
 ```rtfs
-(defn add 
-  [a b] 
-  : [Integer Integer] Integer  ; Return type after params
+(defn add [a :int b :int] :int
   (+ a b))
 ```
+
+Both are valid. The grammar treats `COLON` as optional whitespace-aware, so `: int` and `:int` both parse correctly.
 
 ## Grammar Structure Explained
 
@@ -50,57 +51,85 @@ defn_expr = ( "defn" symbol fn_param_list (COLON type_expr)? expression+ )
 Breaking it down:
 1. `"defn"` - keyword
 2. `symbol` - function name (e.g., `add`)
-3. `fn_param_list` - parameters in brackets `[a b]`
-4. `(COLON type_expr)?` - **optional type after colon** `[:fn [...] ReturnType]`
+3. `fn_param_list` - parameters in brackets `[a b]` (with optional type annotations)
+4. `(COLON type_expr)?` - **optional return type after colon**
 5. `expression+` - function body
 
 ## Type Expression Syntax
 
-From the grammar (lines 150-163), a `type_expr` can be:
+From the grammar (lines 113-114):
+```
+primitive_type = { symbol | keyword }
+// Accept both bare symbols (int) and keyword forms (:int) for backward compatibility
+```
 
-### Primitive Types
+A `type_expr` can be:
+
+### Primitive Types (Symbols or Keywords)
 ```rtfs
-Integer      ; keyword or symbol
-String
-Boolean
+int           ; symbol (lowercase)
+Int           ; symbol (capitalized)
+:int          ; keyword
+:Int          ; keyword
+String        ; symbol
+:String       ; keyword
+Boolean       ; symbol
+:Boolean      ; keyword
 ```
 
 ### Function Type (for parameter/return types)
 ```rtfs
 [:fn [Type1 Type2] ReturnType]
+[:=> [Type1 Type2] ReturnType]    ; Shorthand notation
 ```
 
-For a function that takes two Integers and returns an Integer:
+For a function that takes two integers and returns an integer:
 ```rtfs
-[:fn [Integer Integer] Integer]
-```
-
-Or using the shorthand `=>`:
-```rtfs
-[:=> [Integer Integer] Integer]
+[:fn [int int] int]
+[:=> [int int] int]               ; Shorthand
 ```
 
 ## Correct Examples
 
-### Example 1: Simple Function
+### Example 1: Simple Function with Keywords
 ```rtfs
-(defn add [a b] : [:=> [Integer Integer] Integer]
+(defn add [a :int b :int] :int
   (+ a b))
 ```
 
-### Example 2: String Concatenation
+### Example 2: With Spaced Types
 ```rtfs
-(defn concat-str [s1 s2] : [:=> [String String] String]
+(defn add [a : int b : int] : int
+  (+ a b))
+```
+
+### Example 3: With Capitalized Symbol Types
+```rtfs
+(defn add [a : Int b : Int] : Int
+  (+ a b))
+```
+
+### Example 4: String Concatenation
+```rtfs
+(defn concat-str [s1 :String s2 :String] :String
   (str s1 s2))
 ```
 
-### Example 3: With Multiple Params
+### Example 5: With Function Type
 ```rtfs
-(defn process-data [data index] : [:=> [Vector Integer] String]
-  (get data index))
+(defn add [a :int b :int] : [:=> [int int] int]
+  (+ a b))
 ```
 
-### Example 4: No Type Annotation
+### Example 6: Mixed (individual params + return type)
+```rtfs
+(defn multiply
+  [x : int y : int]
+  : [:fn [int int] int]
+  (* x y))
+```
+
+### Example 7: No Type Annotation
 ```rtfs
 (defn add [a b]
   (+ a b))
@@ -115,18 +144,19 @@ fn_param_list = { "[" ~ param_def* ~ "]" }
 param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 ```
 
-This means individual parameters CAN have types:
+Individual parameters CAN have optional types using COLON:
 
+### Spaced version:
 ```rtfs
-(defn add [a : Integer b : Integer] : Integer
-  (+ a b))
+[a : int b : int]
 ```
 
-Or with function type:
+### Unspaced version:
 ```rtfs
-(defn add [a : Integer b : Integer] : [:=> [Integer Integer] Integer]
-  (+ a b))
+[a :int b :int]
 ```
+
+Both work! The grammar is whitespace-agnostic around the COLON.
 
 ## Also: Metadata vs Types
 
@@ -141,8 +171,8 @@ defn_expr = { "(" ~ defn_keyword ~ metadata* ~ symbol ~ fn_param_list ~ (COLON ~
 ;; With metadata AND type annotation
 (defn add 
   ^:delegation :local
-  [a b]
-  : [:=> [Integer Integer] Integer]
+  [a :int b :int]
+  :int
   (+ a b))
 ```
 
@@ -152,16 +182,22 @@ Metadata goes AFTER `defn` keyword, type annotation goes AFTER parameters.
 
 ```rtfs
 ;; Type-annotated function - CORRECT RTFS SYNTAX
-(defn add [a : Integer b : Integer] : [:=> [Integer Integer] Integer]
+(defn add [a :int b :int] :int
   (+ a b))
 
-;; Simplified version
-(defn add [a b] : [:=> [Integer Integer] Integer]
+;; Alternative with spaces
+(defn add [a : int b : int] : int
   (+ a b))
 
-;; Alternative with explicit function type
-(defn add [a b]
-  : [:fn [Integer Integer] Integer]
+;; With function type signature
+(defn add [a :int b :int] : [:=> [int int] int]
+  (+ a b))
+
+;; With metadata
+(defn add
+  ^:delegation :local
+  [a :int b :int]
+  :int
   (+ a b))
 ```
 
@@ -169,10 +205,12 @@ Metadata goes AFTER `defn` keyword, type annotation goes AFTER parameters.
 
 | Aspect | Spec Shows | Grammar Actually Is | 
 |--------|-----------|-------------------|
-| Type syntax | `{:type {:args [...]}}` | `: type_expr` |
+| Type syntax | `{:type {:args [...]}}` | `: type_expr` (COLON followed by type) |
 | Type placement | In a metadata map | After parameter list |
-| Param list | Not shown | `[a b]` before type |
-| Return type | In nested map | Part of function type |
+| Param list | Not shown | `[a b]` or `[a :type b :type]` before return type |
+| Return type | In nested map | After COLON following params |
+| Whitespace | Not addressed | Optional (both `:int` and `: int` work) |
+| Type forms | Not shown | Symbols (int, Int) OR Keywords (:int, :Int) |
 
 ## Impact
 
@@ -180,5 +218,13 @@ Metadata goes AFTER `defn` keyword, type annotation goes AFTER parameters.
 - ❌ Type annotations don't validate
 - ❌ Examples can't be copied and used directly
 - ✅ Actual grammar is simpler and cleaner
+- ✅ More flexible (symbols and keywords both work)
 
 The grammar is actually more intuitive than what the spec shows!
+
+## Key Insights
+
+1. **Whitespace flexibility**: The pest grammar treats `COLON ~ type_expr` allowing whitespace, so both `:int` and `: int` work
+2. **Type flexibility**: Both symbol forms (`int`, `Int`) and keyword forms (`:int`, `:Int`) are accepted
+3. **Simpler than spec**: Actual syntax is cleaner than the nested map shown in the spec
+4. **Test verified**: Confirmed by `test_type_annotation_whitespace.rs` test cases
