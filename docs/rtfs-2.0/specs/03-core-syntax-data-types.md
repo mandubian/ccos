@@ -283,9 +283,16 @@ Symbols are resolved through lexical scoping with the following precedence:
 While RTFS has a dynamic type system, it supports optional type annotations:
 
 ```rtfs
-;; Type-annotated function
-(defn add {:type {:args [Integer Integer] :return Integer}}
-  [a b]
+;; Type-annotated function (with spaces)
+(defn add [a : Integer b : Integer] : Integer
+  (+ a b))
+
+;; Type-annotated function (shorthand, no spaces)
+(defn add [a :Integer b :Integer] :Integer
+  (+ a b))
+
+;; With lowercase keyword types
+(defn add [a :int b :int] :int
   (+ a b))
 
 ;; Type assertions
