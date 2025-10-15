@@ -90,6 +90,91 @@ struct InteractionMetrics {
     capability_synthesized: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ExtractedPreferences {
+    /// The main goal/topic
+    goal: String,
+    /// Dynamic parameters extracted from Q&A: keyword -> (question, value, inferred_type)
+    /// Examples: "budget" -> ("What's your budget?", "5000", "currency")
+    ///           "duration" -> ("How long?", "7 days", "duration")
+    ///           "interests" -> ("What interests you?", ["art", "food"], "list")
+    parameters: std::collections::BTreeMap<String, ExtractedParam>,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedParam {
+    /// The question that extracted this parameter
+    question: String,
+    /// The user's answer
+    value: String,
+    /// Inferred parameter type: "string", "number", "list", "boolean", "duration", "currency"
+    param_type: String,
+    /// Optional semantic category for grouping
+    category: Option<String>,
+}
+
+impl ExtractedPreferences {
+    /// Get all parameters for capability generation
+    fn get_parameter_schema(&self) -> String {
+        self.parameters
+            .iter()
+            .map(|(key, param)| {
+                let rtfs_type = match param.param_type.as_str() {
+                    "list" => "(list \"string\")",
+                    "number" => "\"number\"",
+                    "boolean" => "\"boolean\"",
+                    "duration" => "\"string\"",  // "7 days", "2 weeks"
+                    "currency" => "\"string\"",  // "$5000", "€3000"
+                    _ => "\"string\"",
+                };
+                format!("    :{} {}", key, rtfs_type)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Get parameter bindings for RTFS let statements
+    fn get_parameter_bindings(&self) -> String {
+        self.parameters
+            .keys()
+            .map(|key| format!("  :{} {}", key, key))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Convert to legacy ResearchPreferences for backward compatibility
+    fn to_legacy(&self) -> ResearchPreferences {
+        ResearchPreferences {
+            topic: self.goal.clone(),
+            domains: self.parameters
+                .get("domains")
+                .or_else(|| self.parameters.get("interests"))
+                .map(|p| vec![p.value.clone()])
+                .unwrap_or_default(),
+            depth: self.parameters
+                .get("depth")
+                .or_else(|| self.parameters.get("detail_level"))
+                .map(|p| p.value.clone())
+                .unwrap_or_default(),
+            format: self.parameters
+                .get("format")
+                .or_else(|| self.parameters.get("output_format"))
+                .map(|p| p.value.clone())
+                .unwrap_or_default(),
+            sources: self.parameters
+                .get("sources")
+                .or_else(|| self.parameters.get("resources"))
+                .map(|p| vec![p.value.clone()])
+                .unwrap_or_default(),
+            time_constraint: self.parameters
+                .get("duration")
+                .or_else(|| self.parameters.get("time_constraint"))
+                .map(|p| p.value.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -194,12 +279,12 @@ async fn run_learning_phase(
     let (preferences, interaction_history) = gather_preferences_via_ccos(&ccos, &research_topic).await?;
     
     println!("\n{}", "📊 Learned Preferences:".bold().green());
-    println!("   • Topic: {}", preferences.topic);
-    println!("   • Domains: {}", preferences.domains.join(", "));
-    println!("   • Depth: {}", preferences.depth);
-    println!("   • Format: {}", preferences.format);
-    println!("   • Sources: {}", preferences.sources.join(", "));
-    println!("   • Time: {}", preferences.time_constraint);
+    println!("   • Topic: {}", preferences.goal);
+    println!("   • Domains: {}", preferences.parameters.get("domains").map(|p| p.value.clone()).unwrap_or_default());
+    println!("   • Depth: {}", preferences.parameters.get("depth").map(|p| p.value.clone()).unwrap_or_default());
+    println!("   • Format: {}", preferences.parameters.get("format").map(|p| p.value.clone()).unwrap_or_default());
+    println!("   • Sources: {}", preferences.parameters.get("sources").map(|p| p.value.clone()).unwrap_or_default());
+    println!("   • Time: {}", preferences.parameters.get("duration").map(|p| p.value.clone()).unwrap_or_default());
 
     let turns_count = interaction_history.len();
     let questions_asked = turns_count.saturating_sub(1); // Exclude initial request
@@ -407,7 +492,7 @@ Output ONLY a JSON array of question strings, no markdown fences:
 async fn gather_preferences_via_ccos(
     ccos: &Arc<CCOS>,
     topic: &str,
-) -> Result<(ResearchPreferences, Vec<(String, String)>), Box<dyn std::error::Error>> {
+) -> Result<(ExtractedPreferences, Vec<(String, String)>), Box<dyn std::error::Error>> {
     use rtfs_compiler::runtime::RuntimeContext;
     
     println!("{}", "💬 Interactive Preference Collection:".bold());
@@ -480,23 +565,45 @@ async fn gather_preferences_via_ccos(
         return Ok((parsed, interaction_history));
     }
 
-    // Fallback: Use the ordered interaction_history (preserves Q1..Qn order) rather than HashMap values
-    // which have an unspecified iteration order. This ensures extracted fields map to the
-    // corresponding questions when heuristics are used.
-    let all_answers_text: String = interaction_history
-        .iter()
-        .skip(1) // skip the initial_topic entry
-        .map(|(_, answer)| answer.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Fallback: Use heuristic extraction with dynamic parameters
+    let mut parameters = std::collections::BTreeMap::new();
+    
+    // Map Q/A pairs to parameters heuristically
+    for (question, answer) in interaction_history.iter().skip(1) {
+        let q_lower = question.to_lowercase();
+        
+        // Try to infer parameter name from question
+        let param_name = if q_lower.contains("budget") {
+            Some(("budget", "currency"))
+        } else if q_lower.contains("day") || q_lower.contains("duration") || q_lower.contains("long") || q_lower.contains("week") {
+            Some(("duration", "duration"))
+        } else if q_lower.contains("interest") || q_lower.contains("prefer") || q_lower.contains("like") {
+            Some(("interests", "list"))
+        } else if q_lower.contains("domain") || q_lower.contains("area") || q_lower.contains("type") {
+            Some(("domains", "list"))
+        } else if q_lower.contains("depth") || q_lower.contains("detail") || q_lower.contains("level") {
+            Some(("depth", "string"))
+        } else if q_lower.contains("format") || q_lower.contains("output") || q_lower.contains("style") {
+            Some(("format", "string"))
+        } else if q_lower.contains("source") || q_lower.contains("resource") {
+            Some(("sources", "list"))
+        } else {
+            None
+        };
+        
+        if let Some((param_name, param_type)) = param_name {
+            parameters.insert(param_name.to_string(), ExtractedParam {
+                question: question.clone(),
+                value: answer.clone(),
+                param_type: param_type.to_string(),
+                category: None,
+            });
+        }
+    }
 
-    let preferences = ResearchPreferences {
-        topic: topic.to_string(),
-        domains: extract_list_from_text(&all_answers_text, &["domain", "area", "type"]),
-        depth: extract_single_from_text(&all_answers_text, &["depth", "detail", "level"]),
-        format: extract_single_from_text(&all_answers_text, &["format", "style", "output"]),
-        sources: extract_list_from_text(&all_answers_text, &["source", "resource", "using"]),
-        time_constraint: extract_single_from_text(&all_answers_text, &["time", "duration", "when", "deadline"]),
+    let preferences = ExtractedPreferences {
+        goal: topic.to_string(),
+        parameters,
     };
 
     Ok((preferences, interaction_history))
@@ -534,40 +641,51 @@ fn extract_list_from_text(text: &str, keywords: &[&str]) -> Vec<String> {
     items
 }
 
-/// Ask the delegating LLM to parse the Q/A pairs into a JSON matching ResearchPreferences.
-/// Returns Ok(Some(...)) on success, Ok(None) if arbiter missing or parsing failed, Err on unexpected errors.
+/// Ask the delegating LLM to parse the Q/A pairs and dynamically extract parameters with keywords
 async fn parse_preferences_via_llm(
     ccos: &Arc<CCOS>,
     topic: &str,
     interaction_history: &[(String, String)],
-) -> Result<Option<ResearchPreferences>, Box<dyn std::error::Error>> {
+) -> Result<Option<ExtractedPreferences>, Box<dyn std::error::Error>> {
     // Try to get the delegating arbiter. If missing, bail to allow fallback heuristics.
     let arbiter = match ccos.get_delegating_arbiter() {
         Some(a) => a,
         None => return Ok(None),
     };
 
-    // Build a compact JSON-friendly prompt containing the Q/A pairs and required schema.
+    // Build a compact JSON-friendly prompt containing the Q/A pairs.
+    // The goal: have LLM extract meaningful keywords and infer parameter types.
     let mut qa_list = Vec::new();
-    for (i, (q, a)) in interaction_history.iter().enumerate().skip(1) {
+    for (_i, (q, a)) in interaction_history.iter().enumerate().skip(1) {
         qa_list.push(format!("{{\"q\": {}, \"a\": {}}}", serde_json::to_string(q)?, serde_json::to_string(a)?));
     }
     let qa_json = format!("[{}]", qa_list.join(","));
 
     let prompt = format!(
-        r#"Parse the following question/answer pairs into a JSON object matching this schema:
+        r#"Analyze these question/answer pairs and extract semantic parameters with inferred types.
+
+Your task:
+1. For each Q/A pair, identify what parameter the question is asking about (e.g., "budget", "duration", "interests")
+2. Infer the parameter type: "string", "number", "list", "boolean", "duration", "currency"
+3. Return a JSON object where each parameter maps to metadata
+
+Examples of expected extractions:
+Q: "What's your budget?"  -> parameter: "budget", type: "currency", value: user's budget
+Q: "How many days?"       -> parameter: "duration", type: "number", value: number of days
+Q: "What interests you?"  -> parameter: "interests", type: "list", value: comma-separated interests
+
+Respond ONLY with valid JSON matching this schema:
 {{
-  "topic": string,
-  "domains": [string],
-  "depth": string,
-  "format": string,
-  "sources": [string],
-  "time_constraint": string
+  "goal": "{topic}",
+  "parameters": {{
+    "PARAMETER_NAME": {{
+      "type": "string|number|list|boolean|duration|currency",
+      "value": "extracted value from answer",
+      "question": "the question that asked for this"
+    }},
+    ...
+  }}
 }}
-
-Respond ONLY with valid JSON matching the schema. If a field cannot be determined, use an empty string or empty list.
-
-Topic: {topic}
 
 Q/A pairs: {qa_json}
 "#,
@@ -595,14 +713,46 @@ Q/A pairs: {qa_json}
         Err(_) => return Ok(None),
     };
 
-    // Map to ResearchPreferences
-    let prefs = ResearchPreferences {
-        topic: v.get("topic").and_then(|x| x.as_str()).unwrap_or(topic).to_string(),
-        domains: v.get("domains").and_then(|x| x.as_array()).map(|arr| arr.iter().filter_map(|it| it.as_str().map(|s| s.to_string())).collect()).unwrap_or_else(|| vec!["general".to_string()]),
-        depth: v.get("depth").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        format: v.get("format").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        sources: v.get("sources").and_then(|x| x.as_array()).map(|arr| arr.iter().filter_map(|it| it.as_str().map(|s| s.to_string())).collect()).unwrap_or_else(|| vec!["general".to_string()]),
-        time_constraint: v.get("time_constraint").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+    // Extract goal
+    let goal = v.get("goal")
+        .and_then(|x| x.as_str())
+        .unwrap_or(topic)
+        .to_string();
+
+    // Extract dynamic parameters
+    let mut parameters = std::collections::BTreeMap::new();
+    
+    if let Some(params_obj) = v.get("parameters").and_then(|x| x.as_object()) {
+        for (param_name, param_data) in params_obj {
+            if let Some(param_obj) = param_data.as_object() {
+                let param_type = param_obj.get("type")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("string")
+                    .to_string();
+                
+                let value = param_obj.get("value")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                
+                let question = param_obj.get("question")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                
+                parameters.insert(param_name.clone(), ExtractedParam {
+                    question,
+                    value,
+                    param_type,
+                    category: None,
+                });
+            }
+        }
+    }
+
+    let prefs = ExtractedPreferences {
+        goal,
+        parameters,
     };
 
     Ok(Some(prefs))
@@ -613,7 +763,7 @@ async fn synthesize_capability_via_llm(
     ccos: &Arc<CCOS>,
     topic: &str,
     interaction_history: &[(String, String)],
-    _prefs: &ResearchPreferences,
+    prefs: &ExtractedPreferences,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
     
     let arbiter = ccos.get_delegating_arbiter()
@@ -637,6 +787,15 @@ async fn synthesize_capability_via_llm(
         interaction_summary.push_str(&format!("Turn {}: Q: {} A: {}\n", i + 1, question, answer));
     }
     
+    // Format extracted parameters for the prompt
+    let mut parameters_summary = String::new();
+    for (param_name, param) in &prefs.parameters {
+        parameters_summary.push_str(&format!(
+            "- {} ({}) from Q: \"{}\" → A: \"{}\"\n",
+            param_name, param.param_type, param.question, param.value
+        ));
+    }
+
     let synthesis_prompt = format!(
         r#"You are synthesizing an RTFS capability from a user interaction.
 
@@ -700,9 +859,11 @@ KEY POINTS:
 2. Each 'let' captures the capability's return value
 3. Use bound variables in subsequent capability calls
 4. Final map can reference all bound variables
+5. EXTRACTED PARAMETERS FROM USER INTERACTION (use these in your capability):
+{}
 
 Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no other text."#,
-        topic, interaction_summary
+        topic, interaction_summary, parameters_summary
     );
     
     // Call LLM to generate the capability
@@ -824,7 +985,8 @@ fn generate_research_capability(prefs: &ResearchPreferences, id: &str) -> String
           :summary formatted_report
           :confidence "high"
           :time_taken time_constraint
-        }}))
+        }})
+      ))
   
   :learned_from {{
     :initial_topic "{topic}"

@@ -202,3 +202,4 @@ RESEARCH_TOPIC="your creative goal here" ./demo_smart_assistant.sh full
 
 The demo will adapt and create a workflow specific to your needs!
 
+
