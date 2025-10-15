@@ -280,25 +280,39 @@ Symbols are resolved through lexical scoping with the following precedence:
 
 ## 8. Type System Integration
 
-While RTFS has a dynamic type system, it supports optional type annotations:
+While RTFS has a dynamic type system, it supports optional type annotations. Type annotations in RTFS are **just symbols** - any symbol or keyword can be used as a type hint. The grammar accepts them all.
+
+**Runtime primitive types** (from `Value::get_type()`):
+- `integer`, `float`, `boolean`, `string`
+- `vector`, `list`, `map`
+- `symbol`, `keyword`, `nil`
+- `timestamp`, `uuid`, `resource-handle`, `function`, `error`
+
+**Type annotation examples**:
 
 ```rtfs
-;; Type-annotated function (with spaces)
+;; With lowercase runtime types
+(defn add [a : integer b : integer] : integer
+  (+ a b))
+
+;; With capitalized convention (also valid, just symbols)
 (defn add [a : Integer b : Integer] : Integer
   (+ a b))
 
-;; Type-annotated function (shorthand, no spaces)
-(defn add [a :Integer b :Integer] :Integer
-  (+ a b))
-
-;; With lowercase keyword types
+;; With keyword types
 (defn add [a :int b :int] :int
   (+ a b))
 
+;; Custom type symbols (any symbol works)
+(defn process [x : CustomType] : MyResult
+  (do-something x))
+
 ;; Type assertions
-(assert-type x Integer)
-(cast-to String value)
+(assert-type x integer)
+(cast-to string value)
 ```
+
+**Important**: Type annotations are optional and act as documentation/hints. They don't enforce runtime type checking unless explicitly used with `assert-type` or similar.
 
 ## 9. Error Conditions
 
