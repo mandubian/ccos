@@ -835,11 +835,17 @@ CRITICAL RTFS PATTERN - Use 'let' to bind results:
 
 OUTPUT EXACTLY ONE fenced ```rtfs block containing a well-formed (capability ...) s-expression.
 
-Example for trip planning goal (showing proper 'let' binding):
+CRITICAL: Parameter types must use KEYWORD syntax, NOT string literals!
+- CORRECT: :parameters {{:destination :string :duration :number :budget :currency}}
+- WRONG:   :parameters {{:destination "string" :duration "number" :budget "currency"}}
+
+Use keyword types: :string, :number, :list, :boolean, :currency, :duration, :integer, :float, etc.
+
+Example for trip planning goal (showing proper 'let' binding with CORRECT TYPES):
 ```rtfs
 (capability "travel.trip-planner.paris.v1"
   :description "Paris trip planner with user's budget and duration preferences"
-  :parameters {{:destination "string" :duration "number" :budget "number" :interests "list"}}
+  :parameters {{:destination :string :travel_dates :string :duration :number :budget :currency :interests :list :accommodation_type :string :travel_companions :string}}
   :implementation
     (do
       (let attractions 
@@ -865,9 +871,9 @@ Example for trip planning goal (showing proper 'let' binding):
 KEY POINTS:
 1. Use (let variable_name (call :capability {{:params}})) to bind results
 2. Each 'let' captures the capability's return value
-3. Use bound variables in subsequent capability calls
-4. Final map can reference all bound variables
-5. EXTRACTED PARAMETERS FROM USER INTERACTION (use these in your capability):
+3. Parameter types are KEYWORDS like :string, :number, NOT string literals
+
+EXTRACTED PARAMETERS FROM USER INTERACTION (use these in your capability):
 {}
 
 Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no other text."#,
