@@ -1,11 +1,27 @@
 use crate::runtime::error::RuntimeResult;
 
 pub mod artifact_generator;
+pub mod dependency_extractor;
+pub mod missing_capability_resolver;
+pub mod mcp_registry_client;
 pub mod preference_schema;
 pub mod schema_builder;
 pub mod skill_extractor;
 pub mod status;
 pub mod telemetry;
+pub mod capability_synthesizer;
+pub mod openapi_importer;
+pub mod graphql_importer;
+pub mod http_wrapper;
+pub mod mcp_proxy_adapter;
+pub mod auth_injector;
+pub mod web_search_discovery;
+pub mod validation_harness;
+pub mod governance_policies;
+pub mod static_analyzers;
+pub mod registration_flow;
+pub mod continuous_resolution;
+pub mod feature_flags;
 
 // Integration tests live in a sibling file to keep the main module tidy.
 #[cfg(test)]
@@ -36,7 +52,7 @@ pub struct InteractionTurn {
 pub struct SynthesisResult {
     pub collector: Option<String>,
     pub planner: Option<String>,
-    pub stub: Option<String>,
+    pub pending_capabilities: Vec<String>, // Capabilities that need to be resolved before execution
     pub metrics: SynthesisMetrics,
 }
 
@@ -70,8 +86,8 @@ impl SynthesizedCapability {
     }
 }
 
-/// Stub entrypoint for capability synthesis. Returns a small placeholder
-/// and is intended to be replaced by a full synthesis pipeline.
+/// Entrypoint for capability synthesis. Returns a synthesized capability
+/// that may have pending dependencies requiring resolution.
 pub fn synthesize_from_dialogue(_dialogue: &str) -> RuntimeResult<SynthesizedCapability> {
     Ok(SynthesizedCapability::new("synth.capability.placeholder"))
 }
@@ -107,12 +123,38 @@ pub fn synthesize_capabilities_with_marketplace(
         artifact_generator::generate_planner(&schema, _conversation, "synth.domain")
     };
 
-    // If a domain-specific agent is missing, synthesize a stub id
-    let stub_id = format!("synth.domain.agent.stub");
-    let stub = artifact_generator::generate_stub(
-        &stub_id,
-        &schema.params.keys().cloned().collect::<Vec<_>>(),
-    );
+    // Collect any missing capabilities that need to be resolved
+    let mut pending_capabilities = Vec::new();
+
+    // Phase 1: Extract dependencies from generated artifacts
+    let mut dependency_metadata = std::collections::HashMap::new();
+    if !planner.is_empty() {
+        if let Ok(dep_result) = dependency_extractor::extract_dependencies(&planner) {
+            // Check dependencies against marketplace
+            let (resolved, missing) = dependency_extractor::check_dependencies_against_marketplace(
+                &dep_result.dependencies,
+                marketplace_snapshot,
+            );
+            
+            // Add dependency metadata
+            dependency_metadata.insert("dependencies.total".to_string(), dep_result.dependencies.len().to_string());
+            dependency_metadata.insert("dependencies.resolved".to_string(), resolved.len().to_string());
+            dependency_metadata.insert("dependencies.missing".to_string(), missing.len().to_string());
+            
+            if !missing.is_empty() {
+                let missing_list: Vec<String> = missing.iter().cloned().collect();
+                dependency_metadata.insert("needs_capabilities".to_string(), missing_list.join(","));
+                
+                // Add missing capabilities to pending list for deferred execution
+                pending_capabilities.extend(missing.clone());
+                
+                // Create audit event data for missing dependencies
+                let audit_data = dependency_extractor::create_audit_event_data("synth.domain.planner.v1", &missing);
+                eprintln!("AUDIT: capability_deps_missing - {}", 
+                    audit_data.get("missing_capabilities").unwrap_or(&"none".to_string()));
+            }
+        }
+    }
 
     // Compute naive metrics
     let turns_total = _conversation.len();
@@ -132,7 +174,7 @@ pub fn synthesize_capabilities_with_marketplace(
     SynthesisResult {
         collector: Some(collector),
         planner: Some(planner),
-        stub: Some(stub),
+        pending_capabilities,
         metrics: SynthesisMetrics {
             coverage,
             redundancy: 0.0,

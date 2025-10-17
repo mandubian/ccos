@@ -140,7 +140,7 @@ print_banner
 print_section "Configuration"
 
 # Check for config file
-if [ ! -f "../config/agent_config.toml" ]; then
+if [ ! -f "config/agent_config.toml" ]; then
     error "Config file not found: config/agent_config.toml"
     info "Please create a config file with your LLM settings"
     exit 1
@@ -170,7 +170,7 @@ fi
 
 # Build command
 CMD="cargo run --release --example user_interaction_smart_assistant -- \
-    --config ../config/agent_config.toml \
+    --config config/agent_config.toml \
     --mode $MODE"
 
 if [ -n "$PROFILE" ]; then

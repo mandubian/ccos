@@ -108,3 +108,6 @@ Not:
 - `DYNAMIC_KEYWORD_EXTRACTION.md` - Parameter extraction system
 - `docs/rtfs-2.0/specs/03-core-syntax-data-types.md` - RTFS type syntax
 - `docs/rtfs-2.0/specs/09-streaming-capabilities.md` - Schema type examples
+
+
+

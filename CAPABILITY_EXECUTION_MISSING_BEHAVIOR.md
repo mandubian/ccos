@@ -192,3 +192,5 @@ For the capability to work fully:
 1. Register all required capabilities, OR
 2. Use error handling in the capability implementation, OR
 3. Use HTTP/MCP bridges to external services
+
+
