@@ -11,6 +11,12 @@ use std::sync::Arc;
 use crate::ccos::arbiter::arbiter_config::{
     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig,
 };
+use crate::ccos::capability_marketplace::{
+    CapabilityMarketplace,
+};
+use crate::ccos::capability_marketplace::types::{
+    CapabilityQuery, CapabilityKind,
+};
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 use crate::ccos::arbiter::plan_generation::{
@@ -243,7 +249,7 @@ pub struct DelegatingArbiter {
     llm_config: LlmConfig,
     delegation_config: DelegationConfig,
     llm_provider: Box<dyn LlmProvider>,
-    agent_registry: AgentRegistry,
+    capability_marketplace: Arc<CapabilityMarketplace>,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
     adaptive_threshold_calculator:
         Option<crate::ccos::adaptive_threshold::AdaptiveThresholdCalculator>,
@@ -319,14 +325,12 @@ impl DelegatingArbiter {
     pub async fn new(
         llm_config: LlmConfig,
         delegation_config: DelegationConfig,
+        capability_marketplace: Arc<CapabilityMarketplace>,
         intent_graph: std::sync::Arc<std::sync::Mutex<crate::ccos::intent_graph::IntentGraph>>,
     ) -> Result<Self, RuntimeError> {
         // Create LLM provider
         let llm_provider =
             LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?;
-
-        // Create agent registry
-        let agent_registry = AgentRegistry::new(delegation_config.agent_registry.clone());
 
         // Create adaptive threshold calculator if configured
         let adaptive_threshold_calculator =
@@ -348,7 +352,7 @@ impl DelegatingArbiter {
             llm_config,
             delegation_config,
             llm_provider,
-            agent_registry,
+            capability_marketplace,
             intent_graph,
             adaptive_threshold_calculator,
             prompt_manager,
@@ -358,6 +362,49 @@ impl DelegatingArbiter {
     /// Get the LLM configuration used by this arbiter
     pub fn get_llm_config(&self) -> &LlmConfig {
         &self.llm_config
+    }
+
+    /// Find agent capabilities that match the given required capabilities
+    async fn find_agents_for_capabilities(
+        &self,
+        required_capabilities: &[String],
+    ) -> Result<Vec<String>, RuntimeError> {
+        // Query the marketplace for agent capabilities
+        let query = CapabilityQuery::new()
+            .with_kind(CapabilityKind::Agent)
+            .with_limit(50); // Reasonable limit for agent discovery
+        
+        let agent_capabilities = self.capability_marketplace
+            .list_capabilities_with_query(&query)
+            .await;
+        
+        // Filter agents that have matching capabilities
+        let mut matching_agents = Vec::new();
+        for capability in agent_capabilities {
+            // Check if this agent capability matches any of the required capabilities
+            for required_cap in required_capabilities {
+                if capability.id.contains(required_cap) || 
+                   capability.description.to_lowercase().contains(&required_cap.to_lowercase()) {
+                    matching_agents.push(capability.id.clone());
+                    break;
+                }
+            }
+        }
+        
+        Ok(matching_agents)
+    }
+
+    /// List all available agent capabilities
+    async fn list_agent_capabilities(&self) -> Result<Vec<String>, RuntimeError> {
+        let query = CapabilityQuery::new()
+            .with_kind(CapabilityKind::Agent)
+            .with_limit(100);
+        
+        let agent_capabilities = self.capability_marketplace
+            .list_capabilities_with_query(&query)
+            .await;
+        
+        Ok(agent_capabilities.into_iter().map(|c| c.id).collect())
     }
 
     /// Generate intent using LLM
@@ -527,16 +574,12 @@ impl DelegatingArbiter {
         if delegation_analysis.should_delegate {
             // Find candidate agents
             let candidate_agents = self
-                .agent_registry
-                .find_agents_for_capabilities(&delegation_analysis.required_capabilities);
+                .find_agents_for_capabilities(&delegation_analysis.required_capabilities)
+                .await?;
 
             println!("DEBUG: Found {} candidate agents", candidate_agents.len());
-            for agent in &candidate_agents {
-                println!(
-                    "DEBUG: Agent: {} with capabilities: {}",
-                    agent.agent_id,
-                    agent.capabilities.join(", ")
-                );
+            for agent_id in &candidate_agents {
+                println!("DEBUG: Agent: {}", agent_id);
             }
 
             if !candidate_agents.is_empty() {
@@ -546,17 +589,17 @@ impl DelegatingArbiter {
                 // Set delegation metadata
                 intent.metadata.insert(
                     "delegation.selected_agent".to_string(),
-                    Value::String(selected_agent.agent_id.clone()),
+                    Value::String(selected_agent.clone()),
                 );
                 intent.metadata.insert(
                     "delegation.candidates".to_string(),
-                    Value::String(candidate_agents.iter().map(|a| a.agent_id.clone()).collect::<Vec<_>>().join(", ")),
+                    Value::String(candidate_agents.join(", ")),
                 );
 
                 // Set intent name to match the selected agent
-                intent.name = Some(selected_agent.agent_id.clone());
+                intent.name = Some(selected_agent.clone());
 
-                println!("DEBUG: Selected agent: {}", selected_agent.agent_id);
+                println!("DEBUG: Selected agent: {}", selected_agent);
             } else {
                 println!(
                     "DEBUG: No candidate agents found for capabilities: [{}]",
@@ -738,7 +781,7 @@ impl DelegatingArbiter {
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> Result<DelegationAnalysis, RuntimeError> {
-        let prompt = self.create_delegation_analysis_prompt(intent, context);
+        let prompt = self.create_delegation_analysis_prompt(intent, context).await?;
 
         let response = self.llm_provider.generate_text(&prompt).await?;
 
@@ -778,8 +821,8 @@ impl DelegatingArbiter {
     ) -> Result<Plan, RuntimeError> {
         // Find suitable agents
         let candidate_agents = self
-            .agent_registry
-            .find_agents_for_capabilities(&delegation_analysis.required_capabilities);
+            .find_agents_for_capabilities(&delegation_analysis.required_capabilities)
+            .await?;
 
         if candidate_agents.is_empty() {
             // No suitable agents found, fall back to direct plan
@@ -819,7 +862,7 @@ impl DelegatingArbiter {
                     let mut m = HashMap::new();
                     m.insert(
                         "delegation_target_agent".to_string(),
-                        selected_agent.agent_id.clone(),
+                        selected_agent.clone(),
                     );
                     m
                 },
@@ -837,12 +880,11 @@ impl DelegatingArbiter {
                     .collect::<HashMap<String, String>>();
                 meta.insert(
                     "delegation.selected_agent".to_string(),
-                    selected_agent.agent_id.clone(),
+                    selected_agent.clone(),
                 );
                 meta.insert(
                     "delegation.agent_capabilities".to_string(),
-                    serde_json::to_string(&selected_agent.capabilities)
-                        .unwrap_or_else(|_| "[unknown_capabilities]".to_string()),
+                    "[agent_capabilities_from_marketplace]".to_string(),
                 );
                 meta
             },
@@ -873,7 +915,7 @@ impl DelegatingArbiter {
                 .unwrap_or_else(|_| "\"unknown\"".to_string())
                 .trim_matches('"')
                 .to_string();
-            let entry = json!({"event":"llm_delegation_plan","provider": provider_str, "agent": selected_agent.agent_id, "intent_id": intent.intent_id, "plan_id": plan.plan_id});
+            let entry = json!({"event":"llm_delegation_plan","provider": provider_str, "agent": selected_agent, "intent_id": intent.intent_id, "plan_id": plan.plan_id});
             writeln!(
                 f,
                 "[{}] {}",
@@ -1089,19 +1131,16 @@ impl DelegatingArbiter {
     }
 
     /// Create prompt for delegation analysis using file-based prompt store
-    fn create_delegation_analysis_prompt(
+    async fn create_delegation_analysis_prompt(
         &self,
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
-    ) -> String {
-        let available_agents = self.agent_registry.list_agents();
+    ) -> Result<String, RuntimeError> {
+        let available_agents = self.list_agent_capabilities().await?;
         let agent_list = available_agents
             .iter()
-            .map(|agent| {
-                format!(
-                    "- {}: {} (trust: {:.2}, cost: {:.2})",
-                    agent.agent_id, agent.name, agent.trust_score, agent.cost
-                )
+            .map(|agent_id| {
+                format!("- {}: Agent capability from marketplace", agent_id)
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -1124,12 +1163,12 @@ impl DelegatingArbiter {
 
         let agent_list_for_fallback = vars["available_agents"].clone();
 
-        self.prompt_manager
+        Ok(self.prompt_manager
             .render("delegation_analysis", "v1", &vars)
             .unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load delegation analysis prompt from assets: {}. Using fallback.", e);
                 self.create_fallback_delegation_prompt(intent, context_for_fallback, &agent_list_for_fallback)
-            })
+            }))
     }
 
     /// Fallback delegation analysis prompt (used when prompt assets fail to load)
@@ -1616,7 +1655,7 @@ Plan:"#,
                     agent::AGENT_TRUST_SCORE.to_string(),
                     Value::Float(agent.trust_score),
                 );
-                meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost));
+                meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost as f64));
                 meta
             },
             input_schema: None,
@@ -2251,6 +2290,9 @@ mod tests {
         AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, LlmProviderType,
         RegistryType,
     };
+    use crate::ccos::capabilities::registry::CapabilityRegistry;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     fn create_test_config() -> (LlmConfig, DelegationConfig) {
         let llm_config = LlmConfig {
@@ -2310,25 +2352,19 @@ mod tests {
             crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
 
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph).await;
+        // Create a minimal capability marketplace for testing
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+        
+        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph).await;
         assert!(arbiter.is_ok());
     }
 
     #[tokio::test]
     async fn test_agent_registry() {
-        let (_, delegation_config) = create_test_config();
-        let registry = AgentRegistry::new(delegation_config.agent_registry);
-
-        // Test finding agents for capabilities
-        let agents = registry.find_agents_for_capabilities(&["sentiment_analysis".to_string()]);
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].agent_id, "sentiment_agent");
-
-        // Test finding agents for multiple capabilities
-        let agents = registry
-            .find_agents_for_capabilities(&["backup".to_string(), "encryption".to_string()]);
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].agent_id, "backup_agent");
+        // This test is now obsolete since we use CapabilityMarketplace instead of AgentRegistry
+        // The functionality is tested in the agent_unification_tests.rs file
+        assert!(true);
     }
 
     #[tokio::test]
@@ -2338,7 +2374,11 @@ mod tests {
             crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
 
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph)
+        // Create a minimal capability marketplace for testing
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+        
+        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
             .await
             .unwrap();
 
@@ -2368,7 +2408,11 @@ mod tests {
             crate::ccos::intent_graph::IntentGraph::new().unwrap(),
         ));
 
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph)
+        // Create a minimal capability marketplace for testing
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+        
+        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
             .await
             .unwrap();
 

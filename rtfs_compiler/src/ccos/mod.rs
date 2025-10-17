@@ -106,6 +106,8 @@ pub struct CCOS {
     delegating_arbiter: Option<Arc<DelegatingArbiter>>,
     agent_registry: Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>>, // M4
     agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
+    /// Missing capability resolver for runtime trap functionality
+    missing_capability_resolver: Option<Arc<crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver>>,
     /// Optional debug callback for emitting lifecycle JSON lines (plan generation, execution etc.)
     debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
@@ -320,6 +322,7 @@ impl CCOS {
             match crate::ccos::arbiter::DelegatingArbiter::new(
                 llm_config,
                 delegation_config,
+                Arc::clone(&capability_marketplace),
                 Arc::clone(&intent_graph),
             )
             .await
@@ -334,6 +337,25 @@ impl CCOS {
             None
         };
 
+        // Initialize checkpoint archive
+        let checkpoint_archive = Arc::new(crate::ccos::checkpoint_archive::CheckpointArchive::new());
+
+        // Initialize missing capability resolver
+        let missing_capability_resolver = Arc::new(
+            crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver::new(
+                Arc::clone(&capability_marketplace),
+                Arc::clone(&checkpoint_archive),
+                crate::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
+                crate::ccos::synthesis::feature_flags::MissingCapabilityConfig::from_env(),
+            )
+        );
+
+        // Set the resolver in the capability registry
+        {
+            let mut registry = capability_registry.write().await;
+            registry.set_missing_capability_resolver(Arc::clone(&missing_capability_resolver));
+        }
+
         Ok(Self {
             arbiter,
             governance_kernel,
@@ -347,6 +369,7 @@ impl CCOS {
             delegating_arbiter,
             agent_registry,
             agent_config,
+            missing_capability_resolver: Some(missing_capability_resolver),
             debug_callback: debug_callback.clone(),
         })
     }
@@ -1185,6 +1208,19 @@ impl CCOS {
         Ok(())
     }
 
+    /// Process pending missing capability resolution requests
+    pub async fn process_missing_capability_queue(&self) -> RuntimeResult<()> {
+        if let Some(ref resolver) = self.missing_capability_resolver {
+            resolver.process_queue().await?;
+        }
+        Ok(())
+    }
+
+    /// Get statistics about missing capability resolution
+    pub fn get_missing_capability_stats(&self) -> Option<crate::ccos::synthesis::missing_capability_resolver::QueueStats> {
+        self.missing_capability_resolver.as_ref().map(|resolver| resolver.get_stats())
+    }
+
     /// Extract recent intents from the IntentGraph for analysis.
     async fn extract_recent_intents(
         &self,
@@ -1250,16 +1286,23 @@ impl CCOS {
             }
         }
 
-        if let Some(stub_code) = &synth_result.stub {
-            // Parse and register the stub capability
-            match self
-                .register_synthesized_capability(stub_code, "stub")
-                .await
-            {
-                Ok(capability_id) => {
-                    println!("[synthesis] Registered stub capability: {}", capability_id)
+        // Handle pending capabilities that need resolution
+        if !synth_result.pending_capabilities.is_empty() {
+            println!(
+                "[synthesis] Found {} pending capabilities requiring resolution: {:?}",
+                synth_result.pending_capabilities.len(),
+                synth_result.pending_capabilities
+            );
+            
+            // Enqueue missing capabilities for resolution
+            if let Some(resolver) = &self.missing_capability_resolver {
+                for capability_id in &synth_result.pending_capabilities {
+                    let _ = resolver.handle_missing_capability(
+                        capability_id.clone(),
+                        vec![],
+                        std::collections::HashMap::new(),
+                    );
                 }
-                Err(e) => eprintln!("[synthesis] Failed to register stub capability: {}", e),
             }
         }
     }

@@ -765,7 +765,7 @@ impl Orchestrator {
                 // Unified checkpoint path: persist context + log PlanPaused via helper so
                 // resume_and_continue_from_checkpoint can locate checkpoint.
                 let (checkpoint_id, _serialized) =
-                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
+                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator, None)?;
 
                 // Build metadata describing required host capability.
                 let mut metadata_map: std::collections::HashMap<String, RtfsValue> =
@@ -1114,6 +1114,7 @@ impl Orchestrator {
         plan_id: &str,
         intent_id: &str,
         evaluator: &Evaluator,
+        missing_capabilities: Option<Vec<String>>,
     ) -> RuntimeResult<(String, String)> {
         let serialized = self.serialize_context(evaluator)?;
         let mut hasher = Sha256::new();
@@ -1145,6 +1146,8 @@ impl Orchestrator {
                 .unwrap()
                 .as_secs(),
             metadata: HashMap::new(),
+            missing_capabilities: missing_capabilities.unwrap_or_default(),
+            auto_resume_enabled: true, // Enable auto-resume for missing capability checkpoints
         };
         let _id = self
             .checkpoint_archive
@@ -1320,8 +1323,9 @@ impl Orchestrator {
             }
             Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                 // Create a new checkpoint and emit PlanPaused
+                let missing_capabilities = vec![host_call.capability_id.clone()];
                 let (checkpoint_id, _serialized) =
-                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator)?;
+                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator, Some(missing_capabilities))?;
 
                 let mut metadata_map: std::collections::HashMap<String, RtfsValue> =
                     std::collections::HashMap::new();

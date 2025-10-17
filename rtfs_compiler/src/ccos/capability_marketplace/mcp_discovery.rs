@@ -444,6 +444,7 @@ impl MCPDiscoveryProvider {
                 }
                 metadata
             },
+            agent_metadata: None,
         }
     }
 
@@ -1321,6 +1322,7 @@ impl MCPDiscoveryProvider {
             permissions,
             effects,
             metadata,
+            agent_metadata: None,
         })
     }
 
@@ -1589,6 +1591,7 @@ impl MCPDiscoveryProvider {
                 }
                 metadata
             },
+            agent_metadata: None,
         })
     }
 

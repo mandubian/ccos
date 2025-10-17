@@ -22,8 +22,8 @@ Provide a precise, minimal, operational distinction between a capability and an 
 
 This keeps the surface minimal while mapping cleanly to orchestration responsibilities.
 
-## Unifying Artifact with Metadata
-To keep the architecture simple, both capabilities and agents use the same artifact form (capability spec), with discriminating metadata flags:
+## Unified Artifact Model (IMPLEMENTED)
+Both capabilities and agents use the same artifact form (capability spec) in the CapabilityMarketplace, with discriminating metadata flags:
 
 ```rtfs
 (capability "domain.entity.action.v1"
@@ -39,9 +39,15 @@ To keep the architecture simple, both capabilities and agents use the same artif
     (do ...))
 ```
 
-- :primitive: leaf capability (e.g., HTTP fetch, file read)
-- :composite: fixed pipeline of sub-capabilities, no autonomy
-- :agent: planning/selection/iteration allowed (autonomy)
+- **:primitive**: leaf capability (e.g., HTTP fetch, file read)
+- **:composite**: fixed pipeline of sub-capabilities, no autonomy
+- **:agent**: planning/selection/iteration allowed (autonomy)
+
+### Implementation Status
+✅ **CapabilityMarketplace** registers all artifacts (capabilities and agents)  
+✅ **CapabilityQuery** filters by `:kind`, `:planning`, `:stateful`, `:interactive`  
+✅ **DelegatingArbiter** queries marketplace instead of separate AgentRegistry  
+✅ **AgentMetadata** struct extends CapabilityManifest with agent-specific fields
 
 ## Governance and Security Gates
 - Capabilities (non-agent)
@@ -115,6 +121,20 @@ To keep the architecture simple, both capabilities and agents use the same artif
 - Keep the spec surface small: one artifact shape with metadata flags.
 - Apply stricter governance automatically when `:kind :agent` or `:planning true`.
 - Expose `:kind` and flags in marketplace/registry UIs for operator clarity.
+
+## Migration Status
+The agent unification is **complete** for core functionality:
+- ✅ Single registry (CapabilityMarketplace) for all artifacts
+- ✅ Unified metadata model with agent-specific flags
+- ✅ Arbiter/Delegation queries marketplace with filters
+- ✅ Backward compatibility maintained during transition
+- ✅ AgentRegistryShim provides marketplace-backed compatibility
+- ✅ Deprecated types marked with deprecation warnings
+- ✅ Documentation updated with migration notes
+
+**Remaining cleanup tasks** (see 016-agent-unification-migration-plan.md):
+- Update governance policies for agent-specific enforcement (pending)
+- Remove deprecated types after release cycle (pending)
 
 ## Rationale
 This preserves the simplest mental model:
