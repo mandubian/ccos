@@ -7,8 +7,9 @@
 //! - Command-line configuration
 
 use clap::{Arg, Command};
-use rtfs_compiler::runtime::{
-    values::Value, CCOSBuilder, CCOSEnvironment, CapabilityCategory, SecurityLevel,
+use rtfs_compiler::runtime::{values::Value, ExecutionOutcome};
+use rtfs_compiler::ccos::environment::{
+    CCOSBuilder, CCOSEnvironment, CapabilityCategory, SecurityLevel,
 };
 use rustyline::Editor;
 use std::path::Path;
@@ -25,6 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("RTFS file to execute")
                 .value_name("FILE")
                 .index(1),
+        )
+        .arg(
+            Arg::new("expr")
+                .long("expr")
+                .short('e')
+                .help("RTFS expression to execute (after optional --file)")
+                .value_name("EXPR"),
         )
         .arg(
             Arg::new("security")
@@ -145,9 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // If file argument provided, execute file and exit
+    // If file argument provided, execute file first
     if let Some(file_path) = matches.get_one::<String>("file") {
-        return execute_file(&env, file_path);
+        execute_file(&env, file_path)?;
+    }
+
+    // If expression argument provided, execute expression and exit
+    if let Some(expr) = matches.get_one::<String>("expr") {
+        return execute_expr(&env, expr);
     }
 
     // Otherwise start interactive REPL
@@ -174,18 +187,53 @@ fn execute_file(env: &CCOSEnvironment, file_path: &str) -> Result<(), Box<dyn st
     }
 
     match env.execute_file(file_path) {
-        Ok(result) => {
+        Ok(outcome) => {
             if env.config().verbose {
                 println!("✅ Execution completed");
-                println!("📊 Result: {:?}", result);
-            } else {
-                println!("{:?}", result);
             }
+            print_outcome(env, outcome);
             Ok(())
         }
         Err(e) => {
             eprintln!("❌ Execution error: {:?}", e);
             std::process::exit(1);
+        }
+    }
+}
+
+fn execute_expr(env: &CCOSEnvironment, expr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    match env.execute_code(expr) {
+        Ok(outcome) => {
+            if env.config().verbose {
+                println!("✅ Expression executed");
+            }
+            print_outcome(env, outcome);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("❌ Execution error: {:?}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_outcome(env: &CCOSEnvironment, outcome: ExecutionOutcome) {
+    match outcome {
+        ExecutionOutcome::Complete(value) => match value {
+            Value::Nil => {} // don't print nil
+            other => {
+                if env.config().verbose {
+                    println!("📊 Result: {:?}", other);
+                } else {
+                    println!("{:?}", other);
+                }
+            }
+        },
+        ExecutionOutcome::RequiresHost(hc) => {
+            eprintln!("❌ Execution requires host call: {:?}", hc);
+        }
+        _ => {
+            println!("ℹ️  Outcome: {:?}", outcome);
         }
     }
 }
@@ -241,19 +289,14 @@ fn start_repl(env: CCOSEnvironment) -> Result<(), Box<dyn std::error::Error>> {
                     line if line.starts_with(":load ") => {
                         let file_path = &line[6..].trim();
                         match env.execute_file(file_path) {
-                            Ok(result) => println!("=> {:?}", result),
+                            Ok(outcome) => print_outcome(&env, outcome),
                             Err(e) => eprintln!("❌ Error: {:?}", e),
                         }
                     }
                     _ => {
                         // Execute RTFS code
                         match env.execute_code(line) {
-                            Ok(result) => {
-                                match result {
-                                    Value::Nil => {} // Don't print nil results
-                                    _ => println!("=> {:?}", result),
-                                }
-                            }
+                            Ok(outcome) => print_outcome(&env, outcome),
                             Err(e) => eprintln!("❌ Error: {:?}", e),
                         }
                     }
