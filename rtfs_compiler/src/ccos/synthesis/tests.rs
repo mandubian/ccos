@@ -40,11 +40,8 @@ mod tests {
             panic!("planner missing");
         }
 
-        if let Some(stub) = &result.stub {
-            parse_with_enhanced_errors(stub, None).expect("stub should parse");
-        } else {
-            panic!("stub missing");
-        }
+        // Check that pending capabilities are tracked
+        assert!(!result.pending_capabilities.is_empty(), "Should have pending capabilities when no exact match found");
     }
 }
 

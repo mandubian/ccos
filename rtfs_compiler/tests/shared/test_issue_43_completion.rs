@@ -80,6 +80,7 @@ mod issue_43_tests {
                 custody_chain: vec!["test_author".to_string()],
                 registered_at: Utc::now(),
             }),
+            agent_metadata: None,
         };
 
         // Register capability using new manifest structure

@@ -50,6 +50,7 @@ mod tests {
             permissions: vec![],
             effects: vec![],
             metadata,
+            agent_metadata: None,
         };
 
         let result = synthesize_capabilities_with_marketplace(&convo, &[manifest.clone()]);
@@ -67,10 +68,9 @@ mod tests {
         // Conversation expecting a `message` key
         let convo = vec![make_turn(0, "What message?", Some("hello"))];
 
-        // Empty marketplace snapshot -> should produce a requires-agent stub planner
+        // Empty marketplace snapshot -> should produce pending capabilities
         let result = crate::ccos::synthesis::synthesize_capabilities_with_marketplace(&convo, &[]);
         let planner = result.planner.unwrap_or_default();
-        let stub = result.stub.unwrap_or_default();
 
         let has_embedded_plan = planner.contains("AUTO-GENERATED PLANNER (embedded synthesis plan)")
             && planner.contains("synth.domain.generated.capability.v1")
@@ -83,9 +83,9 @@ mod tests {
         );
 
         assert!(
-            stub.contains("requires_agent"),
-            "stub should still communicate missing agent path, got: {}",
-            stub
+            !result.pending_capabilities.is_empty(),
+            "should have pending capabilities when marketplace is empty, got: {:?}",
+            result.pending_capabilities
         );
     }
 }

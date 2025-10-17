@@ -226,3 +226,6 @@ for (param_name, param) in &prefs.parameters {
 ```
 
 This ensures the synthesized capability uses proper RTFS type syntax that's compatible with the type system while preserving semantic information.
+
+
+

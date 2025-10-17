@@ -2,6 +2,7 @@
 // This module contains tests for CCOS component integration
 
 // Include all CCOS integration test files
+mod agent_unification_tests;
 mod arbiter_plan_generation_integration;
 mod capability_integration_tests;
 mod capability_marketplace_tests;
@@ -28,8 +29,12 @@ mod microvm_performance_tests;
 mod microvm_policy_enforcement_tests;
 mod microvm_provider_lifecycle_tests;
 mod microvm_security_tests;
+mod missing_capability_basic_tests;
+mod missing_capability_resolution_tests;
 mod orchestrator_checkpoint_tests;
 mod orchestrator_intent_status_tests;
+mod performance_tests;
+mod phase3_module_tests;
 mod rtfs_bridge_tests;
 mod runtime_type_integration_tests;
 mod test_helpers; // Re-exports from shared

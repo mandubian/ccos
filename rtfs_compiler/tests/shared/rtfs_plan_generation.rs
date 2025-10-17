@@ -61,8 +61,14 @@ async fn delegating_arbiter_generates_parsable_rtfs_plan() {
         rtfs_compiler::ccos::intent_graph::IntentGraph::new().unwrap(),
     ));
 
+    // Create a minimal capability marketplace for testing
+    let registry = Arc::new(tokio::sync::RwLock::new(
+        rtfs_compiler::ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let marketplace = Arc::new(rtfs_compiler::ccos::capability_marketplace::CapabilityMarketplace::new(registry));
+
     // Construct the delegating arbiter (async constructor)
-    let arbiter = DelegatingArbiter::new(llm_config, delegation_config, intent_graph)
+    let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
         .await
         .unwrap();
 

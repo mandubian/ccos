@@ -7,7 +7,7 @@ use super::schema_builder::{ParamSchema, ParamTypeInfo};
 use super::skill_extractor::{
     extract_constraints, extract_skills_advanced, ExtractedSkill, SkillCategory,
 };
-use super::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION, STATUS_REQUIRES_AGENT};
+use super::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION};
 use super::InteractionTurn;
 use crate::ast::{
     CapabilityDefinition, DoExpr, Expression, Keyword, LetBinding, LetExpr, Literal, MapKey,
@@ -461,93 +461,7 @@ pub fn generate_planner_via_arbiter(
     )
 }
 
-/// Generate a stub capability when required agent is missing.
-pub fn generate_stub(agent_id: &str, context_keys: &[String]) -> String {
-    // Build expects for stub using AST
-    let mut keys_expr: Vec<Expression> = Vec::new();
-    for k in context_keys {
-        keys_expr.push(Expression::Symbol(Symbol(format!(":{}", k))));
-    }
-    let expects_expr = if keys_expr.is_empty() {
-        Expression::List(vec![
-            Expression::Symbol(Symbol(":expects".into())),
-            Expression::List(vec![]),
-        ])
-    } else {
-        Expression::List(vec![
-            Expression::Symbol(Symbol(":expects".into())),
-            Expression::List(vec![
-                Expression::Symbol(Symbol(":context/keys".into())),
-                Expression::List(keys_expr),
-            ]),
-        ])
-    };
-
-    // impl_do as AST Do with map result
-    let mut impl_map = HashMap::new();
-    impl_map.insert(
-        MapKey::Keyword(Keyword("status".into())),
-        Expression::Literal(Literal::String(STATUS_REQUIRES_AGENT.into())),
-    );
-    impl_map.insert(
-        MapKey::Keyword(Keyword("explanation".into())),
-        Expression::Literal(Literal::String(
-            "No matching capability discovered. Delegate to arbiter for planner.".into(),
-        )),
-    );
-    impl_map.insert(
-        MapKey::Keyword(Keyword("next-step".into())),
-        Expression::Literal(Literal::String(
-            "Invoke :ccos.arbiter.generate-plan with collected context to request assistance."
-                .into(),
-        )),
-    );
-    impl_map.insert(
-        MapKey::Keyword(Keyword("context".into())),
-        Expression::Symbol(Symbol("context".into())),
-    );
-
-    let impl_do = Expression::Do(DoExpr {
-        expressions: vec![Expression::Map(impl_map)],
-    });
-
-    let mut properties = vec![
-        Property {
-            key: Keyword("description".into()),
-            value: Expression::Literal(Literal::String(
-                "[STUB] Auto-generated placeholder for missing agent".into(),
-            )),
-        },
-        Property {
-            key: Keyword("parameters".into()),
-            value: Expression::Map({
-                let mut m = HashMap::new();
-                m.insert(
-                    MapKey::Keyword(Keyword("context".into())),
-                    Expression::Literal(Literal::String("map".into())),
-                );
-                m
-            }),
-        },
-        Property {
-            key: Keyword("expects".into()),
-            value: expects_expr,
-        },
-    ];
-    properties.push(Property {
-        key: Keyword("implementation".into()),
-        value: impl_do,
-    });
-
-    let cap_def = CapabilityDefinition {
-        name: Symbol(agent_id.into()),
-        properties,
-    };
-    format!(
-        "; AUTO-GENERATED STUB - REQUIRES IMPLEMENTATION\n{}",
-        capability_def_to_rtfs_string(&cap_def)
-    )
-}
+// Stub generation removed - replaced with deferred execution approach
 
 /// Convert our local `Elem` builder into the repository `ast::Expression`.
 // All generators now construct AST types directly; no builder placeholder needed.

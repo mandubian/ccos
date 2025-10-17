@@ -1,7 +1,6 @@
 ---
-alwaysApply: true
+alwaysApply: false
 ---
-
 # When Feature Complete: Document and Commit if needed
 
 ## 🚀 **Documentation and Commit Rule**
@@ -10,8 +9,8 @@ A complete feature is not a tiny update or a small fix. It is a significant addi
 
 When you have successfully implemented and tested a complete feature, not a tiny update, you MUST:
 
-### 1. **Document First** 📝
-- **Update relevant documentation** immediately after feature completion
+### 1. **Document when needed** 📝
+- **Update relevant documentation** when feature (not a tiny update) is complete
 - **Add comprehensive comments** to the code explaining the implementation
 - **Update SPEC files** spec files for CCOS are in docs/ccos/specs and for RTFS-2.0 in docs/rtfs-2.0/specs
 - **Update README files** if the feature affects user-facing functionality
@@ -25,3 +24,4 @@ When you have successfully implemented and tested a complete feature, not a tiny
 - **Include test results** in commit messages if relevant
 - **Reference issue numbers** in commit messages when applicable
 
+### 3. **Do not add documentation in root directory except if very generic**

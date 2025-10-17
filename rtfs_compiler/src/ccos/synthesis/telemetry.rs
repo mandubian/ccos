@@ -22,9 +22,9 @@ pub enum TelemetryEvent {
         source_turn: usize,
         conversation_id: String,
     },
-    /// Artifact generated (collector/planner/stub)
+    /// Artifact generated (collector/planner/pending)
     ArtifactGenerated {
-        artifact_type: String, // "collector" | "planner" | "stub"
+        artifact_type: String, // "collector" | "planner" | "pending"
         capability_id: String,
         conversation_id: String,
     },

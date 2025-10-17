@@ -51,3 +51,4 @@ generated_capabilities/
 
 # Nested build artifacts (accidental duplicates)
 rtfs_compiler/rtfs_compiler/
+rtfs_compiler/capabilities/

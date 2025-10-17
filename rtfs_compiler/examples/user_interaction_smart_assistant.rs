@@ -891,6 +891,32 @@ Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no o
     let capability_id = extract_capability_id_from_spec(&capability_spec)
         .unwrap_or_else(|| "research.smart-assistant.v1".to_string());
     
+    // Phase 1: Extract dependencies from synthesized capability
+    if let Ok(dep_result) = rtfs_compiler::ccos::synthesis::dependency_extractor::extract_dependencies(&capability_spec) {
+        println!("🔍 DEPENDENCY ANALYSIS for {}", capability_id);
+        println!("   Total dependencies: {}", dep_result.dependencies.len());
+        println!("   Missing dependencies: {}", dep_result.missing_dependencies.len());
+        
+        if !dep_result.missing_dependencies.is_empty() {
+            println!("   Missing capabilities:");
+            for dep in &dep_result.missing_dependencies {
+                println!("     - {}", dep);
+            }
+            
+            // Create audit event
+            let audit_data = rtfs_compiler::ccos::synthesis::dependency_extractor::create_audit_event_data(&capability_id, &dep_result.missing_dependencies);
+            println!("   AUDIT: capability_deps_missing - {}", 
+                audit_data.get("missing_capabilities").unwrap_or(&"none".to_string()));
+        }
+        
+        if !dep_result.dependencies.is_empty() {
+            println!("   All dependencies found:");
+            for dep in &dep_result.dependencies {
+                println!("     - {} (line {})", dep.capability_id, dep.line_number);
+            }
+        }
+    }
+    
     Ok((capability_id, capability_spec))
 }
 
