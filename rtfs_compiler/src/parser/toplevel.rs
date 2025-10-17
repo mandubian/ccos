@@ -273,9 +273,9 @@ fn build_module_definition(pair: Pair<Rule>) -> Result<ModuleDefinition, PestPar
                 definitions.push(ModuleLevelDefinition::Defn(defn_expr));
             }
             Rule::import_definition => {
-                // For now, skip import definitions as they're not fully implemented
-                // TODO: Implement import definition parsing
-                continue;
+                let pairs = def_pair.clone().into_inner();
+                let import_expr = build_import_definition(&def_pair, pairs)?;
+                definitions.push(ModuleLevelDefinition::Import(import_expr));
             }
             _ => {
                 // Skip whitespace and other non-definition rules
@@ -299,14 +299,98 @@ fn build_import_definition(
     mut pairs: Pairs<Rule>,
 ) -> Result<ImportDefinition, PestParseError> {
     let parent_span = pair_to_source_span(parent_pair);
-    let import_keyword_pair =
-        next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
-            message: "Expected :import keyword in import_definition".to_string(),
-            span: Some(parent_span.clone()),
-        })?;
-    // ... implementation needed
-    Err(PestParseError::UnsupportedRule {
-        rule: "import_definition".to_string(),
-        span: Some(parent_span),
+    
+    // Skip the import keyword
+    next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
+        message: "Expected import keyword in import_definition".to_string(),
+        span: Some(parent_span.clone()),
+    })?;
+    
+    // Parse module name (symbol or namespaced identifier)
+    let module_name_pair = next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
+        message: "Expected module name in import_definition".to_string(),
+        span: Some(parent_span.clone()),
+    })?;
+    
+    let module_name = match module_name_pair.as_rule() {
+        Rule::symbol => {
+            let symbol_pair = module_name_pair.into_inner().next().unwrap();
+            Symbol(symbol_pair.as_str().to_string())
+        }
+        Rule::namespaced_identifier => {
+            Symbol(module_name_pair.as_str().to_string())
+        }
+        _ => {
+            return Err(PestParseError::CustomError {
+                message: "Expected symbol or namespaced identifier for module name".to_string(),
+                span: Some(parent_span.clone()),
+            });
+        }
+    };
+    
+    // Parse optional import options (:as alias, :only [symbols])
+    let mut alias = None;
+    let mut only = None;
+    
+    while let Some(option_pair) = next_significant(&mut pairs) {
+        match option_pair.as_rule() {
+            Rule::import_option => {
+                let mut option_inner = option_pair.into_inner();
+                if let Some(option_type) = option_inner.next() {
+                    match option_type.as_rule() {
+                        Rule::COLON => {
+                            if let Some(keyword) = option_inner.next() {
+                                match keyword.as_str() {
+                                    "as" => {
+                                        if let Some(alias_pair) = option_inner.next() {
+                                            if alias_pair.as_rule() == Rule::symbol {
+                                                let symbol_pair = alias_pair.into_inner().next().unwrap();
+                                                alias = Some(Symbol(symbol_pair.as_str().to_string()));
+                                            }
+                                        }
+                                    }
+                                    "only" => {
+                                        if let Some(vector_pair) = option_inner.next() {
+                                            if vector_pair.as_rule() == Rule::vector {
+                                                let mut symbols = Vec::new();
+                                                for item in vector_pair.into_inner() {
+                                                    if item.as_rule() == Rule::symbol {
+                                                        let symbol_pair = item.into_inner().next().unwrap();
+                                                        symbols.push(Symbol(symbol_pair.as_str().to_string()));
+                                                    }
+                                                }
+                                                only = Some(symbols);
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(PestParseError::CustomError {
+                                            message: format!("Unknown import option: {}", keyword.as_str()),
+                                            span: Some(parent_span.clone()),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(PestParseError::CustomError {
+                                message: "Expected import option".to_string(),
+                                span: Some(parent_span.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Not an import option, might be end of definition
+                break;
+            }
+        }
+    }
+    
+    Ok(ImportDefinition {
+        module_name,
+        alias,
+        only,
     })
 }

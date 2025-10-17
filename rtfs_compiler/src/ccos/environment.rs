@@ -6,7 +6,7 @@
 //! - Progress tracking
 //! - Resource management
 
-use crate::ast::{Expression, TopLevel};
+use crate::ast::{Expression, TopLevel, DoExpr};
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::{capability_marketplace::CapabilityMarketplace, host::RuntimeHost};
 use crate::parser;
@@ -106,7 +106,7 @@ impl Default for CCOSConfig {
 pub struct CCOSEnvironment {
     config: CCOSConfig,
     host: Arc<RuntimeHost>,
-    evaluator: Evaluator,
+    evaluator: std::sync::Mutex<Evaluator>,
     #[allow(dead_code)]
     marketplace: Arc<CapabilityMarketplace>,
     // TODO: Remove this field once we have a proper capability marketplace
@@ -174,11 +174,11 @@ impl CCOSEnvironment {
         crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
         // Create delegation engine
         // Create evaluator
-        let evaluator = Evaluator::new(
+        let evaluator = std::sync::Mutex::new(Evaluator::new(
             std::sync::Arc::new(module_registry),
             runtime_context,
             host.clone(),
-        );
+        ));
 
         // Register local capability: observability.ingestor:v1.ingest
         // Provides on-demand ingestion into Working Memory: modes single | batch | replay
@@ -567,16 +567,21 @@ impl CCOSEnvironment {
             "root-action".to_string(),
         );
 
-        // Ensure hierarchical execution context is initialized
-        {
-            let mut cm = self.evaluator.context_manager.borrow_mut();
-            if cm.current_context_id().is_none() {
-                cm.initialize(Some("repl-session".to_string()));
-            }
-        }
-
         // Execute the expression and propagate the ExecutionOutcome upward.
-        let result = self.evaluator.evaluate(expr);
+        let result = {
+            let evaluator = self.evaluator.lock().map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
+            
+            // Ensure hierarchical execution context is initialized
+            {
+                let mut cm = evaluator.context_manager.borrow_mut();
+                if cm.current_context_id().is_none() {
+                    cm.initialize(Some("repl-session".to_string()));
+                }
+            }
+            
+            // Evaluate expression
+            evaluator.evaluate(expr)
+        };
 
         // Clean up execution context
         self.host.clear_execution_context();
@@ -601,29 +606,93 @@ impl CCOSEnvironment {
             "root-action".to_string(),
         );
 
-        // Ensure hierarchical execution context is initialized
-        {
-            let mut cm = self.evaluator.context_manager.borrow_mut();
-            if cm.current_context_id().is_none() {
-                cm.initialize(Some("repl-execution".to_string()));
-            }
-        }
-
         // Execute each top-level item
         let execution_result = (|| -> RuntimeResult<ExecutionOutcome> {
             for item in parsed {
+                let mut evaluator = self.evaluator.lock().map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
+                
+                // Ensure hierarchical execution context is initialized
+                {
+                    let mut cm = evaluator.context_manager.borrow_mut();
+                    if cm.current_context_id().is_none() {
+                        cm.initialize(Some("repl-execution".to_string()));
+                    }
+                }
                 match item {
                     TopLevel::Expression(expr) => {
-                        // Evaluate and propagate any RequiresHost upward immediately
-                        last_result = self.evaluator.evaluate(&expr)?;
+                        // Evaluate expression
+                        last_result = evaluator.evaluate(&expr)?;
+                        
+                        // Special handling for function definitions to ensure they persist in the environment
+                        if let ExecutionOutcome::Complete(Value::Function(_)) = last_result {
+                            if let Expression::Defn(defn_expr) = expr {
+                                // Manually define the function in the evaluator's environment
+                                // This ensures the binding persists across evaluations
+                                let function = Value::Function(crate::runtime::values::Function::new_closure(
+                                    defn_expr.params.iter().map(|p| {
+                                        match &p.pattern {
+                                            crate::ast::Pattern::Symbol(s) => s.clone(),
+                                            _ => panic!("Expected symbol pattern in defn parameter"),
+                                        }
+                                    }).collect(),
+                                    defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+                                    defn_expr.variadic_param.as_ref().map(|p| {
+                                        match &p.pattern {
+                                            crate::ast::Pattern::Symbol(s) => s.clone(),
+                                            _ => panic!("Expected symbol pattern in defn variadic parameter"),
+                                        }
+                                    }),
+                                    Box::new(Expression::Do(DoExpr {
+                                        expressions: defn_expr.body.clone(),
+                                    })),
+                                    Arc::new(evaluator.env.clone()),
+                                    defn_expr.delegation_hint.clone(),
+                                ));
+                                evaluator.env.define(&defn_expr.name, function);
+                            }
+                        }
+                        
                         if let ExecutionOutcome::RequiresHost(_) = last_result {
                             return Ok(last_result);
+                        }
+                    }
+                    TopLevel::Module(module_def) => {
+                        // Handle module definitions
+                        if self.config.verbose {
+                            println!("Processing module definition: {:?}", module_def.name);
+                        }
+                        // TODO: Implement module loading and execution
+                        // For now, just process the definitions within the module
+                        for def in &module_def.definitions {
+                            match def {
+                                crate::ast::ModuleLevelDefinition::Def(def_expr) => {
+                                    let expr = Expression::Def(Box::new(def_expr.clone()));
+                                    last_result = evaluator.evaluate(&expr)?;
+                                    if let ExecutionOutcome::RequiresHost(_) = last_result {
+                                        return Ok(last_result);
+                                    }
+                                }
+                                crate::ast::ModuleLevelDefinition::Defn(defn_expr) => {
+                                    let expr = Expression::Defn(Box::new(defn_expr.clone()));
+                                    last_result = evaluator.evaluate(&expr)?;
+                                    if let ExecutionOutcome::RequiresHost(_) = last_result {
+                                        return Ok(last_result);
+                                    }
+                                }
+                                crate::ast::ModuleLevelDefinition::Import(import_def) => {
+                                    if self.config.verbose {
+                                        println!("Import statement: {:?}", import_def.module_name);
+                                    }
+                                    // TODO: Implement import resolution and symbol binding
+                                    // For now, just log the import
+                                }
+                            }
                         }
                     }
                     _ => {
                         // For other top-level items, we could extend this to handle them
                         if self.config.verbose {
-                            println!("Skipping non-expression top-level item");
+                            println!("Skipping non-expression top-level item: {:?}", item);
                         }
                     }
                 }
