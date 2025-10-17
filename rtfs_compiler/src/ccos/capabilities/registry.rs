@@ -5,6 +5,7 @@
 use crate::ast::Keyword;
 use crate::ccos::capabilities::capability::Capability;
 use crate::ccos::capabilities::provider::CapabilityProvider;
+use crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::{ExecutionContext, MicroVMConfig, MicroVMFactory};
 use crate::runtime::security::{RuntimeContext, SecurityAuthorizer};
@@ -18,6 +19,8 @@ pub struct CapabilityRegistry {
     providers: HashMap<String, Box<dyn CapabilityProvider>>, // Pluggable providers
     microvm_factory: MicroVMFactory,
     microvm_provider: Option<String>,
+    /// Optional missing capability resolver for runtime trap
+    missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
 }
 
 impl CapabilityRegistry {
@@ -27,6 +30,7 @@ impl CapabilityRegistry {
             providers: HashMap::new(),
             microvm_factory: MicroVMFactory::new(),
             microvm_provider: None,
+            missing_capability_resolver: None,
         };
 
         // Register system capabilities
@@ -37,6 +41,33 @@ impl CapabilityRegistry {
         registry.register_state_capabilities();
 
         registry
+    }
+
+    /// Set the missing capability resolver for runtime trap functionality
+    pub fn set_missing_capability_resolver(&mut self, resolver: Arc<MissingCapabilityResolver>) {
+        self.missing_capability_resolver = Some(resolver);
+    }
+
+    /// Enqueue a missing capability for resolution without attempting execution.
+    /// This is used by orchestrator/marketplace to mark a capability as pending
+    /// and trigger the Phase 2 resolution pipeline.
+    pub fn enqueue_missing_capability(
+        &self,
+        capability_id: String,
+        args: Vec<Value>,
+        runtime_context: Option<&RuntimeContext>,
+    ) -> RuntimeResult<()> {
+        if let Some(resolver) = &self.missing_capability_resolver {
+            let mut context = std::collections::HashMap::new();
+            if runtime_context.is_some() {
+                context.insert("context_available".to_string(), "true".to_string());
+            }
+            resolver.handle_missing_capability(capability_id, args, context)
+        } else {
+            Err(RuntimeError::Generic(
+                "MissingCapabilityResolver not configured".to_string(),
+            ))
+        }
     }
 
     /// Register an additional capability with the registry.
@@ -452,10 +483,32 @@ impl CapabilityRegistry {
             // For capabilities that don't require MicroVM, execute normally
             match self.get_capability(capability_id) {
                 Some(capability) => (capability.func)(args),
-                None => Err(RuntimeError::Generic(format!(
-                    "Capability '{}' not found",
-                    capability_id
-                ))),
+                None => {
+                    // Runtime trap: Handle missing capability through resolver if available
+                    if let Some(ref resolver) = self.missing_capability_resolver {
+                        // Build context for the missing capability request
+                        let mut context = std::collections::HashMap::new();
+                        if let Some(_runtime_context) = runtime_context {
+                            // RuntimeContext doesn't have plan_id/intent_id methods
+                            // These would come from the execution context in the host
+                            context.insert("context_available".to_string(), "true".to_string());
+                        }
+
+                        // Handle the missing capability (this will queue it for resolution)
+                        if let Err(e) = resolver.handle_missing_capability(
+                            capability_id.to_string(),
+                            args.clone(),
+                            context,
+                        ) {
+                            eprintln!("Warning: Failed to queue missing capability for resolution: {}", e);
+                        }
+                    }
+
+                    Err(RuntimeError::Generic(format!(
+                        "Capability '{}' not found",
+                        capability_id
+                    )))
+                }
             }
         }
     }

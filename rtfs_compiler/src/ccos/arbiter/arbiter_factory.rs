@@ -54,9 +54,13 @@ impl ArbiterFactory {
                         "Delegating engine requires delegation_config".to_string(),
                     )
                 })?;
+                let capability_marketplace = _capability_marketplace.ok_or_else(|| {
+                    RuntimeError::Generic("Delegating engine requires capability_marketplace".to_string())
+                })?;
                 let arbiter = DelegatingArbiter::new(
                     llm_config.clone(),
                     delegation_config.clone(),
+                    capability_marketplace,
                     intent_graph,
                 )
                 .await?;

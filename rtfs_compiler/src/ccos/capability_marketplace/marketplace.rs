@@ -7,7 +7,7 @@ use super::types::*;
 // use super::a2a_discovery::{A2ADiscoveryProvider, A2ADiscoveryBuilder, A2AAgentConfig};
 use crate::ast::{MapKey, TypeExpr};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::security::RuntimeContext;
+// RuntimeContext no longer needed in missing-capability path
 use crate::runtime::streaming::{McpStreamingProvider, StreamType, StreamingProvider};
 use crate::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use crate::runtime::values::Value;
@@ -207,6 +207,7 @@ impl CapabilityMarketplace {
                 permissions: vec![],
                 effects: vec![],
                 metadata: HashMap::new(),
+                agent_metadata: None,
             };
 
             let mut caps = self.capabilities.write().await;
@@ -409,6 +410,7 @@ impl CapabilityMarketplace {
             permissions: vec![],
             effects: normalized_effects,
             metadata,
+            agent_metadata: None,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -443,9 +445,27 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
 
+        // Register the capability
+        {
+            let mut caps = self.capabilities.write().await;
+            caps.insert(id.clone(), manifest);
+        }
+
+        // Emit audit event to Causal Chain
+        self.emit_capability_audit_event("capability_registered", &id, None)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Register a capability manifest directly (for testing and advanced use cases)
+    pub async fn register_capability_manifest(&self, manifest: CapabilityManifest) -> RuntimeResult<()> {
+        let id = manifest.id.clone();
+        
         // Register the capability
         {
             let mut caps = self.capabilities.write().await;
@@ -476,7 +496,7 @@ impl CapabilityMarketplace {
     }
 
     /// Emit audit event to Causal Chain
-    async fn emit_capability_audit_event(
+    pub async fn emit_capability_audit_event(
         &self,
         event_type: &str,
         capability_id: &str,
@@ -586,8 +606,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -625,8 +646,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -666,8 +688,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -708,8 +731,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -752,8 +776,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -796,8 +821,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -842,8 +868,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -882,8 +909,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -924,8 +952,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -966,8 +995,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata: HashMap::new(),
-        };
+                metadata: HashMap::new(),
+                agent_metadata: None,
+            };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1043,6 +1073,43 @@ impl CapabilityMarketplace {
         capabilities.values().cloned().collect()
     }
 
+    /// List capabilities with query filters
+    pub async fn list_capabilities_with_query(&self, query: &CapabilityQuery) -> Vec<CapabilityManifest> {
+        let capabilities = self.capabilities.read().await;
+        let mut results: Vec<CapabilityManifest> = capabilities
+            .values()
+            .filter(|manifest| query.matches(manifest))
+            .cloned()
+            .collect();
+
+        // Apply limit if specified
+        if let Some(limit) = query.limit {
+            results.truncate(limit);
+        }
+
+        results
+    }
+
+    /// List only agent capabilities
+    pub async fn list_agents(&self) -> Vec<CapabilityManifest> {
+        self.list_capabilities_with_query(&CapabilityQuery::new().agents_only()).await
+    }
+
+    /// List only primitive capabilities
+    pub async fn list_primitives(&self) -> Vec<CapabilityManifest> {
+        self.list_capabilities_with_query(&CapabilityQuery::new().primitives_only()).await
+    }
+
+    /// List only composite capabilities
+    pub async fn list_composites(&self) -> Vec<CapabilityManifest> {
+        self.list_capabilities_with_query(&CapabilityQuery::new().composites_only()).await
+    }
+
+    /// Search for capabilities by ID pattern
+    pub async fn search_by_id(&self, pattern: &str) -> Vec<CapabilityManifest> {
+        self.list_capabilities_with_query(&CapabilityQuery::new().with_id_pattern(pattern.to_string())).await
+    }
+
     /// Execute a capability with enhanced metadata support
     pub async fn execute_capability_enhanced(
         &self,
@@ -1109,9 +1176,10 @@ impl CapabilityMarketplace {
                 Value::List(list) => list.clone(),
                 _ => vec![inputs.clone()],
             };
-            // For marketplace fallback, use a controlled runtime context
-            let runtime_context = RuntimeContext::controlled(vec![id.to_string()]);
-            return registry.execute_capability_with_microvm(id, args, Some(&runtime_context));
+            // If capability not registered locally, enqueue resolution (pending) and surface a clear error
+            // so the orchestrator can checkpoint/resume at a higher level.
+            let _ = registry.enqueue_missing_capability(id.to_string(), args, None);
+            return Err(RuntimeError::UnknownCapability(id.to_string()));
         };
 
         // Prepare boundary verification context

@@ -2,6 +2,7 @@
 
 pub mod discovery;
 pub mod registry;
+pub mod registry_shim;
 pub mod types;
 
 // Re-export for convenience at ccos::agent::*

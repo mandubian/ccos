@@ -93,6 +93,138 @@ pub struct CapabilityManifest {
     pub permissions: Vec<String>,
     pub effects: Vec<String>,
     pub metadata: HashMap<String, String>,
+    /// Agent-specific metadata flags for unified capability/agent model
+    pub agent_metadata: Option<AgentMetadata>,
+}
+
+/// Metadata flags to distinguish agents from capabilities in the unified model
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentMetadata {
+    /// Kind of artifact: :primitive, :composite, or :agent
+    pub kind: CapabilityKind,
+    /// Whether this artifact can plan and select capabilities dynamically
+    pub planning: bool,
+    /// Whether this artifact maintains state across invocations
+    pub stateful: bool,
+    /// Whether this artifact can interact with humans (ask questions, get feedback)
+    pub interactive: bool,
+    /// Additional agent-specific configuration
+    pub config: HashMap<String, String>,
+}
+
+/// Types of capabilities in the unified model
+#[derive(Debug, Clone, PartialEq)]
+pub enum CapabilityKind {
+    /// Single-shot, stateless capability (default)
+    Primitive,
+    /// Fixed pipeline of capabilities
+    Composite,
+    /// Goal-directed controller with autonomy
+    Agent,
+}
+
+impl CapabilityManifest {
+    /// Create a new capability manifest with default (primitive) kind
+    pub fn new(
+        id: String,
+        name: String,
+        description: String,
+        provider: ProviderType,
+        version: String,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description,
+            provider,
+            version,
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: None,
+            permissions: Vec::new(),
+            effects: Vec::new(),
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        }
+    }
+
+    /// Create a new agent manifest with agent metadata
+    pub fn new_agent(
+        id: String,
+        name: String,
+        description: String,
+        provider: ProviderType,
+        version: String,
+        planning: bool,
+        stateful: bool,
+        interactive: bool,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description,
+            provider,
+            version,
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: None,
+            permissions: Vec::new(),
+            effects: Vec::new(),
+            metadata: HashMap::new(),
+            agent_metadata: Some(AgentMetadata {
+                kind: CapabilityKind::Agent,
+                planning,
+                stateful,
+                interactive,
+                config: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Get the capability kind, defaulting to Primitive if no agent metadata
+    pub fn kind(&self) -> CapabilityKind {
+        self.agent_metadata
+            .as_ref()
+            .map(|m| m.kind.clone())
+            .unwrap_or(CapabilityKind::Primitive)
+    }
+
+    /// Check if this is an agent (has planning, stateful, or interactive capabilities)
+    pub fn is_agent(&self) -> bool {
+        matches!(self.kind(), CapabilityKind::Agent)
+    }
+
+    /// Check if this capability can plan and select other capabilities
+    pub fn can_plan(&self) -> bool {
+        self.agent_metadata
+            .as_ref()
+            .map(|m| m.planning)
+            .unwrap_or(false)
+    }
+
+    /// Check if this capability maintains state
+    pub fn is_stateful(&self) -> bool {
+        self.agent_metadata
+            .as_ref()
+            .map(|m| m.stateful)
+            .unwrap_or(false)
+    }
+
+    /// Check if this capability can interact with humans
+    pub fn is_interactive(&self) -> bool {
+        self.agent_metadata
+            .as_ref()
+            .map(|m| m.interactive)
+            .unwrap_or(false)
+    }
+
+    /// Set agent metadata for this capability
+    pub fn with_agent_metadata(mut self, metadata: AgentMetadata) -> Self {
+        self.agent_metadata = Some(metadata);
+        self
+    }
 }
 
 /// Isolation policy for capability execution
@@ -628,6 +760,190 @@ pub trait CapabilityDiscovery: Send + Sync {
 
     /// Get this object as Any for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// Query filters for capability marketplace discovery
+#[derive(Debug, Clone, Default)]
+pub struct CapabilityQuery {
+    /// Filter by capability kind
+    pub kind: Option<CapabilityKind>,
+    /// Filter by planning capability
+    pub planning: Option<bool>,
+    /// Filter by stateful capability
+    pub stateful: Option<bool>,
+    /// Filter by interactive capability
+    pub interactive: Option<bool>,
+    /// Filter by capability ID pattern
+    pub id_pattern: Option<String>,
+    /// Filter by provider type
+    pub provider_type: Option<ProviderType>,
+    /// Filter by permissions
+    pub required_permissions: Option<Vec<String>>,
+    /// Filter by effects
+    pub required_effects: Option<Vec<String>>,
+    /// Limit number of results
+    pub limit: Option<usize>,
+}
+
+impl CapabilityQuery {
+    /// Create a new empty query
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Filter by capability kind
+    pub fn with_kind(mut self, kind: CapabilityKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    /// Filter for agent capabilities only
+    pub fn agents_only(mut self) -> Self {
+        self.kind = Some(CapabilityKind::Agent);
+        self
+    }
+
+    /// Filter for primitive capabilities only
+    pub fn primitives_only(mut self) -> Self {
+        self.kind = Some(CapabilityKind::Primitive);
+        self
+    }
+
+    /// Filter for composite capabilities only
+    pub fn composites_only(mut self) -> Self {
+        self.kind = Some(CapabilityKind::Composite);
+        self
+    }
+
+    /// Filter by planning capability
+    pub fn with_planning(mut self, planning: bool) -> Self {
+        self.planning = Some(planning);
+        self
+    }
+
+    /// Filter by stateful capability
+    pub fn with_stateful(mut self, stateful: bool) -> Self {
+        self.stateful = Some(stateful);
+        self
+    }
+
+    /// Filter by interactive capability
+    pub fn with_interactive(mut self, interactive: bool) -> Self {
+        self.interactive = Some(interactive);
+        self
+    }
+
+    /// Filter by ID pattern (supports glob patterns)
+    pub fn with_id_pattern(mut self, pattern: String) -> Self {
+        self.id_pattern = Some(pattern);
+        self
+    }
+
+    /// Filter by provider type
+    pub fn with_provider_type(mut self, provider_type: ProviderType) -> Self {
+        self.provider_type = Some(provider_type);
+        self
+    }
+
+    /// Filter by required permissions
+    pub fn with_permissions(mut self, permissions: Vec<String>) -> Self {
+        self.required_permissions = Some(permissions);
+        self
+    }
+
+    /// Filter by required effects
+    pub fn with_effects(mut self, effects: Vec<String>) -> Self {
+        self.required_effects = Some(effects);
+        self
+    }
+
+    /// Limit number of results
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Check if a capability matches this query
+    pub fn matches(&self, manifest: &CapabilityManifest) -> bool {
+        // Check kind filter
+        if let Some(ref kind) = self.kind {
+            if manifest.kind() != *kind {
+                return false;
+            }
+        }
+
+        // Check planning filter
+        if let Some(planning) = self.planning {
+            if manifest.can_plan() != planning {
+                return false;
+            }
+        }
+
+        // Check stateful filter
+        if let Some(stateful) = self.stateful {
+            if manifest.is_stateful() != stateful {
+                return false;
+            }
+        }
+
+        // Check interactive filter
+        if let Some(interactive) = self.interactive {
+            if manifest.is_interactive() != interactive {
+                return false;
+            }
+        }
+
+        // Check ID pattern filter
+        if let Some(ref pattern) = self.id_pattern {
+            if !self.matches_pattern(&manifest.id, pattern) {
+                return false;
+            }
+        }
+
+        // Check provider type filter
+        if let Some(ref provider_type) = self.provider_type {
+            if manifest.provider != *provider_type {
+                return false;
+            }
+        }
+
+        // Check permissions filter
+        if let Some(ref required_permissions) = self.required_permissions {
+            for permission in required_permissions {
+                if !manifest.permissions.contains(permission) {
+                    return false;
+                }
+            }
+        }
+
+        // Check effects filter
+        if let Some(ref required_effects) = self.required_effects {
+            for effect in required_effects {
+                if !manifest.effects.contains(effect) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Simple pattern matching for glob patterns
+    fn matches_pattern(&self, capability_id: &str, pattern: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+
+        if pattern.contains('*') {
+            // Simple glob matching - convert * to .* for regex
+            let regex_pattern = pattern.replace('*', ".*");
+            if let Ok(regex) = regex::Regex::new(&regex_pattern) {
+                return regex.is_match(capability_id);
+            }
+        }
+
+        capability_id == pattern
+    }
 }
 
 /// Trait for capability executors

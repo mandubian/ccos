@@ -16,6 +16,10 @@ pub struct CheckpointRecord {
     pub serialized_context: String,
     pub created_at: u64,
     pub metadata: HashMap<String, String>,
+    /// List of missing capabilities that caused this checkpoint to be created
+    pub missing_capabilities: Vec<String>,
+    /// Whether this checkpoint is waiting for auto-resume when capabilities are resolved
+    pub auto_resume_enabled: bool,
 }
 
 impl Archivable for CheckpointRecord {
@@ -89,5 +93,46 @@ impl CheckpointArchive {
         path.push(format!("{}.json", id));
         let bytes = fs::read(&path).ok()?;
         serde_json::from_slice::<CheckpointRecord>(&bytes).ok()
+    }
+
+    /// Find all checkpoints that are waiting for a specific capability to be resolved
+    pub fn find_checkpoints_waiting_for_capability(&self, capability_id: &str) -> Vec<CheckpointRecord> {
+        self.id_index
+            .lock()
+            .ok()
+            .map(|index| {
+                index
+                    .values()
+                    .filter(|record| {
+                        record.auto_resume_enabled 
+                            && record.missing_capabilities.contains(&capability_id.to_string())
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Remove a checkpoint from the archive (called after successful resume)
+    pub fn remove_checkpoint(&self, checkpoint_id: &str) -> Option<CheckpointRecord> {
+        {
+            let mut index = self.id_index.lock().ok()?;
+            index.remove(checkpoint_id)
+        }
+    }
+
+    /// Get all checkpoints that are waiting for auto-resume
+    pub fn get_pending_auto_resume_checkpoints(&self) -> Vec<CheckpointRecord> {
+        self.id_index
+            .lock()
+            .ok()
+            .map(|index| {
+                index
+                    .values()
+                    .filter(|record| record.auto_resume_enabled && !record.missing_capabilities.is_empty())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }

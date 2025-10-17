@@ -1,3 +1,7 @@
+//! DEPRECATED: This module is deprecated in favor of the unified CapabilityMarketplace.
+//! Agents are now registered as capabilities with :kind :agent metadata.
+//! Use AgentRegistryShim for backward compatibility during migration.
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -93,6 +97,11 @@ pub struct IntentDraft {
 }
 
 /// Trait for agent lookup / registration.
+/// 
+/// # Deprecation Notice
+/// This trait is deprecated. Use CapabilityMarketplace with :kind :agent capabilities instead.
+/// See AgentRegistryShim for backward compatibility.
+#[deprecated(since = "0.1.0", note = "Use CapabilityMarketplace with :kind :agent capabilities instead")]
 pub trait AgentRegistry: Send + Sync {
     fn register(&mut self, agent: AgentDescriptor);
     fn list(&self) -> Vec<AgentDescriptor>;
@@ -102,6 +111,11 @@ pub trait AgentRegistry: Send + Sync {
 }
 
 /// In‑memory implementation with simple skill & constraint scoring.
+/// 
+/// # Deprecation Notice
+/// This struct is deprecated. Use CapabilityMarketplace with :kind :agent capabilities instead.
+/// See AgentRegistryShim for backward compatibility.
+#[deprecated(since = "0.1.0", note = "Use CapabilityMarketplace with :kind :agent capabilities instead")]
 pub struct InMemoryAgentRegistry {
     agents: HashMap<String, AgentDescriptor>,
     skill_index: HashMap<String, HashSet<String>>, // skill -> agent_ids
@@ -115,7 +129,7 @@ impl InMemoryAgentRegistry {
         }
     }
 
-    fn score_agent(agent: &AgentDescriptor, draft: &IntentDraft) -> (f64, String, u32) {
+    pub fn score_agent(agent: &AgentDescriptor, draft: &IntentDraft) -> (f64, String, u32) {
         // Skill overlap ratio
         let goal_lc = draft.goal.to_lowercase();
         let mut skill_hits = 0usize;

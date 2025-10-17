@@ -53,6 +53,7 @@ impl StaticDiscoveryProvider {
                     permissions: vec![],
                     effects: vec![],
                     metadata: HashMap::new(),
+                    agent_metadata: None,
                 },
             ],
         }
@@ -237,6 +238,7 @@ impl NetworkDiscoveryAgent {
             permissions,
             effects,
             metadata,
+            agent_metadata: None,
         })
     }
 }
@@ -430,6 +432,7 @@ async fn parse_capability_manifest_from_json(
         permissions,
         effects,
         metadata,
+        agent_metadata: None,
     })
 }
 
