@@ -16,6 +16,207 @@ use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use futures::executor::block_on;
+
+/// Make a real HTTP request using reqwest (synchronous version)
+fn make_real_http_request(inputs: &Value) -> RuntimeResult<Value> {
+    // Parse inputs to extract HTTP parameters
+    let (url, method, headers, body) = parse_http_inputs(inputs)?;
+    
+    // Create a new tokio runtime for this request to avoid nested executor issues
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| RuntimeError::Generic(format!("Failed to create tokio runtime: {}", e)))?;
+    
+    // Execute the HTTP request in the new runtime
+    let result = rt.block_on(async {
+        let client = reqwest::Client::new();
+        
+        // Build the request based on method
+        let mut request_builder = match method.to_uppercase().as_str() {
+            "GET" => client.get(&url),
+            "POST" => client.post(&url),
+            "PUT" => client.put(&url),
+            "DELETE" => client.delete(&url),
+            "PATCH" => client.patch(&url),
+            "HEAD" => client.head(&url),
+            "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
+            _ => return Err(RuntimeError::Generic(format!("Unsupported HTTP method: {}", method))),
+        };
+        
+        // Add headers
+        for (key, value) in headers {
+            request_builder = request_builder.header(&key, &value);
+        }
+        
+        // Add body for POST/PUT/PATCH requests
+        if !body.is_empty() && ["POST", "PUT", "PATCH"].contains(&method.to_uppercase().as_str()) {
+            request_builder = request_builder.body(body);
+        }
+        
+        // Send the request
+        let response = request_builder.send().await
+            .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
+        
+        // Get response status
+        let status = response.status().as_u16();
+        
+        // Get response headers
+        let response_headers = response.headers();
+        let mut headers_map = HashMap::new();
+        for (key, value) in response_headers {
+            if let Ok(value_str) = value.to_str() {
+                headers_map.insert(
+                    MapKey::String(key.to_string()),
+                    Value::String(value_str.to_string()),
+                );
+            }
+        }
+        
+        // Get response body
+        let body_text = response.text().await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read response body: {}", e)))?;
+        
+        // Build response map
+        let mut response_map = HashMap::new();
+        response_map.insert(
+            MapKey::String("status".to_string()),
+            Value::Integer(status as i64),
+        );
+        response_map.insert(
+            MapKey::String("body".to_string()),
+            Value::String(body_text),
+        );
+        response_map.insert(
+            MapKey::String("headers".to_string()),
+            Value::Map(headers_map),
+        );
+        
+        Ok(Value::Map(response_map))
+    });
+    
+    result
+}
+
+/// Parse HTTP inputs from RTFS Value
+fn parse_http_inputs(inputs: &Value) -> RuntimeResult<(String, String, HashMap<String, String>, String)> {
+    // Debug: Print the input value
+    println!("DEBUG: parse_http_inputs received: {:?}", inputs);
+    
+    // Default values
+    let mut url = String::new();
+    let mut method = "GET".to_string();
+    let mut headers = HashMap::new();
+    let mut body = String::new();
+    
+    // Parse inputs based on structure
+    match inputs {
+        Value::Map(map) => {
+            // Extract parameters from map
+            for (key, value) in map {
+                match key {
+                    MapKey::String(key_str) | MapKey::Keyword(crate::ast::Keyword(key_str)) => {
+                               match key_str.as_str() {
+                                   "url" | ":url" => {
+                                       url = value.as_string().unwrap_or_default().to_string();
+                                   }
+                                   "method" | ":method" => {
+                                       method = value.as_string().unwrap_or("GET").to_string();
+                                   }
+                                   "headers" | ":headers" => {
+                                       if let Value::Map(header_map) = value {
+                                           for (h_key, h_value) in header_map {
+                                               if let (MapKey::String(hk), Value::String(hv)) = (h_key, h_value) {
+                                                   headers.insert(hk.clone(), hv.clone());
+                                               }
+                                           }
+                                       }
+                                   }
+                                   "body" | ":body" => {
+                                       body = value.as_string().unwrap_or_default().to_string();
+                                   }
+                                   _ => {}
+                               }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Value::List(list) => {
+            // Check if this is a keyword-value pair list (from RTFS call syntax)
+            if list.len() >= 2 && list.len() % 2 == 0 {
+                // Parse as keyword-value pairs: [:url "value" :method "value"]
+                let mut i = 0;
+                while i < list.len() {
+                    if let Some(key_val) = list.get(i) {
+                        if let Value::Keyword(crate::ast::Keyword(key_str)) = key_val {
+                            if let Some(value_val) = list.get(i + 1) {
+                                match key_str.as_str() {
+                                    "url" => {
+                                        url = value_val.as_string().unwrap_or_default().to_string();
+                                    }
+                                    "method" => {
+                                        method = value_val.as_string().unwrap_or("GET").to_string();
+                                    }
+                                    "headers" => {
+                                        if let Value::Map(header_map) = value_val {
+                                            for (h_key, h_value) in header_map {
+                                                if let (MapKey::String(hk), Value::String(hv)) = (h_key, h_value) {
+                                                    headers.insert(hk.clone(), hv.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "body" => {
+                                        body = value_val.as_string().unwrap_or_default().to_string();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    i += 2;
+                }
+            } else {
+                // Positional arguments: [url, method, headers, body]
+                if let Some(url_val) = list.get(0) {
+                    url = url_val.as_string().unwrap_or_default().to_string();
+                }
+                if let Some(method_val) = list.get(1) {
+                    method = method_val.as_string().unwrap_or("GET").to_string();
+                }
+                if let Some(headers_val) = list.get(2) {
+                    if let Value::Map(header_map) = headers_val {
+                        for (h_key, h_value) in header_map {
+                            if let (MapKey::String(hk), Value::String(hv)) = (h_key, h_value) {
+                                headers.insert(hk.clone(), hv.clone());
+                            }
+                        }
+                    }
+                }
+                if let Some(body_val) = list.get(3) {
+                    body = body_val.as_string().unwrap_or_default().to_string();
+                }
+            }
+        }
+        Value::String(url_str) => {
+            // Simple string input is treated as URL
+            url = url_str.clone();
+        }
+        _ => {
+            return Err(RuntimeError::Generic(
+                "HTTP inputs must be a map, list, or string".to_string()
+            ));
+        }
+    }
+    
+    if url.is_empty() {
+        return Err(RuntimeError::Generic(
+            "URL is required for HTTP request".to_string()
+        ));
+    }
+    
+    Ok((url, method, headers, body))
+}
 
 impl CapabilityMarketplace {
     pub fn new(
@@ -191,12 +392,26 @@ impl CapabilityMarketplace {
                 name: capability_id.clone(),
                 description: format!("Registry capability: {}", capability_id),
                 provider: ProviderType::Local(LocalCapability {
-                    handler: Arc::new(move |_| {
-                        // For now, just return an error indicating the capability needs to be executed via registry
-                        Err(RuntimeError::Generic(format!(
-                            "Capability '{}' should be executed via registry, not marketplace",
-                            capability_id_clone
-                        )))
+                    handler: Arc::new(move |inputs| {
+                        // For HTTP capabilities, check if they should be loaded
+                        if capability_id_clone == "ccos.network.http-fetch" {
+                            // Check if HTTP capability should be loaded
+                            if std::env::var("CCOS_LOAD_HTTP_CAPABILITY").unwrap_or("false".to_string()) == "true" {
+                                // Make real HTTP request
+                                make_real_http_request(inputs)
+                            } else {
+                                // Return error indicating capability not loaded
+                                Err(crate::runtime::RuntimeError::Generic(format!(
+                                    "HTTP capability not loaded. Set CCOS_LOAD_HTTP_CAPABILITY=true to enable."
+                                )))
+                            }
+                        } else {
+                            // For other capabilities, return an error
+                            Err(crate::runtime::RuntimeError::Generic(format!(
+                                "Capability '{}' should be executed via registry, not marketplace",
+                                capability_id_clone
+                            )))
+                        }
                     }),
                 }),
                 version: "1.0.0".to_string(),

@@ -401,11 +401,14 @@ pub struct TestResult {
 mod tests {
     use super::*;
     use crate::ccos::capability_marketplace::types::CapabilityManifest;
+    use crate::ccos::capability_marketplace::ProviderType;
+    use crate::ccos::capability_marketplace::types::LocalCapability;
 
     #[tokio::test]
     async fn test_registration_flow() {
         // Create a mock marketplace
-        let marketplace = Arc::new(CapabilityMarketplace::new());
+        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let flow = RegistrationFlow::new(marketplace);
         
         // Create a test manifest
@@ -436,7 +439,8 @@ mod tests {
 
     #[test]
     fn test_version_generation() {
-        let marketplace = Arc::new(CapabilityMarketplace::new());
+        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let flow = RegistrationFlow::new(marketplace);
         
         let manifest = CapabilityManifest {

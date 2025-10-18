@@ -1,0 +1,24 @@
+(module openweather-api
+  (defn http_request [method endpoint params headers]
+    "Generic HTTP request to the API"
+    (call "ccos.network.http-fetch"
+      :method method
+      :url (str "https://openweathermap.org/api" endpoint)
+      :headers headers
+      :params params))
+
+  (defn get [endpoint params]
+    "GET request to the API"
+    (http_request "GET" endpoint params {"Content-Type" "application/json"}))
+
+  (defn post [endpoint params body]
+    "POST request to the API"
+    (http_request "POST" endpoint params {"Content-Type" "application/json"} :body body))
+
+  (defn put [endpoint params body]
+    "PUT request to the API"
+    (http_request "PUT" endpoint params {"Content-Type" "application/json"} :body body))
+
+  (defn delete [endpoint params]
+    "DELETE request to the API"
+    (http_request "DELETE" endpoint params {"Content-Type" "application/json"})))

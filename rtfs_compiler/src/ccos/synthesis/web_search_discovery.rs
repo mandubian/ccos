@@ -692,7 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_for_github_api() {
-        let discovery = WebSearchDiscovery::mock();
+        let mut discovery = WebSearchDiscovery::mock();
         let results = discovery.search_for_api_specs("github").await.unwrap();
 
         assert!(!results.is_empty());
@@ -702,7 +702,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_for_stripe_api() {
-        let discovery = WebSearchDiscovery::mock();
+        let mut discovery = WebSearchDiscovery::mock();
         let results = discovery.search_for_api_specs("stripe").await.unwrap();
 
         assert!(!results.is_empty());

@@ -337,44 +337,32 @@ fn build_import_definition(
             Rule::import_option => {
                 let mut option_inner = option_pair.into_inner();
                 if let Some(option_type) = option_inner.next() {
-                    match option_type.as_rule() {
-                        Rule::COLON => {
-                            if let Some(keyword) = option_inner.next() {
-                                match keyword.as_str() {
-                                    "as" => {
-                                        if let Some(alias_pair) = option_inner.next() {
-                                            if alias_pair.as_rule() == Rule::symbol {
-                                                let symbol_pair = alias_pair.into_inner().next().unwrap();
-                                                alias = Some(Symbol(symbol_pair.as_str().to_string()));
-                                            }
+                    match option_type.as_str() {
+                        ":as" => {
+                            if let Some(alias_pair) = option_inner.next() {
+                                if alias_pair.as_rule() == Rule::symbol {
+                                    let symbol_pair = alias_pair.into_inner().next().unwrap();
+                                    alias = Some(Symbol(symbol_pair.as_str().to_string()));
+                                }
+                            }
+                        }
+                        ":only" => {
+                            if let Some(vector_pair) = option_inner.next() {
+                                if vector_pair.as_rule() == Rule::vector {
+                                    let mut symbols = Vec::new();
+                                    for item in vector_pair.into_inner() {
+                                        if item.as_rule() == Rule::symbol {
+                                            let symbol_pair = item.into_inner().next().unwrap();
+                                            symbols.push(Symbol(symbol_pair.as_str().to_string()));
                                         }
                                     }
-                                    "only" => {
-                                        if let Some(vector_pair) = option_inner.next() {
-                                            if vector_pair.as_rule() == Rule::vector {
-                                                let mut symbols = Vec::new();
-                                                for item in vector_pair.into_inner() {
-                                                    if item.as_rule() == Rule::symbol {
-                                                        let symbol_pair = item.into_inner().next().unwrap();
-                                                        symbols.push(Symbol(symbol_pair.as_str().to_string()));
-                                                    }
-                                                }
-                                                only = Some(symbols);
-                                            }
-                                        }
-                                    }
-                                    _ => {
-                                        return Err(PestParseError::CustomError {
-                                            message: format!("Unknown import option: {}", keyword.as_str()),
-                                            span: Some(parent_span.clone()),
-                                        });
-                                    }
+                                    only = Some(symbols);
                                 }
                             }
                         }
                         _ => {
                             return Err(PestParseError::CustomError {
-                                message: "Expected import option".to_string(),
+                                message: format!("Unknown import option: {}", option_type.as_str()),
                                 span: Some(parent_span.clone()),
                             });
                         }

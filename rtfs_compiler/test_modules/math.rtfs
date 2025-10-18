@@ -1,0 +1,22 @@
+;; Simple math module for testing import resolution
+
+(module math
+  (defn add [a b]
+    "Add two numbers"
+    (+ a b))
+  
+  (defn multiply [a b]
+    "Multiply two numbers"
+    (* a b))
+  
+  (defn square [x]
+    "Square a number"
+    (* x x))
+  
+  (def pi 3.14159)
+  
+  (defn circle-area [radius]
+    "Calculate circle area"
+    (* pi (square radius)))
+)
+

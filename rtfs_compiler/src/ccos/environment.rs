@@ -124,6 +124,14 @@ impl CCOSEnvironment {
         ));
         // Create capability marketplace with integrated registry
         let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
+        
+        // Bootstrap the marketplace to register default capabilities
+        let marketplace_for_bootstrap = marketplace.clone();
+        let _: Result<(), Box<dyn std::error::Error + Send + Sync>> =
+            futures::executor::block_on(async move {
+                marketplace_for_bootstrap.bootstrap().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            });
+        
         // Create causal chain for tracking
         let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
 
@@ -683,8 +691,14 @@ impl CCOSEnvironment {
                                     if self.config.verbose {
                                         println!("Import statement: {:?}", import_def.module_name);
                                     }
-                                    // TODO: Implement import resolution and symbol binding
-                                    // For now, just log the import
+                                    
+                                    // Resolve and bind the import
+                                    if let Err(e) = self.resolve_and_bind_import(&mut evaluator, import_def) {
+                                        if self.config.verbose {
+                                            println!("Import resolution failed: {}", e);
+                                        }
+                                        return Err(e);
+                                    }
                                 }
                             }
                         }
@@ -844,6 +858,250 @@ impl CCOSEnvironment {
             .map_err(|_| RuntimeError::Generic("Failed to lock WorkingMemory".to_string()))?;
         crate::ccos::working_memory::ingestor::MemoryIngestor::replay_all(&mut *wm, &records)
             .map_err(|e| RuntimeError::Generic(format!("WM replay failed: {:?}", e)))
+    }
+
+    /// Resolve and bind an import statement to the current environment
+    fn resolve_and_bind_import(
+        &self,
+        evaluator: &mut std::sync::MutexGuard<Evaluator>,
+        import_def: &crate::ast::ImportDefinition,
+    ) -> RuntimeResult<()> {
+        let module_name = &import_def.module_name.0;
+        
+        if self.config.verbose {
+            println!("Resolving import: {}", module_name);
+        }
+
+        // Try to load the module using the ModuleRegistry
+        let module = match evaluator.module_registry().get_module(module_name) {
+            Some(module) => module,
+            None => {
+                // Module not loaded yet, try to load it from filesystem
+                if let Ok(loaded_module) = self.load_module_from_file(module_name, evaluator) {
+                    loaded_module
+                } else {
+                    return Err(RuntimeError::ModuleNotFound(format!(
+                        "Module '{}' not found in registry or filesystem.",
+                        module_name
+                    )));
+                }
+            }
+        };
+
+        // Get the module's exports
+        let exports = module.exports.read()
+            .map_err(|e| RuntimeError::InternalError(format!("Failed to read module exports: {}", e)))?;
+
+        // Handle different import options
+        match (&import_def.alias, &import_def.only) {
+            (Some(alias), None) => {
+                // Import with alias: (import [module :as alias])
+                // Create a namespace-like binding for the alias
+                let alias_name = &alias.0;
+                let module_value = crate::runtime::values::Value::Map(
+                    exports.iter()
+                        .map(|(name, export)| {
+                            (crate::ast::MapKey::Keyword(crate::ast::Keyword(name.clone())), export.value.clone())
+                        })
+                        .collect()
+                );
+                evaluator.env.define(&crate::ast::Symbol(alias_name.clone()), module_value);
+                
+                if self.config.verbose {
+                    println!("Imported module '{}' as '{}' with {} exports", module_name, alias_name, exports.len());
+                }
+            }
+            (None, Some(only_symbols)) => {
+                // Import specific symbols: (import [module :only [sym1 sym2]])
+                for symbol_ast in only_symbols {
+                    let symbol_name = &symbol_ast.0;
+                    if let Some(export) = exports.get(symbol_name) {
+                        evaluator.env.define(&crate::ast::Symbol(symbol_name.clone()), export.value.clone());
+                        if self.config.verbose {
+                            println!("Imported symbol '{}' from module '{}'", symbol_name, module_name);
+                        }
+                    } else {
+                        return Err(RuntimeError::SymbolNotFound(format!(
+                            "Symbol '{}' not found in module '{}'",
+                            symbol_name, module_name
+                        )));
+                    }
+                }
+            }
+            (None, None) => {
+                // Import all symbols, qualified by the full module name
+                for (export_name, export) in exports.iter() {
+                    let qualified_name = format!("{}/{}", module_name, export_name);
+                    evaluator.env.define(&crate::ast::Symbol(qualified_name.clone()), export.value.clone());
+                    if self.config.verbose {
+                        println!("Imported qualified symbol '{}' from module '{}'", qualified_name, module_name);
+                    }
+                }
+            }
+            (Some(_), Some(_)) => {
+                return Err(RuntimeError::ModuleError(
+                    "Invalid import specification: cannot combine :as with :only".to_string()
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load a module from a file
+    fn load_module_from_file(
+        &self,
+        module_name: &str,
+        evaluator: &mut std::sync::MutexGuard<Evaluator>,
+    ) -> RuntimeResult<Arc<crate::runtime::module_runtime::Module>> {
+        if self.config.verbose {
+            println!("Loading module '{}' from filesystem", module_name);
+        }
+
+        // Convert module name to file path
+        // For now, we'll look in a simple test_modules directory
+        let file_path = format!("test_modules/{}.rtfs", module_name);
+        
+        // Read the module file
+        let source_content = std::fs::read_to_string(&file_path)
+            .map_err(|e| RuntimeError::ModuleError(format!(
+                "Failed to read module file '{}': {}",
+                file_path, e
+            )))?;
+
+        if self.config.verbose {
+            println!("Read module source from '{}'", file_path);
+        }
+
+        // Parse the module source
+        let parsed = crate::parser::parse(&source_content)
+            .map_err(|e| RuntimeError::ModuleError(format!(
+                "Failed to parse module file '{}': {:?}",
+                file_path, e
+            )))?;
+
+        // Find the module definition
+        let module_def = parsed.into_iter()
+            .find_map(|top_level| {
+                if let crate::ast::TopLevel::Module(module_def) = top_level {
+                    Some(module_def)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| RuntimeError::ModuleError(format!(
+                "No module definition found in file '{}'",
+                file_path
+            )))?;
+
+        if self.config.verbose {
+            println!("Found module definition: {:?}", module_def.name);
+        }
+
+        // Create a simple module with the definitions
+        // For now, we'll create a basic module structure
+        // In a full implementation, this would use the ModuleRegistry's compilation logic
+        let mut module_env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
+        
+        // Execute the module definitions to populate the environment
+        for def in &module_def.definitions {
+            match def {
+                crate::ast::ModuleLevelDefinition::Def(def_expr) => {
+                    let expr = crate::ast::Expression::Def(Box::new(def_expr.clone()));
+                    let result = evaluator.evaluate(&expr)?;
+                    if let crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) = result {
+                        module_env.define(&def_expr.symbol, value);
+                    }
+                }
+                crate::ast::ModuleLevelDefinition::Defn(defn_expr) => {
+                    let expr = crate::ast::Expression::Defn(Box::new(defn_expr.clone()));
+                    let result = evaluator.evaluate(&expr)?;
+                    if let crate::runtime::execution_outcome::ExecutionOutcome::Complete(crate::runtime::values::Value::Function(_)) = result {
+                        // Manually define the function in the module environment
+                        let function = crate::runtime::values::Value::Function(crate::runtime::values::Function::new_closure(
+                            defn_expr.params.iter().map(|p| {
+                                match &p.pattern {
+                                    crate::ast::Pattern::Symbol(s) => s.clone(),
+                                    _ => panic!("Expected symbol pattern in defn parameter"),
+                                }
+                            }).collect(),
+                            defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+                            defn_expr.variadic_param.as_ref().map(|p| {
+                                match &p.pattern {
+                                    crate::ast::Pattern::Symbol(s) => s.clone(),
+                                    _ => panic!("Expected symbol pattern in defn variadic parameter"),
+                                }
+                            }),
+                            Box::new(crate::ast::Expression::Do(crate::ast::DoExpr {
+                                expressions: defn_expr.body.clone(),
+                            })),
+                            Arc::new(module_env.clone()),
+                            defn_expr.delegation_hint.clone(),
+                        ));
+                        module_env.define(&defn_expr.name, function);
+                    }
+                }
+                crate::ast::ModuleLevelDefinition::Import(_) => {
+                    // Skip imports for now - they would be resolved recursively
+                    if self.config.verbose {
+                        println!("Skipping import in module '{}'", module_name);
+                    }
+                }
+            }
+        }
+
+        // Create module exports from the environment
+        let mut exports = std::collections::HashMap::new();
+        for symbol_name in module_env.symbol_names() {
+            if let Some(value) = module_env.lookup(&crate::ast::Symbol(symbol_name.clone())) {
+                let export = crate::runtime::module_runtime::ModuleExport {
+                    original_name: symbol_name.clone(),
+                    export_name: symbol_name.clone(),
+                    value: value.clone(),
+                    ir_type: crate::ir::core::IrType::Any, // Simplified for now
+                    export_type: match value {
+                        crate::runtime::values::Value::Function(_) => crate::runtime::module_runtime::ExportType::Function,
+                        _ => crate::runtime::module_runtime::ExportType::Variable,
+                    },
+                };
+                exports.insert(symbol_name.clone(), export);
+            }
+        }
+
+        if self.config.verbose {
+            println!("Created module '{}' with {} exports: {:?}", 
+                module_name, exports.len(), exports.keys().collect::<Vec<_>>());
+        }
+
+        // Create the module
+        let module = crate::runtime::module_runtime::Module {
+            metadata: crate::runtime::module_runtime::ModuleMetadata {
+                name: module_name.to_string(),
+                docstring: Some(format!("Module loaded from {}", file_path)),
+                source_file: Some(file_path.into()),
+                version: None,
+                compiled_at: std::time::SystemTime::now(),
+            },
+            ir_node: crate::ir::core::IrNode::Module {
+                id: 0, // Simplified
+                name: module_name.to_string(),
+                exports: exports.keys().cloned().collect(),
+                definitions: vec![], // Simplified
+                source_location: None,
+            },
+            exports: std::sync::RwLock::new(exports),
+            namespace: Arc::new(std::sync::RwLock::new(crate::runtime::IrEnvironment::new())),
+            dependencies: vec![],
+        };
+
+        // Register the module in the registry
+        evaluator.module_registry().register_module(module.clone())
+            .map_err(|e| RuntimeError::ModuleError(format!(
+                "Failed to register module '{}': {:?}",
+                module_name, e
+            )))?;
+
+        Ok(Arc::new(module))
     }
 }
 

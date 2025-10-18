@@ -448,7 +448,13 @@ pub fn generate_planner_via_arbiter(
             "- The `:implementation` body MUST be valid RTFS using only RTFS special forms,\n",
             "  and MUST consume the collected context or declared parameters.\n",
             "- Start the response with `(capability` on the first line. No prose before or after.\n",
-            "- Optionally include `:expects` and `:needs_capabilities`.\n"
+            "- Optionally include `:expects` and `:needs_capabilities`.\n\n",
+            "## HTTP Capability Usage\n",
+            "- For HTTP requests, use: (call \\\"ccos.network.http-fetch\\\" ...)\n",
+            "- Map format: (call \\\"ccos.network.http-fetch\\\" {{:url \\\"https://...\\\" :method \\\"GET\\\" :headers {{...}} :body \\\"...\\\"}})\n",
+            "- List format: (call \\\"ccos.network.http-fetch\\\" :url \\\"https://...\\\" :method \\\"GET\\\" :headers {{...}} :body \\\"...\\\")\n",
+            "- Simple format: (call \\\"ccos.network.http-fetch\\\" \\\"https://...\\\")  ; for GET requests\n",
+            "- Response format: {{:status 200 :body \\\"...\\\" :headers {{...}}}}\n"
         ),
         domain = domain,
         collector = collector_rtfs,
