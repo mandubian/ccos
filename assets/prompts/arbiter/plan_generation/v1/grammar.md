@@ -55,6 +55,12 @@
 - **`:ccos.math.divide`** - Divide two numbers
   - Signature: `(call :ccos.math.divide num1 num2)`
 
+- **`"ccos.network.http-fetch"`** - Make HTTP requests
+  - Map format: `(call "ccos.network.http-fetch" {:url "https://..." :method "GET" :headers {...} :body "..."})`
+  - List format: `(call "ccos.network.http-fetch" :url "https://..." :method "GET" :headers {...} :body "...")`
+  - Simple format: `(call "ccos.network.http-fetch" "https://...")`  ; for GET requests
+  - Returns: `{:status 200 :body "..." :headers {...}}`
+
 ## Critical Rules
 
 ### Variable Scoping

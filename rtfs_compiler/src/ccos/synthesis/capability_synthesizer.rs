@@ -118,10 +118,17 @@ impl CapabilitySynthesizer {
         prompt.push_str("1. Use RTFS keyword types: :string, :number, :currency (NOT \"string\", \"number\")\n");
         prompt.push_str("2. NEVER hardcode credentials or API keys\n");
         prompt.push_str("3. NEVER make direct HTTP calls\n");
-        prompt.push_str("4. ALL network operations MUST use (call :http.* ...)\n");
+        prompt.push_str("4. ALL network operations MUST use (call \"ccos.network.http-fetch\" ...)\n");
         prompt.push_str("5. Auth tokens MUST use (call :ccos.auth.inject ...)\n");
         prompt.push_str("6. Function signature: (defn impl [... :string] :map)\n");
         prompt.push_str("7. Return format: {:status :success :result ...} or {:status :error :message ...}\n\n");
+        
+        prompt.push_str("CCOS HTTP CAPABILITY INTERFACE:\n");
+        prompt.push_str("- Capability ID: \"ccos.network.http-fetch\"\n");
+        prompt.push_str("- Map format: (call \"ccos.network.http-fetch\" {:url \"https://...\" :method \"GET\" :headers {...} :body \"...\"})\n");
+        prompt.push_str("- List format: (call \"ccos.network.http-fetch\" :url \"https://...\" :method \"GET\" :headers {...} :body \"...\")\n");
+        prompt.push_str("- Simple format: (call \"ccos.network.http-fetch\" \"https://...\")  ; for GET requests\n");
+        prompt.push_str("- Response format: {:status 200 :body \"...\" :headers {...}}\n\n");
 
         prompt.push_str("Input parameters schema: ");
         if let Some(schema) = &request.input_schema {

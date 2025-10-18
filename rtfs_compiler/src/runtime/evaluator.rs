@@ -132,6 +132,11 @@ impl Evaluator {
         &self.type_config
     }
 
+    /// Get the module registry
+    pub fn module_registry(&self) -> &Arc<ModuleRegistry> {
+        &self.module_registry
+    }
+
     /// Create evaluator with optimized type checking for production
     pub fn new_optimized(
         module_registry: Arc<ModuleRegistry>,

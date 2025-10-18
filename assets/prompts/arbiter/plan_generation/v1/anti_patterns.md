@@ -120,10 +120,19 @@ This plan will ask for their name...
 (call :ccos.math.add {:a 5 :b 3})  ; Should be positional: (call :ccos.math.add 5 3)
 ```
 
+❌ **Wrong HTTP capability**
+```lisp
+(call :http.request {:url "https://..."})  ; Wrong! Use "ccos.network.http-fetch"
+(call :http.get "https://...")  ; Wrong! Use "ccos.network.http-fetch"
+```
+
 ✅ **CORRECT** - Whitelisted with proper signature:
 ```lisp
 (call :ccos.echo {:message "hi"})
 (call :ccos.math.add 5 3)
+(call "ccos.network.http-fetch" {:url "https://api.example.com" :method "GET"})
+(call "ccos.network.http-fetch" :url "https://api.example.com" :method "POST" :body "data")
+(call "ccos.network.http-fetch" "https://api.example.com")  ; Simple GET
 ```
 
 ## Structure Violations

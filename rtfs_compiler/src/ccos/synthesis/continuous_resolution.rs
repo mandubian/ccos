@@ -662,10 +662,12 @@ mod tests {
     #[test]
     fn test_resolution_methods_priority() {
         let config = ResolutionConfig::default();
+        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
         let loop_instance = ContinuousResolutionLoop::new(
-            Arc::new(MissingCapabilityResolver::new(Arc::new(CapabilityMarketplace::new()), Arc::new(CheckpointArchive::new()))),
-            Arc::new(RegistrationFlow::new(Arc::new(CapabilityMarketplace::new()))),
-            Arc::new(CapabilityMarketplace::new()),
+            Arc::new(MissingCapabilityResolver::new(marketplace.clone(), Arc::new(CheckpointArchive::new()))),
+            Arc::new(RegistrationFlow::new(marketplace.clone())),
+            marketplace,
             config,
         );
 
