@@ -51,6 +51,7 @@ impl LocalProvider {
 
     /// Execute HTTP fetch with local implementation
     fn execute_http_fetch_local(&self, args: &[Value]) -> RuntimeResult<Value> {
+        eprintln!("LocalProvider::execute_http_fetch_local called (http_mocking_enabled={}, allow_hosts={:?}) args={:?}", self.http_mocking_enabled, self.http_allow_hosts, args);
         if self.http_mocking_enabled {
             let mut response_map = std::collections::HashMap::new();
             response_map.insert(MapKey::String("status".to_string()), Value::Integer(200));
@@ -525,7 +526,7 @@ impl CapabilityProvider for LocalProvider {
             }),
         };
 
-        // Route to appropriate capability implementation
+    // Route to appropriate capability implementation
         match capability_id {
             "ccos.system.get-env" => Self::get_env_capability(args),
             "ccos.system.current-time" => Self::current_time_capability(args),
@@ -542,7 +543,10 @@ impl CapabilityProvider for LocalProvider {
             "ccos.state.kv.cas-put" => Self::kv_cas_put_capability(args),
             "ccos.state.counter.inc" => Self::counter_inc_capability(args),
             "ccos.state.event.append" => Self::event_append_capability(args),
-            "ccos.network.http-fetch" => self.execute_http_fetch_local(&args),
+            "ccos.network.http-fetch" => {
+                eprintln!("LocalProvider::execute_capability handling ccos.network.http-fetch (http_mocking_enabled={})", self.http_mocking_enabled);
+                self.execute_http_fetch_local(&args)
+            },
             _ => Err(RuntimeError::Generic(format!(
                 "Capability '{}' not supported by LocalProvider",
                 capability_id
@@ -671,6 +675,12 @@ impl CapabilityRegistry {
 
     pub fn set_http_mocking_enabled(&mut self, enabled: bool) {
         self.http_mocking_enabled = enabled;
+        // If a local provider was already registered, replace it with a
+        // new instance so the provider receives the updated mocking flag.
+        if self.providers.contains_key("local") {
+            let new_local = LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
+            self.providers.insert("local".to_string(), Box::new(new_local));
+        }
     }
 
     pub fn set_http_allow_hosts(&mut self, hosts: Vec<String>) -> RuntimeResult<()> {
@@ -691,6 +701,11 @@ impl CapabilityRegistry {
         }
 
         self.http_allow_hosts = Some(normalized);
+        // If a local provider exists, replace it so it receives the updated allowlist
+        if self.providers.contains_key("local") {
+            let new_local = LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
+            self.providers.insert("local".to_string(), Box::new(new_local));
+        }
         Ok(())
     }
 
@@ -1034,6 +1049,7 @@ impl CapabilityRegistry {
         args: Vec<Value>,
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
+        eprintln!("CapabilityRegistry::execute_in_microvm called for {} with args={:?} http_mocking_enabled={}", capability_id, args, self.http_mocking_enabled);
         // For HTTP operations, return a mock response for testing
         if capability_id == "ccos.network.http-fetch" {
             if self.http_mocking_enabled {
@@ -1116,10 +1132,19 @@ impl CapabilityRegistry {
         args: Vec<Value>,
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
+        eprintln!("CapabilityRegistry::execute_capability_with_microvm called for {} args={:?}", capability_id, args);
         // Perform security validation if runtime context is provided
         if let Some(context) = runtime_context {
             use crate::runtime::security::SecurityAuthorizer;
             SecurityAuthorizer::authorize_capability(context, capability_id, &args)?;
+        }
+
+        // Special-case: route HTTP fetch through the microvm execution helper so
+        // that the registry's http_mocking_enabled and allowlist settings are
+        // honored. This ensures the REPL flag --http-real controls real network
+        // calls for synthetic capabilities.
+        if capability_id == "ccos.network.http-fetch" {
+            return self.execute_in_microvm(capability_id, args, runtime_context);
         }
 
         // Determine which provider to use based on execution policy
@@ -1195,6 +1220,14 @@ impl CapabilityRegistry {
                 | "ccos.io.print"
                 | "ccos.io.println"
                 | "ccos.network.http-fetch"  // Safe for testing with mock endpoints
+                // Local state operations are treated as safe in Hybrid mode for tests and
+                // development environments. In production these should be provided by
+                // marketplace-backed providers.
+                | "ccos.state.counter.inc"
+                | "ccos.state.kv.get"
+                | "ccos.state.kv.put"
+                | "ccos.state.kv.cas-put"
+                | "ccos.state.event.append"
         )
     }
 
