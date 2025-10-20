@@ -1,27 +1,27 @@
 use crate::runtime::error::RuntimeResult;
 
 pub mod artifact_generator;
-pub mod dependency_extractor;
-pub mod missing_capability_resolver;
-pub mod mcp_registry_client;
-pub mod preference_schema;
-pub mod schema_builder;
-pub mod skill_extractor;
-pub mod status;
-pub mod telemetry;
+pub mod auth_injector;
 pub mod capability_synthesizer;
-pub mod openapi_importer;
+pub mod continuous_resolution;
+pub mod dependency_extractor;
+pub mod feature_flags;
+pub mod governance_policies;
 pub mod graphql_importer;
 pub mod http_wrapper;
 pub mod mcp_proxy_adapter;
-pub mod auth_injector;
-pub mod web_search_discovery;
-pub mod validation_harness;
-pub mod governance_policies;
-pub mod static_analyzers;
+pub mod mcp_registry_client;
+pub mod missing_capability_resolver;
+pub mod openapi_importer;
+pub mod preference_schema;
 pub mod registration_flow;
-pub mod continuous_resolution;
-pub mod feature_flags;
+pub mod schema_builder;
+pub mod skill_extractor;
+pub mod static_analyzers;
+pub mod status;
+pub mod telemetry;
+pub mod validation_harness;
+pub mod web_search_discovery;
 
 // Integration tests live in a sibling file to keep the main module tidy.
 #[cfg(test)]
@@ -135,23 +135,40 @@ pub fn synthesize_capabilities_with_marketplace(
                 &dep_result.dependencies,
                 marketplace_snapshot,
             );
-            
+
             // Add dependency metadata
-            dependency_metadata.insert("dependencies.total".to_string(), dep_result.dependencies.len().to_string());
-            dependency_metadata.insert("dependencies.resolved".to_string(), resolved.len().to_string());
-            dependency_metadata.insert("dependencies.missing".to_string(), missing.len().to_string());
-            
+            dependency_metadata.insert(
+                "dependencies.total".to_string(),
+                dep_result.dependencies.len().to_string(),
+            );
+            dependency_metadata.insert(
+                "dependencies.resolved".to_string(),
+                resolved.len().to_string(),
+            );
+            dependency_metadata.insert(
+                "dependencies.missing".to_string(),
+                missing.len().to_string(),
+            );
+
             if !missing.is_empty() {
                 let missing_list: Vec<String> = missing.iter().cloned().collect();
-                dependency_metadata.insert("needs_capabilities".to_string(), missing_list.join(","));
-                
+                dependency_metadata
+                    .insert("needs_capabilities".to_string(), missing_list.join(","));
+
                 // Add missing capabilities to pending list for deferred execution
                 pending_capabilities.extend(missing.clone());
-                
+
                 // Create audit event data for missing dependencies
-                let audit_data = dependency_extractor::create_audit_event_data("synth.domain.planner.v1", &missing);
-                eprintln!("AUDIT: capability_deps_missing - {}", 
-                    audit_data.get("missing_capabilities").unwrap_or(&"none".to_string()));
+                let audit_data = dependency_extractor::create_audit_event_data(
+                    "synth.domain.planner.v1",
+                    &missing,
+                );
+                eprintln!(
+                    "AUDIT: capability_deps_missing - {}",
+                    audit_data
+                        .get("missing_capabilities")
+                        .unwrap_or(&"none".to_string())
+                );
             }
         }
     }

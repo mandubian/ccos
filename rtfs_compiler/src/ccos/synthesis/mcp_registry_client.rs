@@ -126,37 +126,43 @@ impl McpRegistryClient {
     /// Search for MCP servers by capability name or description
     pub async fn search_servers(&self, query: &str) -> RuntimeResult<Vec<McpServer>> {
         let url = format!("{}/v0.1/servers", self.base_url);
-        
+
         let params = [
             ("search", query),
             ("limit", "50"), // Reasonable limit for discovery
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .query(&params)
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-                format!("Failed to search MCP servers: {}", e)
-            ))?;
+            .map_err(|e| {
+                crate::runtime::error::RuntimeError::Generic(format!(
+                    "Failed to search MCP servers: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("MCP Registry API error: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "MCP Registry API error: {}",
+                response.status()
+            )));
         }
 
-        let search_response: RegistrySearchResponse = response
-            .json()
-            .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-                format!("Failed to parse MCP Registry response: {}", e)
-            ))?;
+        let search_response: RegistrySearchResponse = response.json().await.map_err(|e| {
+            crate::runtime::error::RuntimeError::Generic(format!(
+                "Failed to parse MCP Registry response: {}",
+                e
+            ))
+        })?;
 
         // Extract servers from registry entries
-        let servers: Vec<McpServer> = search_response.servers
+        let servers: Vec<McpServer> = search_response
+            .servers
             .into_iter()
             .map(|entry| entry.server)
             .collect();
@@ -166,36 +172,42 @@ impl McpRegistryClient {
     /// Get all available servers from the registry
     pub async fn list_all_servers(&self) -> RuntimeResult<Vec<McpServer>> {
         let url = format!("{}/v0.1/servers", self.base_url);
-        
+
         let params = [
             ("limit", "100"), // Get a reasonable number of servers
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .query(&params)
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-                format!("Failed to list MCP servers: {}", e)
-            ))?;
+            .map_err(|e| {
+                crate::runtime::error::RuntimeError::Generic(format!(
+                    "Failed to list MCP servers: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("MCP Registry API error: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "MCP Registry API error: {}",
+                response.status()
+            )));
         }
 
-        let search_response: RegistrySearchResponse = response
-            .json()
-            .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-                format!("Failed to parse MCP Registry response: {}", e)
-            ))?;
+        let search_response: RegistrySearchResponse = response.json().await.map_err(|e| {
+            crate::runtime::error::RuntimeError::Generic(format!(
+                "Failed to parse MCP Registry response: {}",
+                e
+            ))
+        })?;
 
         // Extract servers from registry entries
-        let servers: Vec<McpServer> = search_response.servers
+        let servers: Vec<McpServer> = search_response
+            .servers
             .into_iter()
             .map(|entry| entry.server)
             .collect();
@@ -206,46 +218,49 @@ impl McpRegistryClient {
     pub async fn get_server(&self, server_id: &str) -> RuntimeResult<Option<McpServer>> {
         let url = format!("{}/v0.1/servers/{}", self.base_url, server_id);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-                format!("Failed to get MCP server: {}", e)
-            ))?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            crate::runtime::error::RuntimeError::Generic(format!("Failed to get MCP server: {}", e))
+        })?;
 
         if response.status() == 404 {
             return Ok(None);
         }
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("MCP Registry API error: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "MCP Registry API error: {}",
+                response.status()
+            )));
         }
 
-        let server: McpServer = response
-            .json()
-            .await
-            .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-                format!("Failed to parse MCP server: {}", e)
-            ))?;
+        let server: McpServer = response.json().await.map_err(|e| {
+            crate::runtime::error::RuntimeError::Generic(format!(
+                "Failed to parse MCP server: {}",
+                e
+            ))
+        })?;
 
         Ok(Some(server))
     }
 
     /// Find servers that provide a specific capability
-    pub async fn find_capability_providers(&self, capability_name: &str) -> RuntimeResult<Vec<McpServer>> {
+    pub async fn find_capability_providers(
+        &self,
+        capability_name: &str,
+    ) -> RuntimeResult<Vec<McpServer>> {
         // Search for servers by capability name
         let servers = self.search_servers(capability_name).await?;
-        
+
         // Filter servers based on name and description matching
         let matching_servers: Vec<McpServer> = servers
             .into_iter()
             .filter(|server| {
                 let capability_lower = capability_name.to_lowercase();
-                server.name.to_lowercase().contains(&capability_lower) ||
-                server.description.to_lowercase().contains(&capability_lower)
+                server.name.to_lowercase().contains(&capability_lower)
+                    || server
+                        .description
+                        .to_lowercase()
+                        .contains(&capability_lower)
             })
             .collect();
 
@@ -270,26 +285,35 @@ impl McpRegistryClient {
         let mut metadata = HashMap::new();
         metadata.insert("mcp_server_name".to_string(), server.name.clone());
         metadata.insert("mcp_server_version".to_string(), server.version.clone());
-        
+
         if let Some(ref repo) = server.repository {
             metadata.insert("mcp_repository_url".to_string(), repo.url.clone());
             metadata.insert("mcp_repository_source".to_string(), repo.source.clone());
         }
-        
+
         // Add package information if available
         if let Some(ref packages) = server.packages {
             for (i, package) in packages.iter().enumerate() {
-                metadata.insert(format!("mcp_package_{}_type", i), package.registry_type.clone());
-                metadata.insert(format!("mcp_package_{}_identifier", i), package.identifier.clone());
+                metadata.insert(
+                    format!("mcp_package_{}_type", i),
+                    package.registry_type.clone(),
+                );
+                metadata.insert(
+                    format!("mcp_package_{}_identifier", i),
+                    package.identifier.clone(),
+                );
                 if let Some(ref version) = package.version {
                     metadata.insert(format!("mcp_package_{}_version", i), version.clone());
                 }
                 if let Some(ref runtime_hint) = package.runtime_hint {
-                    metadata.insert(format!("mcp_package_{}_runtime_hint", i), runtime_hint.clone());
+                    metadata.insert(
+                        format!("mcp_package_{}_runtime_hint", i),
+                        runtime_hint.clone(),
+                    );
                 }
             }
         }
-        
+
         // Add remote information if available
         if let Some(ref remotes) = server.remotes {
             for (i, remote) in remotes.iter().enumerate() {
@@ -313,14 +337,19 @@ impl McpRegistryClient {
         let manifest = CapabilityManifest {
             id: format!("mcp.{}.{}", server.name.replace("/", "."), capability_name),
             name: format!("{} (via {})", capability_name, server.name),
-            description: format!("{} - Provided by MCP server: {}", server.description, server.name),
+            description: format!(
+                "{} - Provided by MCP server: {}",
+                server.description, server.name
+            ),
             version: server.version.clone(),
-            provider: ProviderType::MCP(crate::ccos::capability_marketplace::types::MCPCapability {
-                server_url,
-                tool_name: capability_name.to_string(),
-                timeout_ms: 30000, // 30 second timeout
-            }),
-            input_schema: None, // MCP Registry doesn't provide schema information
+            provider: ProviderType::MCP(
+                crate::ccos::capability_marketplace::types::MCPCapability {
+                    server_url,
+                    tool_name: capability_name.to_string(),
+                    timeout_ms: 30000, // 30 second timeout
+                },
+            ),
+            input_schema: None,  // MCP Registry doesn't provide schema information
             output_schema: None, // MCP Registry doesn't provide schema information
             attestation: None,
             provenance: Some(CapabilityProvenance {
@@ -380,8 +409,10 @@ mod tests {
             packages: None,
             remotes: None,
         };
-        
-        let manifest = client.convert_to_capability_manifest(&server, "test_capability").unwrap();
+
+        let manifest = client
+            .convert_to_capability_manifest(&server, "test_capability")
+            .unwrap();
         assert_eq!(manifest.id, "mcp.test.server.test_capability");
         assert_eq!(manifest.name, "test_capability (via test/server)");
         assert_eq!(manifest.version, "1.0.0");

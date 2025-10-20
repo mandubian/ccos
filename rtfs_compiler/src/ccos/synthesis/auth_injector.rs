@@ -121,7 +121,7 @@ impl AuthInjector {
         token_param_name: &str,
     ) -> RuntimeResult<Expression> {
         // Generate RTFS: (call :ccos.auth.inject {:provider "github" :type :bearer :token token_param})
-        let mut call_args = vec![
+        let call_args = vec![
             (
                 crate::ast::MapKey::Keyword(Keyword("provider".to_string())),
                 Expression::Literal(Literal::String(provider.to_string())),
@@ -266,14 +266,8 @@ impl AuthInjector {
         mut metadata: HashMap<String, String>,
         providers: &[String],
     ) -> HashMap<String, String> {
-        metadata.insert(
-            "auth_required".to_string(),
-            "true".to_string(),
-        );
-        metadata.insert(
-            "auth_providers".to_string(),
-            providers.join(","),
-        );
+        metadata.insert("auth_required".to_string(), "true".to_string());
+        metadata.insert("auth_providers".to_string(), providers.join(","));
         metadata
     }
 

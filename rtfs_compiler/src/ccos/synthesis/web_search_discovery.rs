@@ -1,8 +1,8 @@
 use crate::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use std::collections::HashMap;
 
 /// Web search result for API discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ impl RateLimiter {
 
     async fn wait_if_needed(&mut self) {
         let now = Instant::now();
-        
+
         // Reset counter if window has passed
         if now.duration_since(self.window_start) >= Duration::from_secs(60) {
             self.request_count = 0;
@@ -106,7 +106,7 @@ impl WebSearchDiscovery {
     /// Create a new web search discovery provider
     pub fn new(provider: String) -> Self {
         let mut api_keys = HashMap::new();
-        
+
         // Load API keys from environment variables
         if let Ok(google_key) = std::env::var("GOOGLE_SEARCH_API_KEY") {
             api_keys.insert("google".to_string(), google_key);
@@ -146,14 +146,20 @@ impl WebSearchDiscovery {
     }
 
     /// Search for API specs and documentation
-    pub async fn search_for_api_specs(&mut self, capability_name: &str) -> RuntimeResult<Vec<WebSearchResult>> {
+    pub async fn search_for_api_specs(
+        &mut self,
+        capability_name: &str,
+    ) -> RuntimeResult<Vec<WebSearchResult>> {
         if self.mock_mode {
             return self.get_mock_results(capability_name);
         }
 
         // Build search queries for different API discovery targets
         let queries = vec![
-            format!("{} OpenAPI spec site:github.com OR site:openapis.org", capability_name),
+            format!(
+                "{} OpenAPI spec site:github.com OR site:openapis.org",
+                capability_name
+            ),
             format!("{} GraphQL schema site:github.com", capability_name),
             format!("{} API documentation", capability_name),
             format!("{} REST API docs", capability_name),
@@ -173,7 +179,11 @@ impl WebSearchDiscovery {
         // Deduplicate and sort by relevance
         all_results.sort();
         all_results.dedup();
-        all_results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+        all_results.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(all_results.into_iter().take(10).collect())
     }
@@ -232,8 +242,10 @@ impl WebSearchDiscovery {
         self.rate_limiter.wait_if_needed().await;
 
         let client = reqwest::Client::new();
-        let url = format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1", 
-                         urlencoding::encode(query));
+        let url = format!(
+            "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
+            urlencoding::encode(query)
+        );
 
         let response = client
             .get(&url)
@@ -244,9 +256,10 @@ impl WebSearchDiscovery {
             .map_err(Self::handle_reqwest_error)?;
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("DuckDuckGo API returned status: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "DuckDuckGo API returned status: {}",
+                response.status()
+            )));
         }
 
         let json: serde_json::Value = response.json().await.map_err(Self::handle_reqwest_error)?;
@@ -256,11 +269,13 @@ impl WebSearchDiscovery {
         if let Some(abstract_text) = json.get("AbstractText").and_then(|v| v.as_str()) {
             if !abstract_text.is_empty() {
                 results.push(WebSearchResult {
-                    url: json.get("AbstractURL")
+                    url: json
+                        .get("AbstractURL")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    title: json.get("Heading")
+                    title: json
+                        .get("Heading")
                         .and_then(|v| v.as_str())
                         .unwrap_or("DuckDuckGo Result")
                         .to_string(),
@@ -298,7 +313,7 @@ impl WebSearchDiscovery {
 
         if api_key.is_none() || cx.is_none() {
             return Err(crate::runtime::error::RuntimeError::Generic(
-                "Google API key or CX not configured".to_string()
+                "Google API key or CX not configured".to_string(),
             ));
         }
 
@@ -321,9 +336,10 @@ impl WebSearchDiscovery {
             .map_err(Self::handle_reqwest_error)?;
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("Google API returned status: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "Google API returned status: {}",
+                response.status()
+            )));
         }
 
         let json: serde_json::Value = response.json().await.map_err(Self::handle_reqwest_error)?;
@@ -372,7 +388,7 @@ impl WebSearchDiscovery {
 
         if api_key.is_none() {
             return Err(crate::runtime::error::RuntimeError::Generic(
-                "Bing API key not configured".to_string()
+                "Bing API key not configured".to_string(),
             ));
         }
 
@@ -394,15 +410,20 @@ impl WebSearchDiscovery {
             .map_err(Self::handle_reqwest_error)?;
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("Bing API returned status: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "Bing API returned status: {}",
+                response.status()
+            )));
         }
 
         let json: serde_json::Value = response.json().await.map_err(Self::handle_reqwest_error)?;
         let mut results = Vec::new();
 
-        if let Some(web_pages) = json.get("webPages").and_then(|v| v.get("value")).and_then(|v| v.as_array()) {
+        if let Some(web_pages) = json
+            .get("webPages")
+            .and_then(|v| v.get("value"))
+            .and_then(|v| v.as_array())
+        {
             for page in web_pages {
                 if let (Some(name), Some(url), Some(snippet)) = (
                     page.get("name").and_then(|v| v.as_str()),
@@ -450,9 +471,16 @@ impl WebSearchDiscovery {
         ];
 
         for (base_url, engine_name) in search_engines {
-            match self.scrape_search_engine(&format!("{}{}", base_url, urlencoding::encode(query))).await {
-                Ok(mut results) if !results.is_empty() => {
-                    eprintln!("✅ Scraping {} found {} results", engine_name, results.len());
+            match self
+                .scrape_search_engine(&format!("{}{}", base_url, urlencoding::encode(query)))
+                .await
+            {
+                Ok(results) if !results.is_empty() => {
+                    eprintln!(
+                        "✅ Scraping {} found {} results",
+                        engine_name,
+                        results.len()
+                    );
                     return Ok(results);
                 }
                 Ok(_) => {
@@ -475,12 +503,17 @@ impl WebSearchDiscovery {
             .build()
             .map_err(Self::handle_reqwest_error)?;
 
-        let response = client.get(url).send().await.map_err(Self::handle_reqwest_error)?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(Self::handle_reqwest_error)?;
 
         if !response.status().is_success() {
-            return Err(crate::runtime::error::RuntimeError::Generic(
-                format!("Scraping failed with status: {}", response.status())
-            ));
+            return Err(crate::runtime::error::RuntimeError::Generic(format!(
+                "Scraping failed with status: {}",
+                response.status()
+            )));
         }
 
         let html = response.text().await.map_err(Self::handle_reqwest_error)?;
@@ -489,7 +522,7 @@ impl WebSearchDiscovery {
         // Simple HTML parsing for search results
         // This is a basic implementation - in production you'd want a proper HTML parser
         let lines: Vec<&str> = html.lines().collect();
-        
+
         for (i, line) in lines.iter().enumerate() {
             if line.contains("href=\"http") && line.contains("class=\"result") {
                 // Extract URL and title from search result
@@ -497,15 +530,18 @@ impl WebSearchDiscovery {
                     let url_part = &line[url_start + 6..];
                     if let Some(url_end) = url_part.find("\"") {
                         let result_url = &url_part[..url_end];
-                        
+
                         // Look for title in nearby lines
-                        let title = lines.get(i + 1)
+                        let title = lines
+                            .get(i + 1)
                             .or_else(|| lines.get(i + 2))
                             .unwrap_or(&"Search Result")
                             .trim();
 
                         if !result_url.is_empty() && !title.is_empty() {
-                            let result_type = if result_url.contains("openapi") || result_url.contains("swagger") {
+                            let result_type = if result_url.contains("openapi")
+                                || result_url.contains("swagger")
+                            {
                                 "openapi_spec"
                             } else if result_url.contains("github.com") {
                                 "github_repo"
@@ -581,14 +617,17 @@ impl WebSearchDiscovery {
                 WebSearchResult {
                     url: "https://github.com/octocat/Hello-World".to_string(),
                     title: "GitHub API v3 OpenAPI Specification".to_string(),
-                    snippet: "The official GitHub API specification in OpenAPI 3.0 format".to_string(),
+                    snippet: "The official GitHub API specification in OpenAPI 3.0 format"
+                        .to_string(),
                     relevance_score: 0.95,
                     result_type: "openapi_spec".to_string(),
                 },
                 WebSearchResult {
                     url: "https://docs.github.com/en/rest".to_string(),
                     title: "GitHub REST API Documentation".to_string(),
-                    snippet: "Complete reference for GitHub's REST API endpoints and authentication".to_string(),
+                    snippet:
+                        "Complete reference for GitHub's REST API endpoints and authentication"
+                            .to_string(),
                     relevance_score: 0.90,
                     result_type: "api_docs".to_string(),
                 },
@@ -666,12 +705,7 @@ impl WebSearchDiscovery {
                 _ => "",
             };
 
-            output.push_str(&format!(
-                "  {}. {} {}\n",
-                i + 1,
-                result.url,
-                stars
-            ));
+            output.push_str(&format!("  {}. {} {}\n", i + 1, result.url, stars));
             output.push_str(&format!("     Type: {}\n", result.result_type));
             output.push_str(&format!("     {}\n", result.snippet));
         }
@@ -711,15 +745,13 @@ mod tests {
 
     #[test]
     fn test_format_results_for_display() {
-        let results = vec![
-            WebSearchResult {
-                url: "https://github.com/example/openapi".to_string(),
-                title: "Example API Spec".to_string(),
-                snippet: "An example API specification".to_string(),
-                relevance_score: 0.95,
-                result_type: "openapi_spec".to_string(),
-            },
-        ];
+        let results = vec![WebSearchResult {
+            url: "https://github.com/example/openapi".to_string(),
+            title: "Example API Spec".to_string(),
+            snippet: "An example API specification".to_string(),
+            relevance_score: 0.95,
+            result_type: "openapi_spec".to_string(),
+        }];
 
         let formatted = WebSearchDiscovery::format_results_for_display(&results);
         assert!(formatted.contains("github.com"));

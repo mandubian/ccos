@@ -1,5 +1,5 @@
-use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use crate::ccos::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPTool};
+use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use crate::ccos::synthesis::auth_injector::AuthInjector;
 use crate::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
@@ -144,7 +144,7 @@ impl MCPProxyAdapter {
         metadata.insert("mcp_server_url".to_string(), self.config.server_url.clone());
         metadata.insert("mcp_tool_name".to_string(), proxy.tool.name.clone());
         metadata.insert("proxy_type".to_string(), "mcp_proxy".to_string());
-        
+
         if proxy.requires_auth {
             metadata.insert("auth_required".to_string(), "true".to_string());
             metadata.insert("auth_providers".to_string(), "mcp".to_string());
@@ -183,7 +183,10 @@ impl MCPProxyAdapter {
                 crate::ccos::capability_marketplace::types::CapabilityProvenance {
                     source: "mcp_proxy_adapter".to_string(),
                     version: Some("1.0.0".to_string()),
-                    content_hash: format!("mcp_proxy_{}_{}", self.config.server_name, proxy.tool.name),
+                    content_hash: format!(
+                        "mcp_proxy_{}_{}",
+                        self.config.server_name, proxy.tool.name
+                    ),
                     custody_chain: vec!["mcp_proxy_adapter".to_string()],
                     registered_at: chrono::Utc::now(),
                 },
@@ -206,7 +209,8 @@ impl MCPProxyAdapter {
                         return bool_val;
                     }
                     if let Some(str_val) = value.as_str() {
-                        if str_val.to_lowercase() == "true" || str_val.to_lowercase() == "required" {
+                        if str_val.to_lowercase() == "true" || str_val.to_lowercase() == "required"
+                        {
                             return true;
                         }
                     }
@@ -226,15 +230,20 @@ impl MCPProxyAdapter {
         // Heuristic: check tool name for auth-related keywords
         let name_lower = tool.name.to_lowercase();
         let auth_keywords = [
-            "user", "profile", "account", "settings", "create", "update", "delete",
-            "admin", "private", "secret", "write", "modify",
+            "user", "profile", "account", "settings", "create", "update", "delete", "admin",
+            "private", "secret", "write", "modify",
         ];
 
-        auth_keywords.iter().any(|keyword| name_lower.contains(keyword))
+        auth_keywords
+            .iter()
+            .any(|keyword| name_lower.contains(keyword))
     }
 
     /// Extract parameters from MCP tool input schema
-    fn extract_parameters_from_schema(&self, schema: &serde_json::Value) -> HashMap<String, String> {
+    fn extract_parameters_from_schema(
+        &self,
+        schema: &serde_json::Value,
+    ) -> HashMap<String, String> {
         let mut parameters = HashMap::new();
 
         if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
@@ -317,9 +326,10 @@ impl MCPProxyAdapter {
                         "echo": {"type": "string"}
                     }
                 })),
-                metadata: Some(HashMap::from([
-                    ("category".to_string(), serde_json::Value::String("utility".to_string())),
-                ])),
+                metadata: Some(HashMap::from([(
+                    "category".to_string(),
+                    serde_json::Value::String("utility".to_string()),
+                )])),
                 annotations: None,
             },
             MCPTool {
@@ -341,11 +351,15 @@ impl MCPProxyAdapter {
                 })),
                 metadata: Some(HashMap::from([
                     ("requires_auth".to_string(), serde_json::Value::Bool(true)),
-                    ("category".to_string(), serde_json::Value::String("user_management".to_string())),
+                    (
+                        "category".to_string(),
+                        serde_json::Value::String("user_management".to_string()),
+                    ),
                 ])),
-                annotations: Some(HashMap::from([
-                    ("auth".to_string(), serde_json::Value::String("required".to_string())),
-                ])),
+                annotations: Some(HashMap::from([(
+                    "auth".to_string(),
+                    serde_json::Value::String("required".to_string()),
+                )])),
             },
         ]
     }
@@ -388,9 +402,10 @@ mod tests {
             description: Some("Create user".to_string()),
             input_schema: None,
             output_schema: None,
-            metadata: Some(HashMap::from([
-                ("requires_auth".to_string(), serde_json::Value::Bool(true)),
-            ])),
+            metadata: Some(HashMap::from([(
+                "requires_auth".to_string(),
+                serde_json::Value::Bool(true),
+            )])),
             annotations: None,
         };
         assert!(adapter.detect_auth_requirement(&tool_with_auth));
