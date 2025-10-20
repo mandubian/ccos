@@ -749,6 +749,96 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::some_with_context),
             })),
         );
+
+        // Take function
+        env.define(
+            &Symbol("take".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "take".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::take),
+            })),
+        );
+
+        // Keys function
+        env.define(
+            &Symbol("keys".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "keys".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::keys),
+            })),
+        );
+
+        // Vals function
+        env.define(
+            &Symbol("vals".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "vals".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::vals),
+            })),
+        );
+
+        // Map-indexed function
+        env.define(
+            &Symbol("map-indexed".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "map-indexed".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::map_indexed_with_context),
+            })),
+        );
+
+        // Remove function
+        env.define(
+            &Symbol("remove".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "remove".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::remove_with_context),
+            })),
+        );
+
+        // Update function
+        env.define(
+            &Symbol("update".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "update".to_string(),
+                arity: Arity::Variadic(3),
+                func: Arc::new(Self::update_with_context),
+            })),
+        );
+
+        // GetMessage function
+        env.define(
+            &Symbol("getMessage".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "getMessage".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::get_message),
+            })),
+        );
+
+        // Exception constructor
+        env.define(
+            &Symbol("Exception.".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "Exception.".to_string(),
+                arity: Arity::Variadic(1),
+                func: Arc::new(Self::exception_constructor),
+            })),
+        );
+
+        // Numbers function
+        env.define(
+            &Symbol("numbers".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "numbers".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::numbers),
+            })),
+        );
     }
 
     pub(crate) fn load_type_predicate_functions(env: &mut Environment) {
@@ -2973,7 +3063,7 @@ impl SecureStandardLibrary {
     fn every_with_context(
         args: Vec<Value>,
         evaluator: &Evaluator,
-        env: &mut Environment,
+        _env: &mut Environment,
     ) -> RuntimeResult<Value> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
@@ -3075,7 +3165,7 @@ impl SecureStandardLibrary {
     fn some_with_context(
         args: Vec<Value>,
         evaluator: &Evaluator,
-        env: &mut Environment,
+        _env: &mut Environment,
     ) -> RuntimeResult<Value> {
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
@@ -3306,5 +3396,374 @@ impl SecureStandardLibrary {
             }
         }
         Ok(Value::Map(out))
+    }
+
+    // Additional secure functions implementations
+
+    fn keys(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "keys".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Map(map) => {
+                let mut out: Vec<Value> = Vec::new();
+                for key in map.keys() {
+                    let v = match key {
+                        MapKey::String(s) => Value::String(s.clone()),
+                        MapKey::Keyword(k) => Value::Keyword(k.clone()),
+                        MapKey::Integer(i) => Value::Integer(*i),
+                    };
+                    out.push(v);
+                }
+                Ok(Value::Vector(out))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "keys".to_string(),
+            }),
+        }
+    }
+
+    fn vals(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "vals".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Map(map) => {
+                let mut res = Vec::new();
+                for (_k, v) in map.iter() {
+                    res.push(v.clone());
+                }
+                Ok(Value::Vector(res))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "vals".to_string(),
+            }),
+        }
+    }
+
+    fn map_indexed_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "map-indexed".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let function = &args[0];
+        let collection = &args[1];
+
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "map-indexed".to_string(),
+                })
+            }
+        };
+
+        let mut result = Vec::new();
+        for (index, item) in collection_vec.iter().enumerate() {
+            let index_value = Value::Integer(index as i64);
+            let func_args = vec![index_value, item.clone()];
+            
+            let mapped_value = match function {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    (builtin_func.func)(func_args)?
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    (builtin_func.func)(func_args, evaluator, env)?
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], Value::Integer(index as i64));
+                    func_env.define(&closure.params[1], item.clone());
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(
+                                "Host call required in map-indexed closure".into(),
+                            ))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in map-indexed closure".to_string(),
+                            ))
+                        }
+                    }
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: function.type_name().to_string(),
+                        operation: "map-indexed".to_string(),
+                    });
+                }
+            };
+            result.push(mapped_value);
+        }
+        Ok(Value::Vector(result))
+    }
+
+    fn remove_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "remove".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let pred = &args[0];
+        let collection = &args[1];
+
+        let elements = match collection {
+            Value::Vector(vec) => vec.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::List(list) => list.clone(),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector, string, or list".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "remove".to_string(),
+                })
+            }
+        };
+
+        let mut result = Vec::new();
+        for item in elements {
+            let should_remove = match pred {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    let v = (builtin_func.func)(func_args, evaluator, env)?;
+                    v.is_truthy()
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], item.clone());
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => v.is_truthy(),
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(
+                                "Host call required in remove closure".into(),
+                            ))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in remove closure".to_string(),
+                            ))
+                        }
+                    }
+                }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function".to_string(),
+                        actual: pred.type_name().to_string(),
+                        operation: "remove".to_string(),
+                    });
+                }
+            };
+
+            if !should_remove {
+                result.push(item);
+            }
+        }
+
+        match collection {
+            Value::Vector(_) => Ok(Value::Vector(result)),
+            Value::String(_) => {
+                let string_result: String = result
+                    .into_iter()
+                    .filter_map(|v| match v {
+                        Value::String(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect();
+                Ok(Value::String(string_result))
+            }
+            Value::List(_) => Ok(Value::List(result)),
+            _ => unreachable!(),
+        }
+    }
+
+    fn update_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 3 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "update".to_string(),
+                expected: "at least 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let map_val = &args[0];
+        let key_val = &args[1];
+        let f_val = &args[2];
+        let extra_args: Vec<Value> = if args.len() > 3 {
+            args[3..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        match map_val {
+            Value::Map(map) => {
+                let map_key = Self::value_to_map_key(key_val)?;
+                let current_value = map.get(&map_key).cloned().unwrap_or(Value::Nil);
+
+                let mut func_args = vec![current_value.clone()];
+                func_args.extend(extra_args.clone());
+
+                let new_value = match f_val {
+                    Value::Function(Function::Builtin(builtin_func)) => {
+                        (builtin_func.func)(func_args)?
+                    }
+                    Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                        (builtin_func.func)(func_args, evaluator, env)?
+                    }
+                    Value::Function(Function::Closure(closure)) => {
+                        let mut func_env = Environment::with_parent(closure.env.clone());
+                        func_env.define(&closure.params[0], current_value);
+                        for (i, arg) in extra_args.iter().enumerate() {
+                            if i + 1 < closure.params.len() {
+                                func_env.define(&closure.params[i + 1], arg.clone());
+                            }
+                        }
+                        match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                            ExecutionOutcome::Complete(v) => v,
+                            ExecutionOutcome::RequiresHost(_hc) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host call required in update closure".into(),
+                                ))
+                            }
+                            #[cfg(feature = "effect-boundary")]
+                            ExecutionOutcome::RequiresHost(_) => {
+                                return Err(RuntimeError::Generic(
+                                    "Host effect required in update closure".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "function".to_string(),
+                            actual: f_val.type_name().to_string(),
+                            operation: "update".to_string(),
+                        });
+                    }
+                };
+
+                let mut new_map = map.clone();
+                new_map.insert(map_key, new_value);
+                Ok(Value::Map(new_map))
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: map_val.type_name().to_string(),
+                operation: "update".to_string(),
+            }),
+        }
+    }
+
+    fn get_message(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "getMessage".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        match &args[0] {
+            Value::Error(err) => Ok(Value::String(err.message.clone())),
+            other => Err(RuntimeError::TypeError {
+                expected: "error".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "getMessage".to_string(),
+            }),
+        }
+    }
+
+    fn exception_constructor(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.is_empty() {
+            return Err(RuntimeError::ArityMismatch {
+                function: "Exception.".to_string(),
+                expected: "1+".to_string(),
+                actual: args.len(),
+            });
+        }
+        let msg = match &args[0] {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        Ok(Value::Error(crate::runtime::values::ErrorValue {
+            message: msg,
+            stack_trace: None,
+        }))
+    }
+
+    fn numbers(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "numbers".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let start = args[0].as_number().ok_or_else(|| RuntimeError::TypeError {
+            expected: "number".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "numbers".to_string(),
+        })?;
+        let end = args[1].as_number().ok_or_else(|| RuntimeError::TypeError {
+            expected: "number".to_string(),
+            actual: args[1].type_name().to_string(),
+            operation: "numbers".to_string(),
+        })?;
+
+        let start_int = start as i64;
+        let end_int = end as i64;
+
+        if end_int < start_int {
+            return Ok(Value::Vector(vec![]));
+        }
+
+        let numbers: Vec<Value> = (start_int..=end_int)
+            .map(Value::Integer)
+            .collect();
+
+        Ok(Value::Vector(numbers))
     }
 }
