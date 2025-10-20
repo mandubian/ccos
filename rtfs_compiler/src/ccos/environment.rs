@@ -79,6 +79,12 @@ pub struct CCOSConfig {
     /// Optional WM budgets
     pub wm_max_entries: Option<usize>,
     pub wm_max_tokens: Option<usize>,
+    /// Preferred microVM provider for sandboxed capabilities
+    pub microvm_provider: Option<String>,
+    /// Toggle between mock and real HTTP execution
+    pub http_mocking_enabled: bool,
+    /// Optional allowlist for outbound HTTP hosts
+    pub http_allow_hosts: Option<Vec<String>>,
 }
 
 impl Default for CCOSConfig {
@@ -98,6 +104,9 @@ impl Default for CCOSConfig {
             enable_wm_ingestor: true,
             wm_max_entries: Some(2000),
             wm_max_tokens: Some(200_000),
+            microvm_provider: None,
+            http_mocking_enabled: true,
+            http_allow_hosts: None,
         }
     }
 }
@@ -125,23 +134,35 @@ impl CCOSEnvironment {
         // Create capability marketplace with integrated registry
         let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
 
-        // Bootstrap the marketplace to register default capabilities
+        // Bootstrap the marketplace to register default capabilities and apply registry config
         let marketplace_for_bootstrap = marketplace.clone();
-        // Avoid futures::executor nesting; use a dedicated Tokio runtime
-        {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e))
-                })?;
-            let _: Result<(), Box<dyn std::error::Error + Send + Sync>> = rt.block_on(async move {
-                marketplace_for_bootstrap
-                    .bootstrap()
-                    .await
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            });
-        }
+        let registry_for_config = registry.clone();
+        let microvm_provider = config.microvm_provider.clone();
+        let http_allow_hosts = config.http_allow_hosts.clone();
+        let http_mocking_enabled = config.http_mocking_enabled;
+
+        let tokio_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e)))?;
+
+        tokio_rt.block_on(async move {
+            marketplace_for_bootstrap.bootstrap().await.map_err(|e| {
+                RuntimeError::Generic(format!("Failed to bootstrap capability marketplace: {}", e))
+            })
+        })?;
+
+        tokio_rt.block_on(async move {
+            let mut guard = registry_for_config.write().await;
+            if let Some(provider) = microvm_provider.as_ref() {
+                guard.set_microvm_provider(provider)?;
+            }
+            guard.set_http_mocking_enabled(http_mocking_enabled);
+            if let Some(hosts) = http_allow_hosts {
+                guard.set_http_allow_hosts(hosts)?;
+            }
+            Ok::<(), RuntimeError>(())
+        })?;
 
         // Create causal chain for tracking
         let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
@@ -1609,6 +1630,39 @@ impl CCOSBuilder {
         self.config
             .custom_rules
             .insert(capability_id.to_string(), false);
+        self
+    }
+
+    /// Select a microVM provider such as "process" or "mock"
+    pub fn microvm_provider(mut self, provider: impl Into<String>) -> Self {
+        self.config.microvm_provider = Some(provider.into());
+        self
+    }
+
+    /// Enable or disable HTTP mocking used by the runtime
+    pub fn http_mocking(mut self, enabled: bool) -> Self {
+        self.config.http_mocking_enabled = enabled;
+        self
+    }
+
+    /// Restrict outbound HTTP hosts to the provided allowlist
+    pub fn http_allow_hosts<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let collected: Vec<String> = hosts.into_iter().map(|s| s.into()).collect();
+        if collected.is_empty() {
+            self.config.http_allow_hosts = None;
+        } else {
+            self.config.http_allow_hosts = Some(collected);
+        }
+        self
+    }
+
+    /// Clear any previously configured HTTP host allowlist
+    pub fn clear_http_allow_hosts(mut self) -> Self {
+        self.config.http_allow_hosts = None;
         self
     }
 

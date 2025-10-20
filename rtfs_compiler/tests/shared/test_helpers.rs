@@ -21,8 +21,20 @@ fn create_minimal_host_with_context(
     security_context: RuntimeContext,
 ) -> Arc<dyn rtfs_compiler::runtime::host_interface::HostInterface> {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
-    let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry));
+    let capability_marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
+
+    // Bootstrap built-in capabilities once so host calls succeed in tests
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime for capability bootstrap");
+    rt.block_on(async {
+        capability_marketplace
+            .bootstrap()
+            .await
+            .expect("failed to bootstrap capability marketplace");
+    });
 
     Arc::new(RuntimeHost::new(
         causal_chain,
