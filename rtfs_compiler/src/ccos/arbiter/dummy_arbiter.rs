@@ -59,13 +59,17 @@ impl DummyArbiter {
                 .collect();
 
             let mut metadata = HashMap::new();
-                if !numbers.is_empty() {
+            if !numbers.is_empty() {
                 // Store numbers as an RTFS-like vector literal so prompts expecting RTFS see a native form
-                let vec_literal = format!("[{}]", numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" "));
-                metadata.insert(
-                    "numbers".to_string(),
-                    Value::String(vec_literal),
+                let vec_literal = format!(
+                    "[{}]",
+                    numbers
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 );
+                metadata.insert("numbers".to_string(), Value::String(vec_literal));
             }
 
             Intent {
@@ -109,12 +113,16 @@ impl DummyArbiter {
                 .collect();
 
             let mut metadata = HashMap::new();
-                if !numbers.is_empty() {
-                let vec_literal = format!("[{}]", numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" "));
-                metadata.insert(
-                    "numbers".to_string(),
-                    Value::String(vec_literal),
+            if !numbers.is_empty() {
+                let vec_literal = format!(
+                    "[{}]",
+                    numbers
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 );
+                metadata.insert("numbers".to_string(), Value::String(vec_literal));
             }
 
             Intent {
@@ -192,7 +200,14 @@ impl DummyArbiter {
                 if !numbers.is_empty() {
                     metadata.insert(
                         "numbers".to_string(),
-                        Value::String(format!("[{}]", numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" "))),
+                        Value::String(format!(
+                            "[{}]",
+                            numbers
+                                .iter()
+                                .map(|n| n.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )),
                     );
                 }
 

@@ -11,24 +11,20 @@ use std::sync::Arc;
 use crate::ccos::arbiter::arbiter_config::{
     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig,
 };
-use crate::ccos::capability_marketplace::{
-    CapabilityMarketplace,
-};
-use crate::ccos::capability_marketplace::types::{
-    CapabilityQuery, CapabilityKind,
-};
 use crate::ccos::arbiter::arbiter_engine::ArbiterEngine;
 use crate::ccos::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 use crate::ccos::arbiter::plan_generation::{
     LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
 };
 use crate::ccos::arbiter::prompt::{FilePromptStore, PromptManager};
+use crate::ccos::capability_marketplace::types::{CapabilityKind, CapabilityQuery};
+use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::delegation_keys::{agent, generation};
+use crate::ccos::synthesis::artifact_generator::generate_planner_via_arbiter;
+use crate::ccos::synthesis::{schema_builder::ParamSchema, InteractionTurn};
 use crate::ccos::types::{
     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
 };
-use crate::ccos::synthesis::artifact_generator::generate_planner_via_arbiter;
-use crate::ccos::synthesis::{schema_builder::ParamSchema, InteractionTurn};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::values::Value;
 use regex;
@@ -373,24 +369,29 @@ impl DelegatingArbiter {
         let query = CapabilityQuery::new()
             .with_kind(CapabilityKind::Agent)
             .with_limit(50); // Reasonable limit for agent discovery
-        
-        let agent_capabilities = self.capability_marketplace
+
+        let agent_capabilities = self
+            .capability_marketplace
             .list_capabilities_with_query(&query)
             .await;
-        
+
         // Filter agents that have matching capabilities
         let mut matching_agents = Vec::new();
         for capability in agent_capabilities {
             // Check if this agent capability matches any of the required capabilities
             for required_cap in required_capabilities {
-                if capability.id.contains(required_cap) || 
-                   capability.description.to_lowercase().contains(&required_cap.to_lowercase()) {
+                if capability.id.contains(required_cap)
+                    || capability
+                        .description
+                        .to_lowercase()
+                        .contains(&required_cap.to_lowercase())
+                {
                     matching_agents.push(capability.id.clone());
                     break;
                 }
             }
         }
-        
+
         Ok(matching_agents)
     }
 
@@ -399,11 +400,12 @@ impl DelegatingArbiter {
         let query = CapabilityQuery::new()
             .with_kind(CapabilityKind::Agent)
             .with_limit(100);
-        
-        let agent_capabilities = self.capability_marketplace
+
+        let agent_capabilities = self
+            .capability_marketplace
             .list_capabilities_with_query(&query)
             .await;
-        
+
         Ok(agent_capabilities.into_iter().map(|c| c.id).collect())
     }
 
@@ -723,7 +725,10 @@ impl DelegatingArbiter {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         if show_prompts {
-            println!("--- Delegating Arbiter Capability Prompt ---\n{}\n--- END PROMPT ---", prompt);
+            println!(
+                "--- Delegating Arbiter Capability Prompt ---\n{}\n--- END PROMPT ---",
+                prompt
+            );
         }
 
         let response = self.generate_raw_text(&prompt).await?;
@@ -781,7 +786,9 @@ impl DelegatingArbiter {
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> Result<DelegationAnalysis, RuntimeError> {
-        let prompt = self.create_delegation_analysis_prompt(intent, context).await?;
+        let prompt = self
+            .create_delegation_analysis_prompt(intent, context)
+            .await?;
 
         let response = self.llm_provider.generate_text(&prompt).await?;
 
@@ -981,7 +988,10 @@ impl DelegatingArbiter {
                 .collect::<HashMap<String, String>>()
         });
 
-        let plan = self.llm_provider.generate_plan(&storable_intent, string_context).await?;
+        let plan = self
+            .llm_provider
+            .generate_plan(&storable_intent, string_context)
+            .await?;
         // Log provider and result
         let _ = (|| -> Result<(), std::io::Error> {
             let mut f = OpenOptions::new()
@@ -1029,12 +1039,15 @@ impl DelegatingArbiter {
 
         let prompt_config = self.llm_config.prompts.clone().unwrap_or_default();
 
-        let context_str = context.as_ref().map(|c| {
-            c.iter()
-                .map(|(k, v)| format!("{}: {}", k, v.to_string()))
-                .collect::<Vec<_>>()
-                .join(", ")
-    }).unwrap_or_default();
+        let context_str = context
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
 
         let mut vars = HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());
@@ -1139,23 +1152,28 @@ impl DelegatingArbiter {
         let available_agents = self.list_agent_capabilities().await?;
         let agent_list = available_agents
             .iter()
-            .map(|agent_id| {
-                format!("- {}: Agent capability from marketplace", agent_id)
-            })
+            .map(|agent_id| format!("- {}: Agent capability from marketplace", agent_id))
             .collect::<Vec<_>>()
             .join("\n");
 
         let context_for_fallback = context.clone();
 
         let intent_str = serde_json::to_string(intent).unwrap_or_else(|_| {
-            serde_json::to_string(&serde_json::json!({"name": intent.name, "goal": intent.goal})).unwrap_or_else(|_| {
-                format!("{{\"name\":{} , \"goal\":{} }}", 
-                    intent.name.as_ref().map(|s| format!("\"{}\"", s)).unwrap_or_else(|| "null".to_string()),
-                    format!("\"{}\"", intent.goal)
-                )
-            })
+            serde_json::to_string(&serde_json::json!({"name": intent.name, "goal": intent.goal}))
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{{\"name\":{} , \"goal\":{} }}",
+                        intent
+                            .name
+                            .as_ref()
+                            .map(|s| format!("\"{}\"", s))
+                            .unwrap_or_else(|| "null".to_string()),
+                        format!("\"{}\"", intent.goal)
+                    )
+                })
         });
-        let context_str = serde_json::to_string(&context.unwrap_or_default()).unwrap_or_else(|_| "{}".to_string());
+        let context_str = serde_json::to_string(&context.unwrap_or_default())
+            .unwrap_or_else(|_| "{}".to_string());
         let mut vars = HashMap::new();
         vars.insert("intent".to_string(), intent_str);
         vars.insert("context".to_string(), context_str);
@@ -1211,7 +1229,8 @@ Available Agents:
 
 ## Your JSON Response:"#,
             serde_json::to_string(&intent).unwrap_or_else(|_| "{}".to_string()),
-            serde_json::to_string(&context.unwrap_or_default()).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&context.unwrap_or_default())
+                .unwrap_or_else(|_| "{}".to_string()),
             agents = agent_list
         )
     }
@@ -1231,17 +1250,26 @@ Available Agents:
         ];
 
         let intent_str = serde_json::to_string(intent).unwrap_or_else(|_| {
-            format!("{{\"name\":{} , \"goal\":{} }}", 
-                intent.name.as_ref().map(|s| format!("\"{}\"", s)).unwrap_or_else(|| "null".to_string()),
+            format!(
+                "{{\"name\":{} , \"goal\":{} }}",
+                intent
+                    .name
+                    .as_ref()
+                    .map(|s| format!("\"{}\"", s))
+                    .unwrap_or_else(|| "null".to_string()),
                 format!("\"{}\"", intent.goal)
             )
         });
-        let context_str = serde_json::to_string(&context.unwrap_or_default()).unwrap_or_else(|_| "{}".to_string());
-    let available_caps_str = available_capabilities.join(", ");
+        let context_str = serde_json::to_string(&context.unwrap_or_default())
+            .unwrap_or_else(|_| "{}".to_string());
+        let available_caps_str = available_capabilities.join(", ");
         let mut vars = HashMap::new();
         vars.insert("intent".to_string(), intent_str);
         vars.insert("context".to_string(), context_str);
-    vars.insert("available_capabilities".to_string(), available_caps_str.clone());
+        vars.insert(
+            "available_capabilities".to_string(),
+            available_caps_str.clone(),
+        );
         vars.insert("agent_name".to_string(), agent.name.clone());
         vars.insert("agent_id".to_string(), agent.agent_id.clone());
         vars.insert(
@@ -1263,7 +1291,8 @@ Available Agents:
                     "Warning: Failed to load delegation plan prompt from assets: {}. Using fallback.",
                     e
                 );
-                let intent_json = serde_json::to_string(intent).unwrap_or_else(|_| "{}".to_string());
+                let intent_json =
+                    serde_json::to_string(intent).unwrap_or_else(|_| "{}".to_string());
                 let agent_caps_json =
                     serde_json::to_string(&agent.capabilities).unwrap_or_else(|_| "[]".to_string());
                 let caps_display = available_caps_str.clone();
@@ -1273,11 +1302,7 @@ Intent: {}
 Agent Capabilities: {}
 Available capabilities: {}
 Plan:"#,
-                    agent.name,
-                    agent.agent_id,
-                    intent_json,
-                    agent_caps_json,
-                    caps_display
+                    agent.name, agent.agent_id, intent_json, agent_caps_json, caps_display
                 )
             }
         }
@@ -1323,9 +1348,7 @@ Plan:"#,
 Context: {}
 Available capabilities: {}
 Plan:"#,
-                intent_json,
-                context_json,
-                caps_display,
+                intent_json, context_json, caps_display,
             )
         };
 
@@ -1655,7 +1678,10 @@ Plan:"#,
                     agent::AGENT_TRUST_SCORE.to_string(),
                     Value::Float(agent.trust_score),
                 );
-                meta.insert(agent::AGENT_COST.to_string(), Value::Float(agent.cost as f64));
+                meta.insert(
+                    agent::AGENT_COST.to_string(),
+                    Value::Float(agent.cost as f64),
+                );
                 meta
             },
             input_schema: None,
@@ -1706,7 +1732,10 @@ Plan:"#,
                 );
                 meta.insert(
                     "llm_provider".to_string(),
-                    Value::String(serde_json::to_string(&self.llm_config.provider_type).unwrap_or_else(|_| format!("{:?}", self.llm_config.provider_type))),
+                    Value::String(
+                        serde_json::to_string(&self.llm_config.provider_type)
+                            .unwrap_or_else(|_| format!("{:?}", self.llm_config.provider_type)),
+                    ),
                 );
                 meta
             },
@@ -2191,7 +2220,7 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
             .map_err(|e| RuntimeError::Generic(format!("Failed to list intents: {}", e)))?;
 
         println!("📊 Total Intents in Graph: {}", all_intents.len());
-            for (i, intent) in all_intents.iter().enumerate() {
+        for (i, intent) in all_intents.iter().enumerate() {
             println!(
                 "  [{}] ID: {} | Goal: '{}' | Status: {:?}",
                 i + 1,
@@ -2355,8 +2384,9 @@ mod tests {
         // Create a minimal capability marketplace for testing
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
-        
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph).await;
+
+        let arbiter =
+            DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph).await;
         assert!(arbiter.is_ok());
     }
 
@@ -2377,10 +2407,11 @@ mod tests {
         // Create a minimal capability marketplace for testing
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
-        
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
-            .await
-            .unwrap();
+
+        let arbiter =
+            DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
+                .await
+                .unwrap();
 
         let intent = arbiter
             .natural_language_to_intent("analyze sentiment from user feedback", None)
@@ -2411,10 +2442,11 @@ mod tests {
         // Create a minimal capability marketplace for testing
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
-        
-        let arbiter = DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
-            .await
-            .unwrap();
+
+        let arbiter =
+            DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
+                .await
+                .unwrap();
 
         // Test parsing a JSON response
         let json_response = r#"
