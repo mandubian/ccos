@@ -1,13 +1,14 @@
 # RTFS 2.0 Standard Library
 
-This document provides a comprehensive reference for the RTFS 2.0 standard library, which includes a wide range of functions for pure computation and impure side-effects.
+This document provides a comprehensive reference for the RTFS 2.0 standard library, which contains **only pure, deterministic functions** with **no side effects**.
 
 ## 1. Core Philosophy
 
 The standard library is designed with the following principles in mind:
 
-- **Purity:** Most functions are pure and referentially transparent, making them safe and predictable.
-- **Host Boundary:** Impure functions that interact with the outside world are clearly separated and managed by the CCOS host.
+- **Pure Functions Only:** All functions are pure and referentially transparent, making them safe and predictable.
+- **No Effects:** RTFS is a no-effect language - all effects must be delegated to the host through capabilities.
+- **Immutable Data:** All data structures are immutable - no mutation functions are provided.
 - **Consistency:** The library provides a consistent and idiomatic set of functions for common tasks.
 - **Extensibility:** The library is designed to be extensible with custom functions and capabilities.
 
@@ -19,10 +20,11 @@ The standard library is organized into the following categories:
 - **Comparison:** Functions for comparing values.
 - **Boolean Logic:** Functions for logical operations.
 - **String Manipulation:** Functions for working with strings.
-- **Collection Manipulation:** Functions for working with vectors, lists, and maps.
+- **Collection Manipulation:** Functions for working with vectors, lists, and maps (read-only operations).
 - **Type Predicates:** Functions for checking the type of a value.
-- **Tooling:** Impure functions for interacting with the file system, network, and other external resources.
-- **CCOS Capabilities:** Functions for interacting with the CCOS.
+- **CCOS Capabilities:** Functions for interacting with the CCOS through the host boundary.
+
+**Note:** All effectful operations (I/O, file system, network, state mutation) are **not** part of the standard library. These must be accessed through CCOS capabilities using the `(call :capability ...)` syntax.
 
 ## 3. Arithmetic Functions
 
@@ -73,6 +75,8 @@ The standard library is organized into the following categories:
 
 ## 7. Collection Manipulation Functions
 
+**Note:** All collection functions are **pure and immutable**. They return new collections rather than modifying existing ones.
+
 | Function | Signature | Description |
 |---|---|---|
 | `vector` | `(-> ... :vector)` | Creates a new vector. |
@@ -80,7 +84,6 @@ The standard library is organized into the following categories:
 | `map-indexed` | `(-> :function :collection :collection)` | Applies a function to each element of a collection, with the index. |
 | `filter` | `(-> :function :collection :collection)` | Returns a new collection with only the elements that satisfy a predicate. |
 | `reduce` | `(-> :function :collection :any)` | Reduces a collection to a single value using a function. |
-| `remove` | `(-> :function :collection :collection)` | Returns a new collection with the elements that do not satisfy a predicate. |
 | `sort` | `(-> :collection :collection)` | Sorts a collection. |
 | `sort-by` | `(-> :function :collection :collection)` | Sorts a collection by a key function. |
 | `distinct` | `(-> :collection :collection)` | Returns a new collection with duplicate values removed. |
@@ -90,9 +93,6 @@ The standard library is organized into the following categories:
 | `vals` | `(-> :map :vector)` | Returns a vector of the values in a map. |
 | `get` | `(-> :map :any :any)` | Returns the value for a key in a map, or a default value. |
 | `get-in` | `(-> :map :vector :any)` | Returns the value at a nested path in a map. |
-| `assoc` | `(-> :map :any :any :map)` | Associates a value with a key in a map. |
-| `dissoc` | `(-> :map :any :map)` | Dissociates a key from a map. |
-| `conj` | `(-> :collection :any :collection)` | Adds an element to a collection. |
 | `cons` | `(-> :any :collection :collection)` | Adds an element to the beginning of a collection. |
 | `concat` | `(-> ... :collection)` | Concatenates two or more collections. |
 | `first` | `(-> :collection :any)` | Returns the first element of a collection. |
@@ -102,6 +102,16 @@ The standard library is organized into the following categories:
 | `empty?` | `(-> :collection :bool)` | Returns `true` if a collection is empty. |
 | `range` | `(-> :int :int :int :vector)` | Returns a vector of numbers in a given range. |
 | `hash-map` | `(-> ... :map)` | Creates a new map. |
+| `take` | `(-> :int :collection :collection)` | Returns the first n elements of a collection. |
+| `drop` | `(-> :int :collection :collection)` | Returns all but the first n elements of a collection. |
+| `last` | `(-> :collection :any)` | Returns the last element of a collection. |
+| `reverse` | `(-> :collection :collection)` | Returns a new collection with elements in reverse order. |
+| `numbers` | `(-> :int :int :vector)` | Returns a vector of numbers from start to end. |
+
+**Removed Functions:** The following functions have been removed as they are effectful (mutate data structures):
+- `assoc`, `dissoc`, `conj`, `remove`, `update`
+
+For data structure mutations, use CCOS capabilities like `(call :ccos.state.kv/put ...)` or other appropriate state management capabilities.
 
 ## 8. Type Predicate Functions
 
@@ -120,29 +130,83 @@ The standard library is organized into the following categories:
 | `map?` | `(-> :any :bool)` | Returns `true` if a value is a map. |
 | `type-name` | `(-> :any :string)` | Returns the type of a value as a string. |
 
-## 9. Tooling Functions
+## 9. Effectful Operations (Not in Standard Library)
 
-These functions are impure and interact with the outside world. They are managed by the CCOS host and require appropriate capabilities.
+**Important:** RTFS 2.0 standard library contains **no effectful functions**. All operations that interact with the outside world must be accessed through CCOS capabilities.
 
-| Function | Signature | Description |
+### Common Effectful Operations via Capabilities
+
+| Operation | Capability Call | Description |
 |---|---|---|
-| `tool/open-file` | `(-> :string :string)` | Reads the content of a file. |
-| `tool/http-fetch` | `(-> :string :string)` | Fetches content from a URL. |
-| `tool/log` | `(-> ... :nil)` | Prints arguments to the console. |
-| `tool/time-ms` | `(-> :int)` | Returns the current time in milliseconds. |
-| `file-exists?` | `(-> :string :bool)` | Checks if a file exists. |
-| `get-env` | `(-> :string :string)` | Gets an environment variable. |
-| `tool/serialize-json` | `(-> :any :string)` | Serializes an RTFS value to a JSON string. |
-| `tool/parse-json` | `(-> :string :any)` | Parses a JSON string into an RTFS value. |
-| `println` | `(-> ... :nil)` | Prints arguments to the console with a newline. |
-| `thread/sleep` | `(-> :int :nil)` | Sleeps for a given number of milliseconds. |
-| `read-lines` | `(-> :string :vector)` | Reads all lines from a file. |
+| File I/O | `(call :ccos.io.file-exists "path")` | Check if file exists |
+| | `(call :ccos.io.open-file "path")` | Open file for reading |
+| | `(call :ccos.io.read-line file-handle)` | Read line from file |
+| | `(call :ccos.io.write-line file-handle "content")` | Write line to file |
+| | `(call :ccos.io.close-file file-handle)` | Close file |
+| HTTP Requests | `(call :ccos.network.http-fetch "url")` | Fetch content from URL |
+| Logging | `(call :ccos.io.log "message")` | Log message |
+| | `(call :ccos.io.print "message")` | Print without newline |
+| | `(call :ccos.io.println "message")` | Print with newline |
+| System Info | `(call :ccos.system.get-env "VAR")` | Get environment variable |
+| | `(call :ccos.system.current-time)` | Get current time |
+| | `(call :ccos.system.current-timestamp-ms)` | Get current timestamp |
+| Data Serialization | `(call :ccos.data.parse-json "json-string")` | Parse JSON string |
+| | `(call :ccos.data.serialize-json value)` | Serialize to JSON |
+| State Management | `(call :ccos.state.kv/get "key")` | Get value from key-value store |
+| | `(call :ccos.state.kv/put "key" value)` | Put value in key-value store |
+| | `(call :ccos.state.counter/inc "counter")` | Increment counter |
+| | `(call :ccos.state.event/append "stream" event)` | Append to event stream |
+| Human Interaction | `(call :ccos.agent.ask-human "prompt")` | Ask human for input |
+
+### Why No Effectful Functions in Standard Library?
+
+1. **Purity**: RTFS remains a pure functional language
+2. **Security**: All effects are mediated through CCOS governance
+3. **Auditability**: Every effect is tracked in the causal chain
+4. **Testability**: Pure functions are easily testable
+5. **Composability**: Pure functions can be safely combined
 
 ## 10. CCOS Capability Functions
 
+The only way to perform effectful operations in RTFS is through the `call` function, which delegates to CCOS capabilities.
+
 | Function | Signature | Description |
 |---|---|---|
-| `call` | `(-> :keyword ... :any)` | Calls a CCOS capability. |
-| `discover-agents` | `(-> :map :vector)` | Discovers agents based on a set of criteria. |
-| `task-coordination` | `(-> ... :any)` | Coordinates a task between multiple agents. |
-| `establish-system-baseline` | `(-> ... :map)` | Establishes a system baseline. |
+| `call` | `(-> :keyword ... :any)` | Calls a CCOS capability. This is the **only** way to perform effectful operations. |
+
+### Capability Call Examples
+
+```clojure
+;; System operations
+(call :ccos.system.get-env "PATH")
+(call :ccos.system.current-time)
+
+;; I/O operations  
+(call :ccos.io.log "Processing data...")
+(call :ccos.io.file-exists "/path/to/file")
+
+;; Network operations
+(call :ccos.network.http-fetch "https://api.example.com/data")
+
+;; State management
+(call :ccos.state.kv/get "user:123")
+(call :ccos.state.kv/put "user:123" user-data)
+
+;; Agent operations
+(call :ccos.agent.discover-agents {:capabilities ["database" "api"]})
+(call :ccos.agent.ask-human "Please confirm the operation")
+
+;; Data operations
+(call :ccos.data.parse-json json-string)
+(call :ccos.data.serialize-json data)
+```
+
+### Capability Execution Flow
+
+1. **RTFS Evaluation**: `(call :capability args...)` is evaluated
+2. **Host Call Generation**: Creates `HostCall` with capability ID and arguments
+3. **CCOS Governance**: Security validation, policy enforcement, audit logging
+4. **Provider Execution**: Capability is executed by appropriate provider
+5. **Result Return**: Result is returned to RTFS for continuation
+
+This architecture ensures RTFS remains **pure** while enabling **secure, auditable** interaction with the external world.

@@ -136,10 +136,29 @@ When RTFS yields a host call, CCOS performs:
 
 1. **Security Validation**: Check permissions and context
 2. **Governance Rules**: Apply organizational policies
-3. **Capability Resolution**: Find and validate capability
-4. **Execution**: Perform the operation
-5. **Audit Logging**: Record in causal chain
-6. **Result Return**: Send result back to RTFS
+3. **Provider Selection**: Choose appropriate capability provider based on execution policy
+4. **Capability Resolution**: Find and validate capability in selected provider
+5. **Execution**: Perform the operation through the provider
+6. **Audit Logging**: Record in causal chain
+7. **Result Return**: Send result back to RTFS
+
+### Execution Policies
+
+CCOS supports different execution policies for capability providers:
+
+- **Marketplace**: All capabilities must go through marketplace providers (production mode)
+- **Hybrid**: Safe capabilities can use LocalProvider, risky ones use marketplace
+- **InlineDev**: Development mode allowing local provider for all capabilities
+
+### Provider Architecture
+
+Capabilities are executed through pluggable providers:
+
+- **LocalProvider**: Basic host operations for development/bootstrap
+- **Marketplace Providers**: Full-featured providers from the capability marketplace
+- **Custom Providers**: Organization-specific providers for specialized needs
+
+This architecture ensures **flexibility** while maintaining **security** and **auditability**.
 
 ## Resource Management
 
@@ -258,12 +277,31 @@ RTFS Code → Parser → AST → Evaluator → ExecutionOutcome
                          │    CCOS Governance  │
                          │ - Security Check    │
                          │ - Policy Evaluation │
-                         │ - Capability Exec   │
+                         │ - Provider Selection│
                          │ - Audit Logging     │
+                         └─────────────────────┘
+                                               ↓
+                         ┌─────────────────────┐
+                         │  Capability Provider│
+                         │ - LocalProvider     │
+                         │ - Marketplace Prov. │
+                         │ - Custom Providers  │
                          └─────────────────────┘
                                                ↓
                                     Result → RTFS Continuation
 ```
 
-This architecture ensures RTFS remains **pure and composable** while enabling **secure, auditable interaction** with the external world through CCOS capabilities.</content>
+### Provider Selection Flow
+
+```
+HostCall → Execution Policy → Provider Selection
+    ↓
+Marketplace Policy → Marketplace Provider
+Hybrid Policy → Safe Capability? → LocalProvider : Marketplace Provider  
+InlineDev Policy → LocalProvider
+    ↓
+Provider.execute_capability() → Result
+```
+
+This architecture ensures RTFS remains **pure and composable** while enabling **secure, auditable interaction** with the external world through CCOS capabilities and pluggable providers.</content>
 <parameter name="filePath">/home/mandubian/workspaces/mandubian/ccos/docs/rtfs-2.0/specs-new/04-host-boundary-and-capabilities.md
