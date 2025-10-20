@@ -500,7 +500,10 @@ impl CapabilityRegistry {
                             args.clone(),
                             context,
                         ) {
-                            eprintln!("Warning: Failed to queue missing capability for resolution: {}", e);
+                            eprintln!(
+                                "Warning: Failed to queue missing capability for resolution: {}",
+                                e
+                            );
                         }
                     }
 

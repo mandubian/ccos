@@ -263,6 +263,30 @@ impl CapabilityExecutor for LocalExecutor {
     }
 }
 
+pub struct RegistryExecutor;
+
+#[async_trait(?Send)]
+impl CapabilityExecutor for RegistryExecutor {
+    fn provider_type_id(&self) -> TypeId {
+        TypeId::of::<RegistryCapability>()
+    }
+    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+        if let ProviderType::Registry(registry_cap) = provider {
+            let args = match inputs {
+                Value::List(list) => list.clone(),
+                Value::Vector(vec) => vec.clone(),
+                v => vec![v.clone()],
+            };
+            let registry = registry_cap.registry.read().await;
+            registry.execute_capability_with_microvm(&registry_cap.capability_id, args, None)
+        } else {
+            Err(RuntimeError::Generic(
+                "ProviderType mismatch for RegistryExecutor".to_string(),
+            ))
+        }
+    }
+}
+
 pub struct HttpExecutor;
 
 #[async_trait(?Send)]
@@ -350,6 +374,7 @@ pub enum ExecutorVariant {
     A2A(A2AExecutor),
     Local(LocalExecutor),
     Http(HttpExecutor),
+    Registry(RegistryExecutor),
 }
 
 impl ExecutorVariant {
@@ -359,6 +384,7 @@ impl ExecutorVariant {
             ExecutorVariant::A2A(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Local(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Http(e) => e.execute(provider, inputs).await,
+            ExecutorVariant::Registry(e) => e.execute(provider, inputs).await,
         }
     }
 }

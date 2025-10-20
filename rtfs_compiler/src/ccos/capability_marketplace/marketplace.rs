@@ -1,4 +1,6 @@
-use super::executors::{A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor};
+use super::executors::{
+    A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, RegistryExecutor,
+};
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
 // Temporarily disabled to fix resource monitoring tests
@@ -16,207 +18,6 @@ use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use futures::executor::block_on;
-
-/// Make a real HTTP request using reqwest (synchronous version)
-fn make_real_http_request(inputs: &Value) -> RuntimeResult<Value> {
-    // Parse inputs to extract HTTP parameters
-    let (url, method, headers, body) = parse_http_inputs(inputs)?;
-    
-    // Create a new tokio runtime for this request to avoid nested executor issues
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| RuntimeError::Generic(format!("Failed to create tokio runtime: {}", e)))?;
-    
-    // Execute the HTTP request in the new runtime
-    let result = rt.block_on(async {
-        let client = reqwest::Client::new();
-        
-        // Build the request based on method
-        let mut request_builder = match method.to_uppercase().as_str() {
-            "GET" => client.get(&url),
-            "POST" => client.post(&url),
-            "PUT" => client.put(&url),
-            "DELETE" => client.delete(&url),
-            "PATCH" => client.patch(&url),
-            "HEAD" => client.head(&url),
-            "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
-            _ => return Err(RuntimeError::Generic(format!("Unsupported HTTP method: {}", method))),
-        };
-        
-        // Add headers
-        for (key, value) in headers {
-            request_builder = request_builder.header(&key, &value);
-        }
-        
-        // Add body for POST/PUT/PATCH requests
-        if !body.is_empty() && ["POST", "PUT", "PATCH"].contains(&method.to_uppercase().as_str()) {
-            request_builder = request_builder.body(body);
-        }
-        
-        // Send the request
-        let response = request_builder.send().await
-            .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
-        
-        // Get response status
-        let status = response.status().as_u16();
-        
-        // Get response headers
-        let response_headers = response.headers();
-        let mut headers_map = HashMap::new();
-        for (key, value) in response_headers {
-            if let Ok(value_str) = value.to_str() {
-                headers_map.insert(
-                    MapKey::String(key.to_string()),
-                    Value::String(value_str.to_string()),
-                );
-            }
-        }
-        
-        // Get response body
-        let body_text = response.text().await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to read response body: {}", e)))?;
-        
-        // Build response map
-        let mut response_map = HashMap::new();
-        response_map.insert(
-            MapKey::String("status".to_string()),
-            Value::Integer(status as i64),
-        );
-        response_map.insert(
-            MapKey::String("body".to_string()),
-            Value::String(body_text),
-        );
-        response_map.insert(
-            MapKey::String("headers".to_string()),
-            Value::Map(headers_map),
-        );
-        
-        Ok(Value::Map(response_map))
-    });
-    
-    result
-}
-
-/// Parse HTTP inputs from RTFS Value
-fn parse_http_inputs(inputs: &Value) -> RuntimeResult<(String, String, HashMap<String, String>, String)> {
-    // Debug: Print the input value
-    println!("DEBUG: parse_http_inputs received: {:?}", inputs);
-    
-    // Default values
-    let mut url = String::new();
-    let mut method = "GET".to_string();
-    let mut headers = HashMap::new();
-    let mut body = String::new();
-    
-    // Parse inputs based on structure
-    match inputs {
-        Value::Map(map) => {
-            // Extract parameters from map
-            for (key, value) in map {
-                match key {
-                    MapKey::String(key_str) | MapKey::Keyword(crate::ast::Keyword(key_str)) => {
-                               match key_str.as_str() {
-                                   "url" | ":url" => {
-                                       url = value.as_string().unwrap_or_default().to_string();
-                                   }
-                                   "method" | ":method" => {
-                                       method = value.as_string().unwrap_or("GET").to_string();
-                                   }
-                                   "headers" | ":headers" => {
-                                       if let Value::Map(header_map) = value {
-                                           for (h_key, h_value) in header_map {
-                                               if let (MapKey::String(hk), Value::String(hv)) = (h_key, h_value) {
-                                                   headers.insert(hk.clone(), hv.clone());
-                                               }
-                                           }
-                                       }
-                                   }
-                                   "body" | ":body" => {
-                                       body = value.as_string().unwrap_or_default().to_string();
-                                   }
-                                   _ => {}
-                               }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Value::List(list) => {
-            // Check if this is a keyword-value pair list (from RTFS call syntax)
-            if list.len() >= 2 && list.len() % 2 == 0 {
-                // Parse as keyword-value pairs: [:url "value" :method "value"]
-                let mut i = 0;
-                while i < list.len() {
-                    if let Some(key_val) = list.get(i) {
-                        if let Value::Keyword(crate::ast::Keyword(key_str)) = key_val {
-                            if let Some(value_val) = list.get(i + 1) {
-                                match key_str.as_str() {
-                                    "url" => {
-                                        url = value_val.as_string().unwrap_or_default().to_string();
-                                    }
-                                    "method" => {
-                                        method = value_val.as_string().unwrap_or("GET").to_string();
-                                    }
-                                    "headers" => {
-                                        if let Value::Map(header_map) = value_val {
-                                            for (h_key, h_value) in header_map {
-                                                if let (MapKey::String(hk), Value::String(hv)) = (h_key, h_value) {
-                                                    headers.insert(hk.clone(), hv.clone());
-                                                }
-                                            }
-                                        }
-                                    }
-                                    "body" => {
-                                        body = value_val.as_string().unwrap_or_default().to_string();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    i += 2;
-                }
-            } else {
-                // Positional arguments: [url, method, headers, body]
-                if let Some(url_val) = list.get(0) {
-                    url = url_val.as_string().unwrap_or_default().to_string();
-                }
-                if let Some(method_val) = list.get(1) {
-                    method = method_val.as_string().unwrap_or("GET").to_string();
-                }
-                if let Some(headers_val) = list.get(2) {
-                    if let Value::Map(header_map) = headers_val {
-                        for (h_key, h_value) in header_map {
-                            if let (MapKey::String(hk), Value::String(hv)) = (h_key, h_value) {
-                                headers.insert(hk.clone(), hv.clone());
-                            }
-                        }
-                    }
-                }
-                if let Some(body_val) = list.get(3) {
-                    body = body_val.as_string().unwrap_or_default().to_string();
-                }
-            }
-        }
-        Value::String(url_str) => {
-            // Simple string input is treated as URL
-            url = url_str.clone();
-        }
-        _ => {
-            return Err(RuntimeError::Generic(
-                "HTTP inputs must be a map, list, or string".to_string()
-            ));
-        }
-    }
-    
-    if url.is_empty() {
-        return Err(RuntimeError::Generic(
-            "URL is required for HTTP request".to_string()
-        ));
-    }
-    
-    Ok((url, method, headers, body))
-}
 
 impl CapabilityMarketplace {
     pub fn new(
@@ -270,6 +71,10 @@ impl CapabilityMarketplace {
         marketplace.executor_registry.insert(
             TypeId::of::<HttpCapability>(),
             ExecutorVariant::Http(HttpExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<RegistryCapability>(),
+            ExecutorVariant::Registry(RegistryExecutor),
         );
         marketplace
     }
@@ -377,8 +182,6 @@ impl CapabilityMarketplace {
         // Get all registered capabilities from the registry
         for capability_id in registry.list_capabilities() {
             let capability_id = capability_id.to_string();
-            let _capability_opt = registry.get_capability(&capability_id);
-            let capability_id_clone = capability_id.clone();
             let provenance = CapabilityProvenance {
                 source: "registry_bootstrap".to_string(),
                 version: Some("1.0.0".to_string()),
@@ -391,28 +194,9 @@ impl CapabilityMarketplace {
                 id: capability_id.clone(),
                 name: capability_id.clone(),
                 description: format!("Registry capability: {}", capability_id),
-                provider: ProviderType::Local(LocalCapability {
-                    handler: Arc::new(move |inputs| {
-                        // For HTTP capabilities, check if they should be loaded
-                        if capability_id_clone == "ccos.network.http-fetch" {
-                            // Check if HTTP capability should be loaded
-                            if std::env::var("CCOS_LOAD_HTTP_CAPABILITY").unwrap_or("false".to_string()) == "true" {
-                                // Make real HTTP request
-                                make_real_http_request(inputs)
-                            } else {
-                                // Return error indicating capability not loaded
-                                Err(crate::runtime::RuntimeError::Generic(format!(
-                                    "HTTP capability not loaded. Set CCOS_LOAD_HTTP_CAPABILITY=true to enable."
-                                )))
-                            }
-                        } else {
-                            // For other capabilities, return an error
-                            Err(crate::runtime::RuntimeError::Generic(format!(
-                                "Capability '{}' should be executed via registry, not marketplace",
-                                capability_id_clone
-                            )))
-                        }
-                    }),
+                provider: ProviderType::Registry(RegistryCapability {
+                    capability_id: capability_id.clone(),
+                    registry: Arc::clone(&self.capability_registry),
                 }),
                 version: "1.0.0".to_string(),
                 input_schema: None,
@@ -660,9 +444,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
 
         // Register the capability
         {
@@ -678,9 +462,12 @@ impl CapabilityMarketplace {
     }
 
     /// Register a capability manifest directly (for testing and advanced use cases)
-    pub async fn register_capability_manifest(&self, manifest: CapabilityManifest) -> RuntimeResult<()> {
+    pub async fn register_capability_manifest(
+        &self,
+        manifest: CapabilityManifest,
+    ) -> RuntimeResult<()> {
         let id = manifest.id.clone();
-        
+
         // Register the capability
         {
             let mut caps = self.capabilities.write().await;
@@ -821,9 +608,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -861,9 +648,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -903,9 +690,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -946,9 +733,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -991,9 +778,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1036,9 +823,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1083,9 +870,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1124,9 +911,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1167,9 +954,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1210,9 +997,9 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-                metadata: HashMap::new(),
-                agent_metadata: None,
-            };
+            metadata: HashMap::new(),
+            agent_metadata: None,
+        };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
         Ok(())
@@ -1289,7 +1076,10 @@ impl CapabilityMarketplace {
     }
 
     /// List capabilities with query filters
-    pub async fn list_capabilities_with_query(&self, query: &CapabilityQuery) -> Vec<CapabilityManifest> {
+    pub async fn list_capabilities_with_query(
+        &self,
+        query: &CapabilityQuery,
+    ) -> Vec<CapabilityManifest> {
         let capabilities = self.capabilities.read().await;
         let mut results: Vec<CapabilityManifest> = capabilities
             .values()
@@ -1307,22 +1097,28 @@ impl CapabilityMarketplace {
 
     /// List only agent capabilities
     pub async fn list_agents(&self) -> Vec<CapabilityManifest> {
-        self.list_capabilities_with_query(&CapabilityQuery::new().agents_only()).await
+        self.list_capabilities_with_query(&CapabilityQuery::new().agents_only())
+            .await
     }
 
     /// List only primitive capabilities
     pub async fn list_primitives(&self) -> Vec<CapabilityManifest> {
-        self.list_capabilities_with_query(&CapabilityQuery::new().primitives_only()).await
+        self.list_capabilities_with_query(&CapabilityQuery::new().primitives_only())
+            .await
     }
 
     /// List only composite capabilities
     pub async fn list_composites(&self) -> Vec<CapabilityManifest> {
-        self.list_capabilities_with_query(&CapabilityQuery::new().composites_only()).await
+        self.list_capabilities_with_query(&CapabilityQuery::new().composites_only())
+            .await
     }
 
     /// Search for capabilities by ID pattern
     pub async fn search_by_id(&self, pattern: &str) -> Vec<CapabilityManifest> {
-        self.list_capabilities_with_query(&CapabilityQuery::new().with_id_pattern(pattern.to_string())).await
+        self.list_capabilities_with_query(
+            &CapabilityQuery::new().with_id_pattern(pattern.to_string()),
+        )
+        .await
     }
 
     /// Execute a capability with enhanced metadata support
@@ -1418,6 +1214,7 @@ impl CapabilityMarketplace {
                 ProviderType::Plugin(_) => std::any::TypeId::of::<PluginCapability>(),
                 ProviderType::RemoteRTFS(_) => std::any::TypeId::of::<RemoteRTFSCapability>(),
                 ProviderType::Stream(_) => std::any::TypeId::of::<StreamCapabilityImpl>(),
+                ProviderType::Registry(_) => std::any::TypeId::of::<RegistryCapability>(),
             }) {
             executor.execute(&manifest.provider, inputs).await
         } else {
@@ -1439,6 +1236,9 @@ impl CapabilityMarketplace {
                 ProviderType::Stream(stream_impl) => {
                     self.execute_stream_capability(stream_impl, inputs).await
                 }
+                ProviderType::Registry(_) => Err(RuntimeError::Generic(
+                    "Registry provider missing executor".to_string(),
+                )),
             }
         }?;
 
@@ -1718,6 +1518,7 @@ impl CapabilityMarketplace {
                 ProviderType::Plugin(_) => "plugin",
                 ProviderType::RemoteRTFS(_) => "remote_rtfs",
                 ProviderType::Stream(_) => "stream",
+                ProviderType::Registry(_) => "registry",
             };
             // Namespace heuristic: split by '.' keep first or use entire if absent
             let namespace = id.split('.').next().unwrap_or("");
@@ -1746,6 +1547,7 @@ impl CapabilityMarketplace {
                 ProviderType::Plugin(_) => "plugin",
                 ProviderType::RemoteRTFS(_) => "remote_rtfs",
                 ProviderType::Stream(_) => "stream",
+                ProviderType::Registry(_) => "registry",
             };
             *by_provider.entry(provider_label).or_insert(0) += 1;
             let ns = id.split('.').next().unwrap_or("").to_string();
