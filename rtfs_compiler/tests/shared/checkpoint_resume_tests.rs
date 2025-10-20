@@ -46,6 +46,8 @@ fn test_checkpoint_store_and_resume_from_disk() {
         serialized_context: evaluator.context_manager.borrow().serialize().unwrap(),
         created_at: 0,
         metadata: std::collections::HashMap::new(),
+        missing_capabilities: Vec::new(),
+        auto_resume_enabled: false,
     };
     let _ = archive.store(rec).expect("store");
 
