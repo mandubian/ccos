@@ -9,12 +9,11 @@
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver;
 use crate::ccos::synthesis::registration_flow::RegistrationFlow;
-use crate::runtime::error::{RuntimeResult, RuntimeError};
+use crate::runtime::error::{RuntimeError, RuntimeResult};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::Duration;
-use chrono::{Utc, DateTime};
 /// Resolution attempt record
 #[derive(Debug, Clone)]
 pub struct ResolutionAttempt {
@@ -174,7 +173,8 @@ impl ContinuousResolutionLoop {
             &self.resolution_history,
             &self.human_approval_queue,
             &self.config,
-        ).await?;
+        )
+        .await?;
 
         // Check for expired approvals
         Self::process_expired_approvals(&self.human_approval_queue).await?;
@@ -183,7 +183,11 @@ impl ContinuousResolutionLoop {
     }
 
     /// Trigger resolution for a missing capability
-    pub async fn trigger_resolution(&self, capability_id: &str, context: Option<&str>) -> RuntimeResult<()> {
+    pub async fn trigger_resolution(
+        &self,
+        capability_id: &str,
+        context: Option<&str>,
+    ) -> RuntimeResult<()> {
         println!("🔍 Triggering resolution for capability: {}", capability_id);
 
         // Assess risk level
@@ -191,16 +195,26 @@ impl ContinuousResolutionLoop {
 
         // Check if human approval is required
         if risk_assessment.requires_human_approval && !self.config.high_risk_auto_resolution {
-            self.request_human_approval(capability_id, &risk_assessment, context.unwrap_or("system")).await?;
+            self.request_human_approval(
+                capability_id,
+                &risk_assessment,
+                context.unwrap_or("system"),
+            )
+            .await?;
             return Ok(());
         }
 
         // Proceed with automatic resolution
-        self.attempt_resolution(capability_id, &risk_assessment).await
+        self.attempt_resolution(capability_id, &risk_assessment)
+            .await
     }
 
     /// Assess risk level for a capability
-    async fn assess_risk(&self, capability_id: &str, context: Option<&str>) -> RuntimeResult<RiskAssessment> {
+    async fn assess_risk(
+        &self,
+        capability_id: &str,
+        context: Option<&str>,
+    ) -> RuntimeResult<RiskAssessment> {
         let mut risk_factors = Vec::new();
         let mut security_concerns = Vec::new();
         let mut compliance_requirements = Vec::new();
@@ -237,8 +251,8 @@ impl ContinuousResolutionLoop {
             ResolutionPriority::Low
         };
 
-        let requires_human_approval = priority == ResolutionPriority::Critical || 
-                                    (priority == ResolutionPriority::High && !self.config.high_risk_auto_resolution);
+        let requires_human_approval = priority == ResolutionPriority::Critical
+            || (priority == ResolutionPriority::High && !self.config.high_risk_auto_resolution);
 
         Ok(RiskAssessment {
             priority,
@@ -247,7 +261,10 @@ impl ContinuousResolutionLoop {
             compliance_requirements,
             requires_human_approval,
             approval_deadline: if requires_human_approval {
-                Some(Utc::now() + chrono::Duration::hours(self.config.human_approval_timeout_hours as i64))
+                Some(
+                    Utc::now()
+                        + chrono::Duration::hours(self.config.human_approval_timeout_hours as i64),
+                )
             } else {
                 None
             },
@@ -273,26 +290,39 @@ impl ContinuousResolutionLoop {
         let mut queue = self.human_approval_queue.write().await;
         queue.push(pending_approval);
 
-        println!("🛑 Human approval required for high-risk capability: {}", capability_id);
+        println!(
+            "🛑 Human approval required for high-risk capability: {}",
+            capability_id
+        );
         println!("   Risk level: {:?}", risk_assessment.priority);
         println!("   Risk factors: {:?}", risk_assessment.risk_factors);
-        println!("   Deadline: {}", risk_assessment.approval_deadline.unwrap());
+        println!(
+            "   Deadline: {}",
+            risk_assessment.approval_deadline.unwrap()
+        );
 
         Ok(())
     }
 
     /// Attempt to resolve a capability
-    async fn attempt_resolution(&self, capability_id: &str, risk_assessment: &RiskAssessment) -> RuntimeResult<()> {
+    async fn attempt_resolution(
+        &self,
+        capability_id: &str,
+        risk_assessment: &RiskAssessment,
+    ) -> RuntimeResult<()> {
         // Get previous attempts
         let history = self.resolution_history.read().await;
         let attempts = history.get(capability_id).cloned().unwrap_or_default();
         drop(history);
 
         let attempt_count = attempts.len() as u32;
-        
+
         // Check if we've exceeded max retry attempts
         if attempt_count >= self.config.max_retry_attempts {
-            println!("❌ Max retry attempts exceeded for capability: {}", capability_id);
+            println!(
+                "❌ Max retry attempts exceeded for capability: {}",
+                capability_id
+            );
             return Err(RuntimeError::Generic(format!(
                 "Max retry attempts ({}) exceeded for capability: {}",
                 self.config.max_retry_attempts, capability_id
@@ -304,7 +334,7 @@ impl ContinuousResolutionLoop {
 
         // Try different resolution methods in order of preference
         let methods = self.get_resolution_methods(risk_assessment);
-        
+
         for method in methods {
             let attempt = ResolutionAttempt {
                 capability_id: capability_id.to_string(),
@@ -318,23 +348,33 @@ impl ContinuousResolutionLoop {
 
             match self.try_resolution_method(capability_id, &method).await {
                 Ok(()) => {
-                    println!("✅ Successfully resolved capability: {} using {:?}", capability_id, method);
-                    
+                    println!(
+                        "✅ Successfully resolved capability: {} using {:?}",
+                        capability_id, method
+                    );
+
                     // Record successful attempt
                     let mut history = self.resolution_history.write().await;
-                    let attempts = history.entry(capability_id.to_string()).or_insert_with(Vec::new);
+                    let attempts = history
+                        .entry(capability_id.to_string())
+                        .or_insert_with(Vec::new);
                     let mut successful_attempt = attempt;
                     successful_attempt.success = true;
                     attempts.push(successful_attempt);
-                    
+
                     return Ok(());
                 }
                 Err(e) => {
-                    println!("❌ Failed to resolve capability: {} using {:?}: {}", capability_id, method, e);
-                    
+                    println!(
+                        "❌ Failed to resolve capability: {} using {:?}: {}",
+                        capability_id, method, e
+                    );
+
                     // Record failed attempt
                     let mut history = self.resolution_history.write().await;
-                    let attempts = history.entry(capability_id.to_string()).or_insert_with(Vec::new);
+                    let attempts = history
+                        .entry(capability_id.to_string())
+                        .or_insert_with(Vec::new);
                     let mut failed_attempt = attempt;
                     failed_attempt.error_message = Some(e.to_string());
                     attempts.push(failed_attempt);
@@ -344,50 +384,73 @@ impl ContinuousResolutionLoop {
 
         // All methods failed, schedule retry if under limit
         if attempt_count + 1 < self.config.max_retry_attempts {
-            println!("⏳ Scheduling retry for capability: {} (attempt {})", capability_id, attempt_count + 1);
+            println!(
+                "⏳ Scheduling retry for capability: {} (attempt {})",
+                capability_id,
+                attempt_count + 1
+            );
         } else {
-            println!("💀 All resolution methods exhausted for capability: {}", capability_id);
+            println!(
+                "💀 All resolution methods exhausted for capability: {}",
+                capability_id
+            );
         }
 
         Ok(())
     }
 
     /// Try a specific resolution method
-    async fn try_resolution_method(&self, capability_id: &str, method: &ResolutionMethod) -> RuntimeResult<()> {
+    async fn try_resolution_method(
+        &self,
+        capability_id: &str,
+        method: &ResolutionMethod,
+    ) -> RuntimeResult<()> {
         match method {
             ResolutionMethod::McpRegistry => {
                 // Try MCP Registry discovery (placeholder - would need actual implementation)
-                Err(RuntimeError::Generic("MCP Registry discovery not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "MCP Registry discovery not yet implemented".to_string(),
+                ))
             }
-            
+
             ResolutionMethod::OpenApiImport => {
                 // Try OpenAPI import (placeholder - would need actual implementation)
-                Err(RuntimeError::Generic("OpenAPI import not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "OpenAPI import not yet implemented".to_string(),
+                ))
             }
-            
+
             ResolutionMethod::GraphQLImport => {
                 // Try GraphQL import (placeholder - would need actual implementation)
-                Err(RuntimeError::Generic("GraphQL import not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "GraphQL import not yet implemented".to_string(),
+                ))
             }
-            
+
             ResolutionMethod::HttpWrapper => {
                 // Try HTTP wrapper (placeholder - would need actual implementation)
-                Err(RuntimeError::Generic("HTTP wrapper not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "HTTP wrapper not yet implemented".to_string(),
+                ))
             }
-            
+
             ResolutionMethod::LlmSynthesis => {
                 // Try LLM synthesis (placeholder - would need actual implementation)
-                Err(RuntimeError::Generic("LLM synthesis not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "LLM synthesis not yet implemented".to_string(),
+                ))
             }
-            
+
             ResolutionMethod::WebSearch => {
                 // Try web search discovery (placeholder - would need actual implementation)
-                Err(RuntimeError::Generic("Web search discovery not yet implemented".to_string()))
+                Err(RuntimeError::Generic(
+                    "Web search discovery not yet implemented".to_string(),
+                ))
             }
-            
-            ResolutionMethod::Manual => {
-                Err(RuntimeError::Generic("Manual resolution required".to_string()))
-            }
+
+            ResolutionMethod::Manual => Err(RuntimeError::Generic(
+                "Manual resolution required".to_string(),
+            )),
         }
     }
 
@@ -413,9 +476,7 @@ impl ContinuousResolutionLoop {
                 ]
             }
             ResolutionPriority::High | ResolutionPriority::Critical => {
-                vec![
-                    ResolutionMethod::Manual,
-                ]
+                vec![ResolutionMethod::Manual]
             }
         }
     }
@@ -437,7 +498,7 @@ impl ContinuousResolutionLoop {
     ) -> RuntimeResult<()> {
         // Get pending capabilities from resolver (placeholder)
         let pending_capabilities: Vec<String> = vec![]; // TODO: integrate with actual resolver
-        
+
         for capability_id in pending_capabilities {
             // Check if we're still trying to resolve this capability
             let history = resolution_history.read().await;
@@ -445,7 +506,7 @@ impl ContinuousResolutionLoop {
             drop(history);
 
             let attempt_count = attempts.len() as u32;
-            
+
             // Skip if we've exceeded max attempts
             if attempt_count >= config.max_retry_attempts {
                 continue;
@@ -453,10 +514,10 @@ impl ContinuousResolutionLoop {
 
             // Check if there's a pending human approval
             let approval_queue = human_approval_queue.read().await;
-            let has_pending_approval = approval_queue.iter().any(|approval| 
-                approval.capability_id == capability_id && 
-                matches!(approval.status, ApprovalStatus::Pending)
-            );
+            let has_pending_approval = approval_queue.iter().any(|approval| {
+                approval.capability_id == capability_id
+                    && matches!(approval.status, ApprovalStatus::Pending)
+            });
             drop(approval_queue);
 
             if has_pending_approval {
@@ -480,8 +541,14 @@ impl ContinuousResolutionLoop {
                 config.clone(),
             );
 
-            if let Err(e) = loop_instance.trigger_resolution(&capability_id, Some("continuous_loop")).await {
-                eprintln!("⚠️ Failed to trigger resolution for {}: {}", capability_id, e);
+            if let Err(e) = loop_instance
+                .trigger_resolution(&capability_id, Some("continuous_loop"))
+                .await
+            {
+                eprintln!(
+                    "⚠️ Failed to trigger resolution for {}: {}",
+                    capability_id, e
+                );
             }
         }
 
@@ -494,11 +561,14 @@ impl ContinuousResolutionLoop {
     ) -> RuntimeResult<()> {
         let mut queue = human_approval_queue.write().await;
         let now = Utc::now();
-        
+
         for approval in queue.iter_mut() {
             if matches!(approval.status, ApprovalStatus::Pending) && now > approval.deadline {
                 approval.status = ApprovalStatus::Expired;
-                println!("⏰ Approval expired for capability: {}", approval.capability_id);
+                println!(
+                    "⏰ Approval expired for capability: {}",
+                    approval.capability_id
+                );
             }
         }
 
@@ -516,37 +586,62 @@ impl ContinuousResolutionLoop {
     }
 
     /// Approve a high-risk capability
-    pub async fn approve_capability(&self, capability_id: &str, approver: &str) -> RuntimeResult<()> {
+    pub async fn approve_capability(
+        &self,
+        capability_id: &str,
+        approver: &str,
+    ) -> RuntimeResult<()> {
         let mut queue = self.human_approval_queue.write().await;
-        
+
         for approval in queue.iter_mut() {
-            if approval.capability_id == capability_id && matches!(approval.status, ApprovalStatus::Pending) {
+            if approval.capability_id == capability_id
+                && matches!(approval.status, ApprovalStatus::Pending)
+            {
                 let risk_assessment = approval.risk_assessment.clone();
                 approval.status = ApprovalStatus::Approved(approver.to_string());
                 println!("✅ Capability {} approved by {}", capability_id, approver);
-                
+
                 // Trigger resolution now that it's approved
                 drop(queue);
-                return self.attempt_resolution(capability_id, &risk_assessment).await;
+                return self
+                    .attempt_resolution(capability_id, &risk_assessment)
+                    .await;
             }
         }
 
-        Err(RuntimeError::Generic(format!("No pending approval found for capability: {}", capability_id)))
+        Err(RuntimeError::Generic(format!(
+            "No pending approval found for capability: {}",
+            capability_id
+        )))
     }
 
     /// Reject a high-risk capability
-    pub async fn reject_capability(&self, capability_id: &str, rejector: &str, reason: &str) -> RuntimeResult<()> {
+    pub async fn reject_capability(
+        &self,
+        capability_id: &str,
+        rejector: &str,
+        reason: &str,
+    ) -> RuntimeResult<()> {
         let mut queue = self.human_approval_queue.write().await;
-        
+
         for approval in queue.iter_mut() {
-            if approval.capability_id == capability_id && matches!(approval.status, ApprovalStatus::Pending) {
-                approval.status = ApprovalStatus::Rejected(rejector.to_string(), reason.to_string());
-                println!("❌ Capability {} rejected by {}: {}", capability_id, rejector, reason);
+            if approval.capability_id == capability_id
+                && matches!(approval.status, ApprovalStatus::Pending)
+            {
+                approval.status =
+                    ApprovalStatus::Rejected(rejector.to_string(), reason.to_string());
+                println!(
+                    "❌ Capability {} rejected by {}: {}",
+                    capability_id, rejector, reason
+                );
                 return Ok(());
             }
         }
 
-        Err(RuntimeError::Generic(format!("No pending approval found for capability: {}", capability_id)))
+        Err(RuntimeError::Generic(format!(
+            "No pending approval found for capability: {}",
+            capability_id
+        )))
     }
 
     /// Get resolution statistics
@@ -615,30 +710,41 @@ impl Default for ResolutionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver;
     use crate::ccos::checkpoint_archive::CheckpointArchive;
+    use crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver;
 
     #[tokio::test]
     async fn test_continuous_resolution_loop() {
-        let marketplace = Arc::new(CapabilityMarketplace::new());
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let checkpoint_archive = Arc::new(CheckpointArchive::new());
-        let resolver = Arc::new(MissingCapabilityResolver::new(Arc::clone(&marketplace), Arc::clone(&checkpoint_archive)));
+        let resolver = Arc::new(MissingCapabilityResolver::new(
+            Arc::clone(&marketplace),
+            Arc::clone(&checkpoint_archive),
+            crate::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
+            crate::ccos::synthesis::feature_flags::MissingCapabilityConfig::default(),
+        ));
         let registration_flow = Arc::new(RegistrationFlow::new(Arc::clone(&marketplace)));
         let config = ResolutionConfig::default();
-        
-        let loop_instance = ContinuousResolutionLoop::new(
-            resolver,
-            registration_flow,
-            marketplace,
-            config,
-        );
+
+        let loop_instance =
+            ContinuousResolutionLoop::new(resolver, registration_flow, marketplace, config);
 
         // Test risk assessment
-        let risk_assessment = loop_instance.assess_risk("test.capability", None).await.unwrap();
+        let risk_assessment = loop_instance
+            .assess_risk("test.capability", None)
+            .await
+            .unwrap();
         assert_eq!(risk_assessment.priority, ResolutionPriority::Low);
         assert!(!risk_assessment.requires_human_approval);
 
-        let high_risk_assessment = loop_instance.assess_risk("admin.security.auth", None).await.unwrap();
+        let high_risk_assessment = loop_instance
+            .assess_risk("admin.security.auth", None)
+            .await
+            .unwrap();
         assert_eq!(high_risk_assessment.priority, ResolutionPriority::Critical);
         assert!(high_risk_assessment.requires_human_approval);
     }
@@ -647,9 +753,26 @@ mod tests {
     fn test_backoff_calculation() {
         let config = ResolutionConfig::default();
         let loop_instance = ContinuousResolutionLoop::new(
-            Arc::new(MissingCapabilityResolver::new(Arc::new(CapabilityMarketplace::new()), Arc::new(CheckpointArchive::new()))),
-            Arc::new(RegistrationFlow::new(Arc::new(CapabilityMarketplace::new()))),
-            Arc::new(CapabilityMarketplace::new()),
+            Arc::new(MissingCapabilityResolver::new(
+                Arc::new(CapabilityMarketplace::new(Arc::new(
+                    tokio::sync::RwLock::new(
+                        crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+                    ),
+                ))),
+                Arc::new(CheckpointArchive::new()),
+                crate::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
+                crate::ccos::synthesis::feature_flags::MissingCapabilityConfig::default(),
+            )),
+            Arc::new(RegistrationFlow::new(Arc::new(CapabilityMarketplace::new(
+                Arc::new(tokio::sync::RwLock::new(
+                    crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+                )),
+            )))),
+            Arc::new(CapabilityMarketplace::new(Arc::new(
+                tokio::sync::RwLock::new(
+                    crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+                ),
+            ))),
             config.clone(),
         );
 
@@ -662,10 +785,17 @@ mod tests {
     #[test]
     fn test_resolution_methods_priority() {
         let config = ResolutionConfig::default();
-        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(tokio::sync::RwLock::new(
+            crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
         let loop_instance = ContinuousResolutionLoop::new(
-            Arc::new(MissingCapabilityResolver::new(marketplace.clone(), Arc::new(CheckpointArchive::new()))),
+            Arc::new(MissingCapabilityResolver::new(
+                marketplace.clone(),
+                Arc::new(CheckpointArchive::new()),
+                crate::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
+                crate::ccos::synthesis::feature_flags::MissingCapabilityConfig::default(),
+            )),
             Arc::new(RegistrationFlow::new(marketplace.clone())),
             marketplace,
             config,
