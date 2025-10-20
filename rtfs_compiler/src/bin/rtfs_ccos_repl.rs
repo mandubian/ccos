@@ -90,6 +90,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .num_args(1..)
                 .action(clap::ArgAction::Append),
         )
+        .arg(
+            Arg::new("http-real")
+                .long("http-real")
+                .help("Use the real HTTP provider instead of the mock")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("http-allow")
+                .long("http-allow")
+                .help("Allow outbound HTTP hostnames (repeatable)")
+                .num_args(1..)
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
+            Arg::new("microvm-provider")
+                .long("microvm-provider")
+                .help("Select MicroVM provider (e.g. mock, process)")
+                .value_name("PROVIDER"),
+        )
         .get_matches();
 
     // Parse security level
@@ -141,6 +160,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let http_real = matches.get_flag("http-real");
+    if http_real {
+        builder = builder.http_mocking(false);
+        builder = builder.enable_category(CapabilityCategory::Network);
+    }
+
+    if let Some(hosts) = matches.get_many::<String>("http-allow") {
+        let host_list: Vec<String> = hosts.map(|h| h.to_string()).collect();
+        if !host_list.is_empty() {
+            builder = builder.http_allow_hosts(host_list);
+        }
+    }
+
+    if let Some(provider) = matches.get_one::<String>("microvm-provider") {
+        builder = builder.microvm_provider(provider.clone());
+    } else if http_real {
+        builder = builder.microvm_provider("process");
+    }
+
     // Create environment
     let env = builder.build()?;
 
@@ -150,6 +188,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "📦 Available Capabilities: {}",
             env.list_capabilities().len()
+        );
+    }
+
+    if http_real
+        && !env
+            .config()
+            .enabled_categories
+            .contains(&CapabilityCategory::Network)
+    {
+        eprintln!(
+            "⚠️  HTTP provider enabled but network capability disabled; enable it with --enable network"
         );
     }
 

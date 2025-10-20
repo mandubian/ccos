@@ -1116,6 +1116,12 @@ impl CapabilityRegistry {
         args: Vec<Value>,
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
+        // Perform security validation if runtime context is provided
+        if let Some(context) = runtime_context {
+            use crate::runtime::security::SecurityAuthorizer;
+            SecurityAuthorizer::authorize_capability(context, capability_id, &args)?;
+        }
+
         // Determine which provider to use based on execution policy
         let provider_id = match &self.execution_policy {
             CapabilityExecutionPolicy::Marketplace => {
@@ -1188,6 +1194,7 @@ impl CapabilityRegistry {
                 | "ccos.io.log"
                 | "ccos.io.print"
                 | "ccos.io.println"
+                | "ccos.network.http-fetch"  // Safe for testing with mock endpoints
         )
     }
 
