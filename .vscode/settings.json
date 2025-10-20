@@ -7,5 +7,4 @@
     "github.copilot.chat.agent.thinkingTool": true,
     "chat.tools.autoApprove": true,
     "terminal.integrated.env.linux": {},
-    // "remote.SSH.httpsProxy": "",
 }

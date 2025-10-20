@@ -469,8 +469,12 @@ mod tests {
             .endpoint_to_capability(&endpoint, "test_api")
             .unwrap();
 
-        assert!(capability.id.contains("http") && capability.id.contains("test_api") 
-            && capability.id.contains("get") && capability.id.contains("users"));
+        assert!(
+            capability.id.contains("http")
+                && capability.id.contains("test_api")
+                && capability.id.contains("get")
+                && capability.id.contains("users")
+        );
         assert!(capability.effects.contains(&":auth".to_string()));
         assert!(capability.metadata.get("auth_required") == Some(&"true".to_string()));
     }

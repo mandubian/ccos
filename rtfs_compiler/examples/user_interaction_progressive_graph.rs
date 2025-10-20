@@ -915,7 +915,10 @@ async fn generate_synthesis_summary(
     // `pending_capabilities` lists capabilities that need resolution before
     // execution. Print that list when present for informational purposes.
     if !synth_result.pending_capabilities.is_empty() {
-        println!("[synthesis.quick] Pending capabilities: {:?}", synth_result.pending_capabilities);
+        println!(
+            "[synthesis.quick] Pending capabilities: {:?}",
+            synth_result.pending_capabilities
+        );
         if persist {
             // Persist a simple marker file listing pending capabilities for debugging.
             let contents = synth_result.pending_capabilities.join("\n");

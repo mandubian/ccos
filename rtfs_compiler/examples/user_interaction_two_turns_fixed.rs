@@ -222,7 +222,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !synthesis.pending_capabilities.is_empty() {
-        println!("\n--- Pending Capabilities (needs resolution) ---\n{:?}", synthesis.pending_capabilities);
+        println!(
+            "\n--- Pending Capabilities (needs resolution) ---\n{:?}",
+            synthesis.pending_capabilities
+        );
     }
 
     if let Some(arbiter) = ccos.get_delegating_arbiter() {

@@ -51,13 +51,13 @@ fn main() {
     // Initialize runtime components
     let module_registry = ModuleRegistry::new();
     let mut runtime_strategy = rtfs_compiler::runtime::ir_runtime::IrStrategy::new(module_registry);
-    
+
     // Enable persistent environment for REPL usage
     if let Err(e) = runtime_strategy.enable_persistent_env() {
         eprintln!("Failed to enable persistent environment: {:?}", e);
         std::process::exit(1);
     }
-    
+
     let runtime_strategy: Box<dyn RuntimeStrategy> = Box::new(runtime_strategy);
     let mut runtime = Runtime::new(runtime_strategy);
 

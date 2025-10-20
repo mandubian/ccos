@@ -93,8 +93,11 @@ impl RuntimeStrategy for IrStrategy {
 
         // Use persistent environment if available (for REPL-like usage)
         if let Some(ref mut persistent_env) = self.persistent_env {
-            self.runtime
-                .execute_program_with_env(&program_node, &mut self.module_registry, persistent_env)
+            self.runtime.execute_program_with_env(
+                &program_node,
+                &mut self.module_registry,
+                persistent_env,
+            )
         } else {
             self.runtime
                 .execute_program(&program_node, &mut self.module_registry)

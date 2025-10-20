@@ -246,7 +246,11 @@ impl CapabilitySynthesizer {
     }
 
     /// Calculate quality score for synthesized capability
-    pub fn calculate_quality_score(&self, request: &SynthesisRequest, result: &SynthesisResult) -> f64 {
+    pub fn calculate_quality_score(
+        &self,
+        request: &SynthesisRequest,
+        result: &SynthesisResult,
+    ) -> f64 {
         let mut score = 0.5; // Base score
 
         // Check if input schema is properly handled

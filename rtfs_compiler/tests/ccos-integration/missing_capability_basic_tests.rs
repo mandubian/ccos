@@ -5,12 +5,12 @@
 
 use rtfs_compiler::ccos::{
     capabilities::registry::CapabilityRegistry,
-    capability_marketplace::{CapabilityMarketplace, types::CapabilityManifest},
+    capability_marketplace::{types::CapabilityManifest, CapabilityMarketplace},
     checkpoint_archive::CheckpointArchive,
     synthesis::{
-        mcp_registry_client::McpRegistryClient,
-    missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
         feature_flags::MissingCapabilityConfig,
+        mcp_registry_client::McpRegistryClient,
+        missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
     },
 };
 use rtfs_compiler::runtime::values::Value;
@@ -307,8 +307,14 @@ async fn test_memory_usage_under_load() {
                 Value::String(format!("arg{}", i)),
                 Value::Float(i as f64),
                 Value::Map(std::collections::HashMap::from([
-                    (rtfs_compiler::ast::MapKey::String("key1".to_string()), Value::String(format!("value1_{}", i))),
-                    (rtfs_compiler::ast::MapKey::String("key2".to_string()), Value::String(format!("value2_{}", i))),
+                    (
+                        rtfs_compiler::ast::MapKey::String("key1".to_string()),
+                        Value::String(format!("value1_{}", i)),
+                    ),
+                    (
+                        rtfs_compiler::ast::MapKey::String("key2".to_string()),
+                        Value::String(format!("value2_{}", i)),
+                    ),
                 ])),
             ],
             std::collections::HashMap::from([
