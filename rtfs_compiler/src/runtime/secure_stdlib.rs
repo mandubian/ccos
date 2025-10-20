@@ -319,6 +319,24 @@ impl SecureStandardLibrary {
             })),
         );
 
+        env.define(
+            &Symbol("starts-with?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "starts-with?".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::starts_with),
+            })),
+        );
+
+        env.define(
+            &Symbol("split".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "split".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::split),
+            })),
+        );
+
         // String upper case function
         env.define(
             &Symbol("string-upper".to_string()),
@@ -359,6 +377,15 @@ impl SecureStandardLibrary {
                 name: "map".to_string(),
                 arity: Arity::Fixed(2),
                 func: Arc::new(Self::map_with_context),
+            })),
+        );
+
+        env.define(
+            &Symbol("apply".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "apply".to_string(),
+                arity: Arity::Variadic(2),
+                func: Arc::new(Self::apply_with_context),
             })),
         );
 
@@ -1330,6 +1357,92 @@ impl SecureStandardLibrary {
         Ok(Value::Boolean(haystack.contains(needle)))
     }
 
+    fn starts_with(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "starts-with?".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let haystack = match &args[0] {
+            Value::String(s) => Some(s.as_str()),
+            Value::Nil => None,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "starts-with?".to_string(),
+                })
+            }
+        };
+
+        let needle = match &args[1] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "starts-with?".to_string(),
+                })
+            }
+        };
+
+        Ok(Value::Boolean(
+            haystack.map_or(false, |haystack| haystack.starts_with(needle)),
+        ))
+    }
+
+    fn split(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "split".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let haystack = match &args[0] {
+            Value::String(s) => s.as_str(),
+            Value::Nil => "",
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "split".to_string(),
+                })
+            }
+        };
+
+        let delimiter = match &args[1] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "split".to_string(),
+                })
+            }
+        };
+
+        let parts: Vec<Value> = if delimiter.is_empty() {
+            haystack
+                .chars()
+                .map(|c| Value::String(c.to_string()))
+                .collect()
+        } else {
+            haystack
+                .split(delimiter)
+                .map(|segment| Value::String(segment.to_string()))
+                .collect()
+        };
+
+        Ok(Value::Vector(parts))
+    }
+
     fn vector(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         Ok(Value::Vector(args.to_vec()))
@@ -1809,6 +1922,97 @@ impl SecureStandardLibrary {
             };
         }
         Ok(accumulator)
+    }
+
+    fn apply_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "apply".to_string(),
+                expected: "2+".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let func_value = args[0].clone();
+
+        let mut call_args: Vec<Value> = Vec::with_capacity(args.len().saturating_sub(1));
+        if args.len() > 2 {
+            for arg in &args[1..args.len() - 1] {
+                call_args.push(arg.clone());
+            }
+        }
+
+        let last = args.last().cloned().unwrap_or(Value::Nil);
+        Self::expand_apply_collection(&mut call_args, last)?;
+
+        match evaluator.call_function(func_value, &call_args, env)? {
+            ExecutionOutcome::Complete(value) => Ok(value),
+            ExecutionOutcome::RequiresHost(_hc) => Err(RuntimeError::Generic(
+                "apply cannot execute functions that require host interaction".into(),
+            )),
+            #[cfg(feature = "effect-boundary")]
+            ExecutionOutcome::RequiresHost(_) => Err(RuntimeError::Generic(
+                "apply cannot execute functions that require host interaction".into(),
+            )),
+        }
+    }
+
+    fn expand_apply_collection(call_args: &mut Vec<Value>, value: Value) -> RuntimeResult<()> {
+        match value {
+            Value::Vector(items) | Value::List(items) => {
+                call_args.reserve(items.len());
+                for item in items {
+                    Self::push_apply_item(call_args, item)?;
+                }
+                Ok(())
+            }
+            Value::Map(map) => {
+                Self::append_map_entries(call_args, &map);
+                Ok(())
+            }
+            Value::String(s) => {
+                call_args.extend(s.chars().map(|c| Value::String(c.to_string())));
+                Ok(())
+            }
+            Value::Nil => Ok(()),
+            other => Err(RuntimeError::TypeError {
+                expected: "vector, list, map, string, or nil".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "apply".to_string(),
+            }),
+        }
+    }
+
+    fn push_apply_item(call_args: &mut Vec<Value>, item: Value) -> RuntimeResult<()> {
+        match item {
+            Value::Map(map) => {
+                Self::append_map_entries(call_args, &map);
+                Ok(())
+            }
+            other => {
+                call_args.push(other);
+                Ok(())
+            }
+        }
+    }
+
+    fn append_map_entries(call_args: &mut Vec<Value>, map: &HashMap<MapKey, Value>) {
+        for (key, value) in map {
+            call_args.push(Self::map_key_to_value(key));
+            call_args.push(value.clone());
+        }
+    }
+
+    fn map_key_to_value(key: &MapKey) -> Value {
+        match key {
+            MapKey::Keyword(keyword) => Value::Keyword(keyword.clone()),
+            MapKey::String(text) => Value::String(text.clone()),
+            MapKey::Integer(i) => Value::Integer(*i),
+        }
     }
 
     fn max_value(args: Vec<Value>) -> RuntimeResult<Value> {
