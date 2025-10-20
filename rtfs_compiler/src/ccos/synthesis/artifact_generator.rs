@@ -238,10 +238,7 @@ pub fn generate_planner(schema: &ParamSchema, history: &[InteractionTurn], domai
         MapKey::Keyword(Keyword("required-keys".into())),
         required_keys_vec.clone(),
     );
-    plan_map.insert(
-        MapKey::Keyword(Keyword("inputs".into())),
-        inputs_vector,
-    );
+    plan_map.insert(MapKey::Keyword(Keyword("inputs".into())), inputs_vector);
     plan_map.insert(
         MapKey::Keyword(Keyword("conversation".into())),
         conversation_vector,
@@ -416,11 +413,18 @@ pub fn generate_planner_via_arbiter(
 
     // Load RTFS grammar and anti-patterns to steer the LLM output toward valid RTFS
     let grammar = std::fs::read_to_string("assets/prompts/arbiter/plan_generation/v1/grammar.md")
-        .or_else(|_| std::fs::read_to_string("../assets/prompts/arbiter/plan_generation/v1/grammar.md"))
+        .or_else(|_| {
+            std::fs::read_to_string("../assets/prompts/arbiter/plan_generation/v1/grammar.md")
+        })
         .unwrap_or_else(|_| "(grammar unavailable)".to_string());
-    let anti_patterns = std::fs::read_to_string("assets/prompts/arbiter/plan_generation_full/v1/anti_patterns.md")
-        .or_else(|_| std::fs::read_to_string("../assets/prompts/arbiter/plan_generation_full/v1/anti_patterns.md"))
-        .unwrap_or_else(|_| "(anti-patterns unavailable)".to_string());
+    let anti_patterns =
+        std::fs::read_to_string("assets/prompts/arbiter/plan_generation_full/v1/anti_patterns.md")
+            .or_else(|_| {
+                std::fs::read_to_string(
+                    "../assets/prompts/arbiter/plan_generation_full/v1/anti_patterns.md",
+                )
+            })
+            .unwrap_or_else(|_| "(anti-patterns unavailable)".to_string());
 
     format!(
         concat!(
@@ -513,7 +517,14 @@ pub fn generate_agent_with_intelligent_mapping(
 
     // Render skills and constraints in a human-friendly way instead of Debug output
     let skills_repr = format!("[{}]", agent_skills.join(", "));
-    let constraints_repr = format!("[{}]", constraints.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "));
+    let constraints_repr = format!(
+        "[{}]",
+        constraints
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     format!(
         r#"
@@ -686,9 +697,16 @@ fn generate_skill_based_rtfs_plan(
     };
 
     if !result_parts.is_empty() {
-        plan_parts.push(format!("{{:status \"task_ready\" {} :constraints {}}}", result_parts.join(" "), constraints_str));
+        plan_parts.push(format!(
+            "{{:status \"task_ready\" {} :constraints {}}}",
+            result_parts.join(" "),
+            constraints_str
+        ));
     } else {
-        plan_parts.push(format!("{{:status \"task_ready\" :constraints {}}}", constraints_str));
+        plan_parts.push(format!(
+            "{{:status \"task_ready\" :constraints {}}}",
+            constraints_str
+        ));
     }
 
     // Close let if we opened one

@@ -1,12 +1,14 @@
-use crate::ccos::capability_marketplace::types::{CapabilityManifest, CapabilityProvenance, ProviderType, HttpCapability};
+use crate::ast::TypeExpr;
+use crate::ccos::capability_marketplace::types::{
+    CapabilityManifest, CapabilityProvenance, HttpCapability, ProviderType,
+};
 use crate::ccos::synthesis::auth_injector::AuthInjector;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::ast::TypeExpr;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
-use chrono::Utc;
+use std::path::PathBuf;
 
 /// OpenAPI Operation (endpoint) information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,7 +188,7 @@ impl OpenAPIImporter {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("./capabilities"));
-        
+
         Self {
             base_url,
             auth_injector: AuthInjector::new(),
@@ -206,27 +208,34 @@ impl OpenAPIImporter {
     }
 
     /// Create a complete RTFS capability from OpenAPI spec
-    pub async fn create_rtfs_capability(&self, spec_url: &str, capability_id: &str) -> RuntimeResult<CapabilityManifest> {
-        eprintln!("🔧 Creating RTFS capability from OpenAPI spec: {}", spec_url);
-        
+    pub async fn create_rtfs_capability(
+        &self,
+        spec_url: &str,
+        capability_id: &str,
+    ) -> RuntimeResult<CapabilityManifest> {
+        eprintln!(
+            "🔧 Creating RTFS capability from OpenAPI spec: {}",
+            spec_url
+        );
+
         // Load OpenAPI spec
         let spec = self.load_spec(spec_url).await?;
-        
+
         // Extract operations
         let operations = self.extract_operations(&spec)?;
-        
+
         // Parse API info
         let api_info = self.parse_api_info(&spec)?;
-        
+
         // Extract rate limits from spec or infer from common patterns
         let rate_limits = self.extract_rate_limits(&spec, &api_info)?;
-        
+
         // Extract auth requirements
         let auth_requirements = self.extract_auth_requirements(&spec)?;
-        
+
         // Generate RTFS functions
         let rtfs_functions = self.generate_rtfs_functions(&operations, &api_info)?;
-        
+
         // Create metadata
         let metadata = OpenAPICapabilityMetadata {
             api_info,
@@ -235,13 +244,13 @@ impl OpenAPIImporter {
             endpoints: operations,
             rtfs_functions,
         };
-        
+
         // Create capability manifest
         let manifest = self.create_capability_manifest(capability_id, &metadata)?;
-        
+
         // Save capability to storage
         self.save_capability(&manifest, &metadata).await?;
-        
+
         eprintln!("✅ Created and saved RTFS capability: {}", capability_id);
         Ok(manifest)
     }
@@ -254,7 +263,7 @@ impl OpenAPIImporter {
 
         // Try to fetch from URL
         eprintln!("📥 Loading OpenAPI spec from: {}", spec_url);
-        
+
         let client = reqwest::Client::new();
         let response = client
             .get(spec_url)
@@ -265,11 +274,14 @@ impl OpenAPIImporter {
 
         if !response.status().is_success() {
             return Err(RuntimeError::Generic(format!(
-                "Failed to fetch OpenAPI spec: HTTP {}", response.status()
+                "Failed to fetch OpenAPI spec: HTTP {}",
+                response.status()
             )));
         }
 
-        let spec_text = response.text().await
+        let spec_text = response
+            .text()
+            .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to read OpenAPI spec: {}", e)))?;
 
         // Parse JSON or YAML
@@ -284,7 +296,10 @@ impl OpenAPIImporter {
     }
 
     /// Parse OpenAPI spec and extract operations
-    pub fn extract_operations(&self, spec: &serde_json::Value) -> RuntimeResult<Vec<OpenAPIOperation>> {
+    pub fn extract_operations(
+        &self,
+        spec: &serde_json::Value,
+    ) -> RuntimeResult<Vec<OpenAPIOperation>> {
         let paths = spec
             .get("paths")
             .and_then(|p| p.as_object())
@@ -312,31 +327,42 @@ impl OpenAPIImporter {
 
     /// Parse API info from OpenAPI spec
     fn parse_api_info(&self, spec: &serde_json::Value) -> RuntimeResult<OpenAPIInfo> {
-        let info = spec.get("info")
-            .ok_or_else(|| RuntimeError::Generic("No 'info' section found in OpenAPI spec".to_string()))?;
+        let info = spec.get("info").ok_or_else(|| {
+            RuntimeError::Generic("No 'info' section found in OpenAPI spec".to_string())
+        })?;
 
-        let title = info.get("title")
+        let title = info
+            .get("title")
             .and_then(|t| t.as_str())
             .unwrap_or("Unknown API")
             .to_string();
 
-        let description = info.get("description")
+        let description = info
+            .get("description")
             .and_then(|d| d.as_str())
             .map(|s| s.to_string());
 
-        let version = info.get("version")
+        let version = info
+            .get("version")
             .and_then(|v| v.as_str())
             .unwrap_or("1.0.0")
             .to_string();
 
         let contact = info.get("contact").map(|c| ContactInfo {
-            name: c.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
+            name: c
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string()),
             url: c.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()),
-            email: c.get("email").and_then(|e| e.as_str()).map(|s| s.to_string()),
+            email: c
+                .get("email")
+                .and_then(|e| e.as_str())
+                .map(|s| s.to_string()),
         });
 
         let license = info.get("license").map(|l| LicenseInfo {
-            name: l.get("name")
+            name: l
+                .get("name")
                 .and_then(|n| n.as_str())
                 .unwrap_or("Unknown")
                 .to_string(),
@@ -353,20 +379,28 @@ impl OpenAPIImporter {
     }
 
     /// Extract rate limits from OpenAPI spec or infer from common patterns
-    fn extract_rate_limits(&self, spec: &serde_json::Value, api_info: &OpenAPIInfo) -> RuntimeResult<RateLimitInfo> {
+    fn extract_rate_limits(
+        &self,
+        spec: &serde_json::Value,
+        api_info: &OpenAPIInfo,
+    ) -> RuntimeResult<RateLimitInfo> {
         // Try to extract from x-rate-limit extensions
         let free_tier = if let Some(extensions) = spec.get("x-ccos-rate-limits") {
             Some(TierLimits {
-                requests_per_day: extensions.get("free_requests_per_day")
+                requests_per_day: extensions
+                    .get("free_requests_per_day")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32),
-                requests_per_minute: extensions.get("free_requests_per_minute")
+                requests_per_minute: extensions
+                    .get("free_requests_per_minute")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32),
-                requests_per_second: extensions.get("free_requests_per_second")
+                requests_per_second: extensions
+                    .get("free_requests_per_second")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32),
-                requests_per_month: extensions.get("free_requests_per_month")
+                requests_per_month: extensions
+                    .get("free_requests_per_month")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32),
             })
@@ -402,20 +436,29 @@ impl OpenAPIImporter {
     }
 
     /// Extract authentication requirements from OpenAPI spec
-    fn extract_auth_requirements(&self, spec: &serde_json::Value) -> RuntimeResult<AuthRequirements> {
+    fn extract_auth_requirements(
+        &self,
+        spec: &serde_json::Value,
+    ) -> RuntimeResult<AuthRequirements> {
         // Check for security schemes
-        if let Some(security_schemes) = spec.get("components")
-            .and_then(|c| c.get("securitySchemes")) {
-            
-            for (name, scheme) in security_schemes.as_object().unwrap_or(&serde_json::Map::new()) {
+        if let Some(security_schemes) = spec
+            .get("components")
+            .and_then(|c| c.get("securitySchemes"))
+        {
+            for (name, scheme) in security_schemes
+                .as_object()
+                .unwrap_or(&serde_json::Map::new())
+            {
                 if let Some(scheme_type) = scheme.get("type").and_then(|t| t.as_str()) {
                     match scheme_type {
                         "apiKey" => {
-                            let location = scheme.get("in")
+                            let location = scheme
+                                .get("in")
                                 .and_then(|i| i.as_str())
                                 .unwrap_or("header");
-                            
-                            let param_name = scheme.get("name")
+
+                            let param_name = scheme
+                                .get("name")
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("api_key");
 
@@ -428,7 +471,8 @@ impl OpenAPIImporter {
                             });
                         }
                         "http" => {
-                            let _scheme_name = scheme.get("scheme")
+                            let _scheme_name = scheme
+                                .get("scheme")
                                 .and_then(|s| s.as_str())
                                 .unwrap_or("bearer");
 
@@ -457,7 +501,11 @@ impl OpenAPIImporter {
     }
 
     /// Generate RTFS functions from OpenAPI operations
-    fn generate_rtfs_functions(&self, operations: &[OpenAPIOperation], api_info: &OpenAPIInfo) -> RuntimeResult<Vec<RTFSFunction>> {
+    fn generate_rtfs_functions(
+        &self,
+        operations: &[OpenAPIOperation],
+        api_info: &OpenAPIInfo,
+    ) -> RuntimeResult<Vec<RTFSFunction>> {
         let mut functions = Vec::new();
 
         for operation in operations {
@@ -468,7 +516,10 @@ impl OpenAPIImporter {
 
             functions.push(RTFSFunction {
                 name: function_name.clone(),
-                description: operation.summary.clone().unwrap_or_else(|| operation.description.clone().unwrap_or_default()),
+                description: operation
+                    .summary
+                    .clone()
+                    .unwrap_or_else(|| operation.description.clone().unwrap_or_default()),
                 method: operation.method.to_uppercase(),
                 path: operation.path.clone(),
                 signature,
@@ -482,18 +533,23 @@ impl OpenAPIImporter {
     }
 
     /// Generate function name from operation
-    fn generate_function_name(&self, operation: &OpenAPIOperation, _api_info: &OpenAPIInfo) -> String {
+    fn generate_function_name(
+        &self,
+        operation: &OpenAPIOperation,
+        _api_info: &OpenAPIInfo,
+    ) -> String {
         if let Some(operation_id) = &operation.operation_id {
             // Use operation ID if available
             operation_id.to_lowercase().replace("-", "_")
         } else {
             // Generate from method and path
             let method = operation.method.to_lowercase();
-            let path_parts: Vec<&str> = operation.path
+            let path_parts: Vec<&str> = operation
+                .path
                 .split('/')
                 .filter(|part| !part.is_empty() && !part.starts_with('{'))
                 .collect();
-            
+
             if path_parts.is_empty() {
                 format!("{}_{}", method, "root")
             } else {
@@ -505,7 +561,7 @@ impl OpenAPIImporter {
     /// Generate RTFS function signature
     fn generate_function_signature(&self, operation: &OpenAPIOperation) -> String {
         let mut params = Vec::new();
-        
+
         for param in &operation.parameters {
             let param_type = self.map_openapi_type_to_rtfs(&param.schema);
             let param_def = if param.required {
@@ -516,17 +572,24 @@ impl OpenAPIImporter {
             params.push(param_def);
         }
 
-        format!("(defn {} [{}] ...)", 
-                self.generate_function_name(operation, &OpenAPIInfo::default()),
-                params.join(" "))
+        format!(
+            "(defn {} [{}] ...)",
+            self.generate_function_name(operation, &OpenAPIInfo::default()),
+            params.join(" ")
+        )
     }
 
     /// Generate RTFS function implementation
-    fn generate_function_implementation(&self, operation: &OpenAPIOperation, api_info: &OpenAPIInfo) -> String {
+    fn generate_function_implementation(
+        &self,
+        operation: &OpenAPIOperation,
+        api_info: &OpenAPIInfo,
+    ) -> String {
         let method = operation.method.to_uppercase();
         let path = &operation.path;
-        
-        format!(r#"
+
+        format!(
+            r#"
 (defn {} [{}]
   "{}"
   (call :http.request
@@ -537,7 +600,9 @@ impl OpenAPIImporter {
     :auth (call :ccos.auth.inject :service "{}")))
 "#,
             self.generate_function_name(operation, api_info),
-            operation.parameters.iter()
+            operation
+                .parameters
+                .iter()
                 .map(|p| format!(":{}", p.name))
                 .collect::<Vec<_>>()
                 .join(" "),
@@ -545,7 +610,9 @@ impl OpenAPIImporter {
             method,
             self.base_url,
             path,
-            operation.parameters.iter()
+            operation
+                .parameters
+                .iter()
                 .map(|p| format!(":{} {}", p.name, p.name))
                 .collect::<Vec<_>>()
                 .join(" "),
@@ -555,15 +622,17 @@ impl OpenAPIImporter {
 
     /// Generate function parameters
     fn generate_function_parameters(&self, operation: &OpenAPIOperation) -> Vec<RTFSParameter> {
-        operation.parameters.iter().map(|param| {
-            RTFSParameter {
+        operation
+            .parameters
+            .iter()
+            .map(|param| RTFSParameter {
                 name: param.name.clone(),
                 param_type: self.map_openapi_type_to_rtfs(&param.schema),
                 description: param.description.clone(),
                 required: param.required,
                 default_value: None,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Map OpenAPI type to RTFS type
@@ -584,9 +653,13 @@ impl OpenAPIImporter {
     }
 
     /// Create capability manifest
-    fn create_capability_manifest(&self, capability_id: &str, metadata: &OpenAPICapabilityMetadata) -> RuntimeResult<CapabilityManifest> {
+    fn create_capability_manifest(
+        &self,
+        capability_id: &str,
+        metadata: &OpenAPICapabilityMetadata,
+    ) -> RuntimeResult<CapabilityManifest> {
         let rtfs_code = self.generate_rtfs_module(metadata);
-        
+
         // Create simple TypeExpr for schemas
         let input_schema = TypeExpr::Map {
             entries: vec![],
@@ -596,14 +669,23 @@ impl OpenAPIImporter {
             entries: vec![],
             wildcard: None,
         };
-        
+
         // Create metadata map
         let mut manifest_metadata = HashMap::new();
         manifest_metadata.insert("rtfs_code".to_string(), rtfs_code);
-        manifest_metadata.insert("openapi_metadata".to_string(), serde_json::to_string(metadata).unwrap_or_default());
-        manifest_metadata.insert("rate_limits".to_string(), serde_json::to_string(&metadata.rate_limits).unwrap_or_default());
-        manifest_metadata.insert("auth_requirements".to_string(), serde_json::to_string(&metadata.auth_requirements).unwrap_or_default());
-        
+        manifest_metadata.insert(
+            "openapi_metadata".to_string(),
+            serde_json::to_string(metadata).unwrap_or_default(),
+        );
+        manifest_metadata.insert(
+            "rate_limits".to_string(),
+            serde_json::to_string(&metadata.rate_limits).unwrap_or_default(),
+        );
+        manifest_metadata.insert(
+            "auth_requirements".to_string(),
+            serde_json::to_string(&metadata.auth_requirements).unwrap_or_default(),
+        );
+
         Ok(CapabilityManifest {
             id: capability_id.to_string(),
             name: metadata.api_info.title.clone(),
@@ -634,11 +716,17 @@ impl OpenAPIImporter {
     /// Generate complete RTFS module
     fn generate_rtfs_module(&self, metadata: &OpenAPICapabilityMetadata) -> String {
         let mut module = String::new();
-        
-        module.push_str(&format!(";; RTFS Module for {} API\n", metadata.api_info.title));
-        module.push_str(&format!(";; Generated from OpenAPI spec v{}\n", metadata.api_info.version));
+
+        module.push_str(&format!(
+            ";; RTFS Module for {} API\n",
+            metadata.api_info.title
+        ));
+        module.push_str(&format!(
+            ";; Generated from OpenAPI spec v{}\n",
+            metadata.api_info.version
+        ));
         module.push_str(&format!(";; Base URL: {}\n\n", self.base_url));
-        
+
         // Add rate limiting metadata
         if let Some(free_tier) = &metadata.rate_limits.free_tier {
             module.push_str(";; Rate Limits (Free Tier):\n");
@@ -650,37 +738,45 @@ impl OpenAPIImporter {
             }
             module.push_str("\n");
         }
-        
+
         // Add auth requirements
         if metadata.auth_requirements.required {
-            module.push_str(&format!(";; Authentication: {} ({}: {})\n", 
+            module.push_str(&format!(
+                ";; Authentication: {} ({}: {})\n",
                 metadata.auth_requirements.auth_type,
                 metadata.auth_requirements.auth_location,
-                metadata.auth_requirements.auth_param_name));
+                metadata.auth_requirements.auth_param_name
+            ));
             if let Some(env_var) = &metadata.auth_requirements.env_var_name {
                 module.push_str(&format!(";; Environment variable: {}\n", env_var));
             }
             module.push_str("\n");
         }
-        
+
         // Add all function definitions
         for function in &metadata.rtfs_functions {
             module.push_str(&function.implementation);
             module.push_str("\n\n");
         }
-        
+
         module
     }
 
     /// Save capability to storage
-    async fn save_capability(&self, manifest: &CapabilityManifest, metadata: &OpenAPICapabilityMetadata) -> RuntimeResult<()> {
+    async fn save_capability(
+        &self,
+        manifest: &CapabilityManifest,
+        metadata: &OpenAPICapabilityMetadata,
+    ) -> RuntimeResult<()> {
         // Create storage directory if it doesn't exist
-        fs::create_dir_all(&self.storage_dir)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create storage directory: {}", e)))?;
+        fs::create_dir_all(&self.storage_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
+        })?;
 
         let capability_dir = self.storage_dir.join(&manifest.id);
-        fs::create_dir_all(&capability_dir)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create capability directory: {}", e)))?;
+        fs::create_dir_all(&capability_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
+        })?;
 
         // Save manifest (skip serialization for now since CapabilityManifest doesn't implement Serialize)
         // TODO: Add Serialize derive to CapabilityManifest or create a serializable version
@@ -688,7 +784,8 @@ impl OpenAPIImporter {
 
         // Save capability metadata as RTFS
         let metadata_path = capability_dir.join("capability.rtfs");
-        let metadata_rtfs = format!(r#"
+        let metadata_rtfs = format!(
+            r#"
 ;; Capability metadata for {}
 ;; Generated from OpenAPI import
 ;; Source URL: {}
@@ -751,41 +848,90 @@ impl OpenAPIImporter {
     :location "{}"
     :parameter_name "{}"
     :env_var_hint "{}"}})
-"#, 
-            manifest.name, 
-            metadata.api_info.title, 
-            manifest.id, 
-            manifest.name, 
-            manifest.version, 
-            manifest.description, 
+"#,
+            manifest.name,
+            metadata.api_info.title,
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.description,
             metadata.api_info.title,
             chrono::Utc::now().to_rfc3339(),
             metadata.api_info.title,
             metadata.api_info.version,
             metadata.api_info.description.as_deref().unwrap_or(""),
-            metadata.rate_limits.free_tier.as_ref().and_then(|t| t.requests_per_minute).unwrap_or(0),
-            metadata.rate_limits.free_tier.as_ref().and_then(|t| t.requests_per_day).unwrap_or(0),
-            metadata.rate_limits.paid_tier.as_ref().and_then(|t| t.requests_per_minute).unwrap_or(0),
-            metadata.rate_limits.paid_tier.as_ref().and_then(|t| t.requests_per_day).unwrap_or(0),
+            metadata
+                .rate_limits
+                .free_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_minute)
+                .unwrap_or(0),
+            metadata
+                .rate_limits
+                .free_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_day)
+                .unwrap_or(0),
+            metadata
+                .rate_limits
+                .paid_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_minute)
+                .unwrap_or(0),
+            metadata
+                .rate_limits
+                .paid_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_day)
+                .unwrap_or(0),
             metadata.auth_requirements.auth_type,
             metadata.auth_requirements.auth_location,
             metadata.auth_requirements.auth_param_name,
-            metadata.auth_requirements.env_var_name.as_deref().unwrap_or(""),
+            metadata
+                .auth_requirements
+                .env_var_name
+                .as_deref()
+                .unwrap_or(""),
             chrono::Utc::now().to_rfc3339(),
             metadata.api_info.title,
             metadata.api_info.title,
-            metadata.rate_limits.free_tier.as_ref().and_then(|t| t.requests_per_minute).unwrap_or(0),
-            metadata.rate_limits.free_tier.as_ref().and_then(|t| t.requests_per_day).unwrap_or(0),
-            metadata.rate_limits.paid_tier.as_ref().and_then(|t| t.requests_per_minute).unwrap_or(0),
-            metadata.rate_limits.paid_tier.as_ref().and_then(|t| t.requests_per_day).unwrap_or(0),
+            metadata
+                .rate_limits
+                .free_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_minute)
+                .unwrap_or(0),
+            metadata
+                .rate_limits
+                .free_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_day)
+                .unwrap_or(0),
+            metadata
+                .rate_limits
+                .paid_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_minute)
+                .unwrap_or(0),
+            metadata
+                .rate_limits
+                .paid_tier
+                .as_ref()
+                .and_then(|t| t.requests_per_day)
+                .unwrap_or(0),
             metadata.auth_requirements.auth_type,
             metadata.auth_requirements.auth_location,
             metadata.auth_requirements.auth_param_name,
-            metadata.auth_requirements.env_var_name.as_deref().unwrap_or("")
+            metadata
+                .auth_requirements
+                .env_var_name
+                .as_deref()
+                .unwrap_or("")
         );
-        
-        fs::write(&metadata_path, metadata_rtfs)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to write capability metadata: {}", e)))?;
+
+        fs::write(&metadata_path, metadata_rtfs).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write capability metadata: {}", e))
+        })?;
 
         // Save RTFS code from metadata
         if let Some(rtfs_code) = manifest.metadata.get("rtfs_code") {
@@ -889,9 +1035,10 @@ impl OpenAPIImporter {
             .and_then(|r| r.as_bool())
             .unwrap_or(false);
 
-        let schema = param.get("schema").cloned().unwrap_or_else(|| {
-            serde_json::json!({"type": "string"})
-        });
+        let schema = param
+            .get("schema")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({"type": "string"}));
 
         Ok(OpenAPIParameter {
             name,
@@ -913,7 +1060,10 @@ impl OpenAPIImporter {
             "openapi.{}.{}.{}",
             api_name,
             operation.method.to_lowercase(),
-            operation.operation_id.as_ref().unwrap_or(&"operation".to_string())
+            operation
+                .operation_id
+                .as_ref()
+                .unwrap_or(&"operation".to_string())
         );
 
         let description = operation
@@ -926,10 +1076,7 @@ impl OpenAPIImporter {
         let mut parameters_map = HashMap::new();
         for param in &operation.parameters {
             let param_type = self.json_schema_to_rtfs_type(&param.schema);
-            parameters_map.insert(
-                param.name.clone(),
-                param_type,
-            );
+            parameters_map.insert(param.name.clone(), param_type);
         }
 
         // Mark if auth is required
@@ -954,12 +1101,17 @@ impl OpenAPIImporter {
 
         Ok(CapabilityManifest {
             id: capability_id,
-            name: operation.operation_id.clone().unwrap_or_else(|| format!("{} {}", operation.method, operation.path)),
+            name: operation
+                .operation_id
+                .clone()
+                .unwrap_or_else(|| format!("{} {}", operation.method, operation.path)),
             description,
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
                     handler: std::sync::Arc::new(|_| {
-                        Ok(crate::runtime::values::Value::String("OpenAPI operation placeholder".to_string()))
+                        Ok(crate::runtime::values::Value::String(
+                            "OpenAPI operation placeholder".to_string(),
+                        ))
                     }),
                 },
             ),
@@ -984,7 +1136,7 @@ impl OpenAPIImporter {
     }
 
     /// Convert JSON Schema type to RTFS keyword type
-    fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> String {
+    pub fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> String {
         if let Some(schema_type) = schema.get("type").and_then(|t| t.as_str()) {
             match schema_type {
                 "string" => ":string".to_string(),
@@ -1054,14 +1206,20 @@ mod tests {
         assert_eq!(importer.json_schema_to_rtfs_type(&number_schema), ":number");
 
         let boolean_schema = serde_json::json!({"type": "boolean"});
-        assert_eq!(importer.json_schema_to_rtfs_type(&boolean_schema), ":boolean");
+        assert_eq!(
+            importer.json_schema_to_rtfs_type(&boolean_schema),
+            ":boolean"
+        );
     }
 
     #[tokio::test]
     async fn test_load_mock_spec() {
         let importer = OpenAPIImporter::mock("https://api.example.com".to_string());
         let spec = importer.load_spec("mock").await.unwrap();
-        
-        assert_eq!(spec.get("openapi"), Some(&serde_json::Value::String("3.0.0".to_string())));
+
+        assert_eq!(
+            spec.get("openapi"),
+            Some(&serde_json::Value::String("3.0.0".to_string()))
+        );
     }
 }
