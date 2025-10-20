@@ -1324,8 +1324,12 @@ impl Orchestrator {
             Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                 // Create a new checkpoint and emit PlanPaused
                 let missing_capabilities = vec![host_call.capability_id.clone()];
-                let (checkpoint_id, _serialized) =
-                    self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator, Some(missing_capabilities))?;
+                let (checkpoint_id, _serialized) = self.checkpoint_plan(
+                    &plan_id,
+                    &primary_intent_id,
+                    &evaluator,
+                    Some(missing_capabilities),
+                )?;
 
                 let mut metadata_map: std::collections::HashMap<String, RtfsValue> =
                     std::collections::HashMap::new();

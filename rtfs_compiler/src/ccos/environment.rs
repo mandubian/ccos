@@ -6,7 +6,7 @@
 //! - Progress tracking
 //! - Resource management
 
-use crate::ast::{Expression, TopLevel, DoExpr};
+use crate::ast::{DoExpr, Expression, TopLevel};
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::{capability_marketplace::CapabilityMarketplace, host::RuntimeHost};
 use crate::parser;
@@ -124,14 +124,25 @@ impl CCOSEnvironment {
         ));
         // Create capability marketplace with integrated registry
         let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
-        
+
         // Bootstrap the marketplace to register default capabilities
         let marketplace_for_bootstrap = marketplace.clone();
-        let _: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-            futures::executor::block_on(async move {
-                marketplace_for_bootstrap.bootstrap().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        // Avoid futures::executor nesting; use a dedicated Tokio runtime
+        {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e))
+                })?;
+            let _: Result<(), Box<dyn std::error::Error + Send + Sync>> = rt.block_on(async move {
+                marketplace_for_bootstrap
+                    .bootstrap()
+                    .await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             });
-        
+        }
+
         // Create causal chain for tracking
         let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
 
@@ -543,15 +554,26 @@ impl CCOSEnvironment {
                 }
             });
 
-            let _: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-                futures::executor::block_on(async move {
-                    marketplace_for_cap.register_local_capability(
-                    "observability.ingestor:v1.ingest".to_string(),
-                    "Observability WM Ingestor".to_string(),
-                    "Ingest Working Memory entries from provided records or replay from Causal Chain".to_string(),
-                    handler,
-                ).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            // Register using a dedicated Tokio runtime to avoid nested futures executors
+            {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e))
+                    })?;
+                let _: Result<(), Box<dyn std::error::Error + Send + Sync>> = rt.block_on(async move {
+                    marketplace_for_cap
+                        .register_local_capability(
+                            "observability.ingestor:v1.ingest".to_string(),
+                            "Observability WM Ingestor".to_string(),
+                            "Ingest Working Memory entries from provided records or replay from Causal Chain".to_string(),
+                            handler,
+                        )
+                        .await
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
                 });
+            }
         }
         Ok(Self {
             config,
@@ -577,8 +599,11 @@ impl CCOSEnvironment {
 
         // Execute the expression and propagate the ExecutionOutcome upward.
         let result = {
-            let evaluator = self.evaluator.lock().map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
-            
+            let evaluator = self
+                .evaluator
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
+
             // Ensure hierarchical execution context is initialized
             {
                 let mut cm = evaluator.context_manager.borrow_mut();
@@ -586,7 +611,7 @@ impl CCOSEnvironment {
                     cm.initialize(Some("repl-session".to_string()));
                 }
             }
-            
+
             // Evaluate expression
             evaluator.evaluate(expr)
         };
@@ -617,8 +642,11 @@ impl CCOSEnvironment {
         // Execute each top-level item
         let execution_result = (|| -> RuntimeResult<ExecutionOutcome> {
             for item in parsed {
-                let mut evaluator = self.evaluator.lock().map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
-                
+                let mut evaluator = self
+                    .evaluator
+                    .lock()
+                    .map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
+
                 // Ensure hierarchical execution context is initialized
                 {
                     let mut cm = evaluator.context_manager.borrow_mut();
@@ -630,7 +658,7 @@ impl CCOSEnvironment {
                     TopLevel::Expression(expr) => {
                         // Evaluate expression
                         last_result = evaluator.evaluate(&expr)?;
-                        
+
                         // Special handling for function definitions to ensure they persist in the environment
                         if let ExecutionOutcome::Complete(Value::Function(_)) = last_result {
                             if let Expression::Defn(defn_expr) = expr {
@@ -659,7 +687,7 @@ impl CCOSEnvironment {
                                 evaluator.env.define(&defn_expr.name, function);
                             }
                         }
-                        
+
                         if let ExecutionOutcome::RequiresHost(_) = last_result {
                             return Ok(last_result);
                         }
@@ -691,9 +719,11 @@ impl CCOSEnvironment {
                                     if self.config.verbose {
                                         println!("Import statement: {:?}", import_def.module_name);
                                     }
-                                    
+
                                     // Resolve and bind the import
-                                    if let Err(e) = self.resolve_and_bind_import(&mut evaluator, import_def) {
+                                    if let Err(e) =
+                                        self.resolve_and_bind_import(&mut evaluator, import_def)
+                                    {
                                         if self.config.verbose {
                                             println!("Import resolution failed: {}", e);
                                         }
@@ -702,6 +732,138 @@ impl CCOSEnvironment {
                                 }
                             }
                         }
+                    }
+                    TopLevel::Capability(cap_def) => {
+                        // Handle capability definitions loaded from a file
+                        if self.config.verbose {
+                            println!("Loading capability: {:?}", cap_def.name);
+                        }
+
+                        // Extract simple metadata from properties
+                        let mut description: Option<String> = None;
+                        let mut version: Option<String> = None;
+                        let mut source_url: Option<String> = None;
+                        // Implementation program to execute at call time
+                        let mut implementation_expr: Option<crate::ast::Expression> = None;
+
+                        for prop in &cap_def.properties {
+                            let key = prop.key.0.as_str();
+                            match key {
+                                "description" => {
+                                    if let ExecutionOutcome::Complete(Value::String(s)) =
+                                        evaluator.evaluate(&prop.value)?
+                                    {
+                                        description = Some(s);
+                                    }
+                                }
+                                "version" => {
+                                    if let ExecutionOutcome::Complete(Value::String(s)) =
+                                        evaluator.evaluate(&prop.value)?
+                                    {
+                                        version = Some(s);
+                                    }
+                                }
+                                "source_url" | "source-url" => {
+                                    if let ExecutionOutcome::Complete(Value::String(s)) =
+                                        evaluator.evaluate(&prop.value)?
+                                    {
+                                        source_url = Some(s);
+                                    }
+                                }
+                                "implementation" => {
+                                    // Store the program to be executed when the capability is called
+                                    implementation_expr = Some(prop.value.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // If we have an implementation program, register a generic callable capability
+                        if let Some(impl_expr) = implementation_expr {
+                            let capability_id = cap_def.name.0.clone();
+                            let cap_name = cap_def
+                                .properties
+                                .iter()
+                                .find_map(|p| {
+                                    if p.key.0 == "name" {
+                                        if let Ok(ExecutionOutcome::Complete(Value::String(s))) =
+                                            evaluator.evaluate(&p.value)
+                                        {
+                                            Some(s)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_else(|| capability_id.clone());
+                            let cap_desc = description
+                                .unwrap_or_else(|| format!("Loaded capability {}", capability_id));
+
+                            // Capture immutable resources for the handler
+                            let host_for_cap = self.host.clone();
+                            let module_registry = evaluator.module_registry().clone();
+                            let impl_expr_arc = std::sync::Arc::new(impl_expr);
+                            let marketplace_for_cap = self.marketplace.clone();
+
+                            // Register local capability that evaluates the implementation program with 'input'
+                            std::thread::spawn(move || {
+                                let handler = std::sync::Arc::new(
+                                    move |input: &Value| -> RuntimeResult<Value> {
+                                        // Fresh evaluator per invocation to ensure isolation
+                                        let mut eval = crate::runtime::evaluator::Evaluator::new(
+                                            module_registry.clone(),
+                                            crate::runtime::security::RuntimeContext::full(),
+                                            host_for_cap.clone(),
+                                        );
+                                        // Provide the entire input under a conventional symbol 'input'
+                                        eval.env.define(
+                                            &crate::ast::Symbol("input".to_string()),
+                                            input.clone(),
+                                        );
+
+                                        match eval.evaluate(&impl_expr_arc) {
+                                            Ok(ExecutionOutcome::Complete(v)) => Ok(v),
+                                            Ok(other) => Err(RuntimeError::Generic(format!(
+                                                "Capability implementation did not complete: {:?}",
+                                                other
+                                            ))),
+                                            Err(e) => Err(e),
+                                        }
+                                    },
+                                );
+
+                                let fut = async move {
+                                    marketplace_for_cap
+                                        .register_local_capability(
+                                            capability_id,
+                                            cap_name,
+                                            cap_desc,
+                                            handler,
+                                        )
+                                        .await
+                                        .map_err(|e| {
+                                            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                                        })
+                                };
+                                let _ = futures::executor::block_on(fut);
+                            })
+                            .join()
+                            .map_err(|_| {
+                                RuntimeError::Generic(
+                                    "Thread join error during capability registration".to_string(),
+                                )
+                            })?;
+                        } else if self.config.verbose {
+                            let cap_id = cap_def.name.0.clone();
+                            println!(
+                                "Capability '{}' has no :implementation; skipping registration.",
+                                cap_id
+                            );
+                        }
+
+                        // Continue; last_result remains previous value
                     }
                     _ => {
                         // For other top-level items, we could extend this to handle them
@@ -867,7 +1029,7 @@ impl CCOSEnvironment {
         import_def: &crate::ast::ImportDefinition,
     ) -> RuntimeResult<()> {
         let module_name = &import_def.module_name.0;
-        
+
         if self.config.verbose {
             println!("Resolving import: {}", module_name);
         }
@@ -889,8 +1051,9 @@ impl CCOSEnvironment {
         };
 
         // Get the module's exports
-        let exports = module.exports.read()
-            .map_err(|e| RuntimeError::InternalError(format!("Failed to read module exports: {}", e)))?;
+        let exports = module.exports.read().map_err(|e| {
+            RuntimeError::InternalError(format!("Failed to read module exports: {}", e))
+        })?;
 
         // Handle different import options
         match (&import_def.alias, &import_def.only) {
@@ -899,16 +1062,27 @@ impl CCOSEnvironment {
                 // Create a namespace-like binding for the alias
                 let alias_name = &alias.0;
                 let module_value = crate::runtime::values::Value::Map(
-                    exports.iter()
+                    exports
+                        .iter()
                         .map(|(name, export)| {
-                            (crate::ast::MapKey::Keyword(crate::ast::Keyword(name.clone())), export.value.clone())
+                            (
+                                crate::ast::MapKey::Keyword(crate::ast::Keyword(name.clone())),
+                                export.value.clone(),
+                            )
                         })
-                        .collect()
+                        .collect(),
                 );
-                evaluator.env.define(&crate::ast::Symbol(alias_name.clone()), module_value);
-                
+                evaluator
+                    .env
+                    .define(&crate::ast::Symbol(alias_name.clone()), module_value);
+
                 if self.config.verbose {
-                    println!("Imported module '{}' as '{}' with {} exports", module_name, alias_name, exports.len());
+                    println!(
+                        "Imported module '{}' as '{}' with {} exports",
+                        module_name,
+                        alias_name,
+                        exports.len()
+                    );
                 }
             }
             (None, Some(only_symbols)) => {
@@ -916,9 +1090,15 @@ impl CCOSEnvironment {
                 for symbol_ast in only_symbols {
                     let symbol_name = &symbol_ast.0;
                     if let Some(export) = exports.get(symbol_name) {
-                        evaluator.env.define(&crate::ast::Symbol(symbol_name.clone()), export.value.clone());
+                        evaluator.env.define(
+                            &crate::ast::Symbol(symbol_name.clone()),
+                            export.value.clone(),
+                        );
                         if self.config.verbose {
-                            println!("Imported symbol '{}' from module '{}'", symbol_name, module_name);
+                            println!(
+                                "Imported symbol '{}' from module '{}'",
+                                symbol_name, module_name
+                            );
                         }
                     } else {
                         return Err(RuntimeError::SymbolNotFound(format!(
@@ -932,15 +1112,21 @@ impl CCOSEnvironment {
                 // Import all symbols, qualified by the full module name
                 for (export_name, export) in exports.iter() {
                     let qualified_name = format!("{}/{}", module_name, export_name);
-                    evaluator.env.define(&crate::ast::Symbol(qualified_name.clone()), export.value.clone());
+                    evaluator.env.define(
+                        &crate::ast::Symbol(qualified_name.clone()),
+                        export.value.clone(),
+                    );
                     if self.config.verbose {
-                        println!("Imported qualified symbol '{}' from module '{}'", qualified_name, module_name);
+                        println!(
+                            "Imported qualified symbol '{}' from module '{}'",
+                            qualified_name, module_name
+                        );
                     }
                 }
             }
             (Some(_), Some(_)) => {
                 return Err(RuntimeError::ModuleError(
-                    "Invalid import specification: cannot combine :as with :only".to_string()
+                    "Invalid import specification: cannot combine :as with :only".to_string(),
                 ));
             }
         }
@@ -961,27 +1147,27 @@ impl CCOSEnvironment {
         // Convert module name to file path
         // For now, we'll look in a simple test_modules directory
         let file_path = format!("test_modules/{}.rtfs", module_name);
-        
+
         // Read the module file
-        let source_content = std::fs::read_to_string(&file_path)
-            .map_err(|e| RuntimeError::ModuleError(format!(
-                "Failed to read module file '{}': {}",
-                file_path, e
-            )))?;
+        let source_content = std::fs::read_to_string(&file_path).map_err(|e| {
+            RuntimeError::ModuleError(format!("Failed to read module file '{}': {}", file_path, e))
+        })?;
 
         if self.config.verbose {
             println!("Read module source from '{}'", file_path);
         }
 
         // Parse the module source
-        let parsed = crate::parser::parse(&source_content)
-            .map_err(|e| RuntimeError::ModuleError(format!(
+        let parsed = crate::parser::parse(&source_content).map_err(|e| {
+            RuntimeError::ModuleError(format!(
                 "Failed to parse module file '{}': {:?}",
                 file_path, e
-            )))?;
+            ))
+        })?;
 
         // Find the module definition
-        let module_def = parsed.into_iter()
+        let module_def = parsed
+            .into_iter()
             .find_map(|top_level| {
                 if let crate::ast::TopLevel::Module(module_def) = top_level {
                     Some(module_def)
@@ -989,10 +1175,12 @@ impl CCOSEnvironment {
                     None
                 }
             })
-            .ok_or_else(|| RuntimeError::ModuleError(format!(
-                "No module definition found in file '{}'",
-                file_path
-            )))?;
+            .ok_or_else(|| {
+                RuntimeError::ModuleError(format!(
+                    "No module definition found in file '{}'",
+                    file_path
+                ))
+            })?;
 
         if self.config.verbose {
             println!("Found module definition: {:?}", module_def.name);
@@ -1002,42 +1190,51 @@ impl CCOSEnvironment {
         // For now, we'll create a basic module structure
         // In a full implementation, this would use the ModuleRegistry's compilation logic
         let mut module_env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
-        
+
         // Execute the module definitions to populate the environment
         for def in &module_def.definitions {
             match def {
                 crate::ast::ModuleLevelDefinition::Def(def_expr) => {
                     let expr = crate::ast::Expression::Def(Box::new(def_expr.clone()));
                     let result = evaluator.evaluate(&expr)?;
-                    if let crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) = result {
+                    if let crate::runtime::execution_outcome::ExecutionOutcome::Complete(value) =
+                        result
+                    {
                         module_env.define(&def_expr.symbol, value);
                     }
                 }
                 crate::ast::ModuleLevelDefinition::Defn(defn_expr) => {
                     let expr = crate::ast::Expression::Defn(Box::new(defn_expr.clone()));
                     let result = evaluator.evaluate(&expr)?;
-                    if let crate::runtime::execution_outcome::ExecutionOutcome::Complete(crate::runtime::values::Value::Function(_)) = result {
+                    if let crate::runtime::execution_outcome::ExecutionOutcome::Complete(
+                        crate::runtime::values::Value::Function(_),
+                    ) = result
+                    {
                         // Manually define the function in the module environment
-                        let function = crate::runtime::values::Value::Function(crate::runtime::values::Function::new_closure(
-                            defn_expr.params.iter().map(|p| {
-                                match &p.pattern {
+                        let function = crate::runtime::values::Value::Function(
+                            crate::runtime::values::Function::new_closure(
+                                defn_expr
+                                    .params
+                                    .iter()
+                                    .map(|p| match &p.pattern {
+                                        crate::ast::Pattern::Symbol(s) => s.clone(),
+                                        _ => panic!("Expected symbol pattern in defn parameter"),
+                                    })
+                                    .collect(),
+                                defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+                                defn_expr.variadic_param.as_ref().map(|p| match &p.pattern {
                                     crate::ast::Pattern::Symbol(s) => s.clone(),
-                                    _ => panic!("Expected symbol pattern in defn parameter"),
-                                }
-                            }).collect(),
-                            defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
-                            defn_expr.variadic_param.as_ref().map(|p| {
-                                match &p.pattern {
-                                    crate::ast::Pattern::Symbol(s) => s.clone(),
-                                    _ => panic!("Expected symbol pattern in defn variadic parameter"),
-                                }
-                            }),
-                            Box::new(crate::ast::Expression::Do(crate::ast::DoExpr {
-                                expressions: defn_expr.body.clone(),
-                            })),
-                            Arc::new(module_env.clone()),
-                            defn_expr.delegation_hint.clone(),
-                        ));
+                                    _ => {
+                                        panic!("Expected symbol pattern in defn variadic parameter")
+                                    }
+                                }),
+                                Box::new(crate::ast::Expression::Do(crate::ast::DoExpr {
+                                    expressions: defn_expr.body.clone(),
+                                })),
+                                Arc::new(module_env.clone()),
+                                defn_expr.delegation_hint.clone(),
+                            ),
+                        );
                         module_env.define(&defn_expr.name, function);
                     }
                 }
@@ -1060,7 +1257,9 @@ impl CCOSEnvironment {
                     value: value.clone(),
                     ir_type: crate::ir::core::IrType::Any, // Simplified for now
                     export_type: match value {
-                        crate::runtime::values::Value::Function(_) => crate::runtime::module_runtime::ExportType::Function,
+                        crate::runtime::values::Value::Function(_) => {
+                            crate::runtime::module_runtime::ExportType::Function
+                        }
                         _ => crate::runtime::module_runtime::ExportType::Variable,
                     },
                 };
@@ -1069,8 +1268,12 @@ impl CCOSEnvironment {
         }
 
         if self.config.verbose {
-            println!("Created module '{}' with {} exports: {:?}", 
-                module_name, exports.len(), exports.keys().collect::<Vec<_>>());
+            println!(
+                "Created module '{}' with {} exports: {:?}",
+                module_name,
+                exports.len(),
+                exports.keys().collect::<Vec<_>>()
+            );
         }
 
         // Create the module
@@ -1095,11 +1298,15 @@ impl CCOSEnvironment {
         };
 
         // Register the module in the registry
-        evaluator.module_registry().register_module(module.clone())
-            .map_err(|e| RuntimeError::ModuleError(format!(
-                "Failed to register module '{}': {:?}",
-                module_name, e
-            )))?;
+        evaluator
+            .module_registry()
+            .register_module(module.clone())
+            .map_err(|e| {
+                RuntimeError::ModuleError(format!(
+                    "Failed to register module '{}': {:?}",
+                    module_name, e
+                ))
+            })?;
 
         Ok(Arc::new(module))
     }

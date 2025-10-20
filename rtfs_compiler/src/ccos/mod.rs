@@ -107,7 +107,8 @@ pub struct CCOS {
     agent_registry: Arc<std::sync::RwLock<crate::ccos::agent::InMemoryAgentRegistry>>, // M4
     agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
     /// Missing capability resolver for runtime trap functionality
-    missing_capability_resolver: Option<Arc<crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver>>,
+    missing_capability_resolver:
+        Option<Arc<crate::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver>>,
     /// Optional debug callback for emitting lifecycle JSON lines (plan generation, execution etc.)
     debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
@@ -265,8 +266,8 @@ impl CCOS {
             };
 
             // Create LLM config for delegating arbiter
-            let provider_hint = std::env::var("CCOS_LLM_PROVIDER_HINT")
-                .unwrap_or_else(|_| String::from(""));
+            let provider_hint =
+                std::env::var("CCOS_LLM_PROVIDER_HINT").unwrap_or_else(|_| String::from(""));
             let provider_type = if model == "stub-model"
                 || model == "deterministic-stub-model"
                 || model == "stub"
@@ -338,7 +339,8 @@ impl CCOS {
         };
 
         // Initialize checkpoint archive
-        let checkpoint_archive = Arc::new(crate::ccos::checkpoint_archive::CheckpointArchive::new());
+        let checkpoint_archive =
+            Arc::new(crate::ccos::checkpoint_archive::CheckpointArchive::new());
 
         // Initialize missing capability resolver
         let missing_capability_resolver = Arc::new(
@@ -347,7 +349,7 @@ impl CCOS {
                 Arc::clone(&checkpoint_archive),
                 crate::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
                 crate::ccos::synthesis::feature_flags::MissingCapabilityConfig::from_env(),
-            )
+            ),
         );
 
         // Set the resolver in the capability registry
@@ -652,7 +654,7 @@ impl CCOS {
         natural_language_request: &str,
         security_context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
-        self.emit_debug(|m| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"request_received\",\"text\":{},\"ts\":{}}}",
                 json_escape(natural_language_request),
@@ -712,7 +714,7 @@ impl CCOS {
             }
 
             let plan = da.intent_to_plan(&intent).await?;
-            self.emit_debug(|_| format!(
+            self.emit_debug(|| format!(
                 "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
                 plan.plan_id, intent.intent_id, current_ts()
             ));
@@ -722,7 +724,7 @@ impl CCOS {
                 .arbiter
                 .process_natural_language(natural_language_request, None)
                 .await?;
-            self.emit_debug(|_| {
+            self.emit_debug(|| {
                 format!(
                     "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"ts\":{}}}",
                     plan.plan_id,
@@ -733,7 +735,7 @@ impl CCOS {
         };
 
         // 1.5 Preflight capability validation (M3)
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"plan_validation_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
                 proposed_plan.plan_id,
@@ -743,7 +745,7 @@ impl CCOS {
         self.preflight_validate_capabilities(&proposed_plan).await?;
 
         // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"plan_execution_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
                 proposed_plan.plan_id,
@@ -755,7 +757,7 @@ impl CCOS {
             .governance_kernel
             .validate_and_execute(proposed_plan, security_context)
             .await?;
-        self.emit_debug(|_| format!(
+        self.emit_debug(|| format!(
             "{{\"event\":\"plan_execution_completed\",\"plan_id\":\"{}\",\"success\":{},\"ts\":{}}}",
             plan_id_for_events, result.success, current_ts()
         ));
@@ -819,7 +821,7 @@ impl CCOS {
         natural_language_request: &str,
         security_context: &RuntimeContext,
     ) -> RuntimeResult<(self::types::Plan, ExecutionResult)> {
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"request_received\",\"text\":{},\"ts\":{}}}",
                 json_escape(natural_language_request),
@@ -873,7 +875,7 @@ impl CCOS {
                 ig.store_intent(storable_intent)?;
             }
             let plan = da.intent_to_plan(&intent).await?;
-            self.emit_debug(|_| format!(
+            self.emit_debug(|| format!(
                 "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
                 plan.plan_id, intent.intent_id, current_ts()
             ));
@@ -883,7 +885,7 @@ impl CCOS {
                 .arbiter
                 .process_natural_language(natural_language_request, None)
                 .await?;
-            self.emit_debug(|_| {
+            self.emit_debug(|| {
                 format!(
                     "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"ts\":{}}}",
                     plan.plan_id,
@@ -893,7 +895,7 @@ impl CCOS {
             plan
         };
 
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"plan_validation_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
                 proposed_plan.plan_id,
@@ -902,7 +904,7 @@ impl CCOS {
         });
         self.preflight_validate_capabilities(&proposed_plan).await?;
 
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"plan_execution_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
                 proposed_plan.plan_id,
@@ -915,7 +917,7 @@ impl CCOS {
             .governance_kernel
             .validate_and_execute(proposed_plan, security_context)
             .await?;
-        self.emit_debug(|_| format!(
+        self.emit_debug(|| format!(
             "{{\"event\":\"plan_execution_completed\",\"plan_id\":\"{}\",\"success\":{},\"ts\":{}}}",
             plan_id_for_events, result.success, current_ts()
         ));
@@ -968,7 +970,7 @@ impl CCOS {
         security_context: &RuntimeContext,
         arbiter_context: Option<&std::collections::HashMap<String, crate::runtime::values::Value>>,
     ) -> RuntimeResult<ExecutionResult> {
-        self.emit_debug(|m| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"request_received\",\"text\":{},\"ts\":{}}}",
                 json_escape(natural_language_request),
@@ -1041,7 +1043,7 @@ impl CCOS {
         };
 
         // 1.5 Preflight capability validation (M3)
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"plan_validation_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
                 proposed_plan.plan_id,
@@ -1051,7 +1053,7 @@ impl CCOS {
         self.preflight_validate_capabilities(&proposed_plan).await?;
 
         // 2. Governance Kernel: Validate the plan and execute it via the Orchestrator.
-        self.emit_debug(|_| {
+        self.emit_debug(|| {
             format!(
                 "{{\"event\":\"plan_execution_start\",\"plan_id\":\"{}\",\"ts\":{}}}",
                 proposed_plan.plan_id,
@@ -1063,7 +1065,7 @@ impl CCOS {
             .governance_kernel
             .validate_and_execute(proposed_plan, security_context)
             .await?;
-        self.emit_debug(|_| format!(
+        self.emit_debug(|| format!(
             "{{\"event\":\"plan_execution_completed\",\"plan_id\":\"{}\",\"success\":{},\"ts\":{}}}",
             plan_id_for_events, result.success, current_ts()
         ));
@@ -1217,8 +1219,12 @@ impl CCOS {
     }
 
     /// Get statistics about missing capability resolution
-    pub fn get_missing_capability_stats(&self) -> Option<crate::ccos::synthesis::missing_capability_resolver::QueueStats> {
-        self.missing_capability_resolver.as_ref().map(|resolver| resolver.get_stats())
+    pub fn get_missing_capability_stats(
+        &self,
+    ) -> Option<crate::ccos::synthesis::missing_capability_resolver::QueueStats> {
+        self.missing_capability_resolver
+            .as_ref()
+            .map(|resolver| resolver.get_stats())
     }
 
     /// Extract recent intents from the IntentGraph for analysis.
@@ -1293,7 +1299,7 @@ impl CCOS {
                 synth_result.pending_capabilities.len(),
                 synth_result.pending_capabilities
             );
-            
+
             // Enqueue missing capabilities for resolution
             if let Some(resolver) = &self.missing_capability_resolver {
                 for capability_id in &synth_result.pending_capabilities {
@@ -1463,10 +1469,10 @@ impl CCOS {
 
     fn emit_debug<F>(&self, build: F)
     where
-        F: FnOnce(()) -> String,
+        F: FnOnce() -> String,
     {
         if let Some(cb) = &self.debug_callback {
-            let line = build(());
+            let line = build();
             cb(line);
         }
     }
