@@ -1,22 +1,22 @@
 // GitHub Issue Triage Demo: two-turn conversation to collect repository and triage criteria,
 // then synthesize an RTFS capability via delegating arbiter to auto-triage matching issues.
 use clap::Parser;
-use std::sync::Arc;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json;
 use toml;
 
-use rtfs_compiler::ccos::CCOS;
+use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig;
 use rtfs_compiler::ccos::synthesis::{self, synthesize_capabilities, InteractionTurn};
 use rtfs_compiler::ccos::types::{Plan, StorableIntent};
-use rtfs_compiler::runtime::{RuntimeContext, RuntimeResult, Value};
-use rtfs_compiler::ast::MapKey;
+use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::config::profile_selection::expand_profiles;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::parser;
+use rtfs_compiler::runtime::{RuntimeContext, RuntimeResult, Value};
 
 #[derive(Parser, Debug)]
 /// Minimal demo with optional config loading (`--config <path>`)
@@ -90,8 +90,12 @@ fn apply_profile_env(p: &LlmProfile) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 GitHub Issue Triage Demo - CCOS Two-Turn Synthesis");
-    println!("Collects repository and triage criteria, then synthesizes an auto-triage capability.\n");
-    println!("💡 Tip: Set CCOS_INTERACTIVE_ASK=1 for live prompts or run in batch mode with defaults.\n");
+    println!(
+        "Collects repository and triage criteria, then synthesizes an auto-triage capability.\n"
+    );
+    println!(
+        "💡 Tip: Set CCOS_INTERACTIVE_ASK=1 for live prompts or run in batch mode with defaults.\n"
+    );
 
     let args = Args::parse();
 
@@ -149,7 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Hardcoded Plan ---\n{}\n", plan_body);
 
     let intent_id = "intent.two_turn.demo".to_string();
-    let mut storable_intent = StorableIntent::new("Collect calendar details via two prompts".to_string());
+    let mut storable_intent =
+        StorableIntent::new("Collect calendar details via two prompts".to_string());
     storable_intent.intent_id = intent_id.clone();
     storable_intent.name = Some("two-turn-demo".to_string());
 
@@ -201,7 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         synthesis.metrics.turns_total, synthesis.metrics.coverage
     );
     if !synthesis.metrics.missing_required.is_empty() {
-        println!("Missing answers for: {:?}", synthesis.metrics.missing_required);
+        println!(
+            "Missing answers for: {:?}",
+            synthesis.metrics.missing_required
+        );
     }
 
     if let Some(collector_src) = synthesis.collector {
@@ -213,8 +221,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n--- Synthesized Planner ---\n{}", planner_src);
     }
 
-    if let Some(stub_src) = synthesis.stub {
-        println!("\n--- Synthesized Agent Stub ---\n{}", stub_src);
+    if !synthesis.pending_capabilities.is_empty() {
+        println!("\n--- Pending Capabilities (needs resolution) ---\n{:?}", synthesis.pending_capabilities);
     }
 
     if let Some(arbiter) = ccos.get_delegating_arbiter() {
@@ -228,7 +236,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Validate: prefer single top-level capability
                 match validate_single_capability(&rtfs_block) {
                     Ok(valid_cap) => {
-                        println!("\n--- Synthesized Capability (validated) ---\n{}\n", valid_cap);
+                        println!(
+                            "\n--- Synthesized Capability (validated) ---\n{}\n",
+                            valid_cap
+                        );
                         if let Some(cap_id) = extract_capability_id(&valid_cap) {
                             if let Err(e) = persist_capability(&cap_id, &valid_cap) {
                                 println!("Warning: failed to persist capability: {}", e);
@@ -256,7 +267,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 const FIRST_PROMPT: &str = "What GitHub repository should I monitor for issues?";
-const SECOND_PROMPT: &str = "What criteria should trigger automatic triage? (e.g., label:critical, no assignee)";
+const SECOND_PROMPT: &str =
+    "What criteria should trigger automatic triage? (e.g., label:critical, no assignee)";
 
 #[derive(Debug, Clone)]
 struct ConversationRecord {
@@ -274,10 +286,7 @@ fn derive_goal_from_answers(convo: &[ConversationRecord]) -> String {
     } else if repo.is_empty() {
         format!("Triage issues matching criteria: {}", criteria)
     } else {
-        format!(
-            "Auto-triage issues in {} matching: {}",
-            repo, criteria
-        )
+        format!("Auto-triage issues in {} matching: {}", repo, criteria)
     }
 }
 
@@ -312,8 +321,7 @@ fn validate_single_capability(rtfs_source: &str) -> Result<String, String> {
                 Ok(trimmed.to_string())
             } else {
                 // Fallback: extract the first balanced capability s-expr
-                Ok(extract_balanced_form(trimmed)
-                    .unwrap_or_else(|| trimmed.to_string()))
+                Ok(extract_balanced_form(trimmed).unwrap_or_else(|| trimmed.to_string()))
             }
         }
         Err(_) => Ok(extract_balanced_form(trimmed).unwrap_or_else(|| trimmed.to_string())),

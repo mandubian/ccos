@@ -1,19 +1,19 @@
 //! Simple example demonstrating the missing capability resolution system
-//! 
+//!
 //! This example shows the basic functionality without complex dependencies.
 
+use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ccos::{
-    capability_marketplace::types::CapabilityMarketplace,
     capabilities::registry::CapabilityRegistry,
+    capability_marketplace::types::CapabilityMarketplace,
     checkpoint_archive::CheckpointArchive,
     synthesis::{
-        missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
-        mcp_registry_client::McpRegistryClient,
         feature_flags::MissingCapabilityConfig,
+        mcp_registry_client::McpRegistryClient,
+        missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
     },
 };
 use rtfs_compiler::runtime::values::Value;
-use rtfs_compiler::ast::MapKey;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -23,7 +23,7 @@ async fn main() {
     println!("🚀 Simple Missing Capability Resolution Example");
     println!("===============================================");
     println!();
-    
+
     // Setup the resolution system
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = Arc::new(CapabilityMarketplace::new(registry));
@@ -34,31 +34,34 @@ async fn main() {
         verbose_logging: true,
     };
     let resolver = Arc::new(MissingCapabilityResolver::new(
-        marketplace, 
-        checkpoint_archive, 
+        marketplace,
+        checkpoint_archive,
         config,
-        MissingCapabilityConfig::default()
+        MissingCapabilityConfig::default(),
     ));
-    
+
     // Example 1: Basic missing capability detection
     println!("📝 Example 1: Basic Missing Capability Detection");
     println!("-----------------------------------------------");
-    
+
     let missing_capability_id = "external.api.weather";
-    println!("🔍 Attempting to use '{}' capability...", missing_capability_id);
-    
+    println!(
+        "🔍 Attempting to use '{}' capability...",
+        missing_capability_id
+    );
+
     let result = resolver.handle_missing_capability(
         missing_capability_id.to_string(),
         vec![Value::String("Paris".to_string())],
         std::collections::HashMap::new(),
     );
-    
+
     if result.is_ok() {
         println!("✅ Missing capability queued for resolution");
     } else {
         println!("❌ Failed to queue missing capability: {:?}", result.err());
     }
-    
+
     // Check queue status
     let stats = resolver.get_stats();
     println!("📊 Queue Status:");
@@ -66,14 +69,14 @@ async fn main() {
     println!("   🔄 In Progress: {}", stats.in_progress_count);
     println!("   ❌ Failed: {}", stats.failed_count);
     println!();
-    
+
     // Example 2: MCP Registry discovery
     println!("📝 Example 2: MCP Registry Discovery");
     println!("-----------------------------------");
-    
+
     let mcp_client = McpRegistryClient::new();
     println!("🔍 Searching MCP Registry for 'github' servers...");
-    
+
     let servers = mcp_client.search_servers("github").await;
     match servers {
         Ok(servers) => {
@@ -81,7 +84,7 @@ async fn main() {
             for (i, server) in servers.iter().enumerate() {
                 println!("   {}. {} - {}", i + 1, server.name, server.description);
             }
-            
+
             // Try to convert first server to capability
             if let Some(server) = servers.first() {
                 println!("🔧 Converting MCP server to capability...");
@@ -102,20 +105,23 @@ async fn main() {
         }
     }
     println!();
-    
+
     // Example 3: Multiple concurrent missing capabilities
     println!("📝 Example 3: Concurrent Missing Capabilities");
     println!("---------------------------------------------");
-    
+
     let missing_capabilities = vec![
         "weather.current",
-        "maps.directions", 
+        "maps.directions",
         "calendar.events.create",
-        "email.send"
+        "email.send",
     ];
-    
-    println!("🔍 Attempting to use {} missing capabilities concurrently...", missing_capabilities.len());
-    
+
+    println!(
+        "🔍 Attempting to use {} missing capabilities concurrently...",
+        missing_capabilities.len()
+    );
+
     let mut handles = vec![];
     for (i, capability_id) in missing_capabilities.iter().enumerate() {
         let resolver_clone = resolver.clone();
@@ -129,7 +135,7 @@ async fn main() {
         });
         handles.push(handle);
     }
-    
+
     // Wait for all to complete
     let mut success_count = 0;
     for handle in handles {
@@ -144,9 +150,13 @@ async fn main() {
             }
         }
     }
-    
-    println!("✅ Successfully queued {}/{} capabilities", success_count, missing_capabilities.len());
-    
+
+    println!(
+        "✅ Successfully queued {}/{} capabilities",
+        success_count,
+        missing_capabilities.len()
+    );
+
     // Final queue status
     let final_stats = resolver.get_stats();
     println!("📊 Final Queue Status:");
@@ -154,11 +164,11 @@ async fn main() {
     println!("   🔄 In Progress: {}", final_stats.in_progress_count);
     println!("   ❌ Failed: {}", final_stats.failed_count);
     println!();
-    
+
     // Example 4: Error handling
     println!("📝 Example 4: Error Handling");
     println!("---------------------------");
-    
+
     // Test with empty capability ID
     println!("🔍 Testing with empty capability ID...");
     let result = resolver.handle_missing_capability(
@@ -170,29 +180,32 @@ async fn main() {
         Ok(_) => println!("✅ Empty capability ID handled gracefully"),
         Err(e) => println!("❌ Empty capability ID failed: {:?}", e),
     }
-    
+
     // Test with very long capability ID
     println!("🔍 Testing with very long capability ID...");
     let long_id = "a".repeat(1000);
-    let result = resolver.handle_missing_capability(
-        long_id,
-        vec![],
-        std::collections::HashMap::new(),
-    );
+    let result =
+        resolver.handle_missing_capability(long_id, vec![], std::collections::HashMap::new());
     match result {
         Ok(_) => println!("✅ Long capability ID handled gracefully"),
         Err(e) => println!("❌ Long capability ID failed: {:?}", e),
     }
-    
+
     // Test with complex arguments
     println!("🔍 Testing with complex arguments...");
     let complex_args = vec![
         Value::String("test".to_string()),
         Value::Float(42.0),
         Value::Map(std::collections::HashMap::from([
-            (MapKey::String("key1".to_string()), Value::String("value1".to_string())),
-            (MapKey::String("key2".to_string()), Value::String("value2".to_string())),
-        ]))
+            (
+                MapKey::String("key1".to_string()),
+                Value::String("value1".to_string()),
+            ),
+            (
+                MapKey::String("key2".to_string()),
+                Value::String("value2".to_string()),
+            ),
+        ])),
     ];
     let result = resolver.handle_missing_capability(
         "test.complex".to_string(),
@@ -206,7 +219,7 @@ async fn main() {
         Ok(_) => println!("✅ Complex arguments handled gracefully"),
         Err(e) => println!("❌ Complex arguments failed: {:?}", e),
     }
-    
+
     println!();
     println!("🎉 Example completed successfully!");
     println!();

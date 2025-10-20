@@ -4,7 +4,7 @@
 //! A research assistant that learns your preferences and workflow patterns.
 //!
 //! ## The Learning Flow
-//! 
+//!
 //! **First Interaction (Learning Phase):**
 //! - User: "I need to research quantum computing applications"
 //! - System asks: What domains? What depth? What format? What sources?
@@ -34,20 +34,20 @@
 
 use clap::Parser;
 use crossterm::style::Stylize;
+use serde_json;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-use serde_json;
 use toml;
 
-use rtfs_compiler::ccos::CCOS;
-use rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig;
-use rtfs_compiler::runtime::Value;
 use rtfs_compiler::ast::MapKey;
-use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
+use rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig;
+use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::config::profile_selection::expand_profiles;
+use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
+use rtfs_compiler::runtime::Value;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -123,8 +123,8 @@ impl ExtractedPreferences {
                     "list" => "(list \"string\")",
                     "number" => "\"number\"",
                     "boolean" => "\"boolean\"",
-                    "duration" => "\"string\"",  // "7 days", "2 weeks"
-                    "currency" => "\"string\"",  // "$5000", "€3000"
+                    "duration" => "\"string\"", // "7 days", "2 weeks"
+                    "currency" => "\"string\"", // "$5000", "€3000"
                     _ => "\"string\"",
                 };
                 format!("    :{} {}", key, rtfs_type)
@@ -146,27 +146,32 @@ impl ExtractedPreferences {
     fn to_legacy(&self) -> ResearchPreferences {
         ResearchPreferences {
             topic: self.goal.clone(),
-            domains: self.parameters
+            domains: self
+                .parameters
                 .get("domains")
                 .or_else(|| self.parameters.get("interests"))
                 .map(|p| vec![p.value.clone()])
                 .unwrap_or_default(),
-            depth: self.parameters
+            depth: self
+                .parameters
                 .get("depth")
                 .or_else(|| self.parameters.get("detail_level"))
                 .map(|p| p.value.clone())
                 .unwrap_or_default(),
-            format: self.parameters
+            format: self
+                .parameters
                 .get("format")
                 .or_else(|| self.parameters.get("output_format"))
                 .map(|p| p.value.clone())
                 .unwrap_or_default(),
-            sources: self.parameters
+            sources: self
+                .parameters
                 .get("sources")
                 .or_else(|| self.parameters.get("resources"))
                 .map(|p| vec![p.value.clone()])
                 .unwrap_or_default(),
-            time_constraint: self.parameters
+            time_constraint: self
+                .parameters
                 .get("duration")
                 .or_else(|| self.parameters.get("time_constraint"))
                 .map(|p| p.value.clone())
@@ -178,7 +183,7 @@ impl ExtractedPreferences {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     if args.debug_prompts {
         std::env::set_var("RTFS_SHOW_PROMPTS", "1");
     }
@@ -219,39 +224,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("✓ CCOS initialized");
-    
+
     // Display LLM configuration
     if let Some(arbiter) = ccos.get_delegating_arbiter() {
         let llm_config = arbiter.get_llm_config();
-        println!("✓ LLM: {} via {:?}", llm_config.model, llm_config.provider_type);
+        println!(
+            "✓ LLM: {} via {:?}",
+            llm_config.model, llm_config.provider_type
+        );
     }
 
     match args.mode.as_str() {
         "learn" => {
             println!("\n{}", "🎓 LEARNING MODE".bold().green());
-            println!("{}", "═══════════════════════════════════════════════════════════════\n".dim());
+            println!(
+                "{}",
+                "═══════════════════════════════════════════════════════════════\n".dim()
+            );
             run_learning_phase(&ccos, args.persist).await?;
         }
         "apply" => {
             println!("\n{}", "⚡ APPLICATION MODE".bold().cyan());
-            println!("{}", "═══════════════════════════════════════════════════════════════\n".dim());
+            println!(
+                "{}",
+                "═══════════════════════════════════════════════════════════════\n".dim()
+            );
             run_application_phase(&ccos).await?;
         }
         "full" => {
             println!("\n{}", "🔄 FULL LEARNING LOOP".bold().magenta());
-            println!("{}", "═══════════════════════════════════════════════════════════════\n".dim());
-            
+            println!(
+                "{}",
+                "═══════════════════════════════════════════════════════════════\n".dim()
+            );
+
             let metrics_before = run_learning_phase(&ccos, args.persist).await?;
-            
-            println!("\n{}", "─────────────────────────────────────────────────────────────".dim());
+
+            println!(
+                "\n{}",
+                "─────────────────────────────────────────────────────────────".dim()
+            );
             sleep(Duration::from_secs(2)).await;
-            
+
             let metrics_after = run_application_phase(&ccos).await?;
-            
+
             print_comparison(&metrics_before, &metrics_after);
         }
         _ => {
-            eprintln!("Unknown mode: {}. Use 'learn', 'apply', or 'full'", args.mode);
+            eprintln!(
+                "Unknown mode: {}. Use 'learn', 'apply', or 'full'",
+                args.mode
+            );
             return Err("Invalid mode".into());
         }
     }
@@ -264,30 +287,45 @@ async fn run_learning_phase(
     persist: bool,
 ) -> Result<InteractionMetrics, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
-    
-    println!("{}", "┌─────────────────────────────────────────────────────────────┐".bold());
-    println!("{}", "│ PHASE 1: Initial Learning - Understanding Your Workflow    │".bold());
-    println!("{}", "└─────────────────────────────────────────────────────────────┘\n".bold());
+
+    println!(
+        "{}",
+        "┌─────────────────────────────────────────────────────────────┐".bold()
+    );
+    println!(
+        "{}",
+        "│ PHASE 1: Initial Learning - Understanding Your Workflow    │".bold()
+    );
+    println!(
+        "{}",
+        "└─────────────────────────────────────────────────────────────┘\n".bold()
+    );
 
     let research_topic = std::env::var("RESEARCH_TOPIC")
         .unwrap_or_else(|_| "quantum computing applications in cryptography".to_string());
 
-    println!("{} {}", "User Request:".bold(), research_topic.clone().cyan());
+    println!(
+        "{} {}",
+        "User Request:".bold(),
+        research_topic.clone().cyan()
+    );
     println!();
 
     // Real multi-turn interaction using CCOS capabilities
-    let (preferences, interaction_history) = gather_preferences_via_ccos(&ccos, &research_topic).await?;
-    
+    let (preferences, interaction_history) =
+        gather_preferences_via_ccos(&ccos, &research_topic).await?;
+
     println!("\n{}", "📊 Learned Preferences:".bold().green());
     println!("   • Goal: {}", preferences.goal);
-    
+
     if preferences.parameters.is_empty() {
         println!("   • (No specific parameters extracted)");
     } else {
         println!("   • {} Parameters:", preferences.parameters.len());
         for (param_name, param) in &preferences.parameters {
-            println!("     - {} ({}): {}", 
-                param_name.as_str().bold().cyan(), 
+            println!(
+                "     - {} ({}): {}",
+                param_name.as_str().bold().cyan(),
                 param.param_type.as_str().yellow(),
                 param.value
             );
@@ -297,19 +335,28 @@ async fn run_learning_phase(
     let turns_count = interaction_history.len();
     let questions_asked = turns_count.saturating_sub(1); // Exclude initial request
 
-    println!("\n{}", "┌─────────────────────────────────────────────────────────────┐".bold());
-    println!("{}", "│ PHASE 2: Capability Synthesis (LLM-Driven)                 │".bold());
-    println!("{}", "└─────────────────────────────────────────────────────────────┘\n".bold());
+    println!(
+        "\n{}",
+        "┌─────────────────────────────────────────────────────────────┐".bold()
+    );
+    println!(
+        "{}",
+        "│ PHASE 2: Capability Synthesis (LLM-Driven)                 │".bold()
+    );
+    println!(
+        "{}",
+        "└─────────────────────────────────────────────────────────────┘\n".bold()
+    );
 
-    println!("{}", "🔬 Analyzing interaction patterns with LLM...".yellow());
-    
+    println!(
+        "{}",
+        "🔬 Analyzing interaction patterns with LLM...".yellow()
+    );
+
     // Real LLM-driven synthesis using delegating arbiter
-    let (capability_id, capability_spec) = synthesize_capability_via_llm(
-        &ccos,
-        &research_topic,
-        &interaction_history,
-        &preferences,
-    ).await?;
+    let (capability_id, capability_spec) =
+        synthesize_capability_via_llm(&ccos, &research_topic, &interaction_history, &preferences)
+            .await?;
 
     println!("{}", "✓ LLM analyzed conversation history".dim());
     println!("{}", "✓ Extracted parameter schema from interactions".dim());
@@ -342,11 +389,21 @@ async fn run_learning_phase(
         )
         .await?;
 
-    println!("\n{}", "✓ Registered capability in marketplace".green().bold());
+    println!(
+        "\n{}",
+        "✓ Registered capability in marketplace".green().bold()
+    );
 
     if persist {
         persist_capability(&capability_id, &capability_spec)?;
-        println!("{}", format!("✓ Persisted to capabilities/generated/{}.rtfs", capability_id).green());
+        println!(
+            "{}",
+            format!(
+                "✓ Persisted to capabilities/generated/{}.rtfs",
+                capability_id
+            )
+            .green()
+        );
     }
 
     let elapsed = start.elapsed().as_millis();
@@ -364,9 +421,18 @@ async fn run_application_phase(
 ) -> Result<InteractionMetrics, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
-    println!("\n{}", "┌─────────────────────────────────────────────────────────────┐".bold());
-    println!("{}", "│ PHASE 3: Applying Learned Capability                       │".bold());
-    println!("{}", "└─────────────────────────────────────────────────────────────┘\n".bold());
+    println!(
+        "\n{}",
+        "┌─────────────────────────────────────────────────────────────┐".bold()
+    );
+    println!(
+        "{}",
+        "│ PHASE 3: Applying Learned Capability                       │".bold()
+    );
+    println!(
+        "{}",
+        "└─────────────────────────────────────────────────────────────┘\n".bold()
+    );
 
     // Use a different request to test the learned capability
     // (or use SECOND_RESEARCH_TOPIC to override)
@@ -379,7 +445,7 @@ async fn run_application_phase(
     // Find the most recently registered capability (any domain!)
     let marketplace = ccos.get_capability_marketplace();
     let all_caps = marketplace.list_capabilities().await;
-    
+
     // Get the most recent capability from generated/ directory
     let capability_manifest = all_caps
         .iter()
@@ -389,16 +455,25 @@ async fn run_application_phase(
         })
         .last() // Get the most recent one
         .ok_or("No learned capability found. Run in 'learn' or 'full' mode first")?;
-    
+
     let capability_id = &capability_manifest.id;
 
     println!("{}", "🔍 Checking capability marketplace...".dim());
     sleep(Duration::from_millis(300)).await;
-    println!("{}", format!("✓ Found learned capability: {}", capability_id).green());
-    println!("{}", format!("  Description: {}", capability_manifest.description).dim());
+    println!(
+        "{}",
+        format!("✓ Found learned capability: {}", capability_id).green()
+    );
+    println!(
+        "{}",
+        format!("  Description: {}", capability_manifest.description).dim()
+    );
 
-    println!("\n{}", "⚡ Executing learned workflow via registered capability...".yellow());
-    
+    println!(
+        "\n{}",
+        "⚡ Executing learned workflow via registered capability...".yellow()
+    );
+
     // Build invocation with appropriate parameters based on capability
     // Note: For demo purposes, we use simple mock parameters
     // In production, these would come from actual user input
@@ -422,29 +497,49 @@ async fn run_application_phase(
             new_topic.replace('"', "\\\"")
         )
     };
-    
-    println!("{}", format!("  Invocation: {}", capability_invocation).dim());
-    
+
+    println!(
+        "{}",
+        format!("  Invocation: {}", capability_invocation).dim()
+    );
+
     let ctx = rtfs_compiler::runtime::RuntimeContext::controlled(vec![capability_id.to_string()]);
     let plan = rtfs_compiler::ccos::types::Plan::new_rtfs(capability_invocation, vec![]);
-    
+
     match ccos.validate_and_execute_plan(plan, &ctx).await {
         Ok(result) => {
             println!("{}", "  → Capability executed successfully".dim());
             println!("{}", format!("  → Result: {:?}", result.value).dim());
-            println!("\n{}", "✓ Workflow completed using learned capability!".green().bold());
+            println!(
+                "\n{}",
+                "✓ Workflow completed using learned capability!"
+                    .green()
+                    .bold()
+            );
         }
         Err(e) => {
-            println!("{}", format!("  ⚠ Capability execution error: {}", e).yellow());
-            println!("{}", "  → This is expected if the capability calls sub-capabilities not yet registered".dim());
-            println!("\n{}", "✓ Capability structure validated (would work with implemented sub-capabilities)".green().bold());
+            println!(
+                "{}",
+                format!("  ⚠ Capability execution error: {}", e).yellow()
+            );
+            println!(
+                "{}",
+                "  → This is expected if the capability calls sub-capabilities not yet registered"
+                    .dim()
+            );
+            println!(
+                "\n{}",
+                "✓ Capability structure validated (would work with implemented sub-capabilities)"
+                    .green()
+                    .bold()
+            );
         }
     }
 
     let elapsed = start.elapsed().as_millis();
 
     Ok(InteractionMetrics {
-        turns_count: 1, // Single invocation!
+        turns_count: 1,     // Single invocation!
         questions_asked: 0, // No questions!
         time_elapsed_ms: elapsed,
         capability_synthesized: false,
@@ -456,9 +551,10 @@ async fn generate_questions_for_goal(
     ccos: &Arc<CCOS>,
     goal: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let arbiter = ccos.get_delegating_arbiter()
+    let arbiter = ccos
+        .get_delegating_arbiter()
         .ok_or("Delegating arbiter not available for question generation")?;
-    
+
     let prompt = format!(
         r#"You are analyzing a user's goal to determine what clarifying questions to ask.
 
@@ -473,10 +569,12 @@ Output ONLY a JSON array of question strings, no markdown fences:
 ["question 1", "question 2", "question 3", "question 4", "question 5"]"#,
         goal
     );
-    
-    let response = arbiter.generate_raw_text(&prompt).await
+
+    let response = arbiter
+        .generate_raw_text(&prompt)
+        .await
         .map_err(|e| format!("Question generation failed: {}", e))?;
-    
+
     // Parse JSON response
     let cleaned = response
         .trim()
@@ -484,14 +582,14 @@ Output ONLY a JSON array of question strings, no markdown fences:
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
-    
+
     let questions: Vec<String> = serde_json::from_str(cleaned)
         .map_err(|e| format!("Failed to parse questions JSON: {}", e))?;
-    
+
     if questions.len() < 3 {
         return Err("LLM generated too few questions".into());
     }
-    
+
     // Limit to 5 questions
     Ok(questions.into_iter().take(5).collect())
 }
@@ -502,7 +600,7 @@ async fn gather_preferences_via_ccos(
     topic: &str,
 ) -> Result<(ExtractedPreferences, Vec<(String, String)>), Box<dyn std::error::Error>> {
     use rtfs_compiler::runtime::RuntimeContext;
-    
+
     println!("{}", "💬 Interactive Preference Collection:".bold());
     println!();
 
@@ -516,36 +614,55 @@ async fn gather_preferences_via_ccos(
     // These are generic fallbacks - for real usage, set CCOS_INTERACTIVE_ASK=1
     if std::env::var("CCOS_INTERACTIVE_ASK").is_err() {
         // Set some generic responses for automated testing
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q1", "Medium budget, prefer quality over cheapness");
+        std::env::set_var(
+            "CCOS_USER_ASK_RESPONSE_Q1",
+            "Medium budget, prefer quality over cheapness",
+        );
         std::env::set_var("CCOS_USER_ASK_RESPONSE_Q2", "7 days in total");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q3", "Mix of sightseeing, food, and culture");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q4", "Train and walking, avoid driving");
-        std::env::set_var("CCOS_USER_ASK_RESPONSE_Q5", "Mid-range hotels or nice Airbnbs");
+        std::env::set_var(
+            "CCOS_USER_ASK_RESPONSE_Q3",
+            "Mix of sightseeing, food, and culture",
+        );
+        std::env::set_var(
+            "CCOS_USER_ASK_RESPONSE_Q4",
+            "Train and walking, avoid driving",
+        );
+        std::env::set_var(
+            "CCOS_USER_ASK_RESPONSE_Q5",
+            "Mid-range hotels or nice Airbnbs",
+        );
     }
 
     // Runtime context allowing user.ask
     let ctx = RuntimeContext::controlled(vec!["ccos.user.ask".to_string()]);
-    
+
     let mut answers = HashMap::new();
-    
+
     for (i, question) in questions.iter().enumerate() {
         sleep(Duration::from_millis(200)).await;
         println!("{} {}", format!("  Q{}:", i + 1).bold().yellow(), question);
-        
+
         // Execute RTFS plan to ask the question
-        let plan_body = format!("(call :ccos.user.ask \"{}\")", question.replace('"', "\\\""));
+        let plan_body = format!(
+            "(call :ccos.user.ask \"{}\")",
+            question.replace('"', "\\\"")
+        );
         let plan = rtfs_compiler::ccos::types::Plan::new_rtfs(plan_body, vec![]);
-        
+
         match ccos.validate_and_execute_plan(plan, &ctx).await {
             Ok(result) => {
                 let answer = match &result.value {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                
-                println!("{} {}", format!("  A{}:", i + 1).dim(), answer.clone().cyan());
+
+                println!(
+                    "{} {}",
+                    format!("  A{}:", i + 1).dim(),
+                    answer.clone().cyan()
+                );
                 println!();
-                
+
                 answers.insert(question.to_string(), answer.clone());
                 interaction_history.push((question.to_string(), answer));
             }
@@ -555,10 +672,14 @@ async fn gather_preferences_via_ccos(
                 let env_key = format!("CCOS_USER_ASK_RESPONSE_Q{}", i + 1);
                 let fallback = std::env::var(&env_key)
                     .unwrap_or_else(|_| format!("Reasonable preference for question {}", i + 1));
-                
-                println!("{} {}", format!("  A{}:", i + 1).dim(), fallback.clone().cyan());
+
+                println!(
+                    "{} {}",
+                    format!("  A{}:", i + 1).dim(),
+                    fallback.clone().cyan()
+                );
                 println!();
-                
+
                 answers.insert(question.to_string(), fallback.clone());
                 interaction_history.push((question.to_string(), fallback));
             }
@@ -575,37 +696,54 @@ async fn gather_preferences_via_ccos(
 
     // Fallback: Use heuristic extraction with dynamic parameters
     let mut parameters = std::collections::BTreeMap::new();
-    
+
     // Map Q/A pairs to parameters heuristically
     for (question, answer) in interaction_history.iter().skip(1) {
         let q_lower = question.to_lowercase();
-        
+
         // Try to infer parameter name from question
         let param_name = if q_lower.contains("budget") {
             Some(("budget", "currency"))
-        } else if q_lower.contains("day") || q_lower.contains("duration") || q_lower.contains("long") || q_lower.contains("week") {
+        } else if q_lower.contains("day")
+            || q_lower.contains("duration")
+            || q_lower.contains("long")
+            || q_lower.contains("week")
+        {
             Some(("duration", "duration"))
-        } else if q_lower.contains("interest") || q_lower.contains("prefer") || q_lower.contains("like") {
+        } else if q_lower.contains("interest")
+            || q_lower.contains("prefer")
+            || q_lower.contains("like")
+        {
             Some(("interests", "list"))
-        } else if q_lower.contains("domain") || q_lower.contains("area") || q_lower.contains("type") {
+        } else if q_lower.contains("domain") || q_lower.contains("area") || q_lower.contains("type")
+        {
             Some(("domains", "list"))
-        } else if q_lower.contains("depth") || q_lower.contains("detail") || q_lower.contains("level") {
+        } else if q_lower.contains("depth")
+            || q_lower.contains("detail")
+            || q_lower.contains("level")
+        {
             Some(("depth", "string"))
-        } else if q_lower.contains("format") || q_lower.contains("output") || q_lower.contains("style") {
+        } else if q_lower.contains("format")
+            || q_lower.contains("output")
+            || q_lower.contains("style")
+        {
             Some(("format", "string"))
         } else if q_lower.contains("source") || q_lower.contains("resource") {
             Some(("sources", "list"))
         } else {
             None
         };
-        
+
         if let Some((param_name, param_type)) = param_name {
-            parameters.insert(param_name.to_string(), ExtractedParam {
-                question: question.clone(),
-                value: answer.clone(),
-                param_type: param_type.to_string(),
-                category: None,
-            });
+            parameters.insert(
+                param_name.to_string(),
+                ExtractedParam {
+                    question: question.clone(),
+                    value: answer.clone(),
+                    param_type: param_type.to_string(),
+                    category: None,
+                },
+            );
         }
     }
 
@@ -626,7 +764,11 @@ fn extract_single_from_text(text: &str, keywords: &[&str]) -> String {
             return sentence.trim().to_string();
         }
     }
-    text.split(',').next().unwrap_or("moderate").trim().to_string()
+    text.split(',')
+        .next()
+        .unwrap_or("moderate")
+        .trim()
+        .to_string()
 }
 
 /// Extract a list of items from text based on keywords
@@ -665,7 +807,11 @@ async fn parse_preferences_via_llm(
     // The goal: have LLM extract meaningful keywords and infer parameter types.
     let mut qa_list = Vec::new();
     for (_i, (q, a)) in interaction_history.iter().enumerate().skip(1) {
-        qa_list.push(format!("{{\"q\": {}, \"a\": {}}}", serde_json::to_string(q)?, serde_json::to_string(a)?));
+        qa_list.push(format!(
+            "{{\"q\": {}, \"a\": {}}}",
+            serde_json::to_string(q)?,
+            serde_json::to_string(a)?
+        ));
     }
     let qa_json = format!("[{}]", qa_list.join(","));
 
@@ -722,46 +868,50 @@ Q/A pairs: {qa_json}
     };
 
     // Extract goal
-    let goal = v.get("goal")
+    let goal = v
+        .get("goal")
         .and_then(|x| x.as_str())
         .unwrap_or(topic)
         .to_string();
 
     // Extract dynamic parameters
     let mut parameters = std::collections::BTreeMap::new();
-    
+
     if let Some(params_obj) = v.get("parameters").and_then(|x| x.as_object()) {
         for (param_name, param_data) in params_obj {
             if let Some(param_obj) = param_data.as_object() {
-                let param_type = param_obj.get("type")
+                let param_type = param_obj
+                    .get("type")
                     .and_then(|x| x.as_str())
                     .unwrap_or("string")
                     .to_string();
-                
-                let value = param_obj.get("value")
+
+                let value = param_obj
+                    .get("value")
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                
-                let question = param_obj.get("question")
+
+                let question = param_obj
+                    .get("question")
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                
-                parameters.insert(param_name.clone(), ExtractedParam {
-                    question,
-                    value,
-                    param_type,
-                    category: None,
-                });
+
+                parameters.insert(
+                    param_name.clone(),
+                    ExtractedParam {
+                        question,
+                        value,
+                        param_type,
+                        category: None,
+                    },
+                );
             }
         }
     }
 
-    let prefs = ExtractedPreferences {
-        goal,
-        parameters,
-    };
+    let prefs = ExtractedPreferences { goal, parameters };
 
     Ok(Some(prefs))
 }
@@ -773,28 +923,26 @@ async fn synthesize_capability_via_llm(
     interaction_history: &[(String, String)],
     prefs: &ExtractedPreferences,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
-    
-    let arbiter = ccos.get_delegating_arbiter()
-        .ok_or_else(|| {
-            eprintln!("\n❌ Delegating arbiter not initialized!");
-            eprintln!("   This usually means:");
-            eprintln!("   1. No valid LLM configuration in config file");
-            eprintln!("   2. Missing API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)");
-            eprintln!("   3. Invalid provider/model settings");
-            eprintln!("\n   Solutions:");
-            eprintln!("   • Check config/agent_config.toml has valid llm_profiles");
-            eprintln!("   • Ensure API key environment variable is set");
-            eprintln!("   • Try: export OPENAI_API_KEY=sk-...");
-            eprintln!("   • Or use --profile to select a valid profile\n");
-            "Delegating arbiter not available - check LLM configuration"
-        })?;
-    
+    let arbiter = ccos.get_delegating_arbiter().ok_or_else(|| {
+        eprintln!("\n❌ Delegating arbiter not initialized!");
+        eprintln!("   This usually means:");
+        eprintln!("   1. No valid LLM configuration in config file");
+        eprintln!("   2. Missing API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)");
+        eprintln!("   3. Invalid provider/model settings");
+        eprintln!("\n   Solutions:");
+        eprintln!("   • Check config/agent_config.toml has valid llm_profiles");
+        eprintln!("   • Ensure API key environment variable is set");
+        eprintln!("   • Try: export OPENAI_API_KEY=sk-...");
+        eprintln!("   • Or use --profile to select a valid profile\n");
+        "Delegating arbiter not available - check LLM configuration"
+    })?;
+
     // Build synthesis prompt from the actual interaction
     let mut interaction_summary = String::new();
     for (i, (question, answer)) in interaction_history.iter().enumerate() {
         interaction_summary.push_str(&format!("Turn {}: Q: {} A: {}\n", i + 1, question, answer));
     }
-    
+
     // Format extracted parameters for the prompt
     let mut parameters_summary = String::new();
     for (param_name, param) in &prefs.parameters {
@@ -879,36 +1027,51 @@ EXTRACTED PARAMETERS FROM USER INTERACTION (use these in your capability):
 Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no other text."#,
         topic, interaction_summary, parameters_summary
     );
-    
+
     // Call LLM to generate the capability
-    let raw_response = arbiter.generate_raw_text(&synthesis_prompt).await
+    let raw_response = arbiter
+        .generate_raw_text(&synthesis_prompt)
+        .await
         .map_err(|e| format!("LLM synthesis failed: {}", e))?;
-    
+
     // Extract capability from response
     let capability_spec = extract_capability_from_response(&raw_response)?;
-    
+
     // Extract capability ID
     let capability_id = extract_capability_id_from_spec(&capability_spec)
         .unwrap_or_else(|| "research.smart-assistant.v1".to_string());
-    
+
     // Phase 1: Extract dependencies from synthesized capability
-    if let Ok(dep_result) = rtfs_compiler::ccos::synthesis::dependency_extractor::extract_dependencies(&capability_spec) {
+    if let Ok(dep_result) =
+        rtfs_compiler::ccos::synthesis::dependency_extractor::extract_dependencies(&capability_spec)
+    {
         println!("🔍 DEPENDENCY ANALYSIS for {}", capability_id);
         println!("   Total dependencies: {}", dep_result.dependencies.len());
-        println!("   Missing dependencies: {}", dep_result.missing_dependencies.len());
-        
+        println!(
+            "   Missing dependencies: {}",
+            dep_result.missing_dependencies.len()
+        );
+
         if !dep_result.missing_dependencies.is_empty() {
             println!("   Missing capabilities:");
             for dep in &dep_result.missing_dependencies {
                 println!("     - {}", dep);
             }
-            
+
             // Create audit event
-            let audit_data = rtfs_compiler::ccos::synthesis::dependency_extractor::create_audit_event_data(&capability_id, &dep_result.missing_dependencies);
-            println!("   AUDIT: capability_deps_missing - {}", 
-                audit_data.get("missing_capabilities").unwrap_or(&"none".to_string()));
+            let audit_data =
+                rtfs_compiler::ccos::synthesis::dependency_extractor::create_audit_event_data(
+                    &capability_id,
+                    &dep_result.missing_dependencies,
+                );
+            println!(
+                "   AUDIT: capability_deps_missing - {}",
+                audit_data
+                    .get("missing_capabilities")
+                    .unwrap_or(&"none".to_string())
+            );
         }
-        
+
         if !dep_result.dependencies.is_empty() {
             println!("   All dependencies found:");
             for dep in &dep_result.dependencies {
@@ -916,7 +1079,7 @@ Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no o
             }
         }
     }
-    
+
     Ok((capability_id, capability_spec))
 }
 
@@ -929,14 +1092,14 @@ fn extract_capability_from_response(response: &str) -> Result<String, Box<dyn st
             return Ok(spec.to_string());
         }
     }
-    
+
     // Try to find raw (capability ...) form
     if let Some(start) = response.find("(capability") {
         if let Some(spec) = extract_balanced_sexpr(response, start) {
             return Ok(spec);
         }
     }
-    
+
     Err("Could not extract capability from LLM response".into())
 }
 
@@ -1040,37 +1203,61 @@ fn generate_research_capability(prefs: &ResearchPreferences, id: &str) -> String
 }
 
 fn print_comparison(before: &InteractionMetrics, after: &InteractionMetrics) {
-    println!("\n\n{}", "═══════════════════════════════════════════════════════════════".bold());
-    println!("{}", "                    LEARNING IMPACT ANALYSIS".bold().magenta());
-    println!("{}", "═══════════════════════════════════════════════════════════════\n".bold());
+    println!(
+        "\n\n{}",
+        "═══════════════════════════════════════════════════════════════".bold()
+    );
+    println!(
+        "{}",
+        "                    LEARNING IMPACT ANALYSIS"
+            .bold()
+            .magenta()
+    );
+    println!(
+        "{}",
+        "═══════════════════════════════════════════════════════════════\n".bold()
+    );
 
-    println!("{}", "┌─────────────────────┬───────────────┬───────────────┬──────────┐".dim());
-    println!("{}", "│ Metric              │ Before Learn  │ After Learn   │ Gain     │".bold());
-    println!("{}", "├─────────────────────┼───────────────┼───────────────┼──────────┤".dim());
-    
+    println!(
+        "{}",
+        "┌─────────────────────┬───────────────┬───────────────┬──────────┐".dim()
+    );
+    println!(
+        "{}",
+        "│ Metric              │ Before Learn  │ After Learn   │ Gain     │".bold()
+    );
+    println!(
+        "{}",
+        "├─────────────────────┼───────────────┼───────────────┼──────────┤".dim()
+    );
+
     println!(
         "│ {} │ {:>13} │ {:>13} │ {:>8} │",
         "Interaction Turns   ".dim(),
         format!("{}", before.turns_count).yellow(),
         format!("{}", after.turns_count).green(),
-        format!("{}x", before.turns_count / after.turns_count.max(1)).cyan().bold()
+        format!("{}x", before.turns_count / after.turns_count.max(1))
+            .cyan()
+            .bold()
     );
-    
+
     println!(
         "│ {} │ {:>13} │ {:>13} │ {:>8} │",
         "Questions Asked     ".dim(),
         format!("{}", before.questions_asked).yellow(),
         format!("{}", after.questions_asked).green(),
-        format!("-{}", before.questions_asked - after.questions_asked).cyan().bold()
+        format!("-{}", before.questions_asked - after.questions_asked)
+            .cyan()
+            .bold()
     );
-    
+
     let time_saved = before.time_elapsed_ms.saturating_sub(after.time_elapsed_ms);
     let time_saved_pct = if before.time_elapsed_ms > 0 {
         (time_saved as f64 / before.time_elapsed_ms as f64 * 100.0) as usize
     } else {
         0
     };
-    
+
     println!(
         "│ {} │ {:>11}ms │ {:>11}ms │ {:>6}% │",
         "Time Elapsed        ".dim(),
@@ -1078,12 +1265,24 @@ fn print_comparison(before: &InteractionMetrics, after: &InteractionMetrics) {
         after.time_elapsed_ms.to_string().green(),
         format!("-{}", time_saved_pct).cyan().bold()
     );
-    
-    println!("{}", "└─────────────────────┴───────────────┴───────────────┴──────────┘\n".dim());
+
+    println!(
+        "{}",
+        "└─────────────────────┴───────────────┴───────────────┴──────────┘\n".dim()
+    );
 
     println!("{}", "🎯 Key Achievements:".bold().green());
-    println!("   {} Reduced interaction from {} turns to {} turn", "✓".green(), before.turns_count, after.turns_count);
-    println!("   {} Eliminated {} redundant questions", "✓".green(), before.questions_asked);
+    println!(
+        "   {} Reduced interaction from {} turns to {} turn",
+        "✓".green(),
+        before.turns_count,
+        after.turns_count
+    );
+    println!(
+        "   {} Eliminated {} redundant questions",
+        "✓".green(),
+        before.questions_asked
+    );
     println!("   {} Capability reusable for similar tasks", "✓".green());
     println!("   {} Knowledge persisted in marketplace", "✓".green());
 
@@ -1098,14 +1297,32 @@ fn print_comparison(before: &InteractionMetrics, after: &InteractionMetrics) {
     println!("   • Import the capability into other RTFS programs");
     println!("   • Build upon this pattern for more complex workflows");
 
-    println!("\n{}", "═══════════════════════════════════════════════════════════════\n".bold());
+    println!(
+        "\n{}",
+        "═══════════════════════════════════════════════════════════════\n".bold()
+    );
 }
 
 fn print_banner() {
-    println!("\n{}", "═══════════════════════════════════════════════════════════════".bold().cyan());
-    println!("{}", "       🧠 CCOS/RTFS Self-Learning Demonstration 🧠".bold().cyan());
+    println!(
+        "\n{}",
+        "═══════════════════════════════════════════════════════════════"
+            .bold()
+            .cyan()
+    );
+    println!(
+        "{}",
+        "       🧠 CCOS/RTFS Self-Learning Demonstration 🧠"
+            .bold()
+            .cyan()
+    );
     println!("{}", "           Smart Research Assistant Example".bold());
-    println!("{}", "═══════════════════════════════════════════════════════════════\n".bold().cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════════════════════════════\n"
+            .bold()
+            .cyan()
+    );
 }
 
 fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn std::error::Error>> {
@@ -1128,7 +1345,7 @@ fn apply_llm_profile(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Always enable delegation for this demo
     std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
-    
+
     if let Some(llm_cfg) = &config.llm_profiles {
         let (profiles, _meta, _why) = expand_profiles(config);
         let chosen_name = profile_name
@@ -1196,4 +1413,3 @@ fn persist_capability(id: &str, spec: &str) -> Result<(), Box<dyn std::error::Er
     fs::write(file_path, spec.as_bytes())?;
     Ok(())
 }
-

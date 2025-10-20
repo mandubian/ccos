@@ -6,23 +6,23 @@
 // 4. Register and invoke the synthesized agent
 
 use clap::Parser;
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json;
 use toml;
 
-use rtfs_compiler::ccos::CCOS;
+use rtfs_compiler::ast::MapKey;
 use rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig;
 use rtfs_compiler::ccos::types::{Plan, StorableIntent};
-use rtfs_compiler::runtime::{RuntimeContext, Value};
-use rtfs_compiler::ast::MapKey;
+use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::config::profile_selection::expand_profiles;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
 use rtfs_compiler::parser;
+use rtfs_compiler::runtime::{RuntimeContext, Value};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -205,7 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Phase 0: User's original intent (in real flow, this comes from natural language)
     let original_goal = std::env::var("CCOS_INTENT_GOAL")
         .unwrap_or_else(|_| "Automate a workflow based on collected criteria".to_string());
-    
+
     let intent_id = "intent.synthetic.agent".to_string();
     let mut storable_intent = StorableIntent::new(original_goal.clone());
     storable_intent.intent_id = intent_id.clone();
@@ -251,12 +251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     let discovered = if let Some(arbiter) = ccos.get_delegating_arbiter() {
-        discover_capabilities(
-            &arbiter,
-            &original_goal,
-            &parameters,
-        )
-        .await?
+        discover_capabilities(&arbiter, &original_goal, &parameters).await?
     } else {
         println!("⚠️  Arbiter not available, using mock capabilities");
         get_mock_capabilities()
@@ -276,13 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     let executor_rtfs = if let Some(arbiter) = ccos.get_delegating_arbiter() {
-        synthesize_executor(
-            &arbiter,
-            &original_goal,
-            &parameters,
-            &discovered,
-        )
-        .await?
+        synthesize_executor(&arbiter, &original_goal, &parameters, &discovered).await?
     } else {
         return Err("Arbiter required for synthesis".into());
     };
@@ -335,14 +324,22 @@ async fn discover_capabilities(
         .unwrap_or(false);
 
     if show_prompts {
-        println!("--- Capability Discovery Prompt ---\n{}\n--- END PROMPT ---\n", discovery_prompt);
+        println!(
+            "--- Capability Discovery Prompt ---\n{}\n--- END PROMPT ---\n",
+            discovery_prompt
+        );
     }
 
-    let response = arbiter.generate_raw_text(&discovery_prompt).await
+    let response = arbiter
+        .generate_raw_text(&discovery_prompt)
+        .await
         .map_err(|e| format!("Discovery LLM call failed: {}", e))?;
 
     if show_prompts {
-        println!("--- Discovery Response ---\n{}\n--- END RESPONSE ---\n", response);
+        println!(
+            "--- Discovery Response ---\n{}\n--- END RESPONSE ---\n",
+            response
+        );
     }
 
     // Parse JSON array of search queries
@@ -388,7 +385,9 @@ fn build_discovery_prompt(goal: &str, parameters: &HashMap<String, String>) -> S
     )
 }
 
-fn parse_json_response(response: &str) -> Result<Vec<CapabilitySearchQuery>, Box<dyn std::error::Error>> {
+fn parse_json_response(
+    response: &str,
+) -> Result<Vec<CapabilitySearchQuery>, Box<dyn std::error::Error>> {
     // Strip markdown fences if present
     let cleaned = response
         .trim()
@@ -406,14 +405,24 @@ fn mock_search_capabilities(queries: &[CapabilitySearchQuery]) -> Vec<Discovered
     for query in queries {
         match query.category.as_str() {
             "github" => {
-                if query.keywords.iter().any(|k| k.contains("search") || k.contains("issues")) {
+                if query
+                    .keywords
+                    .iter()
+                    .any(|k| k.contains("search") || k.contains("issues"))
+                {
                     results.push(DiscoveredCapability {
                         id: "github.search.issues".to_string(),
                         description: "Search GitHub issues matching query".to_string(),
-                        signature: "(call :github.search.issues {:repo string :query string}) → vector".to_string(),
+                        signature:
+                            "(call :github.search.issues {:repo string :query string}) → vector"
+                                .to_string(),
                     });
                 }
-                if query.keywords.iter().any(|k| k.contains("label") || k.contains("add")) {
+                if query
+                    .keywords
+                    .iter()
+                    .any(|k| k.contains("label") || k.contains("add"))
+                {
                     results.push(DiscoveredCapability {
                         id: "github.issues.add_label".to_string(),
                         description: "Add label to GitHub issues".to_string(),
@@ -439,13 +448,11 @@ fn mock_search_capabilities(queries: &[CapabilitySearchQuery]) -> Vec<Discovered
 }
 
 fn get_mock_capabilities() -> Vec<DiscoveredCapability> {
-    vec![
-        DiscoveredCapability {
-            id: "ccos.echo".to_string(),
-            description: "Print message".to_string(),
-            signature: "(call :ccos.echo {:message string})".to_string(),
-        }
-    ]
+    vec![DiscoveredCapability {
+        id: "ccos.echo".to_string(),
+        description: "Print message".to_string(),
+        signature: "(call :ccos.echo {:message string})".to_string(),
+    }]
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -465,14 +472,22 @@ async fn synthesize_executor(
         .unwrap_or(false);
 
     if show_prompts {
-        println!("--- Executor Synthesis Prompt ---\n{}\n--- END PROMPT ---\n", synthesis_prompt);
+        println!(
+            "--- Executor Synthesis Prompt ---\n{}\n--- END PROMPT ---\n",
+            synthesis_prompt
+        );
     }
 
-    let response = arbiter.generate_raw_text(&synthesis_prompt).await
+    let response = arbiter
+        .generate_raw_text(&synthesis_prompt)
+        .await
         .map_err(|e| format!("Synthesis LLM call failed: {}", e))?;
 
     if show_prompts {
-        println!("--- Synthesis Response ---\n{}\n--- END RESPONSE ---\n", response);
+        println!(
+            "--- Synthesis Response ---\n{}\n--- END RESPONSE ---\n",
+            response
+        );
     }
 
     Ok(response)
@@ -526,10 +541,7 @@ fn build_synthesis_prompt(
             "        {{:status \"completed\" :param1 param1 :param2 param2}})))\n\n",
             "Start response with `(capability` on first line. NO prose, NO markdown fences.\n"
         ),
-        params_section,
-        goal,
-        caps_section,
-        grammar
+        params_section, goal, caps_section, grammar
     )
 }
 
@@ -551,7 +563,12 @@ fn build_capabilities_section(capabilities: &[DiscoveredCapability]) -> String {
     } else {
         capabilities
             .iter()
-            .map(|cap| format!("- :{} - {}\n  Signature: {}", cap.id, cap.description, cap.signature))
+            .map(|cap| {
+                format!(
+                    "- :{} - {}\n  Signature: {}",
+                    cap.id, cap.description, cap.signature
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -559,7 +576,9 @@ fn build_capabilities_section(capabilities: &[DiscoveredCapability]) -> String {
 
 fn load_grammar_snippet() -> String {
     std::fs::read_to_string("assets/prompts/arbiter/plan_generation/v1/grammar.md")
-        .or_else(|_| std::fs::read_to_string("../assets/prompts/arbiter/plan_generation/v1/grammar.md"))
+        .or_else(|_| {
+            std::fs::read_to_string("../assets/prompts/arbiter/plan_generation/v1/grammar.md")
+        })
         .unwrap_or_else(|_| {
             concat!(
                 "## RTFS Special Forms\n",
@@ -568,7 +587,8 @@ fn load_grammar_snippet() -> String {
                 "- (step \"Name\" expr) - named execution step\n",
                 "- (do expr...) - sequential execution\n",
                 "- (if cond then else) - conditional\n"
-            ).to_string()
+            )
+            .to_string()
         })
 }
 
@@ -608,27 +628,26 @@ fn derive_param_name(question: &str) -> String {
         .replace(" i ", " ")
         .replace(" do you ", " ")
         .replace(" you ", " ");
-    
+
     // Common filler words to skip (expanded list)
     let stop_words = [
-        "the", "a", "an", "is", "are", "for", "to", "of", "in", "on", "at",
-        "should", "would", "could", "will", "can", "do", "does", "did",
-        "be", "been", "being", "or", "and", "but", "if", "then", "than",
-        "with", "from", "by", "as", "into", "through", "during", "before",
+        "the", "a", "an", "is", "are", "for", "to", "of", "in", "on", "at", "should", "would",
+        "could", "will", "can", "do", "does", "did", "be", "been", "being", "or", "and", "but",
+        "if", "then", "than", "with", "from", "by", "as", "into", "through", "during", "before",
         "after", "above", "below", "between", "under", "again", "further",
     ];
-    
+
     // Extract key words (skip filler words)
     let words: Vec<&str> = cleaned
         .split_whitespace()
         .filter(|w| !stop_words.contains(w))
         .take(2) // Take first 2 meaningful words
         .collect();
-    
+
     if words.is_empty() {
         return "param".to_string();
     }
-    
+
     // Join with slash for namespace-like structure
     words.join("/")
 }
@@ -705,8 +724,7 @@ fn validate_single_capability(rtfs_source: &str) -> Result<String, String> {
             if cap_count == 1 {
                 Ok(trimmed.to_string())
             } else {
-                Ok(extract_balanced_form(trimmed)
-                    .unwrap_or_else(|| trimmed.to_string()))
+                Ok(extract_balanced_form(trimmed).unwrap_or_else(|| trimmed.to_string()))
             }
         }
         Err(_) => Ok(extract_balanced_form(trimmed).unwrap_or_else(|| trimmed.to_string())),
@@ -763,4 +781,3 @@ fn persist_capability(cap_id: &str, rtfs_source: &str) -> std::io::Result<()> {
 fn escape_quotes(text: &str) -> String {
     text.replace('"', "\\\"")
 }
-
