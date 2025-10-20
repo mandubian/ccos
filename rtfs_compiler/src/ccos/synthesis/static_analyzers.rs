@@ -3,7 +3,7 @@
 //! This module implements static analysis tools for validating RTFS code
 //! before capability registration.
 
-use super::validation_harness::{ValidationIssue, IssueSeverity, IssueCategory};
+use super::validation_harness::{IssueCategory, IssueSeverity, ValidationIssue};
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use std::collections::HashSet;
 
@@ -11,10 +11,10 @@ use std::collections::HashSet;
 pub trait StaticAnalyzer {
     /// Analyze the capability manifest and RTFS code
     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue>;
-    
+
     /// Get analyzer name
     fn name(&self) -> &str;
-    
+
     /// Get analyzer description
     fn description(&self) -> &str;
 }
@@ -55,7 +55,10 @@ impl StaticAnalyzer for RtfsSyntaxAnalyzer {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::Critical,
                 category: IssueCategory::Quality,
-                description: format!("Unbalanced parentheses: {} opening, {} closing", open_count, close_count),
+                description: format!(
+                    "Unbalanced parentheses: {} opening, {} closing",
+                    open_count, close_count
+                ),
                 location: Some("RTFS code".to_string()),
                 suggestion: Some("Ensure all parentheses are properly balanced".to_string()),
                 code: "SYNTAX002".to_string(),
@@ -103,7 +106,7 @@ impl StaticAnalyzer for RtfsSyntaxAnalyzer {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn description(&self) -> &str {
         "Analyzes RTFS code for syntax errors and compliance"
     }
@@ -173,7 +176,9 @@ impl StaticAnalyzer for SecurityAnalyzer {
                 category: IssueCategory::Security,
                 description: "External HTTP calls should use authentication".to_string(),
                 location: Some("RTFS code".to_string()),
-                suggestion: Some("Use (call :ccos.auth.inject ...) for authenticated requests".to_string()),
+                suggestion: Some(
+                    "Use (call :ccos.auth.inject ...) for authenticated requests".to_string(),
+                ),
                 code: "SEC_ANALYZER003".to_string(),
             });
         }
@@ -181,13 +186,17 @@ impl StaticAnalyzer for SecurityAnalyzer {
         // Check for hardcoded credentials
         let credential_patterns = vec!["password", "secret", "key", "token"];
         for pattern in credential_patterns {
-            if rtfs_code.contains(&format!("\"{}\"", pattern)) || rtfs_code.contains(&format!(":{}\"", pattern)) {
+            if rtfs_code.contains(&format!("\"{}\"", pattern))
+                || rtfs_code.contains(&format!(":{}\"", pattern))
+            {
                 issues.push(ValidationIssue {
                     severity: IssueSeverity::Critical,
                     category: IssueCategory::Security,
                     description: format!("Potential hardcoded credential '{}' detected", pattern),
                     location: Some("RTFS code".to_string()),
-                    suggestion: Some("Use environment variables or secure credential storage".to_string()),
+                    suggestion: Some(
+                        "Use environment variables or secure credential storage".to_string(),
+                    ),
                     code: "SEC_ANALYZER004".to_string(),
                 });
             }
@@ -199,7 +208,7 @@ impl StaticAnalyzer for SecurityAnalyzer {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn description(&self) -> &str {
         "Analyzes RTFS code for syntax errors and compliance"
     }
@@ -232,7 +241,10 @@ impl StaticAnalyzer for PerformanceAnalyzer {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::Medium,
                 category: IssueCategory::Performance,
-                description: format!("Excessive nesting depth: {} > {}", max_depth, self.max_nested_depth),
+                description: format!(
+                    "Excessive nesting depth: {} > {}",
+                    max_depth, self.max_nested_depth
+                ),
                 location: Some("RTFS code".to_string()),
                 suggestion: Some("Refactor to reduce nesting complexity".to_string()),
                 code: "PERF_ANALYZER001".to_string(),
@@ -252,8 +264,8 @@ impl StaticAnalyzer for PerformanceAnalyzer {
         }
 
         // Check for excessive external calls
-        let external_calls = rtfs_code.matches("(call :http").count() + 
-                           rtfs_code.matches("(call :database").count();
+        let external_calls =
+            rtfs_code.matches("(call :http").count() + rtfs_code.matches("(call :database").count();
         if external_calls > 20 {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::Medium,
@@ -273,14 +285,20 @@ impl StaticAnalyzer for PerformanceAnalyzer {
                 if line.contains("(defn") {
                     // Look for function name and check if it calls itself
                     if let Some(func_name) = self.extract_function_name(line) {
-                        for j in (i+1)..lines.len() {
+                        for j in (i + 1)..lines.len() {
                             if lines[j].contains(&format!("(call :{}", func_name)) {
                                 issues.push(ValidationIssue {
                                     severity: IssueSeverity::Medium,
                                     category: IssueCategory::Performance,
-                                    description: format!("Recursive function '{}' without obvious termination", func_name),
+                                    description: format!(
+                                        "Recursive function '{}' without obvious termination",
+                                        func_name
+                                    ),
                                     location: Some(format!("Line {}", j + 1)),
-                                    suggestion: Some("Ensure recursive function has proper base case".to_string()),
+                                    suggestion: Some(
+                                        "Ensure recursive function has proper base case"
+                                            .to_string(),
+                                    ),
                                     code: "PERF_ANALYZER004".to_string(),
                                 });
                                 break;
@@ -297,7 +315,7 @@ impl StaticAnalyzer for PerformanceAnalyzer {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn description(&self) -> &str {
         "Analyzes RTFS code for syntax errors and compliance"
     }
@@ -313,10 +331,10 @@ impl PerformanceAnalyzer {
                 '(' => {
                     current_depth += 1;
                     max_depth = max_depth.max(current_depth);
-                },
+                }
                 ')' => {
                     current_depth = current_depth.saturating_sub(1);
-                },
+                }
                 _ => {}
             }
         }
@@ -356,7 +374,7 @@ impl StaticAnalyzer for DependencyAnalyzer {
         // Extract all capability dependencies
         let mut dependencies = HashSet::new();
         let lines: Vec<&str> = rtfs_code.lines().collect();
-        
+
         for line in &lines {
             if line.contains("(call :") {
                 if let Some(start) = line.find("(call :") {
@@ -376,7 +394,9 @@ impl StaticAnalyzer for DependencyAnalyzer {
                 category: IssueCategory::Dependencies,
                 description: format!("High number of dependencies: {}", dependencies.len()),
                 location: Some("RTFS code".to_string()),
-                suggestion: Some("Consider reducing dependencies or splitting capability".to_string()),
+                suggestion: Some(
+                    "Consider reducing dependencies or splitting capability".to_string(),
+                ),
                 code: "DEP_ANALYZER001".to_string(),
             });
         }
@@ -389,7 +409,9 @@ impl StaticAnalyzer for DependencyAnalyzer {
                     category: IssueCategory::Dependencies,
                     description: format!("External dependency '{}' may not be available", dep),
                     location: Some("RTFS code".to_string()),
-                    suggestion: Some("Ensure external dependencies are properly registered".to_string()),
+                    suggestion: Some(
+                        "Ensure external dependencies are properly registered".to_string(),
+                    ),
                     code: "DEP_ANALYZER002".to_string(),
                 });
             }
@@ -418,7 +440,7 @@ impl StaticAnalyzer for DependencyAnalyzer {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn description(&self) -> &str {
         "Analyzes RTFS code for syntax errors and compliance"
     }
@@ -436,10 +458,16 @@ mod tests {
             version: "1.0.0".to_string(),
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
-                    handler: std::sync::Arc::new(|_| Ok(crate::runtime::values::Value::String("test".to_string()))),
-                }
+                    handler: std::sync::Arc::new(|_| {
+                        Ok(crate::runtime::values::Value::String("test".to_string()))
+                    }),
+                },
             ),
-            parameters: std::collections::HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: None,
+            permissions: vec![],
             effects: vec![],
             metadata: std::collections::HashMap::new(),
             agent_metadata: None,
@@ -450,11 +478,13 @@ mod tests {
     fn test_rtfs_syntax_analyzer() {
         let analyzer = RtfsSyntaxAnalyzer::new();
         let manifest = create_test_manifest();
+        // Missing opening paren - should trigger SYNTAX001
+        // Unbalanced parens - should trigger SYNTAX002
         let rtfs_code = r#"
             capability test
                 :description "Test capability"
                 :implementation
-                (do (print "Hello"))
+                (do (print "Hello")
         "#;
 
         let issues = analyzer.analyze(&manifest, rtfs_code);
@@ -473,7 +503,7 @@ mod tests {
                 (do
                     (call :eval "malicious_code")
                     (call :http.post {:url "http://insecure.com"})
-                    (let password "secret123")
+                    (let my-var "secret")
                 )
             )
         "#;

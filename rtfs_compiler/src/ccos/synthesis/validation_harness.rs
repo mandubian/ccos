@@ -6,7 +6,9 @@
 //! - Static analysis and security scanning
 //! - Capability attestation and provenance tracking
 
-use crate::ccos::capability_marketplace::types::{CapabilityManifest, CapabilityAttestation, CapabilityProvenance};
+use crate::ccos::capability_marketplace::types::{
+    CapabilityAttestation, CapabilityManifest, CapabilityProvenance,
+};
 // Removed unused imports
 use std::collections::HashMap;
 
@@ -214,7 +216,7 @@ impl ValidationHarness {
             static_analyzers: Vec::new(),
             governance_policies: Vec::new(),
         };
-        
+
         harness.initialize_default_rules();
         harness
     }
@@ -225,7 +227,8 @@ impl ValidationHarness {
         self.security_rules.extend(vec![
             SecurityRule {
                 name: "no_hardcoded_secrets".to_string(),
-                description: "Capability must not contain hardcoded secrets or credentials".to_string(),
+                description: "Capability must not contain hardcoded secrets or credentials"
+                    .to_string(),
                 check: SecurityCheck::NoHardcodedSecrets,
             },
             SecurityRule {
@@ -316,15 +319,35 @@ impl ValidationHarness {
         let status = self.determine_validation_status(&issues);
 
         // Add metadata
-        metadata.insert("validation_timestamp".to_string(), 
-            chrono::Utc::now().to_rfc3339());
+        metadata.insert(
+            "validation_timestamp".to_string(),
+            chrono::Utc::now().to_rfc3339(),
+        );
         metadata.insert("total_issues".to_string(), issues.len().to_string());
-        metadata.insert("security_issues".to_string(), 
-            issues.iter().filter(|i| i.category == IssueCategory::Security).count().to_string());
-        metadata.insert("quality_issues".to_string(), 
-            issues.iter().filter(|i| i.category == IssueCategory::Quality).count().to_string());
-        metadata.insert("compliance_issues".to_string(), 
-            issues.iter().filter(|i| i.category == IssueCategory::Compliance).count().to_string());
+        metadata.insert(
+            "security_issues".to_string(),
+            issues
+                .iter()
+                .filter(|i| i.category == IssueCategory::Security)
+                .count()
+                .to_string(),
+        );
+        metadata.insert(
+            "quality_issues".to_string(),
+            issues
+                .iter()
+                .filter(|i| i.category == IssueCategory::Quality)
+                .count()
+                .to_string(),
+        );
+        metadata.insert(
+            "compliance_issues".to_string(),
+            issues
+                .iter()
+                .filter(|i| i.category == IssueCategory::Compliance)
+                .count()
+                .to_string(),
+        );
 
         ValidationResult {
             status,
@@ -337,7 +360,11 @@ impl ValidationHarness {
     }
 
     /// Validate security requirements
-    fn validate_security(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn validate_security(
+        &self,
+        manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         for rule in &self.security_rules {
@@ -347,39 +374,55 @@ impl ValidationHarness {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::Critical,
                             category: IssueCategory::Security,
-                            description: format!("Security rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Security rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("RTFS code".to_string()),
-                            suggestion: Some("Use environment variables or secure credential storage".to_string()),
+                            suggestion: Some(
+                                "Use environment variables or secure credential storage"
+                                    .to_string(),
+                            ),
                             code: "SEC001".to_string(),
                         });
                     }
-                },
+                }
                 SecurityCheck::NoSqlInjection => {
                     if self.has_sql_injection_vulnerabilities(rtfs_code) {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::High,
                             category: IssueCategory::Security,
-                            description: format!("Security rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Security rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("RTFS code".to_string()),
-                            suggestion: Some("Use parameterized queries and input sanitization".to_string()),
+                            suggestion: Some(
+                                "Use parameterized queries and input sanitization".to_string(),
+                            ),
                             code: "SEC002".to_string(),
                         });
                     }
-                },
+                }
                 SecurityCheck::RequiresAuthentication => {
                     if self.requires_authentication_check(manifest, rtfs_code) {
                         if !self.has_authentication(manifest, rtfs_code) {
                             issues.push(ValidationIssue {
                                 severity: IssueSeverity::High,
                                 category: IssueCategory::Security,
-                                description: format!("Security rule '{}' failed: {}", rule.name, rule.description),
+                                description: format!(
+                                    "Security rule '{}' failed: {}",
+                                    rule.name, rule.description
+                                ),
                                 location: Some("Capability manifest".to_string()),
-                                suggestion: Some("Implement authentication using auth_injector".to_string()),
+                                suggestion: Some(
+                                    "Implement authentication using auth_injector".to_string(),
+                                ),
                                 code: "SEC003".to_string(),
                             });
                         }
                     }
-                },
+                }
                 _ => {
                     // Placeholder for other security checks
                 }
@@ -390,7 +433,11 @@ impl ValidationHarness {
     }
 
     /// Validate quality requirements
-    fn validate_quality(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn validate_quality(
+        &self,
+        manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         for rule in &self.quality_rules {
@@ -400,37 +447,52 @@ impl ValidationHarness {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::Medium,
                             category: IssueCategory::Quality,
-                            description: format!("Quality rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Quality rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("RTFS code".to_string()),
-                            suggestion: Some("Add proper error handling with try-catch blocks".to_string()),
+                            suggestion: Some(
+                                "Add proper error handling with try-catch blocks".to_string(),
+                            ),
                             code: "QUAL001".to_string(),
                         });
                     }
-                },
+                }
                 QualityCheck::InputValidation => {
                     if !self.has_input_validation(manifest, rtfs_code) {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::Medium,
                             category: IssueCategory::Quality,
-                            description: format!("Quality rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Quality rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("Capability manifest".to_string()),
-                            suggestion: Some("Add input validation to capability parameters".to_string()),
+                            suggestion: Some(
+                                "Add input validation to capability parameters".to_string(),
+                            ),
                             code: "QUAL002".to_string(),
                         });
                     }
-                },
+                }
                 QualityCheck::DocumentationComplete => {
                     if !self.has_complete_documentation(manifest) {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::Low,
                             category: IssueCategory::Documentation,
-                            description: format!("Quality rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Quality rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("Capability manifest".to_string()),
-                            suggestion: Some("Add comprehensive documentation to capability".to_string()),
+                            suggestion: Some(
+                                "Add comprehensive documentation to capability".to_string(),
+                            ),
                             code: "QUAL003".to_string(),
                         });
                     }
-                },
+                }
                 _ => {
                     // Placeholder for other quality checks
                 }
@@ -441,35 +503,47 @@ impl ValidationHarness {
     }
 
     /// Validate compliance requirements
-    fn validate_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn validate_compliance(
+        &self,
+        manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         for rule in &self.compliance_rules {
             match &rule.check {
                 ComplianceCheck::GdprCompliance => {
-                    if self.requires_gdpr_compliance(manifest) && !self.is_gdpr_compliant(manifest, rtfs_code) {
+                    if self.requires_gdpr_compliance(manifest)
+                        && !self.is_gdpr_compliant(manifest, rtfs_code)
+                    {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::Critical,
                             category: IssueCategory::Compliance,
-                            description: format!("Compliance rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Compliance rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("Capability manifest".to_string()),
                             suggestion: Some("Implement GDPR compliance measures".to_string()),
                             code: "COMP001".to_string(),
                         });
                     }
-                },
+                }
                 ComplianceCheck::AuditTrail => {
                     if !self.has_audit_trail(manifest, rtfs_code) {
                         issues.push(ValidationIssue {
                             severity: IssueSeverity::High,
                             category: IssueCategory::Compliance,
-                            description: format!("Compliance rule '{}' failed: {}", rule.name, rule.description),
+                            description: format!(
+                                "Compliance rule '{}' failed: {}",
+                                rule.name, rule.description
+                            ),
                             location: Some("Capability manifest".to_string()),
                             suggestion: Some("Implement audit trail logging".to_string()),
                             code: "COMP002".to_string(),
                         });
                     }
-                },
+                }
                 _ => {
                     // Placeholder for other compliance checks
                 }
@@ -483,36 +557,50 @@ impl ValidationHarness {
     fn has_hardcoded_secrets(&self, rtfs_code: &str) -> bool {
         // Simple heuristic checks for common secret patterns
         let secret_patterns = vec![
-            "password", "secret", "key", "token", "credential",
-            "api_key", "access_token", "private_key", "auth_token"
+            "password",
+            "secret",
+            "key",
+            "token",
+            "credential",
+            "api_key",
+            "access_token",
+            "private_key",
+            "auth_token",
         ];
 
         let code_lower = rtfs_code.to_lowercase();
         secret_patterns.iter().any(|pattern| {
-            code_lower.contains(&format!(":{}", pattern)) || 
-            code_lower.contains(&format!("{}=\"", pattern))
+            code_lower.contains(&format!(":{}", pattern))
+                || code_lower.contains(&format!("{}=\"", pattern))
         })
     }
 
     /// Check for SQL injection vulnerabilities
     fn has_sql_injection_vulnerabilities(&self, rtfs_code: &str) -> bool {
         // Simple heuristic for SQL injection patterns
-        rtfs_code.contains("SELECT") || rtfs_code.contains("INSERT") || 
-        rtfs_code.contains("UPDATE") || rtfs_code.contains("DELETE")
+        rtfs_code.contains("SELECT")
+            || rtfs_code.contains("INSERT")
+            || rtfs_code.contains("UPDATE")
+            || rtfs_code.contains("DELETE")
     }
 
     /// Check if capability requires authentication
-    fn requires_authentication_check(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> bool {
+    fn requires_authentication_check(
+        &self,
+        manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> bool {
         // Check if capability handles sensitive data or external calls
-        rtfs_code.contains("(call :http") || rtfs_code.contains("(call :database") ||
-        manifest.description.to_lowercase().contains("authenticate") ||
-        manifest.description.to_lowercase().contains("login")
+        rtfs_code.contains("(call :http")
+            || rtfs_code.contains("(call :database")
+            || manifest.description.to_lowercase().contains("authenticate")
+            || manifest.description.to_lowercase().contains("login")
     }
 
     /// Check if capability has authentication
     fn has_authentication(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> bool {
-        rtfs_code.contains("(call :ccos.auth.inject") || 
-        manifest.metadata.contains_key("requires_auth")
+        rtfs_code.contains("(call :ccos.auth.inject")
+            || manifest.metadata.contains_key("requires_auth")
     }
 
     /// Check if capability has proper error handling
@@ -533,38 +621,43 @@ impl ValidationHarness {
 
     /// Check if capability requires GDPR compliance
     fn requires_gdpr_compliance(&self, manifest: &CapabilityManifest) -> bool {
-        manifest.description.to_lowercase().contains("personal") ||
-        manifest.description.to_lowercase().contains("user data") ||
-        manifest.description.to_lowercase().contains("privacy")
+        manifest.description.to_lowercase().contains("personal")
+            || manifest.description.to_lowercase().contains("user data")
+            || manifest.description.to_lowercase().contains("privacy")
     }
 
     /// Check if capability is GDPR compliant
     fn is_gdpr_compliant(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> bool {
         // Simple GDPR compliance checks
-        rtfs_code.contains("data_protection") || rtfs_code.contains("consent") ||
-        manifest.metadata.contains_key("gdpr_compliant")
+        rtfs_code.contains("data_protection")
+            || rtfs_code.contains("consent")
+            || manifest.metadata.contains_key("gdpr_compliant")
     }
 
     /// Check if capability has audit trail
     fn has_audit_trail(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> bool {
-        rtfs_code.contains("audit") || rtfs_code.contains("log") ||
-        manifest.metadata.contains_key("audit_enabled")
+        rtfs_code.contains("audit")
+            || rtfs_code.contains("log")
+            || manifest.metadata.contains_key("audit_enabled")
     }
 
     /// Calculate security score
     fn calculate_security_score(&self, issues: &[ValidationIssue]) -> f64 {
-        let security_issues: Vec<&ValidationIssue> = issues.iter()
+        let security_issues: Vec<&ValidationIssue> = issues
+            .iter()
             .filter(|i| i.category == IssueCategory::Security)
             .collect();
-        
+
         if security_issues.is_empty() {
             return 1.0;
         }
 
-        let critical_count = security_issues.iter()
+        let critical_count = security_issues
+            .iter()
             .filter(|i| i.severity == IssueSeverity::Critical)
             .count();
-        let high_count = security_issues.iter()
+        let high_count = security_issues
+            .iter()
             .filter(|i| i.severity == IssueSeverity::High)
             .count();
 
@@ -575,15 +668,17 @@ impl ValidationHarness {
 
     /// Calculate quality score
     fn calculate_quality_score(&self, issues: &[ValidationIssue]) -> f64 {
-        let quality_issues: Vec<&ValidationIssue> = issues.iter()
+        let quality_issues: Vec<&ValidationIssue> = issues
+            .iter()
             .filter(|i| i.category == IssueCategory::Quality)
             .collect();
-        
+
         if quality_issues.is_empty() {
             return 1.0;
         }
 
-        let total_penalty = quality_issues.iter()
+        let total_penalty = quality_issues
+            .iter()
             .map(|i| match i.severity {
                 IssueSeverity::Critical => 0.3,
                 IssueSeverity::High => 0.2,
@@ -598,18 +693,21 @@ impl ValidationHarness {
 
     /// Calculate compliance score
     fn calculate_compliance_score(&self, issues: &[ValidationIssue]) -> f64 {
-        let compliance_issues: Vec<&ValidationIssue> = issues.iter()
+        let compliance_issues: Vec<&ValidationIssue> = issues
+            .iter()
             .filter(|i| i.category == IssueCategory::Compliance)
             .collect();
-        
+
         if compliance_issues.is_empty() {
             return 1.0;
         }
 
-        let critical_count = compliance_issues.iter()
+        let critical_count = compliance_issues
+            .iter()
             .filter(|i| i.severity == IssueSeverity::Critical)
             .count();
-        let high_count = compliance_issues.iter()
+        let high_count = compliance_issues
+            .iter()
             .filter(|i| i.severity == IssueSeverity::High)
             .count();
 
@@ -619,13 +717,16 @@ impl ValidationHarness {
 
     /// Determine overall validation status
     fn determine_validation_status(&self, issues: &[ValidationIssue]) -> ValidationStatus {
-        let critical_issues: Vec<&ValidationIssue> = issues.iter()
+        let critical_issues: Vec<&ValidationIssue> = issues
+            .iter()
             .filter(|i| i.severity == IssueSeverity::Critical)
             .collect();
 
-        let security_critical = critical_issues.iter()
+        let security_critical = critical_issues
+            .iter()
             .any(|i| i.category == IssueCategory::Security);
-        let compliance_critical = critical_issues.iter()
+        let compliance_critical = critical_issues
+            .iter()
             .any(|i| i.category == IssueCategory::Compliance);
 
         if security_critical {
@@ -634,7 +735,10 @@ impl ValidationHarness {
             ValidationStatus::ComplianceFailed
         } else if !critical_issues.is_empty() {
             ValidationStatus::Failed
-        } else if issues.iter().any(|i| i.severity == IssueSeverity::High || i.severity == IssueSeverity::Medium) {
+        } else if issues
+            .iter()
+            .any(|i| i.severity == IssueSeverity::High || i.severity == IssueSeverity::Medium)
+        {
             ValidationStatus::PassedWithWarnings
         } else {
             ValidationStatus::Passed
@@ -652,14 +756,35 @@ impl ValidationHarness {
     }
 
     /// Create attestation from validation result
-    pub fn create_attestation(&self, validation_result: &ValidationResult) -> CapabilityAttestation {
+    pub fn create_attestation(
+        &self,
+        validation_result: &ValidationResult,
+    ) -> CapabilityAttestation {
         let mut metadata = validation_result.metadata.clone();
-        metadata.insert("validator_id".to_string(), "validation_harness_v1".to_string());
-        metadata.insert("security_score".to_string(), validation_result.security_score.to_string());
-        metadata.insert("quality_score".to_string(), validation_result.quality_score.to_string());
-        metadata.insert("compliance_score".to_string(), validation_result.compliance_score.to_string());
-        metadata.insert("validation_status".to_string(), format!("{:?}", validation_result.status));
-        metadata.insert("issues_count".to_string(), validation_result.issues.len().to_string());
+        metadata.insert(
+            "validator_id".to_string(),
+            "validation_harness_v1".to_string(),
+        );
+        metadata.insert(
+            "security_score".to_string(),
+            validation_result.security_score.to_string(),
+        );
+        metadata.insert(
+            "quality_score".to_string(),
+            validation_result.quality_score.to_string(),
+        );
+        metadata.insert(
+            "compliance_score".to_string(),
+            validation_result.compliance_score.to_string(),
+        );
+        metadata.insert(
+            "validation_status".to_string(),
+            format!("{:?}", validation_result.status),
+        );
+        metadata.insert(
+            "issues_count".to_string(),
+            validation_result.issues.len().to_string(),
+        );
 
         CapabilityAttestation {
             signature: "validation_harness_signature".to_string(),
@@ -700,9 +825,15 @@ mod tests {
             description: "A test capability for validation".to_string(),
             version: "1.0.0".to_string(),
             provider: ProviderType::Local(LocalCapability {
-                handler: std::sync::Arc::new(|_| Ok(crate::runtime::values::Value::String("test".to_string()))),
+                handler: std::sync::Arc::new(|_| {
+                    Ok(crate::runtime::values::Value::String("test".to_string()))
+                }),
             }),
-            parameters: HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: None,
+            permissions: vec![],
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
@@ -750,15 +881,17 @@ mod tests {
     #[test]
     fn test_validation_status_determination() {
         let harness = ValidationHarness::new();
-        
+
         // Test passed status
         let manifest = create_test_manifest();
         let rtfs_code = r#"
             (capability test
                 :description "Well-documented capability with proper implementation"
+                :expects (map :url string)
                 :implementation
                 (do
                     (try
+                        (call :ccos.auth.inject {:auth "env"})
                         (call :http.get {:url "https://api.example.com"})
                         (catch error (log error)))
                 )
@@ -774,9 +907,9 @@ mod tests {
         let harness = ValidationHarness::new();
         let manifest = create_test_manifest();
         let result = harness.validate_capability(&manifest, "");
-        
+
         let attestation = harness.create_attestation(&result);
-        assert_eq!(attestation.validator_id, "validation_harness_v1");
-        assert!(attestation.security_score >= 0.0 && attestation.security_score <= 1.0);
+        assert_eq!(attestation.authority, "validation_harness_v1");
+        assert!(!attestation.signature.is_empty());
     }
 }

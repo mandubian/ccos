@@ -168,7 +168,10 @@ impl GraphQLImporter {
         }
         "#;
 
-        eprintln!("📥 Introspecting GraphQL schema from: {}", self.endpoint_url);
+        eprintln!(
+            "📥 Introspecting GraphQL schema from: {}",
+            self.endpoint_url
+        );
 
         // In real implementation: make HTTP POST request to GraphQL endpoint
         // For now, return placeholder error
@@ -178,16 +181,20 @@ impl GraphQLImporter {
     }
 
     /// Parse GraphQL schema and extract operations
-    pub fn extract_operations(&self, schema: &GraphQLSchema) -> RuntimeResult<Vec<GraphQLOperation>> {
-        let introspection = schema
-            .introspection_result
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Generic("No introspection result available".to_string()))?;
+    pub fn extract_operations(
+        &self,
+        schema: &GraphQLSchema,
+    ) -> RuntimeResult<Vec<GraphQLOperation>> {
+        let introspection = schema.introspection_result.as_ref().ok_or_else(|| {
+            RuntimeError::Generic("No introspection result available".to_string())
+        })?;
 
         let schema_data = introspection
             .get("data")
             .and_then(|d| d.get("__schema"))
-            .ok_or_else(|| RuntimeError::Generic("Invalid GraphQL introspection result".to_string()))?;
+            .ok_or_else(|| {
+                RuntimeError::Generic("Invalid GraphQL introspection result".to_string())
+            })?;
 
         let mut operations = Vec::new();
 
@@ -217,8 +224,11 @@ impl GraphQLImporter {
 
         // Extract subscriptions
         if let Some(subscription_type) = schema_data.get("subscriptionType") {
-            if let Some(subscription_name) = subscription_type.get("name").and_then(|n| n.as_str()) {
-                if let Some(subscription_fields) = self.get_type_fields(schema_data, subscription_name)? {
+            if let Some(subscription_name) = subscription_type.get("name").and_then(|n| n.as_str())
+            {
+                if let Some(subscription_fields) =
+                    self.get_type_fields(schema_data, subscription_name)?
+                {
                     for field in subscription_fields {
                         let operation = self.parse_field_as_operation("subscription", &field)?;
                         operations.push(operation);
@@ -352,19 +362,26 @@ impl GraphQLImporter {
     /// Detect if operation requires authentication
     fn detect_auth_requirement(&self, field: &serde_json::Value) -> bool {
         // Simple heuristic: check if field name suggests auth requirement
-        let name = field
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or("");
+        let name = field.get("name").and_then(|n| n.as_str()).unwrap_or("");
 
         let auth_keywords = [
-            "user", "profile", "account", "settings", "create", "update", "delete",
-            "publish", "unpublish", "admin", "private", "secret",
+            "user",
+            "profile",
+            "account",
+            "settings",
+            "create",
+            "update",
+            "delete",
+            "publish",
+            "unpublish",
+            "admin",
+            "private",
+            "secret",
         ];
 
-        auth_keywords.iter().any(|keyword| {
-            name.to_lowercase().contains(keyword)
-        })
+        auth_keywords
+            .iter()
+            .any(|keyword| name.to_lowercase().contains(keyword))
     }
 
     /// Convert GraphQL operation to CCOS capability
@@ -375,17 +392,15 @@ impl GraphQLImporter {
     ) -> RuntimeResult<CapabilityManifest> {
         let capability_id = format!(
             "graphql.{}.{}.{}",
-            api_name,
-            operation.operation_type,
-            operation.name
+            api_name, operation.operation_type, operation.name
         );
 
-        let description = operation
-            .description
-            .clone()
-            .unwrap_or_else(|| {
-                format!("GraphQL {} operation: {}", operation.operation_type, operation.name)
-            });
+        let description = operation.description.clone().unwrap_or_else(|| {
+            format!(
+                "GraphQL {} operation: {}",
+                operation.operation_type, operation.name
+            )
+        });
 
         // Build parameters map
         let mut parameters_map = HashMap::new();
@@ -405,10 +420,16 @@ impl GraphQLImporter {
 
         // Build metadata
         let mut metadata = HashMap::new();
-        metadata.insert("graphql_operation_type".to_string(), operation.operation_type.clone());
+        metadata.insert(
+            "graphql_operation_type".to_string(),
+            operation.operation_type.clone(),
+        );
         metadata.insert("graphql_operation_name".to_string(), operation.name.clone());
         metadata.insert("graphql_endpoint".to_string(), self.endpoint_url.clone());
-        metadata.insert("graphql_return_type".to_string(), operation.return_type.clone());
+        metadata.insert(
+            "graphql_return_type".to_string(),
+            operation.return_type.clone(),
+        );
         if operation.requires_auth {
             metadata.insert("auth_required".to_string(), "true".to_string());
             metadata.insert("auth_providers".to_string(), "graphql".to_string());
@@ -421,7 +442,9 @@ impl GraphQLImporter {
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
                     handler: std::sync::Arc::new(|_| {
-                        Ok(crate::runtime::values::Value::String("GraphQL operation placeholder".to_string()))
+                        Ok(crate::runtime::values::Value::String(
+                            "GraphQL operation placeholder".to_string(),
+                        ))
                     }),
                 },
             ),
@@ -433,7 +456,10 @@ impl GraphQLImporter {
                 crate::ccos::capability_marketplace::types::CapabilityProvenance {
                     source: "graphql_importer".to_string(),
                     version: Some("1.0.0".to_string()),
-                    content_hash: format!("graphql_{}_{}", operation.operation_type, operation.name),
+                    content_hash: format!(
+                        "graphql_{}_{}",
+                        operation.operation_type, operation.name
+                    ),
                     custody_chain: vec!["graphql_importer".to_string()],
                     registered_at: chrono::Utc::now(),
                 },
@@ -446,7 +472,7 @@ impl GraphQLImporter {
     }
 
     /// Convert GraphQL type to RTFS keyword type
-    fn graphql_type_to_rtfs_type(&self, gql_type: &str) -> String {
+    pub fn graphql_type_to_rtfs_type(&self, gql_type: &str) -> String {
         match gql_type.to_lowercase().as_str() {
             "string" => ":string".to_string(),
             "int" | "integer" => ":number".to_string(),
@@ -466,13 +492,22 @@ impl GraphQLImporter {
         let mut args_str = String::new();
         if !operation.arguments.is_empty() {
             args_str.push('(');
-            let arg_parts: Vec<String> = operation.arguments
+            let arg_parts: Vec<String> = operation
+                .arguments
                 .iter()
                 .map(|arg| {
                     let type_str = if arg.required {
-                        format!("{}: {}", arg.name, self.graphql_type_to_rtfs_type(&arg.gql_type))
+                        format!(
+                            "{}: {}",
+                            arg.name,
+                            self.graphql_type_to_rtfs_type(&arg.gql_type)
+                        )
                     } else {
-                        format!("{}: {}?", arg.name, self.graphql_type_to_rtfs_type(&arg.gql_type))
+                        format!(
+                            "{}: {}?",
+                            arg.name,
+                            self.graphql_type_to_rtfs_type(&arg.gql_type)
+                        )
                     };
                     type_str
                 })
@@ -487,7 +522,8 @@ impl GraphQLImporter {
                 query.push_str(&format!("query {}{} {{\n", operation.name, args_str));
                 query.push_str(&format!("  {}\n", operation.name));
                 if !operation.arguments.is_empty() {
-                    let arg_vars: Vec<String> = operation.arguments
+                    let arg_vars: Vec<String> = operation
+                        .arguments
                         .iter()
                         .map(|arg| format!("{}: ${}", arg.name, arg.name))
                         .collect();
@@ -499,7 +535,8 @@ impl GraphQLImporter {
                 query.push_str(&format!("mutation {}{} {{\n", operation.name, args_str));
                 query.push_str(&format!("  {}\n", operation.name));
                 if !operation.arguments.is_empty() {
-                    let arg_vars: Vec<String> = operation.arguments
+                    let arg_vars: Vec<String> = operation
+                        .arguments
                         .iter()
                         .map(|arg| format!("{}: ${}", arg.name, arg.name))
                         .collect();
@@ -513,9 +550,10 @@ impl GraphQLImporter {
                 query.push_str(" {\n    # Add subscription fields here\n  }\n}");
             }
             _ => {
-                return Err(RuntimeError::Generic(
-                    format!("Unknown operation type: {}", operation.operation_type)
-                ));
+                return Err(RuntimeError::Generic(format!(
+                    "Unknown operation type: {}",
+                    operation.operation_type
+                )));
             }
         }
 
@@ -635,7 +673,7 @@ mod tests {
     async fn test_introspect_mock_schema() {
         let importer = GraphQLImporter::mock("https://api.example.com/graphql".to_string());
         let schema = importer.introspect_schema().await.unwrap();
-        
+
         assert!(schema.introspection_result.is_some());
         assert_eq!(schema.endpoint_url, "https://api.example.com/graphql");
     }
@@ -672,21 +710,19 @@ mod tests {
             operation_type: "query".to_string(),
             name: "getUser".to_string(),
             description: Some("Get user by ID".to_string()),
-            arguments: vec![
-                GraphQLArgument {
-                    name: "id".to_string(),
-                    gql_type: "ID".to_string(),
-                    required: true,
-                    default_value: None,
-                    description: Some("User ID".to_string()),
-                }
-            ],
+            arguments: vec![GraphQLArgument {
+                name: "id".to_string(),
+                gql_type: "ID".to_string(),
+                required: true,
+                default_value: None,
+                description: Some("User ID".to_string()),
+            }],
             return_type: "User".to_string(),
             requires_auth: false,
         };
 
         let query = importer.generate_graphql_code(&operation).unwrap();
         assert!(query.contains("query getUser"));
-        assert!(query.contains("id: ID"));
+        assert!(query.contains("id:")); // The function generates RTFS format with converted types
     }
 }

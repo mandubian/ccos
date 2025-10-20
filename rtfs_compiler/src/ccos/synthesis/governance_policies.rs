@@ -3,7 +3,7 @@
 //! This module implements governance policies that enforce organizational
 //! rules, compliance requirements, and security standards for capabilities.
 
-use super::validation_harness::{ValidationResult, ValidationIssue, IssueSeverity, IssueCategory};
+use super::validation_harness::{IssueCategory, IssueSeverity, ValidationIssue, ValidationResult};
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use std::collections::HashMap;
 
@@ -11,10 +11,10 @@ use std::collections::HashMap;
 pub trait GovernancePolicy {
     /// Check compliance against this policy
     fn check_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult;
-    
+
     /// Get policy name
     fn policy_name(&self) -> &str;
-    
+
     /// Get policy description
     fn policy_description(&self) -> &str;
 }
@@ -31,44 +31,56 @@ impl MaxParameterCountPolicy {
 }
 
 impl GovernancePolicy for MaxParameterCountPolicy {
-    fn check_compliance(&self, manifest: &CapabilityManifest, _rtfs_code: &str) -> ValidationResult {
+    fn check_compliance(
+        &self,
+        manifest: &CapabilityManifest,
+        _rtfs_code: &str,
+    ) -> ValidationResult {
         let mut issues = Vec::new();
-        
+
         // Get parameter count from metadata
-        let param_count = manifest.metadata
+        let param_count = manifest
+            .metadata
             .get("parameter_count")
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
-        
+
         if param_count > self.max_parameters {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::Medium,
                 category: IssueCategory::Quality,
-                description: format!("Capability has {} parameters, exceeding limit of {}", param_count, self.max_parameters),
+                description: format!(
+                    "Capability has {} parameters, exceeding limit of {}",
+                    param_count, self.max_parameters
+                ),
                 location: Some("manifest".to_string()),
                 suggestion: Some("Consider breaking down into smaller capabilities".to_string()),
                 code: "MAX_PARAM_COUNT".to_string(),
             });
         }
-        
+
         ValidationResult {
-            status: if issues.is_empty() { 
-                super::validation_harness::ValidationStatus::Passed 
-            } else { 
-                super::validation_harness::ValidationStatus::PassedWithWarnings 
+            status: if issues.is_empty() {
+                super::validation_harness::ValidationStatus::Passed
+            } else {
+                super::validation_harness::ValidationStatus::PassedWithWarnings
             },
             issues,
             security_score: 1.0,
-            quality_score: if param_count <= self.max_parameters { 1.0 } else { 0.8 },
+            quality_score: if param_count <= self.max_parameters {
+                1.0
+            } else {
+                0.8
+            },
             compliance_score: 1.0,
             metadata: HashMap::new(),
         }
     }
-    
+
     fn policy_name(&self) -> &str {
         "max_parameter_count"
     }
-    
+
     fn policy_description(&self) -> &str {
         "Enforces maximum parameter count for capabilities"
     }
@@ -117,7 +129,9 @@ impl GovernancePolicy for EnterpriseSecurityPolicy {
                     category: IssueCategory::Security,
                     description: format!("Capability name contains blocked keyword: '{}'", keyword),
                     location: Some(format!("Capability name: {}", manifest.name)),
-                    suggestion: Some("Use a more appropriate name without privileged keywords".to_string()),
+                    suggestion: Some(
+                        "Use a more appropriate name without privileged keywords".to_string(),
+                    ),
                     code: "GOV001".to_string(),
                 });
             }
@@ -132,21 +146,26 @@ impl GovernancePolicy for EnterpriseSecurityPolicy {
                     break;
                 }
             }
-            
+
             if !has_allowed_domain {
                 issues.push(ValidationIssue {
                     severity: IssueSeverity::High,
                     category: IssueCategory::Security,
                     description: "Capability makes HTTP calls to non-approved domains".to_string(),
                     location: Some("RTFS code".to_string()),
-                    suggestion: Some("Use only approved external domains or request approval".to_string()),
+                    suggestion: Some(
+                        "Use only approved external domains or request approval".to_string(),
+                    ),
                     code: "GOV002".to_string(),
                 });
             }
         }
 
         // Check for encryption requirements
-        if self.require_encryption && rtfs_code.contains("(call :http") && !rtfs_code.contains("https://") {
+        if self.require_encryption
+            && rtfs_code.contains("(call :http")
+            && !rtfs_code.contains("https://")
+        {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::High,
                 category: IssueCategory::Security,
@@ -158,7 +177,8 @@ impl GovernancePolicy for EnterpriseSecurityPolicy {
         }
 
         // Check for audit logging requirements
-        if self.require_audit_logging && !rtfs_code.contains("audit") && !rtfs_code.contains("log") {
+        if self.require_audit_logging && !rtfs_code.contains("audit") && !rtfs_code.contains("log")
+        {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::Medium,
                 category: IssueCategory::Compliance,
@@ -175,7 +195,10 @@ impl GovernancePolicy for EnterpriseSecurityPolicy {
             1.0
         };
 
-        let compliance_score = if issues.iter().any(|i| i.category == IssueCategory::Compliance) {
+        let compliance_score = if issues
+            .iter()
+            .any(|i| i.category == IssueCategory::Compliance)
+        {
             0.7
         } else {
             1.0
@@ -240,8 +263,10 @@ impl GovernancePolicy for DataPrivacyPolicy {
         // Check for sensitive data patterns
         let code_lower = rtfs_code.to_lowercase();
         let description_lower = manifest.description.to_lowercase();
-        
-        let has_sensitive_data = self.sensitive_data_patterns.iter()
+
+        let has_sensitive_data = self
+            .sensitive_data_patterns
+            .iter()
             .any(|pattern| code_lower.contains(pattern) || description_lower.contains(pattern));
 
         if has_sensitive_data {
@@ -250,9 +275,12 @@ impl GovernancePolicy for DataPrivacyPolicy {
                 issues.push(ValidationIssue {
                     severity: IssueSeverity::Critical,
                     category: IssueCategory::Compliance,
-                    description: "Capability processes sensitive data but lacks consent mechanism".to_string(),
+                    description: "Capability processes sensitive data but lacks consent mechanism"
+                        .to_string(),
                     location: Some("RTFS code".to_string()),
-                    suggestion: Some("Implement user consent collection and validation".to_string()),
+                    suggestion: Some(
+                        "Implement user consent collection and validation".to_string(),
+                    ),
                     code: "PRIV001".to_string(),
                 });
             }
@@ -262,9 +290,12 @@ impl GovernancePolicy for DataPrivacyPolicy {
                 issues.push(ValidationIssue {
                     severity: IssueSeverity::High,
                     category: IssueCategory::Compliance,
-                    description: "Capability must implement data minimization principles".to_string(),
+                    description: "Capability must implement data minimization principles"
+                        .to_string(),
                     location: Some("RTFS code".to_string()),
-                    suggestion: Some("Only collect data that is necessary for the stated purpose".to_string()),
+                    suggestion: Some(
+                        "Only collect data that is necessary for the stated purpose".to_string(),
+                    ),
                     code: "PRIV002".to_string(),
                 });
             }
@@ -274,7 +305,8 @@ impl GovernancePolicy for DataPrivacyPolicy {
                 issues.push(ValidationIssue {
                     severity: IssueSeverity::High,
                     category: IssueCategory::Compliance,
-                    description: "Capability must support right to deletion (GDPR Article 17)".to_string(),
+                    description: "Capability must support right to deletion (GDPR Article 17)"
+                        .to_string(),
                     location: Some("RTFS code".to_string()),
                     suggestion: Some("Implement data deletion functionality".to_string()),
                     code: "PRIV003".to_string(),
@@ -339,8 +371,8 @@ impl GovernancePolicy for PerformancePolicy {
         let mut issues = Vec::new();
 
         // Count external calls
-        let external_calls = rtfs_code.matches("(call :http").count() + 
-                           rtfs_code.matches("(call :database").count();
+        let external_calls =
+            rtfs_code.matches("(call :http").count() + rtfs_code.matches("(call :database").count();
 
         if external_calls > self.max_external_calls as usize {
             issues.push(ValidationIssue {
@@ -427,7 +459,9 @@ impl GovernancePolicy for ApiDesignPolicy {
                 category: IssueCategory::ApiDesign,
                 description: "Capability ID must include version number".to_string(),
                 location: Some(format!("Capability ID: {}", manifest.id)),
-                suggestion: Some("Use semantic versioning in capability ID (e.g., .v1, .v1.2)".to_string()),
+                suggestion: Some(
+                    "Use semantic versioning in capability ID (e.g., .v1, .v1.2)".to_string(),
+                ),
                 code: "API001".to_string(),
             });
         }
@@ -439,13 +473,16 @@ impl GovernancePolicy for ApiDesignPolicy {
                 category: IssueCategory::Documentation,
                 description: "Capability must have comprehensive documentation".to_string(),
                 location: Some("Capability manifest".to_string()),
-                suggestion: Some("Provide detailed description of capability purpose and usage".to_string()),
+                suggestion: Some(
+                    "Provide detailed description of capability purpose and usage".to_string(),
+                ),
                 code: "API002".to_string(),
             });
         }
 
         // Check for error handling
-        if self.require_error_handling && !rtfs_code.contains("try") && !rtfs_code.contains("catch") {
+        if self.require_error_handling && !rtfs_code.contains("try") && !rtfs_code.contains("catch")
+        {
             issues.push(ValidationIssue {
                 severity: IssueSeverity::Medium,
                 category: IssueCategory::Quality,
@@ -468,7 +505,10 @@ impl GovernancePolicy for ApiDesignPolicy {
                             param_count, self.max_parameter_count
                         ),
                         location: Some("Capability manifest".to_string()),
-                        suggestion: Some("Consider grouping parameters into objects or splitting capability".to_string()),
+                        suggestion: Some(
+                            "Consider grouping parameters into objects or splitting capability"
+                                .to_string(),
+                        ),
                         code: "API004".to_string(),
                     });
                 }
@@ -514,9 +554,15 @@ mod tests {
             description: "A test capability for governance policy testing".to_string(),
             version: "1.0.0".to_string(),
             provider: ProviderType::Local(LocalCapability {
-                handler: std::sync::Arc::new(|_| Ok(crate::runtime::values::Value::String("test".to_string()))),
+                handler: std::sync::Arc::new(|_| {
+                    Ok(crate::runtime::values::Value::String("test".to_string()))
+                }),
             }),
-            parameters: HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: None,
+            permissions: vec![],
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
@@ -526,7 +572,8 @@ mod tests {
     #[test]
     fn test_enterprise_security_policy() {
         let policy = EnterpriseSecurityPolicy::new();
-        let manifest = create_test_manifest();
+        let mut manifest = create_test_manifest();
+        manifest.name = "Admin Capability".to_string(); // Use a name with blocked keyword
         let rtfs_code = r#"
             (capability admin
                 :description "Admin capability"
