@@ -28,6 +28,8 @@ use std::sync::Arc;
 pub struct IrStrategy {
     runtime: IrRuntime,
     module_registry: ModuleRegistry,
+    // Persistent environment for REPL-like usage
+    persistent_env: Option<IrEnvironment>,
 }
 
 impl IrStrategy {
@@ -53,7 +55,24 @@ impl IrStrategy {
         Self {
             runtime: IrRuntime::new(host, security_context.clone()),
             module_registry,
+            persistent_env: None,
         }
+    }
+
+    /// Enable persistent environment mode for REPL-like usage
+    pub fn enable_persistent_env(&mut self) -> Result<(), RuntimeError> {
+        if self.persistent_env.is_none() {
+            self.persistent_env = Some(IrEnvironment::with_stdlib(&self.module_registry)?);
+        }
+        Ok(())
+    }
+
+    /// Get the current persistent environment (creates one if needed)
+    fn get_or_create_persistent_env(&mut self) -> Result<&mut IrEnvironment, RuntimeError> {
+        if self.persistent_env.is_none() {
+            self.persistent_env = Some(IrEnvironment::with_stdlib(&self.module_registry)?);
+        }
+        Ok(self.persistent_env.as_mut().unwrap())
     }
 }
 
@@ -72,8 +91,14 @@ impl RuntimeStrategy for IrStrategy {
             source_location: None,
         };
 
-        self.runtime
-            .execute_program(&program_node, &mut self.module_registry)
+        // Use persistent environment if available (for REPL-like usage)
+        if let Some(ref mut persistent_env) = self.persistent_env {
+            self.runtime
+                .execute_program_with_env(&program_node, &mut self.module_registry, persistent_env)
+        } else {
+            self.runtime
+                .execute_program(&program_node, &mut self.module_registry)
+        }
     }
 
     fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
@@ -140,6 +165,54 @@ impl IrRuntime {
 
         for node in forms {
             match self.execute_node(node, &mut env, false, _module_registry)? {
+                ExecutionOutcome::Complete(value) => {
+                    result = value;
+                }
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call));
+                }
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call));
+                }
+            }
+        }
+
+        Ok(ExecutionOutcome::Complete(result))
+    }
+
+    /// Executes a program using a provided environment (for persistent REPL usage).
+    pub fn execute_program_with_env(
+        &mut self,
+        program_node: &IrNode,
+        _module_registry: &mut ModuleRegistry,
+        env: &mut IrEnvironment,
+    ) -> Result<ExecutionOutcome, RuntimeError> {
+        let forms = match program_node {
+            IrNode::Program { forms, .. } => forms,
+            _ => return Err(RuntimeError::Generic("Expected Program node".to_string())),
+        };
+
+        // First pass: predefine placeholders for any function definitions to support
+        // forward references and mutual recursion at the top level.
+        if let IrNode::Program { forms, .. } = program_node {
+            for n in forms {
+                self.predefine_function_placeholders_in_node(env, n);
+            }
+        }
+
+        // Ensure the context manager has an initialized root context so step
+        // lifecycle operations (enter_step/exit_step) can create child contexts.
+        {
+            let mut cm = self.context_manager.borrow_mut();
+            if cm.current_context_id().is_none() {
+                cm.initialize(Some("ir-runtime-root".to_string()));
+            }
+        }
+        let mut result = Value::Nil;
+
+        for node in forms {
+            match self.execute_node(node, env, false, _module_registry)? {
                 ExecutionOutcome::Complete(value) => {
                     result = value;
                 }
