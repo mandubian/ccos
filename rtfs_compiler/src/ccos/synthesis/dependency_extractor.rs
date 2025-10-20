@@ -7,8 +7,8 @@
 
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use crate::runtime::error::RuntimeResult;
-use std::collections::{HashMap, HashSet};
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 
 /// Represents a capability dependency found in RTFS code
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -37,29 +37,39 @@ pub struct DependencyExtractionResult {
 /// Extract capability dependencies from RTFS code
 pub fn extract_dependencies(rtfs_code: &str) -> RuntimeResult<DependencyExtractionResult> {
     let dependencies = extract_capability_calls(rtfs_code)?;
-    
-    let dependency_ids: HashSet<String> = dependencies.iter()
+
+    let dependency_ids: HashSet<String> = dependencies
+        .iter()
         .map(|d| d.capability_id.clone())
         .collect();
-    
-    let mut resolved_dependencies = HashSet::new();
+
+    let resolved_dependencies = HashSet::new();
     let mut missing_dependencies = HashSet::new();
-    
+
     // For now, we'll mark all dependencies as missing since we don't have access to marketplace
     // In the full implementation, this would check against the marketplace snapshot
     missing_dependencies = dependency_ids;
-    
+
     let mut metadata = HashMap::new();
-    metadata.insert("dependencies.total".to_string(), dependencies.len().to_string());
-    metadata.insert("dependencies.missing".to_string(), missing_dependencies.len().to_string());
-    metadata.insert("dependencies.resolved".to_string(), resolved_dependencies.len().to_string());
-    
+    metadata.insert(
+        "dependencies.total".to_string(),
+        dependencies.len().to_string(),
+    );
+    metadata.insert(
+        "dependencies.missing".to_string(),
+        missing_dependencies.len().to_string(),
+    );
+    metadata.insert(
+        "dependencies.resolved".to_string(),
+        resolved_dependencies.len().to_string(),
+    );
+
     // Create comma-separated list of missing dependencies for easy access
     if !missing_dependencies.is_empty() {
         let missing_list: Vec<String> = missing_dependencies.iter().cloned().collect();
         metadata.insert("needs_capabilities".to_string(), missing_list.join(","));
     }
-    
+
     Ok(DependencyExtractionResult {
         dependencies,
         resolved_dependencies,
@@ -71,19 +81,18 @@ pub fn extract_dependencies(rtfs_code: &str) -> RuntimeResult<DependencyExtracti
 /// Extract capability calls from RTFS code using regex
 fn extract_capability_calls(rtfs_code: &str) -> RuntimeResult<Vec<CapabilityDependency>> {
     let mut dependencies = Vec::new();
-    
+
     // Regex to match (call :capability.id ...) patterns
-    let call_regex = Regex::new(r#"(?m)\(call\s+:([a-zA-Z0-9._-]+)\s+"#)
-        .map_err(|e| crate::runtime::error::RuntimeError::Generic(
-            format!("Failed to compile regex: {}", e)
-        ))?;
-    
+    let call_regex = Regex::new(r#"(?m)\(call\s+:([a-zA-Z0-9._-]+)\s+"#).map_err(|e| {
+        crate::runtime::error::RuntimeError::Generic(format!("Failed to compile regex: {}", e))
+    })?;
+
     for (line_num, line) in rtfs_code.lines().enumerate() {
         if let Some(captures) = call_regex.captures(line) {
             if let Some(capability_id) = captures.get(1) {
                 let capability_id = capability_id.as_str().to_string();
                 let call_expression = line.trim().to_string();
-                
+
                 dependencies.push(CapabilityDependency {
                     capability_id,
                     call_expression,
@@ -92,7 +101,7 @@ fn extract_capability_calls(rtfs_code: &str) -> RuntimeResult<Vec<CapabilityDepe
             }
         }
     }
-    
+
     Ok(dependencies)
 }
 
@@ -101,22 +110,26 @@ pub fn check_dependencies_against_marketplace(
     dependencies: &[CapabilityDependency],
     marketplace_snapshot: &[CapabilityManifest],
 ) -> (HashSet<String>, HashSet<String>) {
-    let marketplace_ids: HashSet<String> = marketplace_snapshot.iter()
+    let marketplace_ids: HashSet<String> = marketplace_snapshot
+        .iter()
         .map(|manifest| manifest.id.clone())
         .collect();
-    
-    let dependency_ids: HashSet<String> = dependencies.iter()
+
+    let dependency_ids: HashSet<String> = dependencies
+        .iter()
         .map(|d| d.capability_id.clone())
         .collect();
-    
-    let resolved: HashSet<String> = dependency_ids.intersection(&marketplace_ids)
+
+    let resolved: HashSet<String> = dependency_ids
+        .intersection(&marketplace_ids)
         .cloned()
         .collect();
-    
-    let missing: HashSet<String> = dependency_ids.difference(&marketplace_ids)
+
+    let missing: HashSet<String> = dependency_ids
+        .difference(&marketplace_ids)
         .cloned()
         .collect();
-    
+
     (resolved, missing)
 }
 
@@ -126,15 +139,21 @@ pub fn create_audit_event_data(
     missing_dependencies: &HashSet<String>,
 ) -> HashMap<String, String> {
     let mut event_data = HashMap::new();
-    event_data.insert("event_type".to_string(), "capability_deps_missing".to_string());
+    event_data.insert(
+        "event_type".to_string(),
+        "capability_deps_missing".to_string(),
+    );
     event_data.insert("capability_id".to_string(), capability_id.to_string());
-    event_data.insert("missing_count".to_string(), missing_dependencies.len().to_string());
-    
+    event_data.insert(
+        "missing_count".to_string(),
+        missing_dependencies.len().to_string(),
+    );
+
     if !missing_dependencies.is_empty() {
         let missing_list: Vec<String> = missing_dependencies.iter().cloned().collect();
         event_data.insert("missing_capabilities".to_string(), missing_list.join(","));
     }
-    
+
     event_data
 }
 
@@ -153,17 +172,26 @@ mod tests {
 "#;
 
         let result = extract_dependencies(rtfs_code).unwrap();
-        
+
         assert_eq!(result.dependencies.len(), 3);
-        assert!(result.dependencies.iter().any(|d| d.capability_id == "travel.flights"));
-        assert!(result.dependencies.iter().any(|d| d.capability_id == "travel.hotels"));
-        assert!(result.dependencies.iter().any(|d| d.capability_id == "travel.transport"));
-        
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|d| d.capability_id == "travel.flights"));
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|d| d.capability_id == "travel.hotels"));
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|d| d.capability_id == "travel.transport"));
+
         assert_eq!(result.missing_dependencies.len(), 3);
         assert!(result.missing_dependencies.contains("travel.flights"));
         assert!(result.missing_dependencies.contains("travel.hotels"));
         assert!(result.missing_dependencies.contains("travel.transport"));
-        
+
         assert_eq!(result.metadata.get("dependencies.total").unwrap(), "3");
         assert_eq!(result.metadata.get("dependencies.missing").unwrap(), "3");
         assert_eq!(result.metadata.get("dependencies.resolved").unwrap(), "0");
@@ -178,7 +206,7 @@ mod tests {
 "#;
 
         let result = extract_dependencies(rtfs_code).unwrap();
-        
+
         assert_eq!(result.dependencies.len(), 0);
         assert_eq!(result.missing_dependencies.len(), 0);
         assert_eq!(result.resolved_dependencies.len(), 0);
@@ -196,12 +224,21 @@ mod tests {
 "#;
 
         let result = extract_dependencies(rtfs_code).unwrap();
-        
+
         // Should find all three calls even though they're nested
         assert_eq!(result.dependencies.len(), 3);
-        assert!(result.dependencies.iter().any(|d| d.capability_id == "travel.itinerary"));
-        assert!(result.dependencies.iter().any(|d| d.capability_id == "travel.attractions"));
-        assert!(result.dependencies.iter().any(|d| d.capability_id == "travel.hotels"));
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|d| d.capability_id == "travel.itinerary"));
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|d| d.capability_id == "travel.attractions"));
+        assert!(result
+            .dependencies
+            .iter()
+            .any(|d| d.capability_id == "travel.hotels"));
     }
 
     #[test]
@@ -232,8 +269,12 @@ mod tests {
                 version: "1.0.0".to_string(),
                 provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                     crate::ccos::capability_marketplace::types::LocalCapability {
-                        handler: std::sync::Arc::new(|_args| Ok(crate::runtime::values::Value::String("pending_resolution".to_string()))),
-                    }
+                        handler: std::sync::Arc::new(|_args| {
+                            Ok(crate::runtime::values::Value::String(
+                                "pending_resolution".to_string(),
+                            ))
+                        }),
+                    },
                 ),
                 input_schema: None,
                 output_schema: None,
@@ -251,8 +292,12 @@ mod tests {
                 version: "1.0.0".to_string(),
                 provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                     crate::ccos::capability_marketplace::types::LocalCapability {
-                        handler: std::sync::Arc::new(|_args| Ok(crate::runtime::values::Value::String("pending_resolution".to_string()))),
-                    }
+                        handler: std::sync::Arc::new(|_args| {
+                            Ok(crate::runtime::values::Value::String(
+                                "pending_resolution".to_string(),
+                            ))
+                        }),
+                    },
                 ),
                 input_schema: None,
                 output_schema: None,
@@ -265,25 +310,36 @@ mod tests {
             },
         ];
 
-        let (resolved, missing) = check_dependencies_against_marketplace(&dependencies, &marketplace_snapshot);
-        
+        let (resolved, missing) =
+            check_dependencies_against_marketplace(&dependencies, &marketplace_snapshot);
+
         assert_eq!(resolved.len(), 2);
         assert!(resolved.contains("travel.flights"));
         assert!(resolved.contains("travel.hotels"));
-        
+
         assert_eq!(missing.len(), 1);
         assert!(missing.contains("travel.transport"));
     }
 
     #[test]
     fn test_create_audit_event_data() {
-        let missing_deps: HashSet<String> = ["travel.flights".to_string(), "travel.hotels".to_string()].iter().cloned().collect();
+        let missing_deps: HashSet<String> =
+            ["travel.flights".to_string(), "travel.hotels".to_string()]
+                .iter()
+                .cloned()
+                .collect();
         let event_data = create_audit_event_data("travel.trip-planner.paris.v1", &missing_deps);
-        
-        assert_eq!(event_data.get("event_type").unwrap(), "capability_deps_missing");
-        assert_eq!(event_data.get("capability_id").unwrap(), "travel.trip-planner.paris.v1");
+
+        assert_eq!(
+            event_data.get("event_type").unwrap(),
+            "capability_deps_missing"
+        );
+        assert_eq!(
+            event_data.get("capability_id").unwrap(),
+            "travel.trip-planner.paris.v1"
+        );
         assert_eq!(event_data.get("missing_count").unwrap(), "2");
-        
+
         // Check that both capabilities are present (order may vary due to HashSet)
         let missing_list = event_data.get("missing_capabilities").unwrap();
         assert!(missing_list.contains("travel.flights"));

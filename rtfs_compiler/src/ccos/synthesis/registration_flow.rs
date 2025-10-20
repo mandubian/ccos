@@ -8,18 +8,20 @@
 //! - End-to-end testing of resolved capabilities
 
 use crate::ccos::capability_marketplace::types::{
-    CapabilityManifest, CapabilityAttestation, CapabilityProvenance
+    CapabilityAttestation, CapabilityManifest, CapabilityProvenance,
 };
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
-use crate::ccos::synthesis::validation_harness::{ValidationHarness, ValidationResult, ValidationStatus};
 use crate::ccos::synthesis::governance_policies::GovernancePolicy;
 use crate::ccos::synthesis::static_analyzers::StaticAnalyzer;
+use crate::ccos::synthesis::validation_harness::{
+    ValidationHarness, ValidationResult, ValidationStatus,
+};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::values::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Registration flow result
 #[derive(Debug, Clone)]
@@ -55,12 +57,12 @@ impl RegistrationFlow {
     pub fn new(marketplace: Arc<CapabilityMarketplace>) -> Self {
         Self {
             validation_harness: ValidationHarness::new(),
-            governance_policies: vec![
-                Box::new(crate::ccos::synthesis::governance_policies::MaxParameterCountPolicy::new(20)),
-            ],
-            static_analyzers: vec![
-                Box::new(crate::ccos::synthesis::static_analyzers::PerformanceAnalyzer::new()),
-            ],
+            governance_policies: vec![Box::new(
+                crate::ccos::synthesis::governance_policies::MaxParameterCountPolicy::new(20),
+            )],
+            static_analyzers: vec![Box::new(
+                crate::ccos::synthesis::static_analyzers::PerformanceAnalyzer::new(),
+            )],
             marketplace,
         }
     }
@@ -72,36 +74,39 @@ impl RegistrationFlow {
         rtfs_code: Option<&str>,
     ) -> RuntimeResult<RegistrationResult> {
         let capability_id = manifest.id.clone();
-        
+
         // Step 1: Pre-flight validation
         let validation_result = self.validate_capability(&manifest, rtfs_code)?;
-        
+
         // Step 2: Apply governance policies
         let governance_result = self.apply_governance_policies(&manifest, rtfs_code)?;
-        
+
         // Step 3: Generate version and attestation
         let version = self.generate_version(&manifest, &validation_result)?;
         let attestation = self.create_attestation(&manifest, &validation_result)?;
         let provenance = self.create_provenance(&manifest, &validation_result)?;
-        
+
         // Step 4: Create final manifest with metadata
         let final_manifest = self.create_final_manifest(
-            manifest, 
-            version.clone(), 
-            attestation, 
-            provenance, 
-            &validation_result
+            manifest,
+            version.clone(),
+            attestation,
+            provenance,
+            &validation_result,
         )?;
-        
+
         // Step 5: Register with marketplace
-        self.marketplace.register_capability_manifest(final_manifest.clone()).await?;
-        
+        self.marketplace
+            .register_capability_manifest(final_manifest.clone())
+            .await?;
+
         // Step 6: Emit validation audit event
-        self.emit_validation_audit_event(&capability_id, &validation_result).await?;
-        
+        self.emit_validation_audit_event(&capability_id, &validation_result)
+            .await?;
+
         // Step 7: Check for parent capability integration
         let integration_result = self.check_parent_integration(&capability_id).await?;
-        
+
         Ok(RegistrationResult {
             success: true,
             capability_id,
@@ -122,8 +127,10 @@ impl RegistrationFlow {
         rtfs_code: Option<&str>,
     ) -> RuntimeResult<ValidationResult> {
         // Use the validation harness for comprehensive validation
-        let mut result = self.validation_harness.validate_capability(manifest, rtfs_code.unwrap_or(""));
-        
+        let mut result = self
+            .validation_harness
+            .validate_capability(manifest, rtfs_code.unwrap_or(""));
+
         // Add static analysis results
         if let Some(code) = rtfs_code {
             for analyzer in &self.static_analyzers {
@@ -131,10 +138,10 @@ impl RegistrationFlow {
                 result.issues.extend(issues);
             }
         }
-        
+
         // Update scores based on issues found
         self.update_validation_scores(&mut result);
-        
+
         Ok(result)
     }
 
@@ -175,18 +182,19 @@ impl RegistrationFlow {
         hasher.update(manifest.id.as_bytes());
         hasher.update(manifest.name.as_bytes());
         hasher.update(manifest.description.as_bytes());
-        
+
         if let Some(input_schema) = &manifest.input_schema {
             hasher.update(input_schema.to_string().as_bytes());
         }
-        
+
         // Include validation status in version
         hasher.update(format!("{:?}", validation_result.status).as_bytes());
-        
+
         let hash = hasher.finalize();
         let version_hash = format!("{:x}", hash)[..8].to_string();
-        
-        Ok(format!("1.0.0-{}.{}", 
+
+        Ok(format!(
+            "1.0.0-{}.{}",
             Utc::now().format("%Y%m%d"),
             version_hash
         ))
@@ -198,7 +206,9 @@ impl RegistrationFlow {
         manifest: &CapabilityManifest,
         validation_result: &ValidationResult,
     ) -> RuntimeResult<CapabilityAttestation> {
-        Ok(self.validation_harness.create_attestation(validation_result))
+        Ok(self
+            .validation_harness
+            .create_attestation(validation_result))
     }
 
     /// Create provenance for the capability
@@ -221,18 +231,32 @@ impl RegistrationFlow {
     ) -> RuntimeResult<CapabilityManifest> {
         // Add version to metadata
         manifest.metadata.insert("version".to_string(), version);
-        manifest.metadata.insert("registered_at".to_string(), Utc::now().to_rfc3339());
-        
+        manifest
+            .metadata
+            .insert("registered_at".to_string(), Utc::now().to_rfc3339());
+
         // Add validation results to metadata
-        manifest.metadata.insert("validation_status".to_string(), format!("{:?}", validation_result.status));
-        manifest.metadata.insert("security_score".to_string(), validation_result.security_score.to_string());
-        manifest.metadata.insert("quality_score".to_string(), validation_result.quality_score.to_string());
-        manifest.metadata.insert("compliance_score".to_string(), validation_result.compliance_score.to_string());
-        
+        manifest.metadata.insert(
+            "validation_status".to_string(),
+            format!("{:?}", validation_result.status),
+        );
+        manifest.metadata.insert(
+            "security_score".to_string(),
+            validation_result.security_score.to_string(),
+        );
+        manifest.metadata.insert(
+            "quality_score".to_string(),
+            validation_result.quality_score.to_string(),
+        );
+        manifest.metadata.insert(
+            "compliance_score".to_string(),
+            validation_result.compliance_score.to_string(),
+        );
+
         // Add attestation and provenance
         manifest.attestation = Some(attestation);
         manifest.provenance = Some(provenance);
-        
+
         Ok(manifest)
     }
 
@@ -244,27 +268,47 @@ impl RegistrationFlow {
     ) -> RuntimeResult<()> {
         let mut event_data = HashMap::new();
         event_data.insert("capability_id".to_string(), capability_id.to_string());
-        event_data.insert("validation_status".to_string(), format!("{:?}", validation_result.status));
-        event_data.insert("security_score".to_string(), validation_result.security_score.to_string());
-        event_data.insert("quality_score".to_string(), validation_result.quality_score.to_string());
-        event_data.insert("compliance_score".to_string(), validation_result.compliance_score.to_string());
-        event_data.insert("issues_count".to_string(), validation_result.issues.len().to_string());
+        event_data.insert(
+            "validation_status".to_string(),
+            format!("{:?}", validation_result.status),
+        );
+        event_data.insert(
+            "security_score".to_string(),
+            validation_result.security_score.to_string(),
+        );
+        event_data.insert(
+            "quality_score".to_string(),
+            validation_result.quality_score.to_string(),
+        );
+        event_data.insert(
+            "compliance_score".to_string(),
+            validation_result.compliance_score.to_string(),
+        );
+        event_data.insert(
+            "issues_count".to_string(),
+            validation_result.issues.len().to_string(),
+        );
         event_data.insert("timestamp".to_string(), Utc::now().to_rfc3339());
 
         // Emit via marketplace audit system
-        self.marketplace.emit_capability_audit_event("capability_validated", capability_id, Some(event_data)).await?;
-        
+        self.marketplace
+            .emit_capability_audit_event("capability_validated", capability_id, Some(event_data))
+            .await?;
+
         Ok(())
     }
 
     /// Check parent capability integration
-    async fn check_parent_integration(&self, capability_id: &str) -> RuntimeResult<IntegrationResult> {
+    async fn check_parent_integration(
+        &self,
+        capability_id: &str,
+    ) -> RuntimeResult<IntegrationResult> {
         // Find capabilities that might depend on this one
         let dependent_capabilities = self.find_dependent_capabilities(capability_id).await?;
-        
+
         let mut issues = vec![];
         let mut updated_capabilities = vec![];
-        
+
         for dependent_id in dependent_capabilities {
             // Check if the dependent capability can now be resolved
             if let Some(capability) = self.marketplace.get_capability(&dependent_id).await {
@@ -277,22 +321,31 @@ impl RegistrationFlow {
                             still_missing.push(dep.to_string());
                         }
                     }
-                    
+
                     if still_missing.is_empty() {
                         // All dependencies resolved, update metadata
                         let mut updated_cap = capability.clone();
-                        updated_cap.metadata.insert("all_dependencies_resolved".to_string(), "true".to_string());
-                        updated_cap.metadata.insert("last_dependency_check".to_string(), Utc::now().to_rfc3339());
-                        
-                        self.marketplace.register_capability_manifest(updated_cap.clone()).await?;
+                        updated_cap
+                            .metadata
+                            .insert("all_dependencies_resolved".to_string(), "true".to_string());
+                        updated_cap
+                            .metadata
+                            .insert("last_dependency_check".to_string(), Utc::now().to_rfc3339());
+
+                        self.marketplace
+                            .register_capability_manifest(updated_cap.clone())
+                            .await?;
                         updated_capabilities.push(dependent_id);
                     } else {
-                        issues.push(format!("Capability {} still missing dependencies: {:?}", dependent_id, still_missing));
+                        issues.push(format!(
+                            "Capability {} still missing dependencies: {:?}",
+                            dependent_id, still_missing
+                        ));
                     }
                 }
             }
         }
-        
+
         Ok(IntegrationResult {
             issues,
             updated_capabilities,
@@ -302,10 +355,10 @@ impl RegistrationFlow {
     /// Find capabilities that depend on the given capability
     async fn find_dependent_capabilities(&self, capability_id: &str) -> RuntimeResult<Vec<String>> {
         let mut dependents = vec![];
-        
+
         // Get all capabilities and check their metadata for dependencies
         let capabilities = self.marketplace.list_capabilities().await;
-        
+
         for capability in capabilities {
             if let Some(deps) = capability.metadata.get("needs_capabilities") {
                 let needed: Vec<&str> = deps.split(',').collect();
@@ -314,22 +367,35 @@ impl RegistrationFlow {
                 }
             }
         }
-        
+
         Ok(dependents)
     }
 
     /// Update validation scores based on issues found
     fn update_validation_scores(&self, result: &mut ValidationResult) {
         let issue_count = result.issues.len();
-        let critical_issues = result.issues.iter()
-            .filter(|issue| issue.severity == crate::ccos::synthesis::validation_harness::IssueSeverity::Critical)
+        let critical_issues = result
+            .issues
+            .iter()
+            .filter(|issue| {
+                issue.severity
+                    == crate::ccos::synthesis::validation_harness::IssueSeverity::Critical
+            })
             .count();
-        
+
         // Calculate scores based on issue counts
-        result.security_score = if critical_issues > 0 { 0.0 } else { 1.0 - (issue_count as f64 * 0.1).min(1.0) };
+        result.security_score = if critical_issues > 0 {
+            0.0
+        } else {
+            1.0 - (issue_count as f64 * 0.1).min(1.0)
+        };
         result.quality_score = 1.0 - (issue_count as f64 * 0.05).min(0.8);
-        result.compliance_score = if critical_issues > 2 { 0.0 } else { 1.0 - (critical_issues as f64 * 0.3).min(0.7) };
-        
+        result.compliance_score = if critical_issues > 2 {
+            0.0
+        } else {
+            1.0 - (critical_issues as f64 * 0.3).min(0.7)
+        };
+
         // Update status based on scores
         if result.security_score < 0.5 {
             result.status = ValidationStatus::SecurityFailed;
@@ -345,18 +411,26 @@ impl RegistrationFlow {
     /// Run end-to-end test for a capability
     pub async fn run_end_to_end_test(&self, capability_id: &str) -> RuntimeResult<TestResult> {
         // Get the capability
-        let capability = self.marketplace.get_capability(capability_id).await
-            .ok_or_else(|| crate::runtime::error::RuntimeError::Generic(format!("Capability {} not found", capability_id)))?;
-        
+        let capability = self
+            .marketplace
+            .get_capability(capability_id)
+            .await
+            .ok_or_else(|| {
+                crate::runtime::error::RuntimeError::Generic(format!(
+                    "Capability {} not found",
+                    capability_id
+                ))
+            })?;
+
         // Create test inputs based on input schema
         let test_inputs = self.generate_test_inputs(&capability)?;
-        
+
         // Execute the capability
-        let result = self.marketplace.execute_capability(
-            capability_id,
-            &test_inputs,
-        ).await;
-        
+        let result = self
+            .marketplace
+            .execute_capability(capability_id, &test_inputs)
+            .await;
+
         match result {
             Ok(output) => Ok(TestResult {
                 success: true,
@@ -401,37 +475,41 @@ pub struct TestResult {
 mod tests {
     use super::*;
     use crate::ccos::capability_marketplace::types::CapabilityManifest;
-    use crate::ccos::capability_marketplace::ProviderType;
     use crate::ccos::capability_marketplace::types::LocalCapability;
+    use crate::ccos::capability_marketplace::ProviderType;
 
     #[tokio::test]
     async fn test_registration_flow() {
         // Create a mock marketplace
-        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(tokio::sync::RwLock::new(
+            crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let flow = RegistrationFlow::new(marketplace);
-        
+
         // Create a test manifest
         let manifest = CapabilityManifest {
             id: "test.capability.v1".to_string(),
             name: "Test Capability".to_string(),
             description: "A test capability".to_string(),
+            version: "1.0.0".to_string(),
             provider: ProviderType::Local(LocalCapability {
                 handler: Arc::new(|_args| Ok(Value::String("test".to_string()))),
             }),
             input_schema: None,
             output_schema: None,
-            effects: vec![],
-            metadata: HashMap::new(),
             attestation: None,
             provenance: None,
+            permissions: vec![],
+            effects: vec![],
+            metadata: HashMap::new(),
             agent_metadata: None,
         };
-        
+
         // Test registration
         let result = flow.register_capability(manifest, None).await;
         assert!(result.is_ok());
-        
+
         let reg_result = result.unwrap();
         assert!(reg_result.success);
         assert_eq!(reg_result.capability_id, "test.capability.v1");
@@ -439,26 +517,30 @@ mod tests {
 
     #[test]
     fn test_version_generation() {
-        let registry = Arc::new(tokio::sync::RwLock::new(crate::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(tokio::sync::RwLock::new(
+            crate::runtime::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let flow = RegistrationFlow::new(marketplace);
-        
+
         let manifest = CapabilityManifest {
             id: "test.version".to_string(),
             name: "Version Test".to_string(),
             description: "Test version generation".to_string(),
+            version: "1.0.0".to_string(),
             provider: ProviderType::Local(LocalCapability {
                 handler: Arc::new(|_args| Ok(Value::String("test".to_string()))),
             }),
             input_schema: None,
             output_schema: None,
-            effects: vec![],
-            metadata: HashMap::new(),
             attestation: None,
             provenance: None,
+            permissions: vec![],
+            effects: vec![],
+            metadata: HashMap::new(),
             agent_metadata: None,
         };
-        
+
         let validation_result = ValidationResult {
             status: ValidationStatus::Passed,
             issues: vec![],
@@ -467,8 +549,10 @@ mod tests {
             compliance_score: 1.0,
             metadata: HashMap::new(),
         };
-        
-        let version = flow.generate_version(&manifest, &validation_result).unwrap();
+
+        let version = flow
+            .generate_version(&manifest, &validation_result)
+            .unwrap();
         assert!(version.starts_with("1.0.0-"));
         assert!(version.contains("."));
     }
